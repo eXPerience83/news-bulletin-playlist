@@ -1,4 +1,8 @@
-from news_bulletin_playlist.provider_watch import evaluate_titles, extract_rss_titles
+from news_bulletin_playlist.provider_watch import (
+    evaluate_titles,
+    extract_fallback_titles,
+    extract_rss_titles,
+)
 from news_bulletin_playlist.providers.ser import SerParser
 
 
@@ -16,6 +20,22 @@ def test_extract_rss_titles_handles_namespaced_rss() -> None:
       <item><x:meta>ignored</x:meta><title>News</title></item>
     </channel></rss>"""
     assert extract_rss_titles(payload) == ["News"]
+
+
+def test_extract_ondacero_titles_from_official_html_fallback() -> None:
+    payload = b"""<html><body>
+      <h3>Las noticias de Onda Cero de las 10:00h (27/8/2026)</h3>
+      <script>"Las noticias de Onda Cero de las 10:00h (27/8/2026)"</script>
+      <h3>Las noticias de Onda Cero de las 9:00h (27/8/2026)</h3>
+    </body></html>"""
+    assert extract_fallback_titles("ondacero", payload) == [
+        "Las noticias de Onda Cero de las 10:00h (27/8/2026)",
+        "Las noticias de Onda Cero de las 9:00h (27/8/2026)",
+    ]
+
+
+def test_unknown_provider_has_no_html_fallback_extractor() -> None:
+    assert extract_fallback_titles("unknown", b"<html>News</html>") == []
 
 
 def test_contract_accepts_majority_of_recent_titles() -> None:
