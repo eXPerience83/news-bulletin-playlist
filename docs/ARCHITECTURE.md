@@ -59,10 +59,35 @@ Each playlist may independently define:
 - retention window;
 - maximum number of episodes;
 - ordering policy;
-- inclusion/exclusion rules;
-- optional future sponsorship/promotion rules.
+- inclusion/exclusion rules.
 
 The initial defaults remain 48 hours of playlist retention, a maximum of 100 episodes and 30 days of internal operational metadata unless a playlist explicitly overrides them.
+
+## Editorial independence and monetization invariant
+
+Playlist membership and ordering must be determined by documented editorial/source-selection rules, freshness and playlist policy — **never by payment or other compensation**.
+
+The engine must not implement or expose:
+
+- paid placement in a Spotify playlist;
+- sponsor-funded inclusion or guaranteed inclusion;
+- paid boosts, paid priority or compensation-dependent ordering;
+- rules where donations, sponsorships or payments influence the name or content of a Spotify playlist.
+
+This is an architectural constraint, not merely a launch-policy choice. Spotify states that accepting or offering compensation to influence a user playlist or its content is not permitted.
+
+Possible future monetization of the **software or a separate non-streaming service** is a different concern and must remain technically and conceptually separate from playlist composition. It may only be considered if the deployment's Spotify access mode and the then-current Spotify Developer Policy permit it.
+
+As of 2026-08-27, Spotify Development Mode is intended for learning, experimentation and personal **non-commercial** projects and must not be relied on as the foundation for building or scaling a business. Therefore the current Development Mode deployment is treated as non-commercial.
+
+Relevant Spotify references:
+
+- https://developer.spotify.com/blog/2026-02-06-update-on-developer-access-and-platform-security
+- https://developer.spotify.com/policy
+- https://developer.spotify.com/documentation/web-api/concepts/quota-modes
+- https://artists.spotify.com/en/blog/behind-the-playlists-your-questions-answered-by-our-playlist-editors
+
+Before any future commercial launch, these constraints must be re-verified against the current Spotify terms and access model. Commercialization must not require changing the editorial-independence invariant above.
 
 ## Engine cycle
 
