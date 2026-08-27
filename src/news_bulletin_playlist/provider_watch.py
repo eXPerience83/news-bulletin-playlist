@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -16,6 +17,8 @@ _USER_AGENT = (
 )
 _SAMPLE_SIZE = 6
 _MIN_PARSE_RATIO = 0.5
+_RETRYABLE_HTTP = frozenset({429, 500, 502, 503, 504})
+_RETRY_DELAYS_SECONDS = (0.0, 2.0, 5.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,10 +60,28 @@ def evaluate_titles(provider_id: str, parser: TitleParser, titles: list[str]) ->
     return ContractResult(provider_id, ok, len(sample), parsed, detail)
 
 
-def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
+def fetch_feed_once(url: str, timeout: float = 20.0) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return bytes(response.read())
+
+
+def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
+    last_error: BaseException | None = None
+    for attempt, delay in enumerate(_RETRY_DELAYS_SECONDS, start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            return fetch_feed_once(url, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code not in _RETRYABLE_HTTP or attempt == len(_RETRY_DELAYS_SECONDS):
+                raise
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_error = exc
+            if attempt == len(_RETRY_DELAYS_SECONDS):
+                raise
+    raise RuntimeError(f"feed retries exhausted: {last_error}")
 
 
 def check_provider(provider: ProviderConfig) -> ContractResult:
@@ -68,7 +89,13 @@ def check_provider(provider: ProviderConfig) -> ContractResult:
         payload = fetch_feed(provider.feed_url)
         titles = extract_rss_titles(payload)
     except (urllib.error.URLError, TimeoutError, ET.ParseError, OSError) as exc:
-        return ContractResult(provider.provider_id, False, 0, 0, f"feed error: {exc}")
+        return ContractResult(
+            provider.provider_id,
+            False,
+            0,
+            0,
+            f"feed unavailable or invalid after retries: {exc}",
+        )
     return evaluate_titles(provider.provider_id, provider.parser, titles)
 
 
