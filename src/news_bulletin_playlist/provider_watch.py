@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+import re
 import sys
 import time
 import urllib.error
@@ -19,6 +21,12 @@ _SAMPLE_SIZE = 6
 _MIN_PARSE_RATIO = 0.5
 _RETRYABLE_HTTP = frozenset({429, 500, 502, 503, 504})
 _RETRY_DELAYS_SECONDS = (0.0, 2.0, 5.0)
+_ONDACERO_HTML_TITLE = re.compile(
+    r"Las noticias de Onda Cero de las\s+"
+    r"(?:[01]?\d|2[0-3]):[0-5]\d[hH]\s*"
+    r"\(\d{1,2}/\d{1,2}/\d{4}\)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,10 +53,17 @@ def extract_rss_titles(payload: bytes) -> list[str]:
     return titles
 
 
+def extract_fallback_titles(provider_id: str, payload: bytes) -> list[str]:
+    page = html.unescape(payload.decode("utf-8", errors="replace"))
+    if provider_id != "ondacero":
+        return []
+    return list(dict.fromkeys(match.group(0) for match in _ONDACERO_HTML_TITLE.finditer(page)))
+
+
 def evaluate_titles(provider_id: str, parser: TitleParser, titles: list[str]) -> ContractResult:
     sample = titles[:_SAMPLE_SIZE]
     if not sample:
-        return ContractResult(provider_id, False, 0, 0, "feed contained no RSS item titles")
+        return ContractResult(provider_id, False, 0, 0, "source contained no bulletin titles")
 
     parsed = sum(parser.parse(title) is not None for title in sample)
     required = max(1, ceil(len(sample) * _MIN_PARSE_RATIO))
@@ -88,13 +103,33 @@ def check_provider(provider: ProviderConfig) -> ContractResult:
     try:
         payload = fetch_feed(provider.feed_url)
         titles = extract_rss_titles(payload)
-    except (urllib.error.URLError, TimeoutError, ET.ParseError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, ET.ParseError, OSError) as feed_error:
+        if provider.contract_fallback_url is None:
+            return ContractResult(
+                provider.provider_id,
+                False,
+                0,
+                0,
+                f"feed unavailable or invalid after retries: {feed_error}",
+            )
+        try:
+            fallback_payload = fetch_feed(provider.contract_fallback_url)
+            titles = extract_fallback_titles(provider.provider_id, fallback_payload)
+        except (urllib.error.URLError, TimeoutError, OSError) as fallback_error:
+            return ContractResult(
+                provider.provider_id,
+                False,
+                0,
+                0,
+                f"feed failed ({feed_error}); fallback failed ({fallback_error})",
+            )
+        result = evaluate_titles(provider.provider_id, provider.parser, titles)
         return ContractResult(
-            provider.provider_id,
-            False,
-            0,
-            0,
-            f"feed unavailable or invalid after retries: {exc}",
+            result.provider_id,
+            result.ok,
+            result.sampled,
+            result.parsed,
+            f"{result.detail}; checked official fallback page after RSS failure",
         )
     return evaluate_titles(provider.provider_id, provider.parser, titles)
 
