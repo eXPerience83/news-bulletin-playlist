@@ -1,0 +1,57 @@
+name: Provider Watch
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e .
+
+      - name: Check live provider contracts
+        id: contract
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m news_bulletin_playlist.provider_watch | tee provider-watch.md
+
+      - name: Open or update provider incident
+        if: steps.contract.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "[provider-watch] Upstream contract check failed"
+        run: |
+          issue="$(gh issue list --state open --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n1)"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body-file provider-watch.md
+          else
+            gh issue create --title "$TITLE" --body-file provider-watch.md
+          fi
+
+      - name: Close recovered provider incident
+        if: steps.contract.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "[provider-watch] Upstream contract check failed"
+        run: |
+          issue="$(gh issue list --state open --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n1)"
+          if [ -n "$issue" ]; then
+            gh issue close "$issue" --comment "Provider contract checks recovered successfully."
+          fi
+
+      - name: Fail workflow on provider incident
+        if: steps.contract.outcome == 'failure'
+        run: exit 1
