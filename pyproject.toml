@@ -8,7 +8,6 @@ version = "0.0.1"
 description = "Dynamic Spanish-language news bulletin playlist for Spotify"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
 authors = [{ name = "news-bulletin-playlist contributors" }]
 dependencies = []
 
