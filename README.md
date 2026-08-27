@@ -1,23 +1,36 @@
 # News Bulletin Playlist
 
-Dynamic Spanish-language news bulletin playlist for Spotify.
+Configurable engine for dynamic news bulletin playlists on Spotify.
 
 > Early research/prototype stage. This project is not affiliated with or endorsed by Spotify or any news provider.
 
 ## Goal
 
-Keep a playlist automatically populated with the most recently published Spanish-language news bulletins from selected Spanish and international providers.
+Run **one engine that can maintain multiple news-bulletin playlists** from shared provider data.
 
-Initial product invariants:
+Spain / Spanish-language news is the first implementation and validation target. The architecture is intentionally multi-playlist, multi-country and multi-language so the same runtime can later power English, French, German, Polish and other European playlists without duplicating the application.
+
+Core architectural invariant:
+
+> **Fetch once -> normalize once -> store once -> distribute to many playlists.**
+
+A provider/source is independent from a playlist and may feed several playlists. A single engine run should fetch each required source once, normalize it once, and then reconcile every configured destination playlist independently.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contract and invariants.
+
+Initial product defaults:
 
 - keep episodes published within the last **48 hours**;
-- cap the playlist at **100 episodes**;
+- cap a playlist at **100 episodes**;
 - order by source publication timestamp (`published_at`), newest first;
 - retain operational metadata locally for **30 days**;
 - never download or store podcast audio;
-- treat RSS/provider metadata as the timing source and Spotify as the playlist destination.
+- treat RSS/provider metadata as the timing source and Spotify as the playlist destination;
+- allow playlist-specific policies to override defaults when required.
 
 ## P0 providers
+
+The initial provider research focuses on the first Spain / Spanish-language playlist.
 
 | Provider | Parser | Spotify show identified | Status |
 | --- | --- | --- | --- |
@@ -50,10 +63,11 @@ Do not commit Spotify client secrets, refresh tokens, `.env` files or the runtim
 
 ## Roadmap
 
-1. **P0** — provider contracts and authenticated Spotify catalogue probe.
-2. **P1** — feed collection, canonical metadata model and SQLite persistence.
-3. **P2** — RSS-to-Spotify matcher and reconciliation rules.
-4. **P3** — private playlist write/readback and idempotency.
+1. **P0** — provider contracts and authenticated Spotify catalogue probe for the first Spain / Spanish-language playlist.
+2. **P1** — shared feed collection, canonical metadata model, playlist configuration and SQLite persistence.
+3. **P2** — RSS-to-Spotify matcher and reconciliation rules shared across playlists.
+4. **P3** — private playlist write/readback, multi-playlist reconciliation and idempotency.
 5. **P4** — provider watchdog via GitHub Actions.
-6. **P5** — hardened Docker runtime and private admin UI.
-7. **P6** — public playlist / first release.
+6. **P5** — hardened Docker runtime and private admin UI; one runtime can manage multiple playlists.
+7. **P6** — public first playlist / first release.
+8. **P7** — expand sources and playlist definitions to additional languages and European countries.
