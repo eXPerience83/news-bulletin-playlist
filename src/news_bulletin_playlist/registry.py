@@ -15,6 +15,7 @@ class ProviderConfig:
     feed_url: str
     spotify_show_id: str
     parser: TitleParser
+    contract_fallback_url: str | None = None
 
 
 CORE_PROVIDERS: tuple[ProviderConfig, ...] = (
@@ -38,6 +39,7 @@ CORE_PROVIDERS: tuple[ProviderConfig, ...] = (
         ),
         spotify_show_id="0tjEexypyczHXW9vE3SU3P",
         parser=OndaCeroParser(),
+        contract_fallback_url="https://www.ondacero.es/podcast/programas/boletines/",
     ),
     ProviderConfig(
         provider_id="cnn",
