@@ -28,6 +28,22 @@ Initial product defaults:
 - treat RSS/provider metadata as the timing source and Spotify as the playlist destination;
 - allow playlist-specific policies to override defaults when required.
 
+## Editorial independence
+
+Playlist inclusion and ordering are based on source/editorial rules, freshness and playlist policy — **never on payment, donations, sponsorship or other compensation**.
+
+Paid playlist placement, guaranteed inclusion, paid priority and sponsor-funded changes to playlist content are explicitly outside the product design.
+
+Possible future monetization of the software or a separate qualifying non-streaming service is a different concern and must remain separate from playlist composition.
+
+## Spotify access model
+
+As of 2026-08-27, Spotify Development Mode is intended for learning, experimentation and personal **non-commercial** projects. The current deployment is therefore treated as non-commercial.
+
+Spotify's Developer Policy permits certain limited commercial uses for qualifying non-streaming applications, but any future commercial use would require re-checking Spotify's then-current access mode, eligibility requirements and policies. Development Mode must not be used as the assumed foundation for building or scaling a business.
+
+See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the current Spotify platform constraints and the authenticated probes still required.
+
 ## P0 providers
 
 The initial provider research focuses on the first Spain / Spanish-language playlist.
