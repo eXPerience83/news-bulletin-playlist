@@ -9,7 +9,7 @@ on:
       - "src/news_bulletin_playlist/registry.py"
       - ".github/workflows/provider-watch.yml"
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
