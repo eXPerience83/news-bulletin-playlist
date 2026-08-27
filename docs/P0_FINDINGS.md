@@ -10,6 +10,36 @@ Status: public-source research complete as of 2026-08-27. Authenticated Spotify 
 - Local metadata retention: **30 days**.
 - No podcast audio download or storage.
 - Reconcile the whole playlist in one replace operation whenever desired state changes.
+- No payment, donation, sponsorship or other compensation may influence inclusion, ordering, naming or other editorial content of a Spotify playlist.
+
+## Spotify platform constraints (2026-08-27)
+
+The current project is designed as a **non-streaming** integration: Spotify is used as the catalogue/playlist destination and the application does not provide Spotify audio playback.
+
+Current Development Mode constraints documented by Spotify include:
+
+- intended use is learning, experimentation and personal **non-commercial** projects;
+- Spotify Premium is required for Development Mode;
+- one Development Mode Client ID per developer;
+- up to five authorized users per Client ID;
+- API access is limited compared with wider partner access.
+
+Spotify also states that Development Mode should not be relied on as a foundation for building or scaling a business.
+
+Extended quota access is not currently a realistic assumption for this project. Spotify's published criteria include application by an established business/organization rather than an individual, an already launched service, at least **250,000 monthly active users**, availability in key markets, commercial viability and policy compliance.
+
+Spotify's Developer Policy allows certain commercial uses for qualifying **Non-Streaming SDAs**, including selling access to the SDA and advertising/sponsorship on the SDA itself. This does **not** make the current Development Mode deployment commercial: any future monetization would require re-checking the then-current access mode, terms and approval requirements.
+
+Paid playlist placement is intentionally excluded from the product. Spotify states that accepting or offering compensation to influence the name or content of a user playlist is not permitted. Therefore sponsorship/donation logic must never affect playlist membership or ordering.
+
+Official references:
+
+- https://developer.spotify.com/blog/2026-02-06-update-on-developer-access-and-platform-security
+- https://developer.spotify.com/documentation/web-api/concepts/quota-modes
+- https://developer.spotify.com/policy
+- https://artists.spotify.com/en/blog/behind-the-playlists-your-questions-answered-by-our-playlist-editors
+
+The relevant API endpoints and scopes still need to be verified with the authenticated probe because Spotify's Development Mode endpoint restrictions have changed during 2026 and rollout timing has been adjusted.
 
 ## Providers
 
@@ -71,6 +101,7 @@ Status: public-source research complete as of 2026-08-27. Authenticated Spotify 
 ## Authenticated Spotify probe still required
 
 - Confirm minimum working scopes in current Development Mode.
+- Confirm which playlist/show/episode endpoints needed by this project remain available to a newly created Development Mode Client ID.
 - Confirm latest 24-48h mappings for SER, RNE, Onda Cero and CNN using market `ES`.
 - Check whether Spotify contains one or both RNE 2026-08-25 18:00 republications.
 - Search Spotify for `Boletines COPE` and recent exact national bulletin titles in market `ES`.
