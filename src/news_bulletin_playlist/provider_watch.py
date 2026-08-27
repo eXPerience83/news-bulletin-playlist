@@ -60,7 +60,7 @@ def evaluate_titles(provider_id: str, parser: TitleParser, titles: list[str]) ->
 def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+        return bytes(response.read())
 
 
 def check_provider(provider: ProviderConfig) -> ContractResult:
