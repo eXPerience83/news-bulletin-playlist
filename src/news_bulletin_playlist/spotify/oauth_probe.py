@@ -80,7 +80,11 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         return
 
     def _reply(self, status: int, message: str) -> None:
-        body = f"<!doctype html><meta charset='utf-8'><title>News Bulletin Playlist</title><p>{message}</p>"
+        body = (
+            "<!doctype html><meta charset='utf-8'>"
+            "<title>News Bulletin Playlist</title>"
+            f"<p>{message}</p>"
+        )
         payload = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
