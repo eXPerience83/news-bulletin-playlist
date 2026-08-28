@@ -11,7 +11,7 @@ By default the PKCE probe is **read-only**:
 - checks how many of the known RNE 2026-08-25 18:00 republications Spotify exposes;
 - searches the authenticated Spotify catalogue for `Boletines COPE`.
 
-Writing is disabled unless `--write` is passed explicitly. The write probe creates a temporary **private** playlist, writes one recent episode from each core provider and reads it back.
+Writing is disabled unless `--write` (or the PowerShell helper's `-Write`) is passed explicitly. The write probe creates a temporary **private** playlist, writes one recent episode from each core provider and reads it back.
 
 ## Required scopes
 
@@ -30,9 +30,25 @@ Spotify currently requires HTTPS except for explicit loopback IP literals. `loca
 
 A TrueNAS-hosted/admin-web callback will instead need a real HTTPS URL; a browser on another device cannot use the server's `127.0.0.1`.
 
-## Running via PKCE
+## Recommended Windows path: one command
 
 No Client Secret is required. Never commit tokens or credentials.
+
+From a PowerShell terminal opened in the cloned repository:
+
+```powershell
+.\scripts\run_spotify_probe.ps1 -ClientId 'YOUR_CLIENT_ID'
+```
+
+The helper creates a local `.venv` if needed, installs the project, exposes the Client ID only for that process, opens the Spotify authorization page and runs the read-only P0 probe.
+
+Only after the read-only output has been reviewed should the write probe be run:
+
+```powershell
+.\scripts\run_spotify_probe.ps1 -ClientId 'YOUR_CLIENT_ID' -Write
+```
+
+## Manual PKCE invocation
 
 ### Windows PowerShell
 
@@ -50,7 +66,7 @@ python -m news_bulletin_playlist.spotify.oauth_probe
 
 The helper opens the Spotify authorization page, listens only on `127.0.0.1:8787`, exchanges the returned authorization code using PKCE, runs the catalogue probe, and does not persist the returned access token.
 
-Only after the read-only output has been reviewed should the write probe be run:
+For the manual write probe:
 
 ### Windows PowerShell
 
