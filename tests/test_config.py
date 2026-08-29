@@ -224,7 +224,7 @@ def test_malformed_endpoint_url_is_rejected(endpoint: str) -> None:
     source = _source()
     source["endpoint_url"] = endpoint
 
-    with pytest.raises(ConfigError, match="HTTP\(S\) URL"):
+    with pytest.raises(ConfigError, match=r"HTTP\(S\) URL"):
         parse_config(_config(sources=[source]))
 
 
