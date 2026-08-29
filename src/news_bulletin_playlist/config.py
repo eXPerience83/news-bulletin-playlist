@@ -29,6 +29,7 @@ from news_bulletin_playlist.registry import has_title_parser
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _LANGUAGE_RE = re.compile(r"^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
+_YAML_BOOLEAN_RE = re.compile(r"^(?:true|false)$", re.IGNORECASE)
 
 
 class ConfigError(ValueError):
@@ -37,6 +38,24 @@ class ConfigError(ValueError):
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):  # type: ignore[misc]
     pass
+
+
+# PyYAML follows YAML 1.1 boolean resolution by default, where unquoted values
+# such as NO/no/ON/OFF become booleans. That breaks valid country/language codes
+# (notably Norway: NO / no). Give this loader YAML-1.2-like boolean semantics:
+# only true/false are implicit booleans.
+_UniqueKeySafeLoader.yaml_implicit_resolvers = {
+    key: list(resolvers) for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+for _resolver_key, _resolvers in _UniqueKeySafeLoader.yaml_implicit_resolvers.items():
+    _UniqueKeySafeLoader.yaml_implicit_resolvers[_resolver_key] = [
+        resolver for resolver in _resolvers if resolver[0] != "tag:yaml.org,2002:bool"
+    ]
+_UniqueKeySafeLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    _YAML_BOOLEAN_RE,
+    list("tTfF"),
+)
 
 
 def _construct_unique_mapping(
@@ -87,6 +106,7 @@ def parse_config(payload: object, *, origin: str = "<memory>") -> EngineConfig:
     )
     _validate_unique_ids(sources, playlists, origin)
     _validate_playlist_sources(sources, playlists, origin)
+    _validate_unique_enabled_destinations(playlists, origin)
     return EngineConfig(schema_version=schema_version, sources=sources, playlists=playlists)
 
 
@@ -249,6 +269,23 @@ def _validate_playlist_sources(
                 raise ConfigError(
                     f"{path}: enabled playlist references disabled source {source_id!r}"
                 )
+
+
+def _validate_unique_enabled_destinations(
+    playlists: tuple[PlaylistDefinition, ...], origin: str
+) -> None:
+    seen: dict[tuple[AdapterId, str], int] = {}
+    for playlist_index, playlist in enumerate(playlists):
+        if not playlist.enabled:
+            continue
+        key = (playlist.destination.adapter_id, playlist.destination.external_id)
+        previous_index = seen.get(key)
+        if previous_index is not None:
+            raise ConfigError(
+                f"{origin}.playlists[{playlist_index}].destination: duplicate enabled destination; "
+                f"already used by {origin}.playlists[{previous_index}]"
+            )
+        seen[key] = playlist_index
 
 
 def _countries(value: object, path: str) -> tuple[CountryCode, ...]:
