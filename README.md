@@ -72,7 +72,7 @@ docker compose ps
 
 The local status page is available only on `http://127.0.0.1:8788/`.
 
-For TrueNAS 26-BETA.3 or newer, install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The YAML publishes the status UI on port `8788` and includes best-effort `x-portals` metadata. Current TrueNAS documentation warns that YAML-installed Custom Apps might not show the Web UI button, so direct access to `http://<truenas-host>:8788/` remains the supported path. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for storage, ACL, image-integrity and installation details.
+For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The YAML publishes the status UI on port `8788` and includes best-effort `x-portals` metadata. Direct access to `http://<truenas-host>:8788/` remains the supported path. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the short installation procedure and image-integrity details.
 
 ## Development
 
