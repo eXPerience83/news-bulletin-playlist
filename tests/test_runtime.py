@@ -26,6 +26,27 @@ def test_ensure_data_dir_creates_and_verifies_writable_directory(tmp_path: Path)
     assert data_dir.is_dir()
 
 
+def test_status_portal_reports_runtime_without_sensitive_details(tmp_path: Path) -> None:
+    HealthHandler.data_dir = tmp_path
+    server = HTTPServer(("127.0.0.1", 0), HealthHandler)
+    thread = _serve_one(server)
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{server.server_port}/", timeout=2
+        ) as response:
+            assert response.status == HTTPStatus.OK
+            body = response.read().decode("utf-8")
+            assert "News Bulletin Playlists" in body
+            assert "Persistent storage" in body
+            assert "Client Secret" not in body
+            assert response.headers["Cache-Control"] == "no-store"
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+            assert response.headers["Server"] == "news-bulletin-playlist"
+    finally:
+        thread.join(timeout=2)
+        server.server_close()
+
+
 def test_health_endpoint_reports_ok_for_writable_data(tmp_path: Path) -> None:
     HealthHandler.data_dir = tmp_path
     server = HTTPServer(("127.0.0.1", 0), HealthHandler)
