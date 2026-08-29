@@ -3,6 +3,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import socket
+import threading
+import time
 import urllib.parse
 
 import pytest
@@ -131,6 +134,38 @@ def test_local_callback_stops_immediately_on_authorization_denial(
     monkeypatch.setattr(oauth_probe, "HTTPServer", _FakeLocalServer)
     with pytest.raises(oauth_probe.OAuthAuthorizationDenied, match="not granted"):
         oauth_probe.receive_local_authorization_code(state="expected", timeout=30.0)
+
+
+def test_local_callback_idle_socket_cannot_block_deadline() -> None:
+    errors: list[BaseException] = []
+
+    def run_listener() -> None:
+        try:
+            oauth_probe.receive_local_authorization_code(state="expected", timeout=0.2)
+        except BaseException as exc:  # captured from the worker thread for assertion below
+            errors.append(exc)
+
+    thread = threading.Thread(target=run_listener, daemon=True)
+    thread.start()
+
+    client: socket.socket | None = None
+    connect_deadline = time.monotonic() + 1.0
+    while client is None and time.monotonic() < connect_deadline:
+        try:
+            client = socket.create_connection(("127.0.0.1", 8787), timeout=0.05)
+        except OSError:
+            time.sleep(0.01)
+
+    assert client is not None
+    try:
+        thread.join(timeout=2.0)
+    finally:
+        client.close()
+
+    assert not thread.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], oauth_probe.OAuthCallbackError)
+    assert "timeout" in str(errors[0])
 
 
 class _Response:
