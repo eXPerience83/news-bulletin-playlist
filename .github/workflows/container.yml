@@ -9,6 +9,8 @@ on:
       - ".dockerignore"
       - "compose.yaml"
       - "deploy/**"
+      - "docs/DEPLOY_TRUENAS.md"
+      - "README.md"
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/container.yml"
@@ -18,6 +20,8 @@ on:
       - ".dockerignore"
       - "compose.yaml"
       - "deploy/**"
+      - "docs/DEPLOY_TRUENAS.md"
+      - "README.md"
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/container.yml"
@@ -34,6 +38,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Validate TrueNAS and Compose configuration
         run: |
           docker compose -f compose.yaml config --quiet
@@ -70,7 +76,8 @@ jobs:
             --publish 127.0.0.1:18788:8080 \
             --mount source=news-bulletin-ci-data,target=/data \
             news-bulletin-playlist:ci
-          for attempt in $(seq 1 20); do
+          remaining=20
+          while [ "$remaining" -gt 0 ]; do
             status=$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)
             if [ "$status" = healthy ]; then
               break
@@ -79,6 +86,7 @@ jobs:
               docker logs news-bulletin-playlist-ci
               exit 1
             fi
+            remaining=$((remaining - 1))
             sleep 1
           done
           test "$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)" = healthy
@@ -99,6 +107,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Validate Compose files
         run: |
           docker compose -f compose.yaml config --quiet
