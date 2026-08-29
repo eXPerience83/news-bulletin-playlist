@@ -20,9 +20,11 @@ The runtime root filesystem is read-only. `/data` is the only persistent writabl
 4. Use application name `news-bulletin-playlist`.
 5. Paste the YAML and save.
 6. Wait for the container health state to become healthy.
-7. Open the TrueNAS **Web UI** portal or browse to `http://<truenas-host>:8788/`.
+7. Browse to `http://<truenas-host>:8788/`.
 
-The application listens on container port `8080`. The TrueNAS YAML publishes it as host port `8788` using `ports:`, then declares the corresponding `x-portals` metadata so TrueNAS can present a Web UI shortcut. `x-portals` does not publish a port by itself.
+The application listens on container port `8080`. The TrueNAS YAML publishes it as host port `8788` using `ports:`. This mapping is what makes the status page reachable.
+
+The YAML also includes top-level `x-portals` metadata matching TrueNAS catalog-generated Compose files and the existing remote-dev deployment convention. This is safe Compose extension metadata, but the current TrueNAS documentation explicitly says Custom Apps installed via YAML might not show a **Web UI** button in the Application Info widget. Therefore the deployment does **not** depend on `x-portals`: use `http://<truenas-host>:8788/` if the button is absent. `x-portals` never publishes the port by itself.
 
 The current `/` page is intentionally read-only: it shows runtime, persistent-storage and version status only. It contains no credentials and has no administrative actions. `/healthz` remains the Docker health endpoint. Do not expose port `8788` directly to the public Internet; keep it on the LAN or a trusted private network such as Tailscale. Authentication must be added before future state-changing administration is exposed through the web UI.
 
