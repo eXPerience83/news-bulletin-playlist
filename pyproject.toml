@@ -12,6 +12,9 @@ license = "MIT"
 authors = [{ name = "news-bulletin-playlist contributors" }]
 dependencies = []
 
+[project.scripts]
+news-playlist = "news_bulletin_playlist.cli:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3,<10",
