@@ -148,6 +148,17 @@ def test_duplicate_yaml_keys_are_rejected(tmp_path: Path) -> None:
         load_config(path)
 
 
+def test_non_string_yaml_key_is_reported_as_config_error(tmp_path: Path) -> None:
+    path = tmp_path / "non-string-key.yaml"
+    path.write_text(
+        "schema_version: 1\n? []\n: invalid\nsources: []\nplaylists: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="non-string key"):
+        load_config(path)
+
+
 def test_yaml_does_not_coerce_norway_country_or_language_to_boolean(tmp_path: Path) -> None:
     path = tmp_path / "norway.yaml"
     path.write_text(
@@ -198,6 +209,22 @@ def test_invalid_timezone_is_rejected() -> None:
     source["timezone"] = "Mars/Olympus"
 
     with pytest.raises(ConfigError, match="unknown IANA timezone"):
+        parse_config(_config(sources=[source]))
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://:443/feed.xml",
+        "https://example.com:invalid/feed.xml",
+        "https://[broken/feed.xml",
+    ],
+)
+def test_malformed_endpoint_url_is_rejected(endpoint: str) -> None:
+    source = _source()
+    source["endpoint_url"] = endpoint
+
+    with pytest.raises(ConfigError, match="HTTP\(S\) URL"):
         parse_config(_config(sources=[source]))
 
 
