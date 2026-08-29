@@ -4,11 +4,13 @@ The first supported NAS target is TrueNAS 26-BETA.3 or newer. This project is in
 
 ## Storage first
 
-The checked-in deployment targets the current NAS layout used by this project:
+Create one dedicated dataset directly under `Pool1`:
 
-`/mnt/Pool1/apps/news-bulletin-playlist`
+`/mnt/Pool1/news-bulletin-playlist`
 
-Create that dedicated dataset before installing the app. The container runs as numeric UID/GID `10001:10001`; grant that UID (or GID) **Modify** access to the dataset ACL. TrueNAS does not require a matching local user account for a numeric app UID/GID.
+Use the **Apps** dataset preset and keep the remaining dataset options at their defaults unless you have a specific reason to change them.
+
+TrueNAS' Apps preset grants Modify access to the built-in apps group (GID `568`). The container itself still runs as its dedicated non-root user `10001:10001`, and the TrueNAS YAML adds GID `568` only as a supplementary group. This lets `/data` use the normal Apps preset permissions without a custom ACL step.
 
 The runtime root filesystem is read-only. `/data` is the only persistent writable application path; `/tmp` is an in-memory tmpfs.
 
@@ -16,17 +18,18 @@ For another TrueNAS system, edit the host path in `deploy/truenas.yaml` before i
 
 ## Install via YAML
 
-1. Create `/mnt/Pool1/apps/news-bulletin-playlist` and grant UID/GID `10001` Modify access.
-2. Open `deploy/truenas.yaml`.
-3. In TrueNAS open **Apps -> Discover Apps -> menu -> Install via YAML**.
-4. Use application name `news-bulletin-playlist`.
-5. Paste the YAML and save.
-6. Wait for the container health state to become healthy.
-7. Browse to `http://<truenas-host>:8788/` using any reachable TrueNAS address.
+1. In **Datasets**, select `Pool1` and create a dataset named `news-bulletin-playlist`.
+2. Select **Dataset Preset: Apps** and save it. No manual ACL customization is required for this deployment.
+3. Open `deploy/truenas.yaml`.
+4. In TrueNAS open **Apps -> Discover Apps -> menu -> Install via YAML**.
+5. Use application name `news-bulletin-playlist`.
+6. Paste the YAML and save.
+7. Wait for the container health state to become healthy.
+8. Browse to `http://<truenas-host>:8788/` using any reachable TrueNAS address.
 
-The application listens on container port `8080`. The checked-in TrueNAS deployment publishes it as `0.0.0.0:8788:8080`, so Docker listens on all host interfaces. This intentionally allows the same service to be reached through the appropriate TrueNAS LAN, Tailscale or other trusted host address without hard-coding one NAS IP into the deployment.
+The application listens on container port `8080`. The checked-in TrueNAS deployment publishes it as `0.0.0.0:8788:8080`, so Docker listens on all host interfaces. This allows the same service to be reached through the appropriate TrueNAS LAN, Tailscale or other trusted host address without hard-coding one NAS IP into the deployment.
 
-The YAML also includes top-level `x-portals` metadata with `host: 0.0.0.0`, matching the TrueNAS portal-extension format. This is safe Compose extension metadata, but the current TrueNAS documentation explicitly says Custom Apps installed via YAML might not show a **Web UI** button in the Application Info widget. Therefore the deployment does **not** depend on `x-portals`: use `http://<truenas-host>:8788/` if the button is absent. `x-portals` never publishes the port by itself.
+The YAML also includes top-level `x-portals` metadata with `host: 0.0.0.0`. Current TrueNAS portal generation accepts `0.0.0.0` as the wildcard/default host value. `x-portals` is only metadata: `ports:` is what actually publishes the service. If the TrueNAS UI does not show a Web UI button for the YAML-installed Custom App, use `http://<truenas-host>:8788/` directly.
 
 The current `/` page is intentionally read-only: it shows runtime, persistent-storage and version status only. It contains no credentials and has no administrative actions. `/healthz` remains the Docker health endpoint. Do not forward port `8788` from the router or otherwise expose it directly to the public Internet. Authentication must be added before future state-changing administration is exposed through the web UI.
 
