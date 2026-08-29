@@ -1,6 +1,6 @@
 # TrueNAS deployment
 
-The first supported NAS target is TrueNAS 26-BETA.3 or newer. TrueNAS custom applications use Docker Compose YAML through **Apps -> Discover Apps -> menu -> Install via YAML**.
+The first supported NAS target is TrueNAS 26-BETA.3 or newer. This project is installed as a **Custom App from YAML**; it is not packaged for the TrueNAS Community catalog. Use **Apps -> Discover Apps -> menu -> Install via YAML**.
 
 ## Storage first
 
@@ -20,16 +20,21 @@ The runtime root filesystem is read-only. `/data` is the only persistent writabl
 4. Use application name `news-bulletin-playlist`.
 5. Paste the YAML and save.
 6. Wait for the container health state to become healthy.
+7. Open the TrueNAS **Web UI** portal or browse to `http://<truenas-host>:8788/`.
 
-The YAML intentionally publishes no host ports. The only current HTTP endpoint is a localhost-only `/healthz` endpoint used by Docker HEALTHCHECK. A future private admin UI can add an explicit port without changing the container/runtime model.
+The application listens on container port `8080`. The TrueNAS YAML publishes it as host port `8788` using `ports:`, then declares the corresponding `x-portals` metadata so TrueNAS can present a Web UI shortcut. `x-portals` does not publish a port by itself.
+
+The current `/` page is intentionally read-only: it shows runtime, persistent-storage and version status only. It contains no credentials and has no administrative actions. `/healthz` remains the Docker health endpoint. Do not expose port `8788` directly to the public Internet; keep it on the LAN or a trusted private network such as Tailscale. Authentication must be added before future state-changing administration is exposed through the web UI.
+
+If host port `8788` is already occupied, change the host side of `8788:8080` and the `x-portals` `port` to the same free value. Keep the container target at `8080`.
 
 ## Image integrity and updates
 
 The checked-in TrueNAS YAML is pinned to an exact GHCR `sha256` digest that was built and validated by CI. It does **not** deploy the mutable `latest` tag. Reinstalling or restarting therefore resolves to the same reviewed image.
 
-The GHCR workflow still publishes convenience `latest`, `sha-<git-sha>` and version tags from `main`, but production-style TrueNAS deployment should update only through a reviewed PR that replaces the digest in `deploy/truenas.yaml`. Keeping the previous digest in Git history provides a deterministic rollback path.
+CI also attempts to pull the exact digest anonymously. This proves that a TrueNAS installation does not need GHCR credentials. If this check fails because the package is private, make the GHCR package **Public** rather than putting registry credentials in the repository or deployment YAML.
 
-The first GHCR publication must be anonymously pullable for the supplied TrueNAS YAML. If GitHub creates the container package as private, change the package visibility to **Public** before installing it on TrueNAS; do not add registry credentials to the repository.
+The GHCR workflow still publishes convenience `latest`, `sha-<git-sha>` and version tags from `main`, but the TrueNAS deployment should update only through a reviewed PR that replaces the digest in `deploy/truenas.yaml`. Keeping the previous digest in Git history provides a deterministic rollback path.
 
 ## Container shell and OAuth probe
 
@@ -48,6 +53,6 @@ With manual callback mode, Spotify redirects the browser to `http://127.0.0.1:87
 
 ## Runtime design
 
-The container does not use `sleep infinity`, `tail -f /dev/null`, cron, or a fake external web server. `news-playlist serve` is the durable application host. Today it owns process lifecycle, persistent-path validation, graceful signal handling, and the internal health endpoint. Later the scheduler/engine can run inside this same host without replacing the Docker/TrueNAS deployment model.
+The container does not use `sleep infinity`, `tail -f /dev/null`, cron, or a disposable external server. `news-playlist serve` is the durable application host. Today it owns process lifecycle, the read-only status portal, persistent-path validation, graceful signal handling and the health endpoint. Later the scheduler/engine and authenticated private administration can grow inside the same runtime model.
 
 The health endpoint performs a small real write, flush and `fsync` against `/data`, then removes the temporary probe file. This makes storage-full, quota and write failures observable as an unhealthy container instead of relying only on permission bits.
