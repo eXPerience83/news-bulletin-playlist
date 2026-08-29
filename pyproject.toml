@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "news-bulletin-playlist"
 version = "0.0.1"
-description = "Open-source service for dynamic news bulletin playlists across countries and languages"
+description = "Service for dynamic news bulletin playlists across countries and languages"
 readme = "README.md"
 requires-python = ">=3.14"
 authors = [{ name = "news-bulletin-playlist contributors" }]
