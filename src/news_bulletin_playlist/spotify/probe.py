@@ -32,13 +32,22 @@ def _format_error(exc: SpotifyApiError | SpotifyTransportError) -> str:
     return f"HTTP {exc.status} ({exc.message}){suffix}"
 
 
+def _require_items(container: object, *, context: str) -> list[object]:
+    if not isinstance(container, dict):
+        raise RuntimeError(f"{context} was not an object")
+    items = container.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError(f"{context} did not contain an item list")
+    return items
+
+
 def _show_episodes_for_investigation(
     client: SpotifyClient, show_id: str, *, max_pages: int = 4
 ) -> list[dict[str, Any]]:
     episodes: list[dict[str, Any]] = []
     for page_number in range(max_pages):
         page = client.show_episodes(show_id, limit=50, offset=page_number * 50)
-        items = page.get("items") or []
+        items = _require_items(page, context="Spotify show episodes response")
         episodes.extend(item for item in items if isinstance(item, dict))
         if not page.get("next") or not items:
             break
@@ -47,7 +56,7 @@ def _show_episodes_for_investigation(
 
 def _first_show_page(client: SpotifyClient, show_id: str) -> list[dict[str, Any]]:
     page = client.show_episodes(show_id, limit=50, offset=0)
-    items = page.get("items") or []
+    items = _require_items(page, context="Spotify show episodes response")
     return [item for item in items if isinstance(item, dict)]
 
 
@@ -61,6 +70,10 @@ def run_catalog_probe(client: SpotifyClient) -> int:
                 items = _first_show_page(client, provider.spotify_show_id)
         except (SpotifyApiError, SpotifyTransportError) as exc:
             print(f"FAIL {provider.provider_id}: {_format_error(exc)}")
+            failures += 1
+            continue
+        except RuntimeError as exc:
+            print(f"FAIL {provider.provider_id}: invalid Spotify response ({exc})")
             failures += 1
             continue
         print(f"\n[{provider.provider_id}] {len(items)} episode(s) returned")
@@ -84,15 +97,19 @@ def run_catalog_probe(client: SpotifyClient) -> int:
     print("\n[cope-search]")
     try:
         result = client.search_shows("Boletines COPE", limit=10)
+        shows = result.get("shows")
+        show_items = _require_items(shows, context="Spotify search response")
     except (SpotifyApiError, SpotifyTransportError) as exc:
         print(f"FAIL cope search: {_format_error(exc)}")
         failures += 1
+    except RuntimeError as exc:
+        print(f"FAIL cope search: invalid Spotify response ({exc})")
+        failures += 1
     else:
-        shows = (result.get("shows") or {}).get("items") or []
-        for show in shows:
+        for show in show_items:
             if isinstance(show, dict):
                 print(f"  {show.get('name')} | {show.get('publisher')} | {show.get('id')}")
-        if not shows:
+        if not show_items:
             print("  no show results")
 
     return 0 if failures == 0 else 1
@@ -114,12 +131,11 @@ def _extract_playlist_uris(items: object) -> list[str]:
 
 def _read_playlist_uris(client: SpotifyClient, playlist_id: str) -> list[str]:
     page = client.playlist_items(playlist_id, limit=100, offset=0)
-    items = page.get("items") or []
+    items = _require_items(page, context="Spotify playlist response")
     uris = _extract_playlist_uris(items)
     if page.get("next"):
-        item_count = len(items) if isinstance(items, list) else 0
-        overflow = client.playlist_items(playlist_id, limit=1, offset=item_count)
-        overflow_items = overflow.get("items") or []
+        overflow = client.playlist_items(playlist_id, limit=1, offset=len(items))
+        overflow_items = _require_items(overflow, context="Spotify playlist overflow response")
         overflow_uris = _extract_playlist_uris(overflow_items)
         if not overflow_uris:
             raise RuntimeError("Spotify playlist pagination reported an item that was not returned")
@@ -144,7 +160,11 @@ def run_write_probe(client: SpotifyClient) -> int:
     latest_uris: list[str] = []
     for provider in CORE_PROVIDERS:
         page = client.show_episodes(provider.spotify_show_id, limit=1)
-        items = page.get("items") or []
+        try:
+            items = _require_items(page, context="Spotify show episodes response")
+        except RuntimeError as exc:
+            print(f"FAIL write probe: invalid response for {provider.provider_id} ({exc})")
+            return 1
         if not items or not isinstance(items[0], dict) or not items[0].get("uri"):
             print(f"FAIL write probe: no latest URI for {provider.provider_id}")
             return 1
