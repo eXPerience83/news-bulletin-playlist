@@ -142,7 +142,8 @@ An external catalogue reference, such as a Spotify show ID, is not a destination
 parser ID is likewise separate from the destination adapter ID.
 
 The YAML schema is represented by the non-production example in
-[`config/news-bulletin-playlist.example.yaml`](../config/news-bulletin-playlist.example.yaml):
+[`config/news-bulletin-playlist.example.yaml`](../config/news-bulletin-playlist.example.yaml).
+The following is a deliberately minimal, self-consistent excerpt:
 
 ```yaml
 schema_version: 1
@@ -164,7 +165,7 @@ playlists:
     countries: [ES]
     enabled: true
     source_selection:
-      explicit: [ser, rne, ondacero, cnn]
+      explicit: [cnn]
     destination:
       adapter_id: spotify
       external_id: replace-with-provisioned-playlist-id
