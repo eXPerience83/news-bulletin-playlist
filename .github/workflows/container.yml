@@ -2,7 +2,7 @@ name: Container
 
 on:
   push:
-    branches: [main]
+    branches: [main, p0/truenas-runtime]
     tags: ["v*"]
     paths:
       - "Dockerfile"
@@ -38,6 +38,9 @@ jobs:
         run: |
           docker compose -f compose.yaml config --quiet
           docker compose -f deploy/truenas.yaml config --quiet
+          rendered="$(docker compose -f deploy/truenas.yaml config)"
+          grep -q 'published: "8788"' <<<"$rendered"
+          grep -q 'target: 8080' <<<"$rendered"
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build container image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -46,7 +49,7 @@ jobs:
           push: false
           load: true
           tags: news-bulletin-playlist:ci
-      - name: Verify hardened runtime health
+      - name: Verify hardened runtime health and web portal
         run: |
           docker volume create news-bulletin-ci-data
           docker run --detach --rm \
@@ -55,6 +58,7 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
             --cap-drop ALL \
             --security-opt no-new-privileges:true \
+            --publish 127.0.0.1:18788:8080 \
             --mount source=news-bulletin-ci-data,target=/data \
             news-bulletin-playlist:ci
           for attempt in $(seq 1 20); do
@@ -70,6 +74,8 @@ jobs:
           done
           test "$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)" = healthy
           test "$(docker inspect --format '{{.Config.User}}' news-bulletin-playlist-ci)" = "10001:10001"
+          curl --fail --silent --show-error http://127.0.0.1:18788/ | grep -q 'News Bulletin Playlists'
+          curl --fail --silent --show-error http://127.0.0.1:18788/healthz | grep -q '"status":"ok"'
       - name: Stop validation container
         if: always()
         run: |
