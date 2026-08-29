@@ -12,7 +12,7 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      - "192.168.1.10:8788:8080"
+      - "0.0.0.0:8788:8080"
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     volumes:
