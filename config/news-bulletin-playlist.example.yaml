@@ -1,0 +1,77 @@
+# Example only: copy this file and replace the destination external_id with a
+# provisioned playlist ID before runtime integration in a later issue.
+schema_version: 1
+
+sources:
+  - id: ser
+    display_name: Cadena SER
+    countries: [ES]
+    languages: [es]
+    timezone: Europe/Madrid
+    enabled: true
+    parser_id: ser
+    endpoint_url: https://fapi-top.prisasd.com/podcast/playser/boletines.xml
+    external_references:
+      - system: spotify
+        resource_type: show
+        external_id: 4EwwdoHHYmbt49UXODQMpi
+
+  - id: rne
+    display_name: Radio Nacional de España
+    countries: [ES]
+    languages: [es]
+    timezone: Europe/Madrid
+    enabled: true
+    parser_id: rne
+    endpoint_url: https://api.rtve.es/api/adapter/programas/1750/audios.rss
+    external_references:
+      - system: spotify
+        resource_type: show
+        external_id: 0UgidTKsoaHiHDARuPQNW1
+
+  - id: ondacero
+    display_name: Onda Cero
+    countries: [ES]
+    languages: [es]
+    timezone: Europe/Madrid
+    enabled: true
+    parser_id: ondacero
+    endpoint_url: https://www.ondacero.es/rss/podcast/mount/ATRESMEDIA_LAS_NOTICIAS_EN_ONDA_CERO_P/fastly
+    external_references:
+      - system: spotify
+        resource_type: show
+        external_id: 0tjEexypyczHXW9vE3SU3P
+
+  - id: cnn
+    display_name: CNN 5 Cosas
+    countries: [US]
+    languages: [es]
+    timezone: America/New_York
+    enabled: true
+    parser_id: cnn
+    endpoint_url: https://feeds.megaphone.fm/WMHY5696831164
+    external_references:
+      - system: spotify
+        resource_type: show
+        external_id: 0vDgnorbpBr65YZzFVVouE
+
+  - id: cope
+    display_name: COPE
+    countries: [ES]
+    languages: [es]
+    timezone: Europe/Madrid
+    enabled: false
+    parser_id: cope
+
+playlists:
+  - id: spain_spanish_news
+    display_name: Spain Spanish News
+    description: Core Spanish-language news bulletins
+    countries: [ES]
+    languages: [es]
+    enabled: true
+    source_selection:
+      explicit: [ser, rne, ondacero, cnn]
+    destination:
+      adapter_id: spotify
+      external_id: replace-with-provisioned-playlist-id
