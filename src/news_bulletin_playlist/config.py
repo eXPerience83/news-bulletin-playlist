@@ -64,6 +64,13 @@ def _construct_unique_mapping(
     mapping: dict[object, object] = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
+        if not isinstance(key, str):
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found non-string key {key!r}",
+                key_node.start_mark,
+            )
         if key in mapping:
             raise ConstructorError(
                 "while constructing a mapping",
@@ -384,7 +391,12 @@ def _positive_integer(value: object, path: str) -> int:
 
 def _http_url(value: object, path: str) -> str:
     result = _nonempty_string(value, path)
-    parsed = urlparse(result)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ConfigError(f"{path}: expected an HTTP(S) URL")
+    try:
+        parsed = urlparse(result)
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as exc:
+        raise ConfigError(f"{path}: expected a valid HTTP(S) URL") from exc
+    if parsed.scheme not in {"http", "https"} or hostname is None:
+        raise ConfigError(f"{path}: expected an HTTP(S) URL with a host")
     return result
