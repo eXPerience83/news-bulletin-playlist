@@ -61,7 +61,7 @@ See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the source research and the
 
 ## Container runtime
 
-The supported runtime is a hardened Python 3.14 container designed for one engine that can later manage many playlists. The container uses a read-only root filesystem, runs as a non-root numeric UID/GID, keeps `/data` as its only persistent writable path, drops Linux capabilities and exposes only an internal health check.
+The supported runtime is a hardened Python 3.14 container designed for one engine that can later manage many playlists. The container uses a read-only root filesystem, runs as a non-root numeric UID/GID, keeps `/data` as its only persistent writable path and drops Linux capabilities. It serves an internal Docker health endpoint plus a read-only status page.
 
 For local Docker:
 
@@ -70,7 +70,9 @@ docker compose up --build -d
 docker compose ps
 ```
 
-For TrueNAS 26-BETA.3 or newer, use [`deploy/truenas.yaml`](deploy/truenas.yaml) with the installation steps in [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md).
+The local status page is available only on `http://127.0.0.1:8788/`.
+
+For TrueNAS 26-BETA.3 or newer, install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The YAML publishes the status UI on port `8788` and includes `x-portals` metadata for the TrueNAS Web UI shortcut. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for storage, ACL, image-integrity and installation details.
 
 ## Development
 
