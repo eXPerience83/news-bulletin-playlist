@@ -12,12 +12,12 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      - "8788:8080"
+      - "192.168.1.10:8788:8080"
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     volumes:
       - type: bind
-        source: /mnt/POOL/apps/news-bulletin-playlist
+        source: /mnt/Pool1/apps/news-bulletin-playlist
         target: /data
         bind:
           create_host_path: false
