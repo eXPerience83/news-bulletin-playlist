@@ -1,0 +1,161 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "es-ES"
+early_access: false
+tone_instructions: >-
+  Sé conciso, técnico y específico. Prioriza bugs reales, seguridad, regresiones,
+  contratos externos y mantenibilidad; evita nitpicks de estilo que ya cubren Ruff o CI.
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  review_status: true
+  review_details: true
+  review_progress: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: true
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  auto_apply_labels: false
+  suggested_reviewers: false
+  in_progress_fortune: false
+  poem: false
+  enable_prompt_for_ai_agents: false
+  abort_on_close: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+    ignore_usernames:
+      - "renovate[bot]"
+
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+
+  tools:
+    ruff:
+      enabled: true
+    shellcheck:
+      enabled: true
+    psscriptanalyzer:
+      enabled: true
+    hadolint:
+      enabled: true
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+
+  path_instructions:
+    - path: "src/news_bulletin_playlist/spotify/**"
+      instructions: |
+        Trata esta integración como código sensible. Revisa OAuth/PKCE, state,
+        redirect_uri, scopes mínimos, exposición de tokens/códigos/verifiers,
+        timeouts, errores HTTP/red y comportamiento fail-closed. Cuando una
+        observación dependa de endpoints, scopes, límites o reglas de Spotify,
+        contrástala con documentación oficial actual antes de marcarla como
+        problema. Mantén los límites actuales del producto/API (incluido máximo
+        100 items por reemplazo) y exige idempotencia para reconciliaciones. Un
+        default ES es aceptable dentro del probe P0, pero no como supuesto global
+        reutilizable.
+
+    - path: "src/news_bulletin_playlist/providers/**"
+      instructions: |
+        Los parsers deben seguir siendo específicos por proveedor y tolerar solo
+        variantes observadas/documentadas; evita convertirlos en un regex genérico
+        global. Las fechas deben quedar timezone-aware. Conserva la identidad del
+        elemento fuente (GUID/ID) y no colapses publicaciones distintas solo porque
+        compartan título u hora. RSS/proveedor es la autoridad temporal; no se debe
+        descargar ni almacenar audio.
+
+    - path: "src/news_bulletin_playlist/registry.py"
+      instructions: |
+        Distingue el registro P0 español de la arquitectura productiva futura.
+        Señala hardcoding nuevo que impida múltiples países, idiomas o playlists,
+        pero no exijas implementar el motor multi-playlist antes de su fase.
+        Spotify es el primer destino, no el dominio del producto.
+
+    - path: "tests/**"
+      instructions: |
+        Los tests no deben realizar red real ni OAuth real. Para cambios sensibles,
+        exige casos negativos que demuestren fail-closed, límites e idempotencia.
+        Comprueba que valores centinela de access token, refresh token,
+        authorization code y PKCE verifier no aparezcan en stdout/stderr ni en
+        excepciones destinadas al usuario.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Mantén permisos mínimos y acciones de terceros fijadas por SHA completo.
+        El proyecto soporta únicamente Python 3.14. GitHub Actions sirve para CI,
+        watchdog y automatización del repositorio; no debe convertirse en el
+        scheduler de producción que actualizará playlists.
+
+    - path: "scripts/**/*.ps1"
+      instructions: |
+        Revisa compatibilidad con PowerShell moderno, manejo de errores y limpieza
+        de variables de entorno sensibles. El Client ID de Spotify no es secreto;
+        access/refresh tokens, authorization codes y Client Secret sí lo son y no
+        deben persistirse ni imprimirse.
+
+    - path: "Dockerfile"
+      instructions: |
+        Cuando exista, prioriza imagen Python 3.14 ligera, usuario no-root,
+        superficie mínima, healthcheck y secretos fuera de la imagen. El runtime
+        debe ser apto para Docker/TrueNAS y escribir solo en almacenamiento
+        persistente explícito.
+
+    - path: "deploy/**"
+      instructions: |
+        Revisa despliegues para TrueNAS/Docker: persistencia explícita, secretos no
+        versionados, permisos mínimos, healthcheck y configuración multi-playlist.
+        No expongas interfaces administrativas públicamente sin autenticación y
+        endurecimiento explícitos.
+
+    - path: "docs/**"
+      instructions: |
+        Mantén coherencia con ARCHITECTURE.md: un único motor, múltiples playlists,
+        países e idiomas; fetch once -> normalize once -> store once -> distribute
+        to many playlists. Distingue hechos actuales de Spotify de decisiones de
+        arquitectura y señala documentación obsoleta que pueda inducir una
+        implementación incorrecta.
+
+knowledge_base:
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "docs/ARCHITECTURE.md"
+      - "docs/P0_FINDINGS.md"
+      - "docs/SPOTIFY_PROBE.md"
+  learnings:
+    scope: "local"
+    approval_delay: 1
+  issues:
+    scope: "local"
+  pull_requests:
+    scope: "local"
+
+chat:
+  art: false
+  auto_reply: true
