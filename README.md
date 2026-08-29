@@ -1,6 +1,6 @@
 # News Bulletin Playlist
 
-Open-source service for dynamic news bulletin playlists across countries and languages,
+Service for dynamic news bulletin playlists across countries and languages,
 with Spotify as the first destination.
 
 > Early research/prototype stage. This project is not affiliated with or endorsed by Spotify or any news provider.
