@@ -10,7 +10,7 @@ Create one dedicated dataset directly under `Pool1`:
 
 Use the **Apps** dataset preset and keep the remaining dataset options at their defaults unless you have a specific reason to change them.
 
-TrueNAS' Apps preset grants Modify access to the built-in apps group (GID `568`). The container itself still runs as its dedicated non-root user `10001:10001`, and the TrueNAS YAML adds GID `568` only as a supplementary group. This lets `/data` use the normal Apps preset permissions without a custom ACL step.
+TrueNAS 26's Apps preset includes Modify access for the built-in apps group (GID `568`). The container itself still runs as its dedicated non-root user `10001:10001`, and the TrueNAS YAML adds GID `568` only as a supplementary group. This lets `/data` use the standard Apps-preset permissions without any manual ACL customization.
 
 The runtime root filesystem is read-only. `/data` is the only persistent writable application path; `/tmp` is an in-memory tmpfs.
 
