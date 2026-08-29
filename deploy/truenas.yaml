@@ -1,0 +1,32 @@
+name: news-bulletin-playlist
+
+services:
+  app:
+    image: ghcr.io/experience83/news-bulletin-playlist@sha256:c21db83277c9e1921e6766eb9c95c2280f8140db9b1737587e9d9bf49b3b5b47
+    restart: unless-stopped
+    init: true
+    user: "568:568"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "0.0.0.0:8788:8080"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - type: bind
+        source: /mnt/Pool1/news-bulletin-playlist
+        target: /data
+        bind:
+          create_host_path: false
+    pids_limit: 128
+    stop_grace_period: 15s
+
+x-portals:
+  - host: 0.0.0.0
+    name: "Web UI"
+    path: /
+    port: 8788
+    scheme: http

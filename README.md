@@ -59,6 +59,21 @@ The initial provider research focuses on the first Spain / Spanish-language play
 
 See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the source research and the remaining authenticated Spotify probe.
 
+## Container runtime
+
+The supported runtime is a hardened Python 3.14 container designed for one engine that can later manage many playlists. The container uses a read-only root filesystem, runs as a non-root numeric UID/GID, keeps `/data` as its only persistent writable path and drops Linux capabilities. It serves an internal Docker health endpoint plus a read-only status page.
+
+For local Docker:
+
+```bash
+docker compose up --build -d
+docker compose ps
+```
+
+The local status page is available only on `http://127.0.0.1:8788/`.
+
+For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The YAML publishes the status UI on port `8788` and includes best-effort `x-portals` metadata. Direct access to `http://<truenas-host>:8788/` remains the supported path. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the short installation procedure and image-integrity details.
+
 ## Development
 
 The project targets **Python 3.14**. The current P0 code has no runtime dependencies. Development checks use pytest, Ruff and mypy.
@@ -72,7 +87,7 @@ ruff check .
 mypy src
 ```
 
-CI runs Ruff, mypy and pytest on Python 3.14.
+CI runs Ruff, mypy and pytest on Python 3.14. A separate container workflow validates Docker/Compose changes and publishes successful `main` builds to GHCR.
 
 ## License
 
@@ -84,11 +99,11 @@ Do not commit Spotify client secrets, refresh tokens, `.env` files or the runtim
 
 ## Roadmap
 
-1. **P0** — provider contracts and authenticated Spotify catalogue probe for the first Spain / Spanish-language playlist.
+1. **P0** — provider contracts, hardened container/TrueNAS runtime and authenticated Spotify catalogue/write probes for the first Spain / Spanish-language playlist.
 2. **P1** — shared feed collection, canonical metadata model, playlist configuration and SQLite persistence.
 3. **P2** — RSS-to-Spotify matcher and reconciliation rules shared across playlists.
-4. **P3** — private playlist write/readback, multi-playlist reconciliation and idempotency.
+4. **P3** — multi-playlist reconciliation and idempotent scheduled engine cycles.
 5. **P4** — provider watchdog via GitHub Actions.
-6. **P5** — hardened Docker runtime and private admin UI; one runtime can manage multiple playlists.
+6. **P5** — private admin UI, production token persistence and operational hardening.
 7. **P6** — public first playlist / first release.
 8. **P7** — expand sources and playlist definitions to additional languages and European countries.
