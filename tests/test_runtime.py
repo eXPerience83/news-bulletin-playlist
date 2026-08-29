@@ -8,6 +8,9 @@ from http import HTTPStatus
 from http.server import HTTPServer
 from pathlib import Path
 
+import pytest
+
+import news_bulletin_playlist.runtime as runtime
 from news_bulletin_playlist.runtime import HealthHandler, ensure_data_dir, healthcheck
 
 
@@ -41,6 +44,31 @@ def test_health_endpoint_reports_ok_for_writable_data(tmp_path: Path) -> None:
 
 def test_health_endpoint_fails_closed_when_data_path_is_missing(tmp_path: Path) -> None:
     HealthHandler.data_dir = tmp_path / "missing"
+    server = HTTPServer(("127.0.0.1", 0), HealthHandler)
+    thread = _serve_one(server)
+    try:
+        try:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{server.server_port}/healthz", timeout=2
+            )
+        except urllib.error.HTTPError as exc:
+            assert exc.code == HTTPStatus.SERVICE_UNAVAILABLE
+        else:
+            raise AssertionError("health endpoint unexpectedly succeeded")
+    finally:
+        thread.join(timeout=2)
+        server.server_close()
+
+
+def test_health_endpoint_fails_closed_when_real_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_write_probe(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise OSError("simulated storage failure")
+
+    monkeypatch.setattr(runtime.tempfile, "NamedTemporaryFile", fail_write_probe)
+    HealthHandler.data_dir = tmp_path
     server = HTTPServer(("127.0.0.1", 0), HealthHandler)
     thread = _serve_one(server)
     try:
