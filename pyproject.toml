@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 authors = [{ name = "news-bulletin-playlist contributors" }]
-dependencies = []
+dependencies = ["PyYAML>=6.0.3,<7"]
 
 [project.scripts]
 news-playlist = "news_bulletin_playlist.cli:main"

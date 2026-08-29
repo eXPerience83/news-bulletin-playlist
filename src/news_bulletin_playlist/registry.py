@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from news_bulletin_playlist.providers.base import TitleParser
 from news_bulletin_playlist.providers.cnn import CnnParser
+from news_bulletin_playlist.providers.cope import CopeParser
 from news_bulletin_playlist.providers.ondacero import OndaCeroParser
 from news_bulletin_playlist.providers.rne import RneParser
 from news_bulletin_playlist.providers.ser import SerParser
@@ -48,3 +49,25 @@ CORE_PROVIDERS: tuple[ProviderConfig, ...] = (
         parser=CnnParser(),
     ),
 )
+
+
+# P1 configuration resolves parsers here and does not depend on the transitional
+# CORE_PROVIDERS registry, which remains for P0 watch/probe compatibility only.
+TITLE_PARSERS: dict[str, TitleParser] = {
+    "ser": SerParser(),
+    "rne": RneParser(),
+    "ondacero": OndaCeroParser(),
+    "cnn": CnnParser(),
+    "cope": CopeParser(),
+}
+
+
+def has_title_parser(parser_id: str) -> bool:
+    return parser_id in TITLE_PARSERS
+
+
+def get_title_parser(parser_id: str) -> TitleParser:
+    try:
+        return TITLE_PARSERS[parser_id]
+    except KeyError as exc:
+        raise KeyError(f"unknown parser_id: {parser_id}") from exc
