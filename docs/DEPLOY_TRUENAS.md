@@ -22,15 +22,15 @@ For another TrueNAS system, edit the host path in `deploy/truenas.yaml` before i
 4. Use application name `news-bulletin-playlist`.
 5. Paste the YAML and save.
 6. Wait for the container health state to become healthy.
-7. Browse to `http://192.168.1.10:8788/`.
+7. Browse to `http://<truenas-host>:8788/` using any reachable TrueNAS address.
 
-The application listens on container port `8080`. The checked-in TrueNAS deployment binds it specifically to the NAS LAN address as `192.168.1.10:8788:8080`, matching the existing remote-dev deployment convention. This is deliberately narrower than `8788:8080`, which would listen on every host interface.
+The application listens on container port `8080`. The checked-in TrueNAS deployment publishes it as `0.0.0.0:8788:8080`, so Docker listens on all host interfaces. This intentionally allows the same service to be reached through the appropriate TrueNAS LAN, Tailscale or other trusted host address without hard-coding one NAS IP into the deployment.
 
-The YAML also includes top-level `x-portals` metadata matching TrueNAS catalog-generated Compose files and the existing remote-dev deployment convention. This is safe Compose extension metadata, but the current TrueNAS documentation explicitly says Custom Apps installed via YAML might not show a **Web UI** button in the Application Info widget. Therefore the deployment does **not** depend on `x-portals`: use `http://192.168.1.10:8788/` if the button is absent. `x-portals` never publishes the port by itself.
+The YAML also includes top-level `x-portals` metadata with `host: 0.0.0.0`, matching the TrueNAS portal-extension format. This is safe Compose extension metadata, but the current TrueNAS documentation explicitly says Custom Apps installed via YAML might not show a **Web UI** button in the Application Info widget. Therefore the deployment does **not** depend on `x-portals`: use `http://<truenas-host>:8788/` if the button is absent. `x-portals` never publishes the port by itself.
 
-The current `/` page is intentionally read-only: it shows runtime, persistent-storage and version status only. It contains no credentials and has no administrative actions. `/healthz` remains the Docker health endpoint. Do not expose port `8788` directly to the public Internet. Authentication must be added before future state-changing administration is exposed through the web UI.
+The current `/` page is intentionally read-only: it shows runtime, persistent-storage and version status only. It contains no credentials and has no administrative actions. `/healthz` remains the Docker health endpoint. Do not forward port `8788` from the router or otherwise expose it directly to the public Internet. Authentication must be added before future state-changing administration is exposed through the web UI.
 
-If port `8788` is already occupied, change the host port in `192.168.1.10:8788:8080` and the `x-portals` `port` to the same free value. Keep the container target at `8080`.
+If port `8788` is already occupied, change the host port in `0.0.0.0:8788:8080` and the `x-portals` `port` to the same free value. Keep the container target at `8080`.
 
 ## Image integrity and updates
 
