@@ -4,31 +4,33 @@ The first supported NAS target is TrueNAS 26-BETA.3 or newer. This project is in
 
 ## Storage first
 
-Create a dedicated dataset before installing the app, for example:
+The checked-in deployment targets the current NAS layout used by this project:
 
-`POOL/apps/news-bulletin-playlist`
+`/mnt/Pool1/apps/news-bulletin-playlist`
 
-The container runs as numeric UID/GID `10001:10001`. Grant that UID (or GID) **Modify** access to the dataset ACL. TrueNAS does not require a matching local user account for a numeric app UID/GID.
+Create that dedicated dataset before installing the app. The container runs as numeric UID/GID `10001:10001`; grant that UID (or GID) **Modify** access to the dataset ACL. TrueNAS does not require a matching local user account for a numeric app UID/GID.
 
 The runtime root filesystem is read-only. `/data` is the only persistent writable application path; `/tmp` is an in-memory tmpfs.
 
+For another TrueNAS system, edit the host path in `deploy/truenas.yaml` before installation.
+
 ## Install via YAML
 
-1. Open `deploy/truenas.yaml`.
-2. Replace `POOL` in `/mnt/POOL/apps/news-bulletin-playlist` with the actual pool name.
+1. Create `/mnt/Pool1/apps/news-bulletin-playlist` and grant UID/GID `10001` Modify access.
+2. Open `deploy/truenas.yaml`.
 3. In TrueNAS open **Apps -> Discover Apps -> menu -> Install via YAML**.
 4. Use application name `news-bulletin-playlist`.
 5. Paste the YAML and save.
 6. Wait for the container health state to become healthy.
-7. Browse to `http://<truenas-host>:8788/`.
+7. Browse to `http://192.168.1.10:8788/`.
 
-The application listens on container port `8080`. The TrueNAS YAML publishes it as host port `8788` using `ports:`. This mapping is what makes the status page reachable.
+The application listens on container port `8080`. The checked-in TrueNAS deployment binds it specifically to the NAS LAN address as `192.168.1.10:8788:8080`, matching the existing remote-dev deployment convention. This is deliberately narrower than `8788:8080`, which would listen on every host interface.
 
-The YAML also includes top-level `x-portals` metadata matching TrueNAS catalog-generated Compose files and the existing remote-dev deployment convention. This is safe Compose extension metadata, but the current TrueNAS documentation explicitly says Custom Apps installed via YAML might not show a **Web UI** button in the Application Info widget. Therefore the deployment does **not** depend on `x-portals`: use `http://<truenas-host>:8788/` if the button is absent. `x-portals` never publishes the port by itself.
+The YAML also includes top-level `x-portals` metadata matching TrueNAS catalog-generated Compose files and the existing remote-dev deployment convention. This is safe Compose extension metadata, but the current TrueNAS documentation explicitly says Custom Apps installed via YAML might not show a **Web UI** button in the Application Info widget. Therefore the deployment does **not** depend on `x-portals`: use `http://192.168.1.10:8788/` if the button is absent. `x-portals` never publishes the port by itself.
 
-The current `/` page is intentionally read-only: it shows runtime, persistent-storage and version status only. It contains no credentials and has no administrative actions. `/healthz` remains the Docker health endpoint. Do not expose port `8788` directly to the public Internet; keep it on the LAN or a trusted private network such as Tailscale. Authentication must be added before future state-changing administration is exposed through the web UI.
+The current `/` page is intentionally read-only: it shows runtime, persistent-storage and version status only. It contains no credentials and has no administrative actions. `/healthz` remains the Docker health endpoint. Do not expose port `8788` directly to the public Internet. Authentication must be added before future state-changing administration is exposed through the web UI.
 
-If host port `8788` is already occupied, change the host side of `8788:8080` and the `x-portals` `port` to the same free value. Keep the container target at `8080`.
+If port `8788` is already occupied, change the host port in `192.168.1.10:8788:8080` and the `x-portals` `port` to the same free value. Keep the container target at `8080`.
 
 ## Image integrity and updates
 
