@@ -121,12 +121,68 @@ def test_enabled_playlist_must_have_explicit_source() -> None:
         parse_config(_config(playlists=[_playlist(sources=[])]))
 
 
+def test_enabled_playlists_cannot_share_one_destination() -> None:
+    first = _playlist("first")
+    second = _playlist("second")
+    second["destination"] = first["destination"]
+
+    with pytest.raises(ConfigError, match="duplicate enabled destination"):
+        parse_config(_config(playlists=[first, second]))
+
+
+def test_disabled_playlist_may_stage_an_enabled_playlist_destination() -> None:
+    first = _playlist("first")
+    second = _playlist("second", enabled=False)
+    second["destination"] = first["destination"]
+
+    config = parse_config(_config(playlists=[first, second]))
+
+    assert config.playlists[0].destination == config.playlists[1].destination
+
+
 def test_duplicate_yaml_keys_are_rejected(tmp_path: Path) -> None:
     path = tmp_path / "duplicate.yaml"
     path.write_text("schema_version: 1\nschema_version: 1\nsources: []\nplaylists: []\n")
 
     with pytest.raises(ConfigError, match="duplicate key"):
         load_config(path)
+
+
+def test_yaml_does_not_coerce_norway_country_or_language_to_boolean(tmp_path: Path) -> None:
+    path = tmp_path / "norway.yaml"
+    path.write_text(
+        """schema_version: 1
+sources:
+  - id: ser
+    display_name: Norwegian test source
+    countries: [NO]
+    languages: [no]
+    timezone: Europe/Oslo
+    enabled: true
+    parser_id: ser
+    endpoint_url: https://example.com/feed.xml
+playlists:
+  - id: norway_news
+    display_name: Norway News
+    description: Test
+    countries: [NO]
+    languages: [no]
+    enabled: true
+    source_selection:
+      explicit: [ser]
+    destination:
+      adapter_id: spotify
+      external_id: playlist-norway
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.sources[0].countries == ("NO",)
+    assert config.sources[0].languages == ("no",)
+    assert config.playlists[0].countries == ("NO",)
+    assert config.playlists[0].languages == ("no",)
 
 
 def test_unknown_config_key_is_rejected() -> None:
