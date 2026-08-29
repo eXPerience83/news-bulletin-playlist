@@ -25,8 +25,10 @@ RUN python -m pip install --no-cache-dir /wheels/*.whl \
 USER 10001:10001
 WORKDIR /data
 
+EXPOSE 8080
+
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --start-interval=1s --retries=3 \
     CMD ["news-playlist", "healthcheck"]
 
 ENTRYPOINT ["news-playlist"]
-CMD ["serve"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8080"]
