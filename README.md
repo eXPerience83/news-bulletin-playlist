@@ -1,6 +1,7 @@
 # News Bulletin Playlist
 
-Configurable engine for dynamic news bulletin playlists on Spotify.
+Open-source service for dynamic news bulletin playlists across countries and languages,
+with Spotify as the first destination.
 
 > Early research/prototype stage. This project is not affiliated with or endorsed by Spotify or any news provider.
 
@@ -60,10 +61,10 @@ See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the source research and the
 
 ## Development
 
-The current P0 code has no runtime dependencies. Development checks use pytest, Ruff and mypy.
+The project targets **Python 3.14**. The current P0 code has no runtime dependencies. Development checks use pytest, Ruff and mypy.
 
 ```bash
-python -m venv .venv
+python3.14 -m venv .venv
 . .venv/bin/activate
 pip install -e '.[dev]'
 pytest
@@ -71,7 +72,11 @@ ruff check .
 mypy src
 ```
 
-CI runs the parser contract suite on Python 3.12 and 3.14.
+CI runs Ruff, mypy and pytest on Python 3.14.
+
+## License
+
+Released under the [MIT License](LICENSE).
 
 ## Security
 

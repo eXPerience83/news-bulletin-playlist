@@ -11,21 +11,28 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-$pythonLauncher = $null
+$pythonCommand = $null
+$pythonArgs = @()
 if (Get-Command py -ErrorAction SilentlyContinue) {
-    $pythonLauncher = "py"
+    $pythonCommand = "py"
+    $pythonArgs = @("-3.14")
 } elseif (Get-Command python -ErrorAction SilentlyContinue) {
-    $pythonLauncher = "python"
+    $pythonCommand = "python"
 } else {
-    throw "Python was not found. Install Python 3.12+ and run this script again."
+    throw "Python 3.14 was not found. Install Python 3.14 and run this script again."
+}
+
+$pythonVersion = & $pythonCommand @pythonArgs -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+if ($pythonVersion.Trim() -ne "3.14") {
+    throw "Python 3.14 is required; found Python $pythonVersion."
 }
 
 $venvPath = Join-Path $repoRoot ".venv"
 $venvPython = Join-Path $venvPath "Scripts\python.exe"
 
 if (-not (Test-Path $venvPython)) {
-    Write-Host "Creating local virtual environment..."
-    & $pythonLauncher -m venv $venvPath
+    Write-Host "Creating local virtual environment with Python 3.14..."
+    & $pythonCommand @pythonArgs -m venv $venvPath
 }
 
 Write-Host "Installing the local project..."
