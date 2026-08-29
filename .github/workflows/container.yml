@@ -45,8 +45,10 @@ jobs:
           docker compose -f compose.yaml config --quiet
           docker compose -f deploy/truenas.yaml config --quiet
           rendered="$(docker compose -f deploy/truenas.yaml config)"
+          grep -q 'host_ip: 192.168.1.10' <<<"$rendered"
           grep -q 'published: "8788"' <<<"$rendered"
           grep -q 'target: 8080' <<<"$rendered"
+          grep -q 'source: /mnt/Pool1/apps/news-bulletin-playlist' <<<"$rendered"
           grep -q '^x-portals:' deploy/truenas.yaml
           grep -q 'port: 8788' deploy/truenas.yaml
       - name: Verify TrueNAS image is anonymously pullable
