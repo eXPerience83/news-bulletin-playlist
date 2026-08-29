@@ -2,23 +2,49 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import hashlib
+import hmac
 import json
 import os
 import secrets
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
-import webbrowser
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 from news_bulletin_playlist.spotify.client import SpotifyClient
 from news_bulletin_playlist.spotify.probe import run_catalog_probe, run_write_probe
 
-_REDIRECT_URI = "http://127.0.0.1:8787/callback"
+REDIRECT_URI = "http://127.0.0.1:8787/callback"
 _AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
 _TOKEN_URL = "https://accounts.spotify.com/api/token"
-_SCOPES = ("user-read-playback-position", "playlist-modify-private")
+_LOCAL_CALLBACK_TIMEOUT_SECONDS = 180.0
+
+
+class OAuthCallbackError(ValueError):
+    """A safe, user-facing OAuth callback validation error."""
+
+
+class OAuthAuthorizationDenied(OAuthCallbackError):
+    """Spotify returned an OAuth authorization error for the expected state."""
+
+
+@dataclass(frozen=True, slots=True)
+class TokenResponse:
+    access_token: str
+    expires_in: int
+    granted_scopes: tuple[str, ...]
+
+
+def scopes_for_mode(write: bool) -> tuple[str, ...]:
+    read_scopes = ("user-read-playback-position", "user-read-private")
+    if not write:
+        return read_scopes
+    return (*read_scopes, "playlist-modify-private", "playlist-read-private")
 
 
 def create_code_verifier() -> str:
@@ -30,13 +56,15 @@ def create_code_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
-def build_authorize_url(client_id: str, *, state: str, challenge: str) -> str:
+def build_authorize_url(
+    client_id: str, *, state: str, challenge: str, scopes: tuple[str, ...]
+) -> str:
     query = urllib.parse.urlencode(
         {
             "client_id": client_id,
             "response_type": "code",
-            "redirect_uri": _REDIRECT_URI,
-            "scope": " ".join(_SCOPES),
+            "redirect_uri": REDIRECT_URI,
+            "scope": " ".join(scopes),
             "state": state,
             "code_challenge_method": "S256",
             "code_challenge": challenge,
@@ -45,34 +73,76 @@ def build_authorize_url(client_id: str, *, state: str, challenge: str) -> str:
     return f"{_AUTHORIZE_URL}?{query}"
 
 
-class _CallbackHandler(BaseHTTPRequestHandler):
-    expected_state: ClassVar[str] = ""
-    code: ClassVar[str | None] = None
-    error: ClassVar[str | None] = None
+def _single_parameter(params: dict[str, list[str]], name: str, *, required: bool) -> str | None:
+    values = params.get(name, [])
+    if len(values) > 1:
+        raise OAuthCallbackError(f"OAuth callback contained duplicate {name} parameters")
+    if not values:
+        if required:
+            raise OAuthCallbackError(f"OAuth callback did not contain {name}")
+        return None
+    if not values[0]:
+        raise OAuthCallbackError(f"OAuth callback contained an empty {name} parameter")
+    return values[0]
 
-    def do_GET(self) -> None:
-        parsed = urllib.parse.urlparse(self.path)
-        params = urllib.parse.parse_qs(parsed.query)
-        returned_state = (params.get("state") or [""])[0]
-        error = (params.get("error") or [None])[0]
-        code = (params.get("code") or [None])[0]
 
-        if parsed.path != "/callback":
-            self._reply(404, "Unexpected callback path. You can close this tab.")
-            return
-        if returned_state != self.expected_state:
-            self.__class__.error = "OAuth state mismatch"
-            self._reply(400, "Authorization state mismatch. You can close this tab.")
-            return
-        if error:
-            self.__class__.error = error
-            self._reply(400, "Spotify authorization was not granted. You can close this tab.")
-            return
-        if not code:
-            self.__class__.error = "callback did not contain an authorization code"
-            self._reply(400, "Missing authorization code. You can close this tab.")
-            return
+def parse_callback_url(callback_url: str, *, expected_state: str) -> str:
+    """Validate a pasted/local callback and return its authorization code only."""
+    try:
+        parsed = urllib.parse.urlsplit(callback_url)
+        port = parsed.port
+        params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError as exc:
+        raise OAuthCallbackError("OAuth callback URL is malformed") from exc
 
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname != "127.0.0.1"
+        or port != 8787
+        or parsed.path != "/callback"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise OAuthCallbackError("OAuth callback URL does not match the registered redirect URI")
+
+    state = _single_parameter(params, "state", required=True)
+    if state is None or not hmac.compare_digest(state, expected_state):
+        raise OAuthCallbackError("OAuth callback state validation failed")
+    code = _single_parameter(params, "code", required=False)
+    error = _single_parameter(params, "error", required=False)
+    if (code is None) == (error is None):
+        raise OAuthCallbackError("OAuth callback must contain exactly one of code or error")
+    if error is not None:
+        raise OAuthAuthorizationDenied("Spotify authorization was not granted")
+    if code is None:
+        raise OAuthCallbackError("OAuth callback did not contain an authorization code")
+    return code
+
+
+def receive_manual_authorization_code(*, state: str) -> str:
+    callback_url = getpass.getpass("Paste the complete callback URL: ")
+    code = parse_callback_url(callback_url, expected_state=state)
+    print("OAuth callback received.")
+    return code
+
+
+class _LocalCallbackHandler(BaseHTTPRequestHandler):
+    expected_state = ""
+    code: str | None = None
+    error: str | None = None
+
+    def do_GET(self) -> None:  # noqa: N802
+        candidate = f"http://127.0.0.1:8787{self.path}"
+        try:
+            code = parse_callback_url(candidate, expected_state=self.expected_state)
+        except OAuthAuthorizationDenied as exc:
+            self.__class__.error = str(exc)
+            self._reply(400, str(exc))
+            return
+        except OAuthCallbackError as exc:
+            self._reply(400, str(exc))
+            return
         self.__class__.code = code
         self._reply(200, "Authorization received. Return to the terminal; this tab can be closed.")
 
@@ -93,31 +163,62 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def receive_authorization_code(authorize_url: str, *, state: str) -> str:
-    _CallbackHandler.expected_state = state
-    _CallbackHandler.code = None
-    _CallbackHandler.error = None
+def receive_local_authorization_code(
+    *, state: str, timeout: float = _LOCAL_CALLBACK_TIMEOUT_SECONDS
+) -> str:
+    _LocalCallbackHandler.expected_state = state
+    _LocalCallbackHandler.code = None
+    _LocalCallbackHandler.error = None
+    deadline = time.monotonic() + timeout
+    with HTTPServer(("127.0.0.1", 8787), _LocalCallbackHandler) as server:
+        while (
+            _LocalCallbackHandler.code is None
+            and _LocalCallbackHandler.error is None
+            and time.monotonic() < deadline
+        ):
+            server.timeout = max(0.1, min(1.0, deadline - time.monotonic()))
+            server.handle_request()
+    if _LocalCallbackHandler.error is not None:
+        raise OAuthAuthorizationDenied(_LocalCallbackHandler.error)
+    if _LocalCallbackHandler.code is None:
+        raise OAuthCallbackError("OAuth callback was not received before the timeout")
+    return _LocalCallbackHandler.code
 
-    with HTTPServer(("127.0.0.1", 8787), _CallbackHandler) as server:
-        print("Opening Spotify authorization in your browser...")
-        print(f"If it does not open automatically, visit:\n{authorize_url}\n")
-        webbrowser.open(authorize_url)
-        server.handle_request()
 
-    if _CallbackHandler.error:
-        raise RuntimeError(_CallbackHandler.error)
-    if not _CallbackHandler.code:
-        raise RuntimeError("authorization callback was not received")
-    return _CallbackHandler.code
+def validate_token_response(payload: dict[str, Any]) -> TokenResponse:
+    access_token = payload.get("access_token")
+    token_type = payload.get("token_type")
+    expires_in = payload.get("expires_in")
+    scope = payload.get("scope")
+    if not isinstance(access_token, str) or not access_token:
+        raise RuntimeError("Spotify token response did not contain a valid access token")
+    if not isinstance(token_type, str) or token_type.lower() != "bearer":
+        raise RuntimeError("Spotify token response did not contain a Bearer token type")
+    if isinstance(expires_in, bool) or not isinstance(expires_in, int) or expires_in <= 0:
+        raise RuntimeError("Spotify token response did not contain a valid expiry")
+    if not isinstance(scope, str):
+        raise RuntimeError("Spotify token response did not contain granted scopes")
+    return TokenResponse(access_token, expires_in, tuple(scope.split()))
 
 
-def exchange_code(client_id: str, code: str, verifier: str) -> dict[str, Any]:
+def require_granted_scopes(
+    granted_scopes: tuple[str, ...], required_scopes: tuple[str, ...]
+) -> None:
+    granted = set(granted_scopes)
+    missing = [scope for scope in required_scopes if scope not in granted]
+    if missing:
+        raise RuntimeError(
+            "Spotify did not grant all requested scopes: " + ", ".join(missing)
+        )
+
+
+def exchange_code(client_id: str, code: str, verifier: str) -> TokenResponse:
     body = urllib.parse.urlencode(
         {
             "client_id": client_id,
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": _REDIRECT_URI,
+            "redirect_uri": REDIRECT_URI,
             "code_verifier": verifier,
         }
     ).encode("ascii")
@@ -127,41 +228,68 @@ def exchange_code(client_id: str, code: str, verifier: str) -> dict[str, Any]:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=30.0) as response:
-        payload = bytes(response.read())
-    decoded = json.loads(payload)
+    try:
+        with urllib.request.urlopen(request, timeout=30.0) as response:
+            payload = bytes(response.read())
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Spotify token exchange failed (HTTP {exc.code})") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError("Spotify token exchange failed due to a network error") from exc
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Spotify token exchange returned invalid JSON") from exc
     if not isinstance(decoded, dict):
-        raise RuntimeError("unexpected Spotify token response")
-    return cast(dict[str, Any], decoded)
+        raise RuntimeError("Spotify token exchange returned an unexpected response")
+    return validate_token_response(cast(dict[str, Any], decoded))
+
+
+def _print_manual_instructions(authorize_url: str) -> None:
+    print("Open this Spotify authorization URL in your browser:")
+    print(authorize_url)
+    print(
+        "After authorizing, Spotify will try http://127.0.0.1:8787/callback. "
+        "A browser connection error is expected when this helper runs in a remote container."
+    )
+    print("Copy the complete URL from the browser address bar and paste it below.")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the authenticated Spotify P0 probe via PKCE.")
     parser.add_argument(
-        "--write",
-        action="store_true",
-        help="also create and validate a temporary private playlist",
+        "--write", action="store_true", help="also run the private playlist write probe"
+    )
+    parser.add_argument("--callback-mode", choices=("manual", "local"), default="manual")
+    parser.add_argument(
+        "--market", default="ES", help="Spotify ISO 3166-1 alpha-2 market for this P0 probe"
     )
     args = parser.parse_args()
-
     client_id = os.environ.get("SPOTIFY_CLIENT_ID")
     if not client_id:
         parser.error("SPOTIFY_CLIENT_ID is required")
-
     verifier = create_code_verifier()
     state = secrets.token_urlsafe(32)
+    requested_scopes = scopes_for_mode(args.write)
     authorize_url = build_authorize_url(
         client_id,
         state=state,
         challenge=create_code_challenge(verifier),
+        scopes=requested_scopes,
     )
-    code = receive_authorization_code(authorize_url, state=state)
+    if args.callback_mode == "manual":
+        _print_manual_instructions(authorize_url)
+        code = receive_manual_authorization_code(state=state)
+    else:
+        print("Open this Spotify authorization URL in your browser:")
+        print(authorize_url)
+        code = receive_local_authorization_code(state=state)
+        print("OAuth callback received.")
     token = exchange_code(client_id, code, verifier)
-    access_token = token.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise RuntimeError("Spotify token response did not contain an access token")
-
-    client = SpotifyClient(access_token=access_token)
+    require_granted_scopes(token.granted_scopes, requested_scopes)
+    print("Granted scopes:")
+    for scope in token.granted_scopes:
+        print(f"- {scope}")
+    client = SpotifyClient(access_token=token.access_token, market=args.market)
     result = run_catalog_probe(client)
     if result != 0 or not args.write:
         return result
