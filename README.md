@@ -76,7 +76,7 @@ For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** pre
 
 ## Development
 
-The project targets **Python 3.14**. The current P0 code has no runtime dependencies. Development checks use pytest, Ruff and mypy.
+The project targets **Python 3.14**. PyYAML is the only runtime dependency; development checks use pytest, Ruff and mypy.
 
 ```bash
 python3.14 -m venv .venv
@@ -88,6 +88,24 @@ mypy src
 ```
 
 CI runs Ruff, mypy and pytest on Python 3.14. A separate container workflow validates Docker/Compose changes and publishes successful `main` builds to GHCR.
+
+## Domain and configuration contract
+
+P1 configuration is YAML and separates global source definitions from playlist policies and
+destination references. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml)
+is a non-production example: its Spotify destination must be replaced with an already provisioned
+playlist ID before later runtime integration. Issue #14 does not provision a playlist.
+
+The example uses the verified feeds and existing source IDs `ser`, `rne`, `ondacero` and `cnn`.
+COPE remains a disabled candidate without an invented endpoint or Spotify catalogue reference.
+Playlist `source_selection.explicit` is authoritative in schema version 1; playlist countries and
+languages describe editorial scope and do not implicitly filter that list. This is why a
+Spain-oriented playlist can explicitly include the US source CNN 5 Cosas.
+
+Canonical editions are identified only by `(source_id, source_native_id)`. Titles and timestamps
+are metadata, never identity. Canonical timestamps are timezone-aware UTC values. Spotify show
+references are source catalogue metadata and are intentionally distinct from writable playlist
+destinations.
 
 ## License
 

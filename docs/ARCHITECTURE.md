@@ -127,33 +127,59 @@ Adding a new country, language or playlist should normally require:
 
 It should **not** require copying the application, forking the engine, or creating a country-specific runtime implementation.
 
-## Intended configuration direction
+## P1.1 domain and configuration contract
 
-The exact schema is not frozen yet, but the architecture should support explicit source lists and selector-based playlists, for example:
+Schema version 1 defines four separate concepts:
+
+- `SourceDefinition`: a global source/provider definition with stable ID, parser, endpoint,
+  country/language metadata and optional external catalogue references;
+- `CanonicalEdition`: one source-native asset identified by `(source_id, source_native_id)`, with
+  its source title plus UTC `published_at` and optional UTC `edition_at` metadata;
+- `PlaylistDefinition`: editorial metadata, an explicit source selection and per-playlist policy;
+- `DestinationReference`: the adapter and writable external destination for a playlist.
+
+An external catalogue reference, such as a Spotify show ID, is not a destination. The source
+parser ID is likewise separate from the destination adapter ID.
+
+The YAML schema is represented by the non-production example in
+[`config/news-bulletin-playlist.example.yaml`](../config/news-bulletin-playlist.example.yaml):
 
 ```yaml
+schema_version: 1
+sources:
+  - id: cnn
+    display_name: CNN 5 Cosas
+    countries: [US]
+    languages: [es]
+    timezone: America/New_York
+    enabled: true
+    parser_id: cnn
+    endpoint_url: https://feeds.megaphone.fm/WMHY5696831164
+
 playlists:
-  - id: spain
+  - id: spain_spanish_news
+    display_name: Spain Spanish News
+    description: Core Spanish-language news bulletins
     languages: [es]
     countries: [ES]
+    enabled: true
+    source_selection:
+      explicit: [ser, rne, ondacero, cnn]
+    destination:
+      adapter_id: spotify
+      external_id: replace-with-provisioned-playlist-id
     retention_hours: 48
     max_episodes: 100
-    sources:
-      - rne_24h
-      - cadena_ser
-      - cope
-      - onda_cero
-
-  - id: english
-    languages: [en]
-    retention_hours: 48
-    max_episodes: 100
-    selector:
-      category: news_bulletin
-      enabled: true
+    ordering: published_at_desc
 ```
 
-The final schema may change, but the domain separation above must remain.
+`source_selection.explicit` is authoritative in schema version 1. Playlist countries and languages
+are independent editorial metadata and do not implicitly filter explicitly selected sources.
+Selectors may later evaluate source dimensions, but selectors are deliberately not part of P1.1.
+
+The default playlist policy is 48 retention hours, 100 episodes and descending source publication
+time. `CORE_PROVIDERS` remains temporarily available to the P0 provider watch and Spotify probes;
+new P1 code resolves parsers independently and does not consume that legacy tuple.
 
 ## Deployment invariant
 
