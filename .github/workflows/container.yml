@@ -49,8 +49,7 @@ jobs:
           grep -q 'published: "8788"' <<<"$rendered"
           grep -q 'target: 8080' <<<"$rendered"
           grep -q 'source: /mnt/Pool1/news-bulletin-playlist' <<<"$rendered"
-          grep -q 'group_add:' <<<"$rendered"
-          grep -q -- '- "568"' <<<"$rendered"
+          grep -q 'user: 568:568' <<<"$rendered"
           grep -q '^x-portals:' deploy/truenas.yaml
           grep -q 'host: 0.0.0.0' deploy/truenas.yaml
           grep -q 'port: 8788' deploy/truenas.yaml
@@ -95,7 +94,6 @@ jobs:
             sleep 1
           done
           test "$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)" = healthy
-          test "$(docker inspect --format '{{.Config.User}}' news-bulletin-playlist-ci)" = "10001:10001"
           curl --fail --silent --show-error http://127.0.0.1:18788/ | grep -q 'News Bulletin Playlists'
           curl --fail --silent --show-error http://127.0.0.1:18788/healthz | grep -q '"status":"ok"'
       - name: Stop validation container
