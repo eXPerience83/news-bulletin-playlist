@@ -128,6 +128,7 @@ def receive_manual_authorization_code(*, state: str) -> str:
 
 
 class _LocalCallbackHandler(BaseHTTPRequestHandler):
+    timeout = 1.0
     expected_state = ""
     code: str | None = None
     error: str | None = None
