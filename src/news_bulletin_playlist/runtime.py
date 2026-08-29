@@ -23,23 +23,34 @@ DEFAULT_HEALTH_URL = f"http://{DEFAULT_HEALTH_HOST}:{DEFAULT_HEALTH_PORT}/health
 
 
 def _data_dir_ready(data_dir: Path) -> bool:
-    return data_dir.is_dir() and os.access(data_dir, os.R_OK | os.W_OK | os.X_OK)
+    """Return whether the persistent path accepts a real durable write."""
+    if not data_dir.is_dir():
+        return False
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".runtime-health-", dir=data_dir) as probe:
+            probe.write(b"ok")
+            probe.flush()
+            os.fsync(probe.fileno())
+    except OSError:
+        return False
+    return True
 
 
 def ensure_data_dir(data_dir: Path) -> None:
     """Fail early unless the persistent application directory is writable."""
-    data_dir.mkdir(parents=True, exist_ok=True)
     try:
-        with tempfile.NamedTemporaryFile(prefix=".runtime-write-test-", dir=data_dir):
-            pass
+        data_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise RuntimeError(f"application data directory is not writable: {data_dir}") from exc
+    if not _data_dir_ready(data_dir):
+        raise RuntimeError(f"application data directory is not writable: {data_dir}")
 
 
 class HealthHandler(BaseHTTPRequestHandler):
     """Local-only operational health endpoint kept as part of the future engine host."""
 
     data_dir = DEFAULT_DATA_DIR
+    timeout = 2.0
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if self.path != "/healthz":
@@ -58,7 +69,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def log_message(self, format: str, *args: object) -> None:
-        # Do not emit request details from a localhost-only health probe.
+        """Suppress localhost health-request logging."""
         return
 
 
