@@ -5,9 +5,7 @@ services:
     image: ghcr.io/experience83/news-bulletin-playlist@sha256:c21db83277c9e1921e6766eb9c95c2280f8140db9b1737587e9d9bf49b3b5b47
     restart: unless-stopped
     init: true
-    user: "10001:10001"
-    group_add:
-      - "568"
+    user: "568:568"
     read_only: true
     cap_drop:
       - ALL
