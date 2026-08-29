@@ -2,7 +2,7 @@ name: Container
 
 on:
   push:
-    branches: [main]
+    branches: [main, p0/truenas-runtime]
     tags: ["v*"]
     paths:
       - "Dockerfile"
