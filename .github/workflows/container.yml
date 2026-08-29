@@ -48,7 +48,9 @@ jobs:
           grep -q 'host_ip: 0.0.0.0' <<<"$rendered"
           grep -q 'published: "8788"' <<<"$rendered"
           grep -q 'target: 8080' <<<"$rendered"
-          grep -q 'source: /mnt/Pool1/apps/news-bulletin-playlist' <<<"$rendered"
+          grep -q 'source: /mnt/Pool1/news-bulletin-playlist' <<<"$rendered"
+          grep -q 'group_add:' <<<"$rendered"
+          grep -q -- '- "568"' <<<"$rendered"
           grep -q '^x-portals:' deploy/truenas.yaml
           grep -q 'host: 0.0.0.0' deploy/truenas.yaml
           grep -q 'port: 8788' deploy/truenas.yaml
