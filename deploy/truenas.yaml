@@ -11,6 +11,8 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    ports:
+      - "8788:8080"
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     volumes:
@@ -21,3 +23,10 @@ services:
           create_host_path: false
     pids_limit: 128
     stop_grace_period: 15s
+
+x-portals:
+  - host: 0.0.0.0
+    name: "Web UI"
+    path: /
+    port: 8788
+    scheme: http
