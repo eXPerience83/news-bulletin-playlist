@@ -80,7 +80,9 @@ def serve(
         del signum, frame
         stopped.set()
 
-    handlers_installed = stop_event is None and threading.current_thread() is threading.main_thread()
+    handlers_installed = (
+        stop_event is None and threading.current_thread() is threading.main_thread()
+    )
     previous_sigterm = signal.getsignal(signal.SIGTERM)
     previous_sigint = signal.getsignal(signal.SIGINT)
     if handlers_installed:
