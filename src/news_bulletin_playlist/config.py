@@ -394,9 +394,9 @@ def _http_url(value: object, path: str) -> str:
     try:
         parsed = urlparse(result)
         hostname = parsed.hostname
-        parsed.port
+        port = parsed.port
     except ValueError as exc:
         raise ConfigError(f"{path}: expected a valid HTTP(S) URL") from exc
-    if parsed.scheme not in {"http", "https"} or hostname is None:
+    if parsed.scheme not in {"http", "https"} or hostname is None or port == 0:
         raise ConfigError(f"{path}: expected an HTTP(S) URL with a host")
     return result
