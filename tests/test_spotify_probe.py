@@ -60,6 +60,23 @@ def test_reconciliation_rejects_more_than_100_items_before_http_like_calls() -> 
 
 
 @dataclass
+class InvalidPlaylistClient(FakePlaylistClient):
+    def playlist_items(
+        self, playlist_id: str, *, limit: int = 100, offset: int = 0
+    ) -> dict[str, object]:
+        self.reads += 1
+        return {"items": None, "next": None}
+
+
+def test_reconciliation_rejects_invalid_items_without_writing() -> None:
+    client = InvalidPlaylistClient()
+    with pytest.raises(RuntimeError, match="item list"):
+        reconcile_playlist_items(client, "playlist", ["spotify:episode:one"])
+    assert client.reads == 1
+    assert client.writes == 0
+
+
+@dataclass
 class FakeCatalogClient:
     calls: list[tuple[str, int, int]] = field(default_factory=list)
 
@@ -101,3 +118,37 @@ def test_catalog_probe_only_uses_deep_paging_for_rne() -> None:
     for provider in CORE_PROVIDERS:
         expected = 4 if provider.provider_id == "rne" else 1
         assert counts[provider.spotify_show_id] == expected
+
+
+@dataclass
+class InvalidCatalogClient(FakeCatalogClient):
+    invalid_show_id: str = CORE_PROVIDERS[0].spotify_show_id
+
+    def show_episodes(
+        self, show_id: str, *, limit: int = 50, offset: int = 0
+    ) -> dict[str, object]:
+        if show_id == self.invalid_show_id:
+            self.calls.append((show_id, limit, offset))
+            return {"items": None, "next": None}
+        return super().show_episodes(show_id, limit=limit, offset=offset)
+
+
+def test_catalog_probe_reports_invalid_items_as_failure() -> None:
+    assert run_catalog_probe(InvalidCatalogClient()) == 1
+
+
+@dataclass
+class EmptyCatalogClient:
+    def show_episodes(
+        self, show_id: str, *, limit: int = 50, offset: int = 0
+    ) -> dict[str, object]:
+        return {"items": [], "next": None}
+
+    def search_shows(
+        self, query: str, *, limit: int = 10, offset: int = 0
+    ) -> dict[str, object]:
+        return {"shows": {"items": []}}
+
+
+def test_catalog_probe_accepts_valid_empty_item_lists() -> None:
+    assert run_catalog_probe(EmptyCatalogClient()) == 0
