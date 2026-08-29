@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import signal
@@ -46,30 +47,87 @@ def ensure_data_dir(data_dir: Path) -> None:
         raise RuntimeError(f"application data directory is not writable: {data_dir}")
 
 
+def _status_page(*, ready: bool) -> bytes:
+    """Render the intentionally read-only P0 web portal."""
+    status = "Ready" if ready else "Degraded"
+    storage = "Writable" if ready else "Unavailable"
+    version = html.escape(__version__)
+    document = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>News Bulletin Playlists</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; max-width: 48rem; margin: 4rem auto;
+           padding: 0 1.25rem; line-height: 1.5; }}
+    dl {{ display: grid; grid-template-columns: max-content 1fr; gap: .5rem 1rem; }}
+    dt {{ font-weight: 700; }}
+    code {{ font-family: ui-monospace, monospace; }}
+  </style>
+</head>
+<body>
+  <h1>News Bulletin Playlists</h1>
+  <p>The container runtime is running. This P0 page is read-only; playlist controls
+     will be added only after the engine and authentication model are implemented.</p>
+  <dl>
+    <dt>Runtime</dt><dd>{status}</dd>
+    <dt>Persistent storage</dt><dd>{storage}</dd>
+    <dt>Version</dt><dd><code>{version}</code></dd>
+  </dl>
+</body>
+</html>
+"""
+    return document.encode("utf-8")
+
+
 class HealthHandler(BaseHTTPRequestHandler):
-    """Local-only operational health endpoint kept as part of the future engine host."""
+    """Serve the status portal and Docker health endpoint without request logging."""
 
     data_dir = DEFAULT_DATA_DIR
     timeout = 2.0
 
+    def _send_headers(self, *, content_type: str, length: int) -> None:
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+            "frame-ancestors 'none'",
+        )
+        self.end_headers()
+
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        if self.path != "/healthz":
-            self.send_error(HTTPStatus.NOT_FOUND)
+        ready = _data_dir_ready(self.data_dir)
+
+        if self.path == "/":
+            payload = _status_page(ready=ready)
+            self.send_response(HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE)
+            self._send_headers(content_type="text/html; charset=utf-8", length=len(payload))
+            self.wfile.write(payload)
             return
 
-        ready = _data_dir_ready(self.data_dir)
-        payload = json.dumps(
-            {"status": "ok" if ready else "degraded", "version": __version__},
-            separators=(",", ":"),
-        ).encode("utf-8")
-        self.send_response(HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
+        if self.path == "/healthz":
+            payload = json.dumps(
+                {"status": "ok" if ready else "degraded", "version": __version__},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            self.send_response(HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE)
+            self._send_headers(content_type="application/json", length=len(payload))
+            self.wfile.write(payload)
+            return
+
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def version_string(self) -> str:
+        """Avoid disclosing the Python runtime version in HTTP headers."""
+        return "news-bulletin-playlist"
 
     def log_message(self, format: str, *args: object) -> None:
-        """Suppress localhost health-request logging."""
+        """Suppress request logging for the small built-in runtime server."""
         return
 
 
@@ -101,8 +159,8 @@ def serve(
         signal.signal(signal.SIGINT, request_stop)
 
     print(
-        f"news-bulletin-playlist runtime ready; health=http://{host}:{server.server_port}/healthz "
-        f"data={data_dir}",
+        f"news-bulletin-playlist runtime ready; web=http://{host}:{server.server_port}/ "
+        f"health=http://127.0.0.1:{server.server_port}/healthz data={data_dir}",
         flush=True,
     )
     try:
