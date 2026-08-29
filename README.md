@@ -1,6 +1,6 @@
 # News Bulletin Playlist
 
-Service for dynamic news bulletin playlists across countries and languages,
+Open-source service for dynamic news bulletin playlists across countries and languages,
 with Spotify as the first destination.
 
 > Early research/prototype stage. This project is not affiliated with or endorsed by Spotify or any news provider.
@@ -73,6 +73,10 @@ mypy src
 ```
 
 CI runs Ruff, mypy and pytest on Python 3.14.
+
+## License
+
+Released under the [MIT License](LICENSE).
 
 ## Security
 
