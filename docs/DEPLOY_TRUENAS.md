@@ -10,7 +10,7 @@ Create one dedicated dataset directly under `Pool1`:
 
 Use the **Apps** dataset preset and keep the remaining dataset options at their defaults unless you have a specific reason to change them.
 
-TrueNAS 26's Apps preset includes Modify access for the built-in apps group (GID `568`). The container itself still runs as its dedicated non-root user `10001:10001`, and the TrueNAS YAML adds GID `568` only as a supplementary group. This lets `/data` use the standard Apps-preset permissions without any manual ACL customization.
+TrueNAS 26's Apps preset includes Modify access for the built-in apps group (GID `568`). The TrueNAS deployment therefore runs the container directly as numeric UID/GID `568:568`. This keeps the process non-root and avoids any manual ACL customization.
 
 The runtime root filesystem is read-only. `/data` is the only persistent writable application path; `/tmp` is an in-memory tmpfs.
 
@@ -19,7 +19,7 @@ For another TrueNAS system, edit the host path in `deploy/truenas.yaml` before i
 ## Install via YAML
 
 1. In **Datasets**, select `Pool1` and create a dataset named `news-bulletin-playlist`.
-2. Select **Dataset Preset: Apps** and save it. No manual ACL customization is required for this deployment.
+2. Select **Dataset Preset: Apps** and save it. Do not customize ACLs for this deployment.
 3. Open `deploy/truenas.yaml`.
 4. In TrueNAS open **Apps -> Discover Apps -> menu -> Install via YAML**.
 5. Use application name `news-bulletin-playlist`.
