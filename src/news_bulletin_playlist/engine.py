@@ -189,11 +189,18 @@ class EngineRunner:
         started_at = _as_utc(self.clock())
         source_outcomes: dict[SourceId, SourceCycleOutcome] = {}
         playlist_outcomes: list[PlaylistCycleOutcome] = []
+        unsafe_source_ids: set[SourceId] = set()
 
         try:
             collection = collect_required_sources(self.config, fetcher=self.fetcher)
             collected_at = _as_utc(self.clock())
             for result in collection.sources:
+                previous_source_state = self.store.get_source_state(result.source_id)
+                if not result.ok and (
+                    previous_source_state is None
+                    or previous_source_state.last_success_at is None
+                ):
+                    unsafe_source_ids.add(result.source_id)
                 if result.ok:
                     self.store.upsert_editions(result.editions, observed_at=collected_at)
                 self.store.record_source_run(
@@ -233,11 +240,20 @@ class EngineRunner:
         matching_now = _as_utc(self.clock())
         matching_cutoff = self._matching_cutoff(matching_now)
         for source in required_sources(self.config):
+            had_durable_match = False
             try:
                 editions = tuple(
                     edition
                     for edition in self.store.list_editions(source_id=source.id)
                     if matching_cutoff <= edition.published_at <= matching_now
+                )
+                had_durable_match = any(
+                    self.store.get_spotify_episode_uri(
+                        edition.source_id,
+                        edition.source_native_id,
+                    )
+                    is not None
+                    for edition in editions
                 )
                 if editions:
                     match_result = match_source_editions(
@@ -266,6 +282,8 @@ class EngineRunner:
                 SpotifyApiError,
                 SpotifyTransportError,
             ) as exc:
+                if not had_durable_match:
+                    unsafe_source_ids.add(source.id)
                 current = source_outcomes.get(source.id)
                 if current is not None:
                     source_outcomes[source.id] = replace(
@@ -281,6 +299,57 @@ class EngineRunner:
                 continue
             playlist_started_at = _as_utc(self.clock())
             desired_count = 0
+            unsafe_for_playlist = tuple(
+                source_id
+                for source_id in playlist.source_selection.explicit
+                if source_id in unsafe_source_ids
+            )
+            if unsafe_for_playlist:
+                try:
+                    desired = build_desired_state_from_store(
+                        self.store,
+                        playlist,
+                        now=playlist_started_at,
+                    )
+                    desired_count = len(desired.items)
+                    reason = (
+                        "destination preserved because no last-known-good state is available "
+                        "for source(s): "
+                        + ", ".join(str(source_id) for source_id in unsafe_for_playlist)
+                    )
+                    playlist_finished_at = _as_utc(self.clock())
+                    self.store.record_playlist_run(
+                        playlist.id,
+                        started_at=playlist_started_at,
+                        finished_at=playlist_finished_at,
+                        ok=False,
+                        desired_count=desired_count,
+                        applied_count=0,
+                        error=reason,
+                    )
+                    playlist_state = self.store.get_playlist_state(playlist.id)
+                except PersistenceError as exc:
+                    return self._fatal_result(
+                        started_at,
+                        source_outcomes,
+                        playlist_outcomes,
+                        exc,
+                    )
+                playlist_outcomes.append(
+                    PlaylistCycleOutcome(
+                        playlist_id=playlist.id,
+                        ok=False,
+                        desired_count=desired_count,
+                        applied_count=None,
+                        wrote=None,
+                        last_success_at=(
+                            None if playlist_state is None else playlist_state.last_success_at
+                        ),
+                        error=reason,
+                    )
+                )
+                continue
+
             try:
                 desired = build_desired_state_from_store(
                     self.store,
