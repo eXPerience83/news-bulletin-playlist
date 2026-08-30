@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -190,6 +190,34 @@ def test_denial_is_safe_and_consumes_pending_flow(tmp_path: Path) -> None:
     assert transport.exchange_calls == []
 
 
+def test_expired_callback_fails_closed_and_consumes_pending_flow(tmp_path: Path) -> None:
+    service, transport, store = _service(tmp_path)
+    _, state = _start(service)
+    callback = urllib.parse.urlencode({"state": state, "code": "late-code"})
+
+    with pytest.raises(SpotifyOAuthCallbackError, match="expired"):
+        service.complete_callback(callback, now=NOW + timedelta(minutes=11))
+    with pytest.raises(SpotifyOAuthCallbackError, match="No Spotify authorization"):
+        service.complete_callback(callback, now=NOW)
+
+    assert transport.exchange_calls == []
+    assert not store.path.exists()
+
+
+def test_successful_callback_cannot_be_replayed(tmp_path: Path) -> None:
+    service, transport, store = _service(tmp_path)
+    _, state = _start(service)
+    callback = urllib.parse.urlencode({"state": state, "code": "single-use-code"})
+
+    service.complete_callback(callback, now=NOW)
+    first_record = store.load()
+    with pytest.raises(SpotifyOAuthCallbackError, match="No Spotify authorization"):
+        service.complete_callback(callback, now=NOW)
+
+    assert len(transport.exchange_calls) == 1
+    assert store.load() == first_record
+
+
 def test_success_persists_only_refresh_credential_with_owner_only_permissions(
     tmp_path: Path,
 ) -> None:
@@ -290,6 +318,38 @@ def test_invalid_grant_discards_secret_and_surfaces_reauthorization(tmp_path: Pa
     assert "refresh-initial" not in store.path.read_text(encoding="utf-8")
 
 
+def test_invalid_grant_stays_fail_closed_when_reauth_marker_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _, store = _service(tmp_path)
+    _authorize(service)
+    transport = _FakeTransport()
+    transport.refresh_error = SpotifyTokenEndpointError(
+        "Spotify token endpoint rejected the request (HTTP 400)",
+        status=400,
+        error_code="invalid_grant",
+    )
+    restarted = SpotifyAuthService(
+        client_id="client-id",
+        redirect_uri=REDIRECT_URI,
+        store=store,
+        transport=transport,
+    )
+
+    def fail_marker(previous: SpotifyCredentialRecord) -> None:
+        del previous
+        raise SpotifyCredentialStoreError("simulated marker failure")
+
+    monkeypatch.setattr(store, "mark_reauthorization_required", fail_marker)
+    with pytest.raises(SpotifyReauthorizationRequired, match="reauthorization"):
+        restarted.get_access_token(now=NOW)
+
+    assert restarted.authorization_state() is AuthorizationState.REAUTH_REQUIRED
+    with pytest.raises(SpotifyReauthorizationRequired):
+        restarted.get_access_token(now=NOW)
+    assert len(transport.refresh_calls) == 1
+
+
 def test_missing_required_scope_fails_before_persistence(tmp_path: Path) -> None:
     transport = _FakeTransport()
     transport.exchange_response = TokenResponse(
@@ -310,18 +370,42 @@ def test_missing_required_scope_fails_before_persistence(tmp_path: Path) -> None
     assert not store.path.exists()
 
 
-def test_callback_persistence_failure_never_claims_connection(tmp_path: Path) -> None:
+def test_callback_persistence_failure_never_claims_connection_or_leaks_secrets(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     failing_store = _FailingStore(tmp_path / auth.SPOTIFY_AUTH_FILENAME)
-    service, _, _ = _service(tmp_path, store=failing_store)
+    transport = _FakeTransport()
+    transport.exchange_response = TokenResponse(
+        access_token="access-token-sentinel",
+        expires_in=3600,
+        granted_scopes=PRODUCTION_SCOPES,
+        refresh_token="refresh-token-sentinel",
+    )
+    service, _, _ = _service(tmp_path, transport=transport, store=failing_store)
     _, state = _start(service)
+    code = "authorization-code-sentinel"
+    callback = urllib.parse.urlencode({"state": state, "code": code})
 
-    with pytest.raises(SpotifyCredentialStoreError, match="simulated persistence failure"):
-        service.complete_callback(
-            urllib.parse.urlencode({"state": state, "code": "code"}),
-            now=NOW,
-        )
+    with pytest.raises(SpotifyCredentialStoreError, match="simulated persistence failure") as raised:
+        service.complete_callback(callback, now=NOW)
+    assert len(transport.exchange_calls) == 1
+    verifier = transport.exchange_calls[0]["verifier"]
 
+    with pytest.raises(SpotifyOAuthCallbackError, match="No Spotify authorization"):
+        service.complete_callback(callback, now=NOW)
+    assert len(transport.exchange_calls) == 1
     assert service.authorization_state() is AuthorizationState.DISCONNECTED
+
+    captured = capsys.readouterr()
+    for secret in (
+        code,
+        verifier,
+        "access-token-sentinel",
+        "refresh-token-sentinel",
+    ):
+        assert secret not in str(raised.value)
+        assert secret not in captured.out
+        assert secret not in captured.err
 
 
 def test_atomic_save_failure_preserves_previous_credential(
