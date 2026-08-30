@@ -554,8 +554,11 @@ def _single_parameter(
 def _parse_credential_record(payload: object) -> SpotifyCredentialRecord:
     if not isinstance(payload, dict) or payload.get("version") != 1:
         raise SpotifyCredentialStoreError("Spotify authorization state has an unknown format")
+    raw_status = payload.get("status")
+    if not isinstance(raw_status, str):
+        raise SpotifyCredentialStoreError("Spotify authorization state has an invalid status")
     try:
-        status = CredentialStatus(payload.get("status"))
+        status = CredentialStatus(raw_status)
     except ValueError as exc:
         raise SpotifyCredentialStoreError(
             "Spotify authorization state has an invalid status"
@@ -586,7 +589,7 @@ def _parse_credential_record(payload: object) -> SpotifyCredentialRecord:
         )
     return SpotifyCredentialRecord(
         status=status,
-        refresh_token=cast(str | None, refresh_token),
+        refresh_token=refresh_token,
         granted_scopes=tuple(cast(list[str], raw_scopes)),
         authorized_at=authorized_at,
     )
