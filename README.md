@@ -72,7 +72,9 @@ docker compose ps
 
 The local status page is available only on `http://127.0.0.1:8788/`.
 
-For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The YAML publishes the status UI on port `8788` and includes best-effort `x-portals` metadata. Direct access to `http://<truenas-host>:8788/` remains the supported path. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the short installation procedure and image-integrity details.
+For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and includes best-effort `x-portals` metadata. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for installation and for the separate, opt-in production Spotify authorization setup.
+
+Production `/admin/` and the Spotify callback are intentionally fail-closed. When an external HTTPS origin is configured, administration is accepted only from the explicitly configured immediate reverse-proxy IP/CIDR and only when that proxy asserts `X-Forwarded-Proto: https`. Direct HTTP access to the backend never reaches the Basic-authentication challenge in that mode. Loopback HTTP remains available only for local/P0 development.
 
 ## Development
 
@@ -113,7 +115,9 @@ Released under the [MIT License](LICENSE).
 
 ## Security
 
-Do not commit Spotify client secrets, refresh tokens, `.env` files or the runtime database. Spotify credentials will be stored only in the deployment runtime once OAuth work begins.
+Do not commit Spotify client secrets, refresh tokens, `.env` files, administration passwords or the runtime database. Production Spotify authorization uses Authorization Code + PKCE and does not require a Spotify Client Secret. The durable refresh credential is stored owner-only under `/data`; access tokens remain memory-only.
+
+The production administration surface must sit behind HTTPS. Configure `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS` with the immediate reverse proxy's source IP/CIDR, not a client or Tailscale subnet, and configure the proxy to overwrite `X-Forwarded-Proto` with `https`. Never expose the backend administration port as a trusted alternative to the HTTPS origin. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md).
 
 ## Roadmap
 
@@ -125,7 +129,7 @@ The authoritative production-engine roadmap is the [P1 umbrella issue #13](https
    - [x] **P1.2 / #15** — shared RSS collection and canonical normalization; completed via #22.
    - [x] **P1.3 / #16** — SQLite persistence, migrations and 30-day operational retention; completed via #26.
    - [x] **P1.4 / #17** — deterministic source-to-Spotify episode matching; completed via #27.
-   - [ ] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation; next primary workstream.
+   - [x] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation.
    - [ ] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI.
    - [ ] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime.
 3. **First release** — provision and operate the first public Spain / Spanish-language playlist once the P1 exit criteria are satisfied.
