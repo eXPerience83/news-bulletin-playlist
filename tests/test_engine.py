@@ -234,6 +234,71 @@ def test_source_failure_carries_forward_recent_durable_match(tmp_path: Path) -> 
     assert spotify.items["destination-first"] == [SER_URI]
 
 
+def test_first_source_failure_preserves_existing_destination_without_lkg(
+    tmp_path: Path,
+) -> None:
+    spotify = _Spotify()
+    existing_uri = "spotify:episode:preexisting"
+    spotify.items["destination-first"] = [existing_uri]
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: (_ for _ in ()).throw(OSError("source unavailable")),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+
+    assert not result.ok
+    assert not result.playlists[0].ok
+    assert result.playlists[0].wrote is None
+    assert "destination preserved" in (result.playlists[0].error or "")
+    assert spotify.items["destination-first"] == [existing_uri]
+    assert spotify.playlist_reads == []
+    assert spotify.replacements == []
+
+
+def test_first_matching_failure_preserves_existing_destination_without_lkg(
+    tmp_path: Path,
+) -> None:
+    existing_uri = "spotify:episode:preexisting"
+
+    class MatchingUnavailableSpotify(_Spotify):
+        def show_episodes(
+            self,
+            show_id: str,
+            *,
+            limit: int = 50,
+            offset: int = 0,
+        ) -> dict[str, Any]:
+            del show_id, limit, offset
+            raise SpotifyTransportError("simulated catalogue outage")
+
+    spotify = MatchingUnavailableSpotify()
+    spotify.items["destination-first"] = [existing_uri]
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+
+    assert not result.ok
+    assert result.sources[0].matching_ok is False
+    assert not result.playlists[0].ok
+    assert result.playlists[0].wrote is None
+    assert "destination preserved" in (result.playlists[0].error or "")
+    assert spotify.items["destination-first"] == [existing_uri]
+    assert spotify.playlist_reads == []
+    assert spotify.replacements == []
+
+
 def test_playlist_failure_does_not_block_other_destination(tmp_path: Path) -> None:
     spotify = _Spotify(fail_playlist="destination-first")
     runner = EngineRunner(
