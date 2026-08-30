@@ -1,5 +1,7 @@
-# Example only: copy this file and replace the destination external_id with a
-# provisioned playlist ID before runtime integration in a later issue.
+# Example only: copy this file to /data/news-bulletin-playlist.yaml (or point
+# NEWS_PLAYLIST_CONFIG at another persistent path) and replace each destination
+# external_id with the already provisioned Spotify playlist ID before enabling
+# production engine cycles.
 schema_version: 1
 
 sources:
