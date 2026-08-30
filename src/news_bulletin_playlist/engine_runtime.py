@@ -5,7 +5,8 @@ import os
 import signal
 import threading
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import HTTPServer
@@ -22,6 +23,7 @@ from news_bulletin_playlist.engine import (
     OperationalStatus,
     OperationalStatusSnapshot,
 )
+from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
@@ -32,7 +34,7 @@ from news_bulletin_playlist.runtime import (
     build_runtime_auth,
     initialize_runtime_storage,
 )
-from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.spotify.auth import AuthorizationState, SpotifyAuthService
 
 DEFAULT_CONFIG_FILENAME = "news-bulletin-playlist.yaml"
 _CONFIG_PATH_ENV = "NEWS_PLAYLIST_CONFIG"
@@ -40,11 +42,57 @@ _INTERVAL_SECONDS_ENV = "NEWS_PLAYLIST_INTERVAL_SECONDS"
 _MIN_RUNTIME_INTERVAL = timedelta(minutes=1)
 
 
+class AuthSynchronization:
+    """Serialize token refresh and Web UI authorization against one credential store."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+
+    @contextmanager
+    def hold(self) -> Iterator[None]:
+        with self._lock:
+            yield
+
+
+class _LockedAuthProvider:
+    def __init__(self, service: SpotifyAuthService, synchronization: AuthSynchronization) -> None:
+        self.service = service
+        self.synchronization = synchronization
+
+    def get_access_token(self, *, now: datetime | None = None) -> str:
+        with self.synchronization.hold():
+            return self.service.get_access_token(now=now)
+
+
 class OperationalHealthHandler(HealthHandler):
     """Extend the existing secure HTTP surface with read-only engine status."""
 
     operational_status: OperationalStatus | None = None
     engine_scheduler: EngineScheduler | None = None
+    auth_synchronization: AuthSynchronization | None = None
+
+    def _spotify_state(self) -> AuthorizationState | None:
+        synchronization = self.auth_synchronization
+        if synchronization is None:
+            return super()._spotify_state()
+        with synchronization.hold():
+            return super()._spotify_state()
+
+    def _handle_spotify_callback(self, query: str) -> None:
+        synchronization = self.auth_synchronization
+        if synchronization is None:
+            super()._handle_spotify_callback(query)
+            return
+        with synchronization.hold():
+            super()._handle_spotify_callback(query)
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        synchronization = self.auth_synchronization
+        if synchronization is None:
+            super().do_POST()
+            return
+        with synchronization.hold():
+            super().do_POST()
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         try:
@@ -103,9 +151,14 @@ def serve(
     scheduler_interval = interval if interval is not None else _runtime_interval(env)
     status = OperationalStatus(configured=configured)
     scheduler: EngineScheduler | None = None
+    auth_synchronization = AuthSynchronization()
     if config is not None and spotify_auth is not None:
         scheduler = EngineScheduler(
-            EngineRunner(config, store, spotify_auth),
+            EngineRunner(
+                config,
+                store,
+                _LockedAuthProvider(spotify_auth, auth_synchronization),
+            ),
             status,
             interval=scheduler_interval,
         )
@@ -115,6 +168,7 @@ def serve(
     OperationalHealthHandler.spotify_auth = spotify_auth
     OperationalHealthHandler.operational_status = status
     OperationalHealthHandler.engine_scheduler = scheduler
+    OperationalHealthHandler.auth_synchronization = auth_synchronization
     server = HTTPServer((host, port), OperationalHealthHandler)
     server.timeout = 0.5
     stopped = stop_event if stop_event is not None else threading.Event()
@@ -162,19 +216,19 @@ def serve(
         if scheduler_thread is not None:
             scheduler_thread.join()
         OperationalHealthHandler.engine_scheduler = None
+        OperationalHealthHandler.auth_synchronization = None
         if handlers_installed:
             signal.signal(signal.SIGTERM, previous_sigterm)
             signal.signal(signal.SIGINT, previous_sigint)
     return 0
 
 
-def _load_runtime_config(data_dir: Path, environ: Mapping[str, str]) -> object | None:
-    configured_path = environ.get(_CONFIG_PATH_ENV)
-    path = Path(configured_path.strip()) if configured_path and configured_path.strip() else (
-        data_dir / DEFAULT_CONFIG_FILENAME
-    )
+def _load_runtime_config(data_dir: Path, environ: Mapping[str, str]) -> EngineConfig | None:
+    raw_path = environ.get(_CONFIG_PATH_ENV)
+    explicit_path = raw_path.strip() if raw_path is not None and raw_path.strip() else None
+    path = Path(explicit_path) if explicit_path is not None else data_dir / DEFAULT_CONFIG_FILENAME
     if not path.exists():
-        if configured_path is not None:
+        if explicit_path is not None:
             raise RuntimeError(f"configured engine YAML does not exist: {path}")
         return None
     try:
@@ -255,12 +309,17 @@ def _operational_status_page(
   </dl>
   <h2>Sources</h2>
   <table>
-    <thead><tr><th>Source</th><th>Result</th><th>Last success</th><th>Editions</th><th>Error</th></tr></thead>
+    <thead><tr>
+      <th>Source</th><th>Result</th><th>Last success</th><th>Editions</th><th>Error</th>
+    </tr></thead>
     <tbody>{source_rows}</tbody>
   </table>
   <h2>Playlists</h2>
   <table>
-    <thead><tr><th>Playlist</th><th>Result</th><th>Last success</th><th>Items</th><th>Write</th><th>Error</th></tr></thead>
+    <thead><tr>
+      <th>Playlist</th><th>Result</th><th>Last success</th><th>Items</th>
+      <th>Write</th><th>Error</th>
+    </tr></thead>
     <tbody>{playlist_rows}</tbody>
   </table>
 </body>
@@ -330,7 +389,8 @@ def _format_optional_time(value: datetime | None) -> str:
 
 
 def _format_time(value: datetime) -> str:
-    return html.escape(value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"))
+    timestamp = value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return html.escape(timestamp)
 
 
 def _escape_optional(value: str | None) -> str:
