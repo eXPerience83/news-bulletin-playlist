@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
+from http.server import HTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,6 +21,7 @@ from news_bulletin_playlist.engine import (
 from news_bulletin_playlist.engine_runtime import (
     DEFAULT_CONFIG_FILENAME,
     AuthSynchronization,
+    OperationalHealthHandler,
     ReloadingEngineCycleRunner,
     _load_runtime_config,
     _operational_status_page,
@@ -23,7 +30,14 @@ from news_bulletin_playlist.engine_runtime import (
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
 from news_bulletin_playlist.persistence import SQLiteStore
-from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.runtime import AdminSecurity
+from news_bulletin_playlist.spotify.auth import (
+    PRODUCTION_SCOPES,
+    AuthorizationState,
+    SpotifyAuthService,
+    SpotifyCredentialStore,
+    TokenResponse,
+)
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
 
@@ -36,6 +50,59 @@ class _NeverAuth:
         del now
         self.calls += 1
         raise AssertionError("authorization must not be reached for invalid configuration")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
+class _SentinelTokenTransport:
+    def __init__(self) -> None:
+        self.exchange_calls: list[dict[str, str]] = []
+
+    def exchange_code(
+        self,
+        *,
+        client_id: str,
+        code: str,
+        redirect_uri: str,
+        verifier: str,
+    ) -> TokenResponse:
+        assert client_id == "client-id"
+        assert redirect_uri == "https://news.example.test/admin/spotify/callback"
+        self.exchange_calls.append({"code": code, "verifier": verifier})
+        return TokenResponse(
+            access_token="access-token-sentinel",
+            expires_in=3600,
+            granted_scopes=PRODUCTION_SCOPES,
+            refresh_token="refresh-token-sentinel",
+        )
+
+    def refresh_token(self, *, client_id: str, refresh_token: str) -> TokenResponse:
+        raise AssertionError("refresh must not run in callback regression test")
+
+
+def _serve_one(server: HTTPServer) -> threading.Thread:
+    thread = threading.Thread(target=server.handle_request)
+    thread.start()
+    return thread
+
+
+def _no_redirect_open(request: urllib.request.Request) -> urllib.error.HTTPError:
+    opener = urllib.request.build_opener(_NoRedirect())
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        opener.open(request, timeout=2)
+    return raised.value
 
 
 def _valid_config() -> str:
@@ -195,8 +262,102 @@ def test_operational_status_page_reports_cycle_without_secret_material() -> None
     assert "0 fetched / 1 matched" in body
     assert "1 desired / 1 verified" in body
     assert "unchanged" in body
-    for secret in ("access-token-sentinel", "refresh-token-sentinel", "authorization-code"):
+    for secret in (
+        "access-token-sentinel",
+        "refresh-token-sentinel",
+        "authorization-code-sentinel",
+        "pkce-verifier-sentinel",
+    ):
         assert secret not in body
+
+
+def test_operational_callback_and_status_never_expose_oauth_sentinels(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    transport = _SentinelTokenTransport()
+    service = SpotifyAuthService(
+        client_id="client-id",
+        redirect_uri="https://news.example.test/admin/spotify/callback",
+        store=SpotifyCredentialStore(tmp_path / "spotify-auth.json"),
+        transport=transport,
+    )
+    status = OperationalStatus(configured=True)
+    previous = (
+        OperationalHealthHandler.data_dir,
+        OperationalHealthHandler.admin_security,
+        OperationalHealthHandler.spotify_auth,
+        OperationalHealthHandler.operational_status,
+        OperationalHealthHandler.engine_scheduler,
+    )
+    OperationalHealthHandler.data_dir = tmp_path
+    OperationalHealthHandler.admin_security = AdminSecurity("long-enough-admin-password")
+    OperationalHealthHandler.spotify_auth = service
+    OperationalHealthHandler.operational_status = status
+    OperationalHealthHandler.engine_scheduler = None
+    server = HTTPServer(("127.0.0.1", 0), OperationalHealthHandler)
+    base_url = f"http://127.0.0.1:{server.server_port}"
+
+    authorize_url = service.start_authorization()
+    state = urllib.parse.parse_qs(urllib.parse.urlsplit(authorize_url).query)["state"][0]
+    code = "authorization-code-sentinel"
+    callback_url = f"{base_url}/admin/spotify/callback?" + urllib.parse.urlencode(
+        {"state": state, "code": code}
+    )
+
+    try:
+        thread = _serve_one(server)
+        try:
+            successful_callback = _no_redirect_open(urllib.request.Request(callback_url))
+            successful_body = successful_callback.read().decode("utf-8")
+            successful_headers = str(successful_callback.headers)
+        finally:
+            thread.join(timeout=2)
+        assert successful_callback.code == HTTPStatus.SEE_OTHER
+
+        thread = _serve_one(server)
+        try:
+            with pytest.raises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(callback_url, timeout=2)
+            replay_body = raised.value.read().decode("utf-8")
+        finally:
+            thread.join(timeout=2)
+        assert raised.value.code == HTTPStatus.BAD_REQUEST
+
+        thread = _serve_one(server)
+        try:
+            with urllib.request.urlopen(f"{base_url}/", timeout=2) as response:
+                status_body = response.read().decode("utf-8")
+        finally:
+            thread.join(timeout=2)
+
+        assert len(transport.exchange_calls) == 1
+        verifier = transport.exchange_calls[0]["verifier"]
+        captured = capsys.readouterr()
+        surfaces = (
+            successful_body,
+            successful_headers,
+            replay_body,
+            status_body,
+            captured.out,
+            captured.err,
+        )
+        for secret in (
+            code,
+            verifier,
+            "access-token-sentinel",
+            "refresh-token-sentinel",
+        ):
+            assert all(secret not in surface for surface in surfaces)
+    finally:
+        server.server_close()
+        (
+            OperationalHealthHandler.data_dir,
+            OperationalHealthHandler.admin_security,
+            OperationalHealthHandler.spotify_auth,
+            OperationalHealthHandler.operational_status,
+            OperationalHealthHandler.engine_scheduler,
+        ) = previous
 
 
 def test_auth_synchronization_serializes_competing_operations() -> None:
