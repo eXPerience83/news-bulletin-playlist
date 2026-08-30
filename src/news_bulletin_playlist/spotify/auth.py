@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -195,7 +196,9 @@ class SpotifyCredentialStore:
         except FileNotFoundError:
             return None
         except OSError as exc:
-            raise SpotifyCredentialStoreError("Spotify authorization state cannot be inspected") from exc
+            raise SpotifyCredentialStoreError(
+                "Spotify authorization state cannot be inspected"
+            ) from exc
 
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
             raise SpotifyCredentialStoreError("Spotify authorization state is not a regular file")
@@ -244,14 +247,14 @@ class SpotifyCredentialStore:
             os.chmod(self.path, 0o600)
             _fsync_directory(self.path.parent)
         except OSError as exc:
-            raise SpotifyCredentialStoreError("Spotify authorization state could not be saved") from exc
+            raise SpotifyCredentialStoreError(
+                "Spotify authorization state could not be saved"
+            ) from exc
         finally:
             if fd is not None:
                 os.close(fd)
-            try:
+            with suppress(OSError):
                 temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
 
     def mark_reauthorization_required(self, previous: SpotifyCredentialRecord) -> None:
         self.save(
@@ -341,7 +344,9 @@ class SpotifyAuthService:
         if error is not None:
             raise SpotifyAuthorizationDenied("Spotify authorization was not granted")
         if code is None:
-            raise SpotifyOAuthCallbackError("Spotify callback did not contain an authorization code")
+            raise SpotifyOAuthCallbackError(
+                "Spotify callback did not contain an authorization code"
+            )
 
         token = self.transport.exchange_code(
             client_id=self.client_id,
@@ -432,11 +437,10 @@ def build_redirect_uri(external_url: str) -> str:
         raise SpotifyAuthConfigurationError(
             "External application URL must be an origin without path, query or credentials"
         )
-    if parsed.scheme == "https":
-        pass
-    elif parsed.scheme == "http" and _is_loopback_hostname(parsed.hostname):
-        pass
-    else:
+    allowed_scheme = parsed.scheme == "https" or (
+        parsed.scheme == "http" and _is_loopback_hostname(parsed.hostname)
+    )
+    if not allowed_scheme:
         raise SpotifyAuthConfigurationError(
             "External application URL must use HTTPS except for an explicit loopback IP"
         )
@@ -553,7 +557,9 @@ def _parse_credential_record(payload: object) -> SpotifyCredentialRecord:
     try:
         status = CredentialStatus(payload.get("status"))
     except ValueError as exc:
-        raise SpotifyCredentialStoreError("Spotify authorization state has an invalid status") from exc
+        raise SpotifyCredentialStoreError(
+            "Spotify authorization state has an invalid status"
+        ) from exc
     refresh_token = payload.get("refresh_token")
     raw_scopes = payload.get("granted_scopes")
     raw_authorized_at = payload.get("authorized_at")
