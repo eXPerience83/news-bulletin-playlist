@@ -3,7 +3,7 @@
 Open-source service for dynamic news bulletin playlists across countries and languages,
 with Spotify as the first destination.
 
-> Early research/prototype stage. This project is not affiliated with or endorsed by Spotify or any news provider.
+> Pre-release. The P1 production multi-playlist engine is complete; provisioning and operating the first public Spain / Spanish-language playlist is the next release step. This project is not affiliated with or endorsed by Spotify or any news provider.
 
 ## Goal
 
@@ -104,7 +104,7 @@ The example uses the verified feeds and existing source IDs `ser`, `rne`, `ondac
 
 Canonical editions are identified only by `(source_id, source_native_id)`. Titles and timestamps are metadata, never identity. Canonical timestamps are timezone-aware UTC values. Spotify show references are source catalogue metadata and are intentionally distinct from writable playlist destinations.
 
-A cycle uses durable canonical/match state when building desired playlists. Therefore a transient source failure does not erase still-valid recent episodes; they age out naturally at the playlist retention boundary. Destination failures are isolated so one Spotify playlist cannot block another.
+A cycle uses durable canonical/match state when building desired playlists. Therefore a transient source failure does not erase still-valid recent episodes; they age out naturally at the playlist retention boundary. Destination failures are isolated so one Spotify playlist cannot block another. If a source or Spotify catalogue lookup fails before enough last-known-good state exists to establish a safe desired state, the affected destination is preserved with zero reconciliation writes rather than treating an empty desired state as authoritative.
 
 ## License
 
@@ -118,18 +118,18 @@ The production administration surface must sit behind HTTPS. Configure `NEWS_PLA
 
 ## Roadmap
 
-The authoritative production-engine roadmap is the [P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13).
+The completed production-engine roadmap is recorded in the [P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13).
 
 1. **P0 — validated foundation** — provider contracts and watchdog, hardened container/TrueNAS runtime, plus Spotify catalogue/write probes for the first Spain / Spanish-language playlist.
-2. **P1 — production multi-playlist engine**:
+2. **P1 — production multi-playlist engine — complete**:
    - [x] **P1.1 / #14** — source, canonical edition and playlist configuration/domain model; completed via #21.
    - [x] **P1.2 / #15** — shared RSS collection and canonical normalization; completed via #22.
    - [x] **P1.3 / #16** — SQLite persistence, migrations and 30-day operational retention; completed via #26.
    - [x] **P1.4 / #17** — deterministic source-to-Spotify episode matching; completed via #27.
    - [x] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation; completed via #29.
    - [x] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI; completed via #30.
-   - [ ] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime; in progress via #31.
-3. **First release** — provision and operate the first public Spain / Spanish-language playlist once the P1 exit criteria are satisfied.
+   - [x] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime; completed via #31.
+3. **First release — next** — provision and operate the first public Spain / Spanish-language playlist using the completed P1 engine.
 4. **Expansion** — add source and playlist definitions for additional languages and European countries without duplicating the engine.
 
 Parallel/non-blocking product work such as the playlist cover-art system in #12 may land when its configuration hook is stable, but it must never block bulletin synchronization.
