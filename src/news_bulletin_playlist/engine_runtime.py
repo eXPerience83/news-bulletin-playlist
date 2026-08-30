@@ -22,6 +22,7 @@ from news_bulletin_playlist.engine import (
     EngineScheduler,
     OperationalStatus,
     OperationalStatusSnapshot,
+    SpotifyAuthProvider,
 )
 from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.persistence import SQLiteStore
@@ -40,6 +41,7 @@ DEFAULT_CONFIG_FILENAME = "news-bulletin-playlist.yaml"
 _CONFIG_PATH_ENV = "NEWS_PLAYLIST_CONFIG"
 _INTERVAL_SECONDS_ENV = "NEWS_PLAYLIST_INTERVAL_SECONDS"
 _MIN_RUNTIME_INTERVAL = timedelta(minutes=1)
+_SCHEDULER_SHUTDOWN_WAIT_SECONDS = 10.0
 
 
 class AuthSynchronization:
@@ -62,6 +64,46 @@ class _LockedAuthProvider:
     def get_access_token(self, *, now: datetime | None = None) -> str:
         with self.synchronization.hold():
             return self.service.get_access_token(now=now)
+
+
+class ReloadingEngineCycleRunner:
+    """Load and validate durable configuration immediately before every engine cycle."""
+
+    def __init__(
+        self,
+        data_dir: Path,
+        environ: Mapping[str, str],
+        store: SQLiteStore,
+        auth: SpotifyAuthProvider,
+    ) -> None:
+        self.data_dir = data_dir
+        self.environ = environ
+        self.store = store
+        self.auth = auth
+
+    def run_cycle(self) -> EngineCycleResult:
+        started_at = datetime.now(UTC)
+        try:
+            config = _load_runtime_config(self.data_dir, self.environ)
+        except RuntimeError as exc:
+            return EngineCycleResult(
+                started_at=started_at,
+                finished_at=datetime.now(UTC),
+                ok=False,
+                sources=(),
+                playlists=(),
+                error=str(exc),
+            )
+        if config is None:
+            return EngineCycleResult(
+                started_at=started_at,
+                finished_at=datetime.now(UTC),
+                ok=False,
+                sources=(),
+                playlists=(),
+                error="production engine configuration is no longer available",
+            )
+        return EngineRunner(config, self.store, self.auth).run_cycle()
 
 
 class OperationalHealthHandler(HealthHandler):
@@ -153,12 +195,9 @@ def serve(
     scheduler: EngineScheduler | None = None
     auth_synchronization = AuthSynchronization()
     if config is not None and spotify_auth is not None:
+        auth_provider = _LockedAuthProvider(spotify_auth, auth_synchronization)
         scheduler = EngineScheduler(
-            EngineRunner(
-                config,
-                store,
-                _LockedAuthProvider(spotify_auth, auth_synchronization),
-            ),
+            ReloadingEngineCycleRunner(data_dir, env, store, auth_provider),
             status,
             interval=scheduler_interval,
         )
@@ -194,6 +233,7 @@ def serve(
             target=scheduler.run,
             args=(stopped,),
             name="news-playlist-engine",
+            daemon=True,
         )
         scheduler_thread.start()
 
@@ -214,7 +254,12 @@ def serve(
             scheduler.wake()
         server.server_close()
         if scheduler_thread is not None:
-            scheduler_thread.join()
+            scheduler_thread.join(timeout=_SCHEDULER_SHUTDOWN_WAIT_SECONDS)
+            if scheduler_thread.is_alive():
+                print(
+                    "news-bulletin-playlist engine shutdown exceeded graceful wait; exiting",
+                    flush=True,
+                )
         OperationalHealthHandler.engine_scheduler = None
         OperationalHealthHandler.auth_synchronization = None
         if handlers_installed:
