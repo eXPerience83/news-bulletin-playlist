@@ -6,6 +6,7 @@ import base64
 import binascii
 import hmac
 import html
+import ipaddress
 import json
 import os
 import secrets
@@ -16,7 +17,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -45,15 +46,24 @@ DEFAULT_HEALTH_URL = f"http://{DEFAULT_HEALTH_HOST}:{DEFAULT_HEALTH_PORT}/health
 _ADMIN_PASSWORD_ENV = "NEWS_PLAYLIST_ADMIN_PASSWORD"
 _ADMIN_PASSWORD_FILE_ENV = "NEWS_PLAYLIST_ADMIN_PASSWORD_FILE"
 _EXTERNAL_URL_ENV = "NEWS_PLAYLIST_EXTERNAL_URL"
+_TRUSTED_PROXY_CIDRS_ENV = "NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS"
 _SPOTIFY_CLIENT_ID_ENV = "SPOTIFY_CLIENT_ID"
 _CSRF_TTL = timedelta(minutes=10)
 _MAX_FORM_BYTES = 4096
+
+TrustedProxyNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
 class AdminSecurity:
     """Protect the small server-rendered administration surface."""
 
-    def __init__(self, password: str) -> None:
+    def __init__(
+        self,
+        password: str,
+        *,
+        trusted_proxy_networks: Sequence[TrustedProxyNetwork] = (),
+        allow_direct_loopback: bool = True,
+    ) -> None:
         if not password.strip():
             raise RuntimeError("administration password must not be blank")
         if len(password) < 16:
@@ -61,8 +71,30 @@ class AdminSecurity:
         if "\r" in password or "\n" in password:
             raise RuntimeError("administration password must not contain line breaks")
         self._password = password
+        self._trusted_proxy_networks = tuple(trusted_proxy_networks)
+        self._allow_direct_loopback = allow_direct_loopback
         self._csrf_token: str | None = None
         self._csrf_expires_at: datetime | None = None
+
+    def is_secure_transport(
+        self,
+        client_ip: str,
+        forwarded_proto_values: Sequence[str] | None,
+    ) -> bool:
+        """Accept direct loopback or HTTPS asserted by an explicitly trusted proxy."""
+        try:
+            address = ipaddress.ip_address(client_ip)
+        except ValueError:
+            return False
+        if self._allow_direct_loopback and address.is_loopback:
+            return True
+        trusted = any(
+            address.version == network.version and address in network
+            for network in self._trusted_proxy_networks
+        )
+        if not trusted or forwarded_proto_values is None or len(forwarded_proto_values) != 1:
+            return False
+        return forwarded_proto_values[0].strip().lower() == "https"
 
     def is_authorized(self, header: str | None) -> bool:
         if header is None:
@@ -141,6 +173,9 @@ def build_runtime_auth(
     admin_password = _load_admin_password(env)
     client_id = _optional_setting(env.get(_SPOTIFY_CLIENT_ID_ENV))
     external_url = _optional_setting(env.get(_EXTERNAL_URL_ENV))
+    trusted_proxy_networks = _parse_trusted_proxy_networks(
+        _optional_setting(env.get(_TRUSTED_PROXY_CIDRS_ENV))
+    )
 
     if (client_id is None) != (external_url is None):
         raise RuntimeError(
@@ -151,20 +186,43 @@ def build_runtime_auth(
             f"{_ADMIN_PASSWORD_ENV} or {_ADMIN_PASSWORD_FILE_ENV} is required when Spotify "
             "Web UI authorization is enabled"
         )
+    if admin_password is None and trusted_proxy_networks:
+        raise RuntimeError(f"{_TRUSTED_PROXY_CIDRS_ENV} requires administration to be enabled")
 
-    admin_security = AdminSecurity(admin_password) if admin_password is not None else None
-    if client_id is None or external_url is None:
+    redirect_uri: str | None = None
+    external_scheme: str | None = None
+    if external_url is not None:
+        try:
+            redirect_uri = build_redirect_uri(external_url)
+        except SpotifyAuthConfigurationError as exc:
+            raise RuntimeError(
+                f"invalid Spotify Web UI authorization configuration: {exc}"
+            ) from exc
+        external_scheme = urllib.parse.urlsplit(redirect_uri).scheme
+
+    if admin_password is not None and external_scheme == "https" and not trusted_proxy_networks:
+        raise RuntimeError(
+            f"{_TRUSTED_PROXY_CIDRS_ENV} is required for HTTPS administration behind a "
+            "reverse proxy"
+        )
+
+    admin_security = (
+        AdminSecurity(
+            admin_password,
+            trusted_proxy_networks=trusted_proxy_networks,
+            allow_direct_loopback=external_scheme != "https",
+        )
+        if admin_password is not None
+        else None
+    )
+    if client_id is None or redirect_uri is None:
         return admin_security, None
 
-    try:
-        redirect_uri = build_redirect_uri(external_url)
-        spotify_auth = SpotifyAuthService(
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            store=SpotifyCredentialStore(data_dir / SPOTIFY_AUTH_FILENAME),
-        )
-    except SpotifyAuthConfigurationError as exc:
-        raise RuntimeError(f"invalid Spotify Web UI authorization configuration: {exc}") from exc
+    spotify_auth = SpotifyAuthService(
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        store=SpotifyCredentialStore(data_dir / SPOTIFY_AUTH_FILENAME),
+    )
     return admin_security, spotify_auth
 
 
@@ -309,10 +367,24 @@ class HealthHandler(BaseHTTPRequestHandler):
         auth_service = self.spotify_auth
         return auth_service.authorization_state() if auth_service is not None else None
 
-    def _require_admin(self) -> AdminSecurity | None:
+    def _require_admin_transport(self) -> AdminSecurity | None:
         security = self.admin_security
         if security is None:
             self._reply(HTTPStatus.NOT_FOUND, b"Not found")
+            return None
+        forwarded_proto = self.headers.get_all("X-Forwarded-Proto")
+        if not security.is_secure_transport(self.client_address[0], forwarded_proto):
+            self._reply(
+                HTTPStatus.FORBIDDEN,
+                b"Administration requires a trusted HTTPS reverse proxy",
+                content_type="text/plain; charset=utf-8",
+            )
+            return None
+        return security
+
+    def _require_admin(self) -> AdminSecurity | None:
+        security = self._require_admin_transport()
+        if security is None:
             return None
         if not security.is_authorized(self.headers.get("Authorization")):
             self._reply(
@@ -365,6 +437,8 @@ class HealthHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/admin/spotify/callback":
+            if self._require_admin_transport() is None:
+                return
             self._handle_spotify_callback(parsed.query)
             return
 
@@ -579,6 +653,26 @@ def _load_admin_password(environ: Mapping[str, str]) -> str | None:
         if value.endswith("\r"):
             value = value[:-1]
     return value or None
+
+
+def _parse_trusted_proxy_networks(
+    value: str | None,
+) -> tuple[TrustedProxyNetwork, ...]:
+    """Parse explicit reverse-proxy IP/CIDR entries used to trust HTTPS forwarding."""
+    if value is None:
+        return ()
+    entries = [entry.strip() for entry in value.split(",")]
+    if not entries or any(not entry for entry in entries):
+        raise RuntimeError(f"{_TRUSTED_PROXY_CIDRS_ENV} contains an empty entry")
+    networks: list[TrustedProxyNetwork] = []
+    for entry in entries:
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{_TRUSTED_PROXY_CIDRS_ENV} contains an invalid IP/CIDR"
+            ) from exc
+    return tuple(networks)
 
 
 def _optional_setting(value: str | None, *, strip: bool = True) -> str | None:
