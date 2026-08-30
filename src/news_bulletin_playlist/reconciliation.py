@@ -9,7 +9,7 @@ from news_bulletin_playlist.desired_state import (
     DesiredPlaylistState,
     build_playlist_desired_state,
 )
-from news_bulletin_playlist.models import PlaylistDefinition, PlaylistId
+from news_bulletin_playlist.models import PlaylistDefinition, PlaylistId, SourceId
 from news_bulletin_playlist.persistence import EditionMatch, SQLiteStore
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
@@ -52,7 +52,7 @@ def build_desired_state_from_store(
     observed_at = _as_utc(now)
     cutoff = observed_at - timedelta(hours=playlist.retention_hours)
     editions = []
-    matches: dict[tuple[object, str], EditionMatch] = {}
+    matches: dict[tuple[SourceId, str], EditionMatch] = {}
 
     for source_id in playlist.source_selection.explicit:
         for edition in store.list_editions(source_id=source_id):
@@ -66,10 +66,7 @@ def build_desired_state_from_store(
             if match is not None:
                 matches[edition.identity] = match
 
-    # Edition identity uses SourceId at runtime, so this narrowing is safe and keeps
-    # persistence concerns outside the pure desired-state function.
-    typed_matches: dict[tuple[Any, str], EditionMatch] = matches
-    return build_playlist_desired_state(playlist, editions, typed_matches, now=observed_at)
+    return build_playlist_desired_state(playlist, editions, matches, now=observed_at)
 
 
 def read_spotify_playlist_uris(
