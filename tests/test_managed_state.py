@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,16 @@ def test_builtin_catalog_has_stable_first_template_and_supported_sources() -> No
     )
 
 
+def test_catalog_rejects_template_that_references_unknown_source() -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    broken = replace(
+        template,
+        default_source_ids=template.default_source_ids + (SourceId("missing"),),
+    )
+    with pytest.raises(ValueError, match="unknown source"):
+        BuiltInCatalog(sources=BUILTIN_CATALOG.sources, playlists=(broken,))
+
+
 def test_activation_snapshots_defaults_instead_of_copying_the_catalog() -> None:
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
     managed = activate_template(template, "spotify-playlist-id")
@@ -87,24 +98,25 @@ def test_managed_state_rejects_duplicate_json_keys(tmp_path: Path) -> None:
 def test_catalog_additions_do_not_change_existing_source_selection() -> None:
     original_template = BUILTIN_CATALOG.playlist("spain_spanish_news")
     managed = activate_template(original_template, "spotify-playlist-id")
-    expanded_template = PlaylistTemplate(
-        id=original_template.id,
-        display_name=original_template.display_name,
-        description=original_template.description,
-        countries=original_template.countries,
-        languages=original_template.languages,
-        default_source_ids=original_template.default_source_ids + (SourceId("future"),),
-        cover_id=original_template.cover_id,
+    future_source = replace(
+        BUILTIN_CATALOG.sources[0],
+        id=SourceId("future"),
+        display_name="Future News",
+        endpoint_url="https://example.test/future.xml",
+    )
+    expanded_template = replace(
+        original_template,
+        default_source_ids=original_template.default_source_ids + (future_source.id,),
     )
     expanded_catalog = BuiltInCatalog(
-        sources=BUILTIN_CATALOG.sources,
+        sources=BUILTIN_CATALOG.sources + (future_source,),
         playlists=(expanded_template,),
     )
 
     config = compile_engine_config(expanded_catalog, ManagedState(playlists=(managed,)))
 
     assert config.playlists[0].source_selection.explicit == original_template.default_source_ids
-    assert SourceId("future") not in config.playlists[0].source_selection.explicit
+    assert future_source.id not in config.playlists[0].source_selection.explicit
 
 
 def test_many_playlists_can_share_one_source_without_duplicate_collection() -> None:
