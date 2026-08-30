@@ -67,8 +67,8 @@ sources:
 
 playlists:
   - id: spain_spanish_news
-    display_name: Spain Spanish News
-    description: Core Spanish-language news bulletins
+    display_name: "Noticias 48h · España"
+    description: "Boletines en español de SER, RNE, Onda Cero y CNN 5 Cosas. Actualización automática con las últimas 48 horas, ordenadas de más reciente a más antigua."
     countries: [ES]
     languages: [es]
     enabled: true
