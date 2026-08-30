@@ -44,7 +44,10 @@ def test_canonical_retention_requires_explicit_protection_boundary(tmp_path: Pat
     )
 
     assert result.canonical_editions_deleted == 1
-    assert store.get_edition(old_protected.source_id, old_protected.source_native_id) == old_protected
+    assert (
+        store.get_edition(old_protected.source_id, old_protected.source_native_id)
+        == old_protected
+    )
     assert store.get_edition(old_stale.source_id, old_stale.source_native_id) is None
     assert store.get_spotify_episode_uri(old_stale.source_id, old_stale.source_native_id) is None
     assert store.get_edition(recent.source_id, recent.source_native_id) == recent
