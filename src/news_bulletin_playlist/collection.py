@@ -24,6 +24,7 @@ _USER_AGENT = (
     "news-bulletin-playlist/0.0.1 "
     "(+https://github.com/eXPerience83/news-bulletin-playlist)"
 )
+_MAX_FEED_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,11 +66,14 @@ def required_sources(config: EngineConfig) -> tuple[SourceDefinition, ...]:
 
 
 def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
-    """Fetch an RSS payload without applying provider or playlist policy."""
+    """Fetch a bounded RSS payload without applying provider or playlist policy."""
 
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return bytes(response.read())
+        payload = response.read(_MAX_FEED_BYTES + 1)
+    if len(payload) > _MAX_FEED_BYTES:
+        raise ValueError("feed payload exceeds 10 MiB limit")
+    return bytes(payload)
 
 
 def collect_required_sources(
