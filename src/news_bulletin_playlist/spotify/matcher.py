@@ -163,7 +163,7 @@ def _cached_outcome(
 
     if state.status in {MatchStatus.PENDING, MatchStatus.AMBIGUOUS}:
         age = now - state.updated_at
-        if age <= retry_grace:
+        if timedelta(0) <= age <= retry_grace:
             return MatchOutcome(
                 edition=edition,
                 status=state.status,
