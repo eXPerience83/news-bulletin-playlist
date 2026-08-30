@@ -60,6 +60,15 @@ def _edition(source: SourceDefinition) -> CanonicalEdition:
     )
 
 
+def _valid_item() -> dict[str, object]:
+    return {
+        "uri": "spotify:episode:valid",
+        "name": "Las noticias de la SER, 10:00 (30/08/2026)",
+        "release_date": "2026-08-30",
+        "release_date_precision": "day",
+    }
+
+
 class FailingCatalogClient:
     def show_episodes(
         self,
@@ -120,6 +129,21 @@ class MalformedCatalogClient:
     ) -> dict[str, Any]:
         del show_id, limit, offset
         return {"items": None, "next": None}
+
+
+class StaticPageCatalogClient:
+    def __init__(self, page: dict[str, Any]) -> None:
+        self.page = page
+
+    def show_episodes(
+        self,
+        show_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        del show_id, limit, offset
+        return self.page
 
 
 def _prepared_store(tmp_path: Path, edition: CanonicalEdition) -> SQLiteStore:
@@ -213,6 +237,89 @@ def test_malformed_catalogue_response_does_not_persist_false_pending(tmp_path: P
     with pytest.raises(MatchResponseError, match="item list"):
         match_source_editions(
             MalformedCatalogClient(),
+            store,
+            source,
+            (edition,),
+            now=datetime(2026, 8, 30, 12, 0, tzinfo=UTC),
+        )
+
+    assert store.get_match_state(edition.source_id, edition.source_native_id) is None
+
+
+@pytest.mark.parametrize(
+    ("page", "message"),
+    [
+        ({"items": [_valid_item()]}, "did not contain next"),
+        ({"items": [_valid_item()], "next": 123}, "invalid next"),
+        (
+            {
+                "items": [
+                    {
+                        "uri": "spotify:episode:missing-precision",
+                        "name": "Las noticias de la SER, 10:00 (30/08/2026)",
+                        "release_date": "2026-08-30",
+                    }
+                ],
+                "next": None,
+            },
+            "release_date_precision",
+        ),
+        (
+            {
+                "items": [
+                    {
+                        "uri": "spotify:episode:bad-precision",
+                        "name": "Las noticias de la SER, 10:00 (30/08/2026)",
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "hour",
+                    }
+                ],
+                "next": None,
+            },
+            "release_date_precision",
+        ),
+        (
+            {
+                "items": [
+                    {
+                        "uri": "spotify:episode:bad-date",
+                        "name": "Las noticias de la SER, 10:00 (30/08/2026)",
+                        "release_date": "2026-08",
+                        "release_date_precision": "day",
+                    }
+                ],
+                "next": None,
+            },
+            "release_date incompatible",
+        ),
+        (
+            {
+                "items": [
+                    {
+                        "uri": "spotify:track:not-an-episode",
+                        "name": "Las noticias de la SER, 10:00 (30/08/2026)",
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                    }
+                ],
+                "next": None,
+            },
+            "non-episode uri",
+        ),
+    ],
+)
+def test_invalid_spotify_matching_fields_fail_without_persisting_state(
+    tmp_path: Path,
+    page: dict[str, Any],
+    message: str,
+) -> None:
+    source = _source()
+    edition = _edition(source)
+    store = _prepared_store(tmp_path, edition)
+
+    with pytest.raises(MatchResponseError, match=message):
+        match_source_editions(
+            StaticPageCatalogClient(page),
             store,
             source,
             (edition,),
