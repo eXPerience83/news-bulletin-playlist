@@ -195,7 +195,10 @@ def test_admin_retry_with_existing_config_never_requests_token_or_spotify_write(
         nonlocal restart_called
         restart_called = True
 
-    monkeypatch.setattr("news_bulletin_playlist.lan_admin.provision_first_release", fail_if_provisioned)
+    monkeypatch.setattr(
+        "news_bulletin_playlist.lan_admin.provision_first_release",
+        fail_if_provisioned,
+    )
     monkeypatch.setattr(LanAdminHandler, "runtime_restart", restart)
 
     handler = _HandlerHarness(
@@ -229,7 +232,10 @@ def test_admin_provision_endpoint_rejects_replayed_csrf_without_write(
         provision_called = True
         raise AssertionError("replayed CSRF must fail before provisioning")
 
-    monkeypatch.setattr("news_bulletin_playlist.lan_admin.provision_first_release", fail_if_provisioned)
+    monkeypatch.setattr(
+        "news_bulletin_playlist.lan_admin.provision_first_release",
+        fail_if_provisioned,
+    )
 
     handler = _HandlerHarness(
         data_dir=tmp_path,
