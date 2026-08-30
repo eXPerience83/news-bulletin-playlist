@@ -256,15 +256,37 @@ class SpotifyCredentialStore:
             with suppress(OSError):
                 temporary.unlink(missing_ok=True)
 
+    def discard(self) -> None:
+        """Remove persisted authorization state and durably record the deletion."""
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise SpotifyCredentialStoreError(
+                "Spotify authorization state could not be discarded"
+            ) from exc
+        try:
+            _fsync_directory(self.path.parent)
+        except OSError as exc:
+            raise SpotifyCredentialStoreError(
+                "Spotify authorization state deletion could not be synchronized"
+            ) from exc
+
     def mark_reauthorization_required(self, previous: SpotifyCredentialRecord) -> None:
-        self.save(
-            SpotifyCredentialRecord(
-                status=CredentialStatus.REAUTH_REQUIRED,
-                refresh_token=None,
-                granted_scopes=previous.granted_scopes,
-                authorized_at=previous.authorized_at,
-            )
+        marker = SpotifyCredentialRecord(
+            status=CredentialStatus.REAUTH_REQUIRED,
+            refresh_token=None,
+            granted_scopes=previous.granted_scopes,
+            authorized_at=previous.authorized_at,
         )
+        try:
+            self.save(marker)
+        except SpotifyCredentialStoreError:
+            # Never deliberately retain a refresh credential already known to be invalid.
+            with suppress(SpotifyCredentialStoreError):
+                self.discard()
+            raise
 
 
 class SpotifyAuthService:
@@ -290,8 +312,11 @@ class SpotifyAuthService:
             raise SpotifyAuthConfigurationError("Spotify authorization scopes are invalid")
         self._pending: PendingAuthorization | None = None
         self._access_token: _CachedAccessToken | None = None
+        self._reauthorization_required = False
 
     def authorization_state(self) -> AuthorizationState:
+        if self._reauthorization_required:
+            return AuthorizationState.REAUTH_REQUIRED
         try:
             record = self.store.load()
         except SpotifyCredentialStoreError:
@@ -365,6 +390,7 @@ class SpotifyAuthService:
             authorized_at=observed_at,
         )
         self.store.save(record)
+        self._reauthorization_required = False
         self._access_token = _CachedAccessToken(
             token.access_token,
             observed_at + timedelta(seconds=token.expires_in),
@@ -372,6 +398,8 @@ class SpotifyAuthService:
 
     def get_access_token(self, *, now: datetime | None = None) -> str:
         observed_at = _as_utc(now or datetime.now(UTC))
+        if self._reauthorization_required:
+            raise SpotifyReauthorizationRequired("Spotify authorization is required")
         cached = self._access_token
         if cached is not None and cached.expires_at > observed_at + _ACCESS_TOKEN_REFRESH_SKEW:
             return cached.value
@@ -393,7 +421,13 @@ class SpotifyAuthService:
         except SpotifyTokenEndpointError as exc:
             if exc.error_code == "invalid_grant":
                 self._access_token = None
-                self.store.mark_reauthorization_required(record)
+                self._reauthorization_required = True
+                try:
+                    self.store.mark_reauthorization_required(record)
+                except SpotifyCredentialStoreError as store_exc:
+                    raise SpotifyReauthorizationRequired(
+                        "Spotify authorization expired or was revoked; reauthorization is required"
+                    ) from store_exc
                 raise SpotifyReauthorizationRequired(
                     "Spotify authorization expired or was revoked"
                 ) from exc
