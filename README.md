@@ -15,7 +15,7 @@ Core architectural invariant:
 
 > **Fetch once -> normalize once -> store once -> distribute to many playlists.**
 
-A provider/source is independent from a playlist and may feed several playlists. A single engine run should fetch each required source once, normalize it once, and then reconcile every configured destination playlist independently.
+A provider/source is independent from a playlist and may feed several playlists. A single engine run fetches each required source once, normalizes and persists it once, then evaluates and reconciles every configured destination playlist independently.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contract and invariants.
 
@@ -25,6 +25,7 @@ Initial product defaults:
 - cap a playlist at **100 episodes**;
 - order by source publication timestamp (`published_at`), newest first;
 - retain operational metadata locally for **30 days**;
+- run the production engine approximately every **10 minutes**;
 - never download or store podcast audio;
 - treat RSS/provider metadata as the timing source and Spotify as the playlist destination;
 - allow playlist-specific policies to override defaults when required.
@@ -61,7 +62,9 @@ See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the source research and the
 
 ## Container runtime
 
-The supported runtime is a hardened Python 3.14 container designed for one engine that can later manage many playlists. The container uses a read-only root filesystem, runs as a non-root numeric UID/GID, keeps `/data` as its only persistent writable path and drops Linux capabilities. It serves an internal Docker health endpoint plus a read-only status page.
+The supported runtime is a hardened Python 3.14 container. One long-lived process owns the HTTP status/admin surface and one sequential engine scheduler; it does **not** create one cron, worker or container per playlist.
+
+The container uses a read-only root filesystem, runs as a non-root numeric UID/GID, keeps `/data` as its only persistent writable path and drops Linux capabilities. `/healthz` validates persistent storage. The read-only `/` page reports runtime/Spotify state plus last cycle, next run, source outcomes and playlist outcomes when the engine is configured.
 
 For local Docker:
 
@@ -72,7 +75,9 @@ docker compose ps
 
 The local status page is available only on `http://127.0.0.1:8788/`.
 
-For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and includes best-effort `x-portals` metadata. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for installation and for the separate, opt-in production Spotify authorization setup.
+The base container remains healthy with no production engine configuration. To enable automatic cycles, copy [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) to `/data/news-bulletin-playlist.yaml`, replace the placeholder destination with the already provisioned Spotify playlist ID, and configure the production Spotify PKCE/HTTPS settings described in [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md). The scheduler starts immediately and then runs every 600 seconds by default.
+
+For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and contains no Spotify credentials.
 
 Production `/admin/` and the Spotify callback are intentionally fail-closed. When an external HTTPS origin is configured, administration is accepted only from the explicitly configured immediate reverse-proxy IP/CIDR and only when that proxy asserts `X-Forwarded-Proto: https`. Direct HTTP access to the backend never reaches the Basic-authentication challenge in that mode. Loopback HTTP remains available only for local/P0 development.
 
@@ -93,21 +98,13 @@ CI runs Ruff, mypy and pytest on Python 3.14. A separate container workflow vali
 
 ## Domain and configuration contract
 
-P1 configuration is YAML and separates global source definitions from playlist policies and
-destination references. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml)
-is a non-production example: its Spotify destination must be replaced with an already provisioned
-playlist ID before later runtime integration. Issue #14 does not provision a playlist.
+P1 configuration is YAML and separates global source definitions from playlist policies and destination references. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is a non-production example: copy it to the persistent runtime and replace its Spotify destination with an already provisioned playlist ID before enabling automatic cycles.
 
-The example uses the verified feeds and existing source IDs `ser`, `rne`, `ondacero` and `cnn`.
-COPE remains a disabled candidate without an invented endpoint or Spotify catalogue reference.
-Playlist `source_selection.explicit` is authoritative in schema version 1; playlist countries and
-languages describe editorial scope and do not implicitly filter that list. This is why a
-Spain-oriented playlist can explicitly include the US source CNN 5 Cosas.
+The example uses the verified feeds and existing source IDs `ser`, `rne`, `ondacero` and `cnn`. COPE remains a disabled candidate without an invented endpoint or Spotify catalogue reference. Playlist `source_selection.explicit` is authoritative in schema version 1; playlist countries and languages describe editorial scope and do not implicitly filter that list. This is why a Spain-oriented playlist can explicitly include the US source CNN 5 Cosas.
 
-Canonical editions are identified only by `(source_id, source_native_id)`. Titles and timestamps
-are metadata, never identity. Canonical timestamps are timezone-aware UTC values. Spotify show
-references are source catalogue metadata and are intentionally distinct from writable playlist
-destinations.
+Canonical editions are identified only by `(source_id, source_native_id)`. Titles and timestamps are metadata, never identity. Canonical timestamps are timezone-aware UTC values. Spotify show references are source catalogue metadata and are intentionally distinct from writable playlist destinations.
+
+A cycle uses durable canonical/match state when building desired playlists. Therefore a transient source failure does not erase still-valid recent episodes; they age out naturally at the playlist retention boundary. Destination failures are isolated so one Spotify playlist cannot block another.
 
 ## License
 
@@ -117,11 +114,11 @@ Released under the [MIT License](LICENSE).
 
 Do not commit Spotify client secrets, refresh tokens, `.env` files, administration passwords or the runtime database. Production Spotify authorization uses Authorization Code + PKCE and does not require a Spotify Client Secret. The durable refresh credential is stored owner-only under `/data`; access tokens remain memory-only.
 
-The production administration surface must sit behind HTTPS. Configure `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS` with the immediate reverse proxy's source IP/CIDR, not a client or Tailscale subnet, and configure the proxy to overwrite `X-Forwarded-Proto` with `https`. Never expose the backend administration port as a trusted alternative to the HTTPS origin. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md).
+The production administration surface must sit behind HTTPS. Configure `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS` with the immediate reverse proxy's source IP/CIDR, not a client or Tailscale subnet, and configure the proxy to overwrite `X-Forwarded-Proto` with `https`. Never expose the backend administration port as a trusted alternative to the HTTPS origin. Runtime OAuth operations and scheduler token refreshes are serialized so reconnect/refresh cannot race against the same credential store.
 
 ## Roadmap
 
-The authoritative production-engine roadmap is the [P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13). P1 deliberately contains the complete path from shared collection to an unattended multi-playlist runtime rather than splitting those engine stages into separate top-level P2/P3/P5 phases.
+The authoritative production-engine roadmap is the [P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13).
 
 1. **P0 — validated foundation** — provider contracts and watchdog, hardened container/TrueNAS runtime, plus Spotify catalogue/write probes for the first Spain / Spanish-language playlist.
 2. **P1 — production multi-playlist engine**:
@@ -129,9 +126,9 @@ The authoritative production-engine roadmap is the [P1 umbrella issue #13](https
    - [x] **P1.2 / #15** — shared RSS collection and canonical normalization; completed via #22.
    - [x] **P1.3 / #16** — SQLite persistence, migrations and 30-day operational retention; completed via #26.
    - [x] **P1.4 / #17** — deterministic source-to-Spotify episode matching; completed via #27.
-   - [x] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation.
-   - [ ] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI.
-   - [ ] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime.
+   - [x] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation; completed via #29.
+   - [x] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI; completed via #30.
+   - [ ] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime; in progress via #31.
 3. **First release** — provision and operate the first public Spain / Spanish-language playlist once the P1 exit criteria are satisfied.
 4. **Expansion** — add source and playlist definitions for additional languages and European countries without duplicating the engine.
 
