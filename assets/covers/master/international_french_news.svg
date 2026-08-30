@@ -1,15 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1600" viewBox="0 0 1200 1200" role="img" aria-label="MONDE ACTUALITÉS">
-  <defs>
-    <radialGradient id="bg" cx="50%" cy="42%" r="75%"><stop offset="0%" stop-color="#03172d"/><stop offset="100%" stop-color="#001126"/></radialGradient>
-    <linearGradient id="goldline" x1="0%" x2="100%"><stop offset="0%" stop-color="#f7b735" stop-opacity="0"/><stop offset="45%" stop-color="#f7b735" stop-opacity="1"/><stop offset="100%" stop-color="#f7b735" stop-opacity="0"/></linearGradient>
-    <linearGradient id="redline" x1="0%" x2="100%"><stop offset="0%" stop-color="#ed4b43" stop-opacity="0"/><stop offset="45%" stop-color="#ed4b43" stop-opacity="1"/><stop offset="100%" stop-color="#ed4b43" stop-opacity="0"/></linearGradient>
-  </defs>
-  <rect width="1200" height="1200" fill="url(#bg)"/>
-  <rect x="150" y="143" width="305" height="3" fill="url(#goldline)"/><rect x="745" y="143" width="305" height="3" fill="url(#goldline)"/>
-  <text x="600" y="168" text-anchor="middle" fill="#f7b735" font-size="58" font-weight="700" letter-spacing="13" font-family="Arial,Helvetica,sans-serif">INT · FR</text>
-  <text x="600" y="570" text-anchor="middle" fill="#f8f7f4" font-size="330" font-weight="900" font-stretch="condensed" textLength="900" lengthAdjust="spacingAndGlyphs" font-family="Arial Narrow,Arial,Helvetica,sans-serif">MONDE</text>
-  <text x="600" y="745" text-anchor="middle" fill="#f7b735" font-size="160" font-weight="800" textLength="895" lengthAdjust="spacingAndGlyphs" font-family="Arial Narrow,Arial,Helvetica,sans-serif">ACTUALITÉS</text>
-  <rect x="260" y="800" width="620" height="30" rx="2" fill="#ed4b43"/><circle cx="928" cy="815" r="19" fill="#ed4b43"/><text x="974" y="824" fill="#ed4b43" font-size="38" font-weight="700" font-family="Arial,Helvetica,sans-serif">07:00</text><rect x="260" y="870" width="600" height="30" rx="2" fill="#f7b735"/><circle cx="908" cy="885" r="19" fill="#f7b735"/><text x="954" y="894" fill="#f7b735" font-size="38" font-weight="700" font-family="Arial,Helvetica,sans-serif">13:00</text><rect x="260" y="940" width="500" height="30" rx="2" fill="#f4a928"/><circle cx="808" cy="955" r="19" fill="#f4a928"/><text x="854" y="964" fill="#f4a928" font-size="38" font-weight="700" font-family="Arial,Helvetica,sans-serif">19:00</text>
-  <rect x="150" y="1060" width="270" height="3" fill="url(#redline)"/><rect x="780" y="1060" width="270" height="3" fill="url(#redline)"/>
-  <text x="600" y="1084" text-anchor="middle" fill="#ed4b43" font-size="53" font-weight="700" letter-spacing="13" font-family="Arial,Helvetica,sans-serif">BULLETINS</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200" role="img" aria-label="MONDE ACTUALITÉS">
+<defs><radialGradient id="bg" cx="50%" cy="42%" r="75%"><stop offset="0%" stop-color="#03172d"/><stop offset="100%" stop-color="#001126"/></radialGradient><linearGradient id="goldline"><stop offset="0%" stop-color="#f7b735" stop-opacity="0"/><stop offset="45%" stop-color="#f7b735"/><stop offset="100%" stop-color="#f7b735" stop-opacity="0"/></linearGradient><linearGradient id="redline"><stop offset="0%" stop-color="#ed4b43" stop-opacity="0"/><stop offset="45%" stop-color="#ed4b43"/><stop offset="100%" stop-color="#ed4b43" stop-opacity="0"/></linearGradient></defs>
+<rect width="1200" height="1200" fill="url(#bg)"/>
+<rect x="150" y="142" width="305" height="3" fill="url(#goldline)"/><rect x="745" y="142" width="305" height="3" fill="url(#goldline)"/>
+<text x="600" y="178" text-anchor="middle" fill="#f7b735" font-size="58" font-weight="700" letter-spacing="12" font-family="PT Sans Narrow,sans-serif">INT · FR</text>
+<text x="600" y="590" text-anchor="middle" fill="#f8f7f4" font-size="345" font-weight="700" font-family="PT Sans Narrow,sans-serif">MONDE</text>
+<text x="600" y="770" text-anchor="middle" fill="#f7b735" font-size="204" font-weight="700" font-family="PT Sans Narrow,sans-serif">ACTUALITÉS</text>
+<rect x="265" y="825" width="475" height="30" fill="#ed4b43"/><circle cx="790" cy="840" r="18" fill="#ed4b43"/><text x="830" y="852" fill="#ed4b43" font-size="38" font-weight="700" font-family="DejaVu Sans,sans-serif">06:00</text>
+<rect x="265" y="885" width="475" height="30" fill="#f7b735"/><circle cx="790" cy="900" r="18" fill="#f7b735"/><text x="830" y="912" fill="#f7b735" font-size="38" font-weight="700" font-family="DejaVu Sans,sans-serif">12:00</text>
+<rect x="265" y="945" width="475" height="30" fill="#f4a928"/><circle cx="790" cy="960" r="18" fill="#f4a928"/><text x="830" y="972" fill="#f4a928" font-size="38" font-weight="700" font-family="DejaVu Sans,sans-serif">18:00</text>
+<rect x="150" y="1060" width="260" height="3" fill="url(#redline)"/><rect x="790" y="1060" width="260" height="3" fill="url(#redline)"/>
+<text x="600" y="1085" text-anchor="middle" fill="#ed4b43" font-size="53" font-weight="700" letter-spacing="11" font-family="PT Sans Narrow,sans-serif">BULLETINS</text>
 </svg>
