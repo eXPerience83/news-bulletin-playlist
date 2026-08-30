@@ -40,6 +40,34 @@ class BuiltInCatalog:
     sources: tuple[SourceDefinition, ...]
     playlists: tuple[PlaylistTemplate, ...]
 
+    def __post_init__(self) -> None:
+        source_ids = [source.id for source in self.sources]
+        if len(source_ids) != len(set(source_ids)):
+            raise ValueError("built-in catalog contains duplicate source ids")
+        template_ids = [template.id for template in self.playlists]
+        if len(template_ids) != len(set(template_ids)):
+            raise ValueError("built-in catalog contains duplicate playlist template ids")
+        known_sources = set(source_ids)
+        for source in self.sources:
+            if not source.enabled or source.endpoint_url is None:
+                raise ValueError(
+                    f"built-in source {source.id} must be operational and have an endpoint"
+                )
+        for template in self.playlists:
+            if not template.display_name.strip() or not template.cover_id.strip():
+                raise ValueError(f"playlist template {template.id} has incomplete metadata")
+            if not template.default_source_ids:
+                raise ValueError(f"playlist template {template.id} must select a default source")
+            if len(template.default_source_ids) != len(set(template.default_source_ids)):
+                raise ValueError(f"playlist template {template.id} contains duplicate sources")
+            for source_id in template.default_source_ids:
+                if source_id not in known_sources:
+                    raise ValueError(
+                        f"playlist template {template.id} references unknown source {source_id}"
+                    )
+            if template.retention_hours <= 0 or template.max_episodes <= 0:
+                raise ValueError(f"playlist template {template.id} has invalid retention policy")
+
     def source(self, source_id: SourceId | str) -> SourceDefinition:
         for source in self.sources:
             if source.id == source_id:
