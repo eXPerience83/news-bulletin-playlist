@@ -16,6 +16,8 @@ DEFAULT_MAX_PAGES = 2
 DEFAULT_RETRY_GRACE = timedelta(minutes=15)
 
 _WHITESPACE = re.compile(r"\s+")
+_RELEASE_PRECISIONS = {"year", "month", "day"}
+_EPISODE_URI_PREFIX = "spotify:episode:"
 
 
 class SpotifyCatalogClient(Protocol):
@@ -59,7 +61,7 @@ class _SpotifyEpisodeCandidate:
     uri: str
     name: str
     release_date: str
-    release_date_precision: str | None
+    release_date_precision: str
     duration_seconds: int | None
 
 
@@ -77,8 +79,8 @@ def match_source_editions(
     """Match one source batch using persisted state before bounded Spotify catalogue reads."""
     if not 1 <= page_size <= 50:
         raise ValueError("page_size must be between 1 and 50")
-    if max_pages <= 0:
-        raise ValueError("max_pages must be positive")
+    if not 1 <= max_pages <= DEFAULT_MAX_PAGES:
+        raise ValueError(f"max_pages must be between 1 and {DEFAULT_MAX_PAGES}")
     if retry_grace < timedelta(0):
         raise ValueError("retry_grace must not be negative")
 
@@ -221,48 +223,89 @@ def _fetch_candidates(
         items = page.get("items")
         if not isinstance(items, list):
             raise MatchResponseError("Spotify show episodes response did not contain an item list")
+        if "next" not in page:
+            raise MatchResponseError("Spotify show episodes response did not contain next")
+        next_page = page["next"]
+        if next_page is not None and (
+            not isinstance(next_page, str) or not next_page.strip()
+        ):
+            raise MatchResponseError("Spotify show episodes response contained invalid next")
 
         for item in items:
             candidate = _candidate_from_item(item)
-            if candidate is not None:
-                by_uri.setdefault(candidate.uri, candidate)
+            existing = by_uri.get(candidate.uri)
+            if existing is None:
+                by_uri[candidate.uri] = candidate
+            elif existing != candidate:
+                raise MatchResponseError(
+                    "Spotify catalogue repeated an episode URI with conflicting metadata"
+                )
 
-        if not items or not page.get("next"):
+        if not items or next_page is None:
             break
     return tuple(by_uri.values()), calls
 
 
-def _candidate_from_item(item: object) -> _SpotifyEpisodeCandidate | None:
+def _candidate_from_item(item: object) -> _SpotifyEpisodeCandidate:
     if not isinstance(item, dict):
-        return None
+        raise MatchResponseError("Spotify episode item was not an object")
+
     name = item.get("name")
-    release_date = item.get("release_date")
     if not isinstance(name, str) or not name.strip():
-        return None
+        raise MatchResponseError("Spotify episode item contained invalid name")
+
+    release_date = item.get("release_date")
     if not isinstance(release_date, str) or not release_date.strip():
-        return None
+        raise MatchResponseError("Spotify episode item contained invalid release_date")
+    release_date = release_date.strip()
+
+    precision = item.get("release_date_precision")
+    if not isinstance(precision, str) or precision not in _RELEASE_PRECISIONS:
+        raise MatchResponseError(
+            "Spotify episode item contained invalid release_date_precision"
+        )
+    _validate_release_date(release_date, precision)
 
     uri = item.get("uri")
     if not isinstance(uri, str) or not uri.strip():
-        episode_id = item.get("id")
-        if not isinstance(episode_id, str) or not episode_id.strip():
-            return None
-        uri = f"spotify:episode:{episode_id.strip()}"
+        raise MatchResponseError("Spotify episode item contained invalid uri")
+    uri = uri.strip()
+    if not uri.startswith(_EPISODE_URI_PREFIX) or len(uri) == len(_EPISODE_URI_PREFIX):
+        raise MatchResponseError("Spotify episode item contained a non-episode uri")
 
-    precision = item.get("release_date_precision")
-    release_date_precision = precision if isinstance(precision, str) else None
     duration_ms = item.get("duration_ms")
     duration_seconds = None
     if isinstance(duration_ms, int) and not isinstance(duration_ms, bool) and duration_ms >= 0:
         duration_seconds = round(duration_ms / 1000)
 
     return _SpotifyEpisodeCandidate(
-        uri=uri.strip(),
+        uri=uri,
         name=name.strip(),
-        release_date=release_date.strip(),
-        release_date_precision=release_date_precision,
+        release_date=release_date,
+        release_date_precision=precision,
         duration_seconds=duration_seconds,
     )
+
+
+def _validate_release_date(value: str, precision: str) -> None:
+    try:
+        if precision == "year":
+            if len(value) != 4:
+                raise ValueError
+            year = int(value)
+            date(year, 1, 1)
+            return
+        if precision == "month":
+            if len(value) != 7:
+                raise ValueError
+            year_s, month_s = value.split("-", 1)
+            date(int(year_s), int(month_s), 1)
+            return
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise MatchResponseError(
+            "Spotify episode item contained release_date incompatible with its precision"
+        ) from exc
 
 
 def _candidate_matches(
@@ -295,18 +338,14 @@ def _release_date_compatible(
 ) -> bool:
     target = (edition.edition_at or edition.published_at).astimezone(source.timezone).date()
     value = candidate.release_date
-    precision = (candidate.release_date_precision or "").casefold()
+    precision = candidate.release_date_precision
 
-    try:
-        if precision == "year" or (not precision and len(value) == 4):
-            return int(value) == target.year
-        if precision == "month" or (not precision and len(value) == 7):
-            year_s, month_s = value.split("-", 1)
-            return (int(year_s), int(month_s)) == (target.year, target.month)
-        released = date.fromisoformat(value)
-    except (TypeError, ValueError):
-        return False
-    return released == target
+    if precision == "year":
+        return int(value) == target.year
+    if precision == "month":
+        year_s, month_s = value.split("-", 1)
+        return (int(year_s), int(month_s)) == (target.year, target.month)
+    return date.fromisoformat(value) == target
 
 
 def _resolve_outcome(
