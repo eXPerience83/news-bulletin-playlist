@@ -16,6 +16,7 @@ from pathlib import Path
 from types import FrameType
 
 from news_bulletin_playlist import __version__
+from news_bulletin_playlist.persistence import DEFAULT_DB_FILENAME, SQLiteStore
 
 DEFAULT_DATA_DIR = Path("/data")
 DEFAULT_HEALTH_HOST = "127.0.0.1"
@@ -45,6 +46,14 @@ def ensure_data_dir(data_dir: Path) -> None:
         raise RuntimeError(f"application data directory is not writable: {data_dir}") from exc
     if not _data_dir_ready(data_dir):
         raise RuntimeError(f"application data directory is not writable: {data_dir}")
+
+
+def initialize_runtime_storage(data_dir: Path) -> Path:
+    """Verify `/data` and apply durable SQLite migrations before serving traffic."""
+    ensure_data_dir(data_dir)
+    database_path = data_dir / DEFAULT_DB_FILENAME
+    SQLiteStore(database_path).initialize()
+    return database_path
 
 
 def _status_page(*, ready: bool) -> bytes:
@@ -139,7 +148,7 @@ def serve(
     stop_event: threading.Event | None = None,
 ) -> int:
     """Run the durable container host until SIGTERM/SIGINT requests shutdown."""
-    ensure_data_dir(data_dir)
+    database_path = initialize_runtime_storage(data_dir)
     HealthHandler.data_dir = data_dir
     server = HTTPServer((host, port), HealthHandler)
     server.timeout = 0.5
@@ -160,7 +169,8 @@ def serve(
 
     print(
         f"news-bulletin-playlist runtime ready; web=http://{host}:{server.server_port}/ "
-        f"health=http://127.0.0.1:{server.server_port}/healthz data={data_dir}",
+        f"health=http://127.0.0.1:{server.server_port}/healthz data={data_dir} "
+        f"db={database_path}",
         flush=True,
     )
     try:

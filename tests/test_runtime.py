@@ -11,6 +11,11 @@ from pathlib import Path
 import pytest
 
 import news_bulletin_playlist.runtime as runtime
+from news_bulletin_playlist.persistence import (
+    DEFAULT_DB_FILENAME,
+    LATEST_SCHEMA_VERSION,
+    SQLiteStore,
+)
 from news_bulletin_playlist.runtime import HealthHandler, ensure_data_dir, healthcheck
 
 
@@ -24,6 +29,17 @@ def test_ensure_data_dir_creates_and_verifies_writable_directory(tmp_path: Path)
     data_dir = tmp_path / "data"
     ensure_data_dir(data_dir)
     assert data_dir.is_dir()
+
+
+def test_initialize_runtime_storage_creates_migrated_database(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+
+    database_path = runtime.initialize_runtime_storage(data_dir)
+    runtime.initialize_runtime_storage(data_dir)
+
+    assert database_path == data_dir / DEFAULT_DB_FILENAME
+    assert database_path.is_file()
+    assert SQLiteStore(database_path).schema_version() == LATEST_SCHEMA_VERSION
 
 
 def test_status_portal_reports_runtime_without_sensitive_details(tmp_path: Path) -> None:
