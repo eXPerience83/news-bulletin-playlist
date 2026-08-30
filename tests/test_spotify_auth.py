@@ -10,9 +10,9 @@ import pytest
 
 import news_bulletin_playlist.spotify.auth as auth
 from news_bulletin_playlist.spotify.auth import (
+    PRODUCTION_SCOPES,
     AuthorizationState,
     CredentialStatus,
-    PRODUCTION_SCOPES,
     SpotifyAuthConfigurationError,
     SpotifyAuthorizationDenied,
     SpotifyAuthService,
