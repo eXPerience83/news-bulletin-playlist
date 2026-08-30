@@ -203,14 +203,16 @@ class EngineRunner:
                     edition_count=len(result.editions),
                     error=result.error,
                 )
-                state = self.store.get_source_state(result.source_id)
+                source_state = self.store.get_source_state(result.source_id)
                 source_outcomes[result.source_id] = SourceCycleOutcome(
                     source_id=result.source_id,
                     collection_ok=result.ok,
                     matching_ok=None,
                     edition_count=len(result.editions),
                     matched_count=0,
-                    last_success_at=None if state is None else state.last_success_at,
+                    last_success_at=(
+                        None if source_state is None else source_state.last_success_at
+                    ),
                     error=result.error,
                 )
         except PersistenceError as exc:
@@ -295,7 +297,7 @@ class EngineRunner:
                     desired_count=reconciled.desired_count,
                     applied_count=reconciled.applied_count or 0,
                 )
-                state = self.store.get_playlist_state(playlist.id)
+                playlist_state = self.store.get_playlist_state(playlist.id)
                 playlist_outcomes.append(
                     PlaylistCycleOutcome(
                         playlist_id=playlist.id,
@@ -303,7 +305,9 @@ class EngineRunner:
                         desired_count=reconciled.desired_count,
                         applied_count=reconciled.applied_count,
                         wrote=reconciled.wrote,
-                        last_success_at=None if state is None else state.last_success_at,
+                        last_success_at=(
+                            None if playlist_state is None else playlist_state.last_success_at
+                        ),
                     )
                 )
             except (
@@ -323,7 +327,7 @@ class EngineRunner:
                         applied_count=0,
                         error=str(exc),
                     )
-                    state = self.store.get_playlist_state(playlist.id)
+                    playlist_state = self.store.get_playlist_state(playlist.id)
                 except PersistenceError as persistence_exc:
                     return self._fatal_result(
                         started_at,
@@ -338,7 +342,9 @@ class EngineRunner:
                         desired_count=desired_count,
                         applied_count=None,
                         wrote=None,
-                        last_success_at=None if state is None else state.last_success_at,
+                        last_success_at=(
+                            None if playlist_state is None else playlist_state.last_success_at
+                        ),
                         error=str(exc),
                     )
                 )
@@ -403,7 +409,7 @@ class EngineRunner:
                     applied_count=0,
                     error=message,
                 )
-                state = self.store.get_playlist_state(playlist.id)
+                playlist_state = self.store.get_playlist_state(playlist.id)
             except PersistenceError as exc:
                 return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
             playlist_outcomes.append(
@@ -413,7 +419,9 @@ class EngineRunner:
                     desired_count=desired_count,
                     applied_count=None,
                     wrote=None,
-                    last_success_at=None if state is None else state.last_success_at,
+                    last_success_at=(
+                        None if playlist_state is None else playlist_state.last_success_at
+                    ),
                     error=message,
                 )
             )
