@@ -330,3 +330,24 @@ def test_catalogue_pagination_is_bounded_even_when_spotify_reports_more(tmp_path
         ("show-ser", DEFAULT_PAGE_SIZE, DEFAULT_PAGE_SIZE),
     ]
     assert result.outcomes[0].status is MatchStatus.PENDING
+
+
+def test_max_pages_cannot_exceed_two_page_contract(tmp_path: Path) -> None:
+    source = _source("ser", "ser", "Europe/Madrid", "show-ser")
+    edition = _edition(source, "ser-native", "Las noticias de la SER, 10:00 (30/08/2026)")
+    store = _store(tmp_path)
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    store.upsert_editions((edition,), observed_at=now)
+    client = FakeCatalogClient(pages=[])
+
+    with pytest.raises(ValueError, match="max_pages must be between 1 and 2"):
+        match_source_editions(
+            client,
+            store,
+            source,
+            (edition,),
+            now=now,
+            max_pages=DEFAULT_MAX_PAGES + 1,
+        )
+
+    assert client.calls == []
