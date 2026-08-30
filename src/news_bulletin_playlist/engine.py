@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -525,10 +526,20 @@ class EngineScheduler:
 
             next_run_at = _as_utc(self.clock()) + self.interval
             self.status.finish_cycle(result, next_run_at=next_run_at)
-            self._wake_event.wait(self.interval.total_seconds())
-            self._wake_event.clear()
+            self._wait_for_wake_or_stop(stop_event)
 
         self.status.set_next_run(None)
+
+    def _wait_for_wake_or_stop(self, stop_event: threading.Event) -> None:
+        """Wait for cadence or wake while keeping external stop requests responsive."""
+        deadline = time.monotonic() + self.interval.total_seconds()
+        while not stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            if self._wake_event.wait(min(remaining, 0.25)):
+                self._wake_event.clear()
+                return
 
 
 def _spotify_client(access_token: str) -> SpotifyEngineClient:
