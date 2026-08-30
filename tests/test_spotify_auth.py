@@ -386,7 +386,9 @@ def test_callback_persistence_failure_never_claims_connection_or_leaks_secrets(
     code = "authorization-code-sentinel"
     callback = urllib.parse.urlencode({"state": state, "code": code})
 
-    with pytest.raises(SpotifyCredentialStoreError, match="simulated persistence failure") as raised:
+    with pytest.raises(
+        SpotifyCredentialStoreError, match="simulated persistence failure"
+    ) as raised:
         service.complete_callback(callback, now=NOW)
     assert len(transport.exchange_calls) == 1
     verifier = transport.exchange_calls[0]["verifier"]
