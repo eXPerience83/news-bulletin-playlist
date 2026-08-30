@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -21,6 +22,7 @@ FIRST_PLAYLIST_DESCRIPTION = (
     "Boletines en español de SER, RNE, Onda Cero y CNN 5 Cosas. "
     "Actualización automática con las últimas 48 horas, ordenadas de más reciente a más antigua."
 )
+_CONFIG_EXISTS_ERROR = "Engine configuration already exists; provisioning refused"
 _SPOTIFY_PLAYLIST_ID = re.compile(r"^[A-Za-z0-9]{22}$")
 
 
@@ -54,7 +56,7 @@ def provision_first_release(
     """Create the first private Spotify playlist and durable engine config exactly once."""
     config_path = data_dir / DEFAULT_CONFIG_FILENAME
     if config_path.exists():
-        raise FirstReleaseProvisioningError("Engine configuration already exists; provisioning refused")
+        raise FirstReleaseProvisioningError(_CONFIG_EXISTS_ERROR)
 
     factory = client_factory or (lambda token: SpotifyClient(token))
     client = factory(access_token)
@@ -187,7 +189,7 @@ def _playlist_id(payload: dict[str, Any]) -> str:
 
 def _write_validated_no_replace(path: Path, document: str) -> None:
     if path.exists():
-        raise FirstReleaseProvisioningError("Engine configuration already exists; provisioning refused")
+        raise FirstReleaseProvisioningError(_CONFIG_EXISTS_ERROR)
     temp_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -199,15 +201,11 @@ def _write_validated_no_replace(path: Path, document: str) -> None:
         try:
             os.link(temp_path, path)
         except FileExistsError as exc:
-            raise FirstReleaseProvisioningError(
-                "Engine configuration already exists; provisioning refused"
-            ) from exc
+            raise FirstReleaseProvisioningError(_CONFIG_EXISTS_ERROR) from exc
         _fsync_directory(path.parent)
     finally:
-        try:
+        with suppress(FileNotFoundError):
             temp_path.unlink()
-        except FileNotFoundError:
-            pass
         _fsync_directory(path.parent)
 
 
