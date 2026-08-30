@@ -123,8 +123,8 @@ The authoritative production-engine roadmap is the [P1 umbrella issue #13](https
 2. **P1 — production multi-playlist engine**:
    - [x] **P1.1 / #14** — source, canonical edition and playlist configuration/domain model; completed via #21.
    - [x] **P1.2 / #15** — shared RSS collection and canonical normalization; completed via #22.
-   - [ ] **P1.3 / #16** — SQLite persistence, migrations and 30-day operational retention.
-   - [ ] **P1.4 / #17** — deterministic source-to-Spotify episode matching.
+   - [x] **P1.3 / #16** — SQLite persistence, migrations and 30-day operational retention; completed via #26.
+   - [ ] **P1.4 / #17** — deterministic source-to-Spotify episode matching; active in #27.
    - [ ] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation.
    - [ ] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI.
    - [ ] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime.
