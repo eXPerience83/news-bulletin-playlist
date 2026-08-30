@@ -6,7 +6,12 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-from news_bulletin_playlist.collection import FeedFetcher, collect_required_sources, fetch_feed, required_sources
+from news_bulletin_playlist.collection import (
+    FeedFetcher,
+    collect_required_sources,
+    fetch_feed,
+    required_sources,
+)
 from news_bulletin_playlist.desired_state import DesiredStateError
 from news_bulletin_playlist.models import EngineConfig, PlaylistId, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
@@ -16,7 +21,11 @@ from news_bulletin_playlist.reconciliation import (
     reconcile_spotify_playlist,
 )
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
-from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyClient, SpotifyTransportError
+from news_bulletin_playlist.spotify.client import (
+    SpotifyApiError,
+    SpotifyClient,
+    SpotifyTransportError,
+)
 from news_bulletin_playlist.spotify.matcher import (
     MatchConfigurationError,
     MatchResponseError,
@@ -48,6 +57,10 @@ class SpotifyEngineClient(Protocol):
     ) -> dict[str, Any]: ...
 
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]: ...
+
+
+class EngineCycleRunner(Protocol):
+    def run_cycle(self) -> EngineCycleResult: ...
 
 
 SpotifyClientFactory = Callable[[str], SpotifyEngineClient]
@@ -162,7 +175,6 @@ class EngineRunner:
         self.client_factory = client_factory or _spotify_client
         self.clock = clock or _utc_now
         self._cycle_lock = threading.Lock()
-        self._sources = {source.id: source for source in config.sources}
 
     def run_cycle(self) -> EngineCycleResult:
         if not self._cycle_lock.acquire(blocking=False):
@@ -215,13 +227,14 @@ class EngineRunner:
             )
 
         client = self.client_factory(access_token)
-        matching_cutoff = self._matching_cutoff(_as_utc(self.clock()))
+        matching_now = _as_utc(self.clock())
+        matching_cutoff = self._matching_cutoff(matching_now)
         for source in required_sources(self.config):
             try:
                 editions = tuple(
                     edition
                     for edition in self.store.list_editions(source_id=source.id)
-                    if matching_cutoff <= edition.published_at <= _as_utc(self.clock())
+                    if matching_cutoff <= edition.published_at <= matching_now
                 )
                 if editions:
                     match_result = match_source_editions(
@@ -229,7 +242,7 @@ class EngineRunner:
                         self.store,
                         source,
                         editions,
-                        now=_as_utc(self.clock()),
+                        now=matching_now,
                     )
                     matched_count = sum(
                         outcome.spotify_episode_uri is not None
@@ -244,7 +257,12 @@ class EngineRunner:
                         matching_ok=True,
                         matched_count=matched_count,
                     )
-            except (MatchConfigurationError, MatchResponseError, SpotifyApiError, SpotifyTransportError) as exc:
+            except (
+                MatchConfigurationError,
+                MatchResponseError,
+                SpotifyApiError,
+                SpotifyTransportError,
+            ) as exc:
                 current = source_outcomes.get(source.id)
                 if current is not None:
                     source_outcomes[source.id] = replace(
@@ -255,7 +273,6 @@ class EngineRunner:
             except PersistenceError as exc:
                 return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
 
-        protected_identities: set[tuple[SourceId, str]] = set()
         for playlist in self.config.playlists:
             if not playlist.enabled:
                 continue
@@ -268,7 +285,6 @@ class EngineRunner:
                     now=playlist_started_at,
                 )
                 desired_count = len(desired.items)
-                protected_identities.update(item.identity for item in desired.items)
                 reconciled = reconcile_spotify_playlist(client, playlist, desired)
                 playlist_finished_at = _as_utc(self.clock())
                 self.store.record_playlist_run(
@@ -333,7 +349,7 @@ class EngineRunner:
         try:
             self.store.prune_operational_history(
                 now=finished_at,
-                protected_identities=protected_identities,
+                protected_identities=self._protected_identities(finished_at),
             )
         except PersistenceError as exc:
             return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
@@ -432,9 +448,28 @@ class EngineRunner:
         )
 
     def _matching_cutoff(self, now: datetime) -> datetime:
-        enabled = [playlist.retention_hours for playlist in self.config.playlists if playlist.enabled]
+        enabled = [
+            playlist.retention_hours
+            for playlist in self.config.playlists
+            if playlist.enabled
+        ]
         retention_hours = max(enabled, default=48)
         return now - timedelta(hours=retention_hours)
+
+    def _protected_identities(self, now: datetime) -> set[tuple[SourceId, str]]:
+        """Protect canonical state still eligible for any configured playlist window."""
+        protected: set[tuple[SourceId, str]] = set()
+        for playlist in self.config.playlists:
+            if not playlist.enabled:
+                continue
+            cutoff = now - timedelta(hours=playlist.retention_hours)
+            for source_id in playlist.source_selection.explicit:
+                for edition in self.store.list_editions(source_id=source_id):
+                    if edition.published_at < cutoff:
+                        break
+                    if edition.published_at <= now:
+                        protected.add(edition.identity)
+        return protected
 
 
 class EngineScheduler:
@@ -442,7 +477,7 @@ class EngineScheduler:
 
     def __init__(
         self,
-        runner: EngineRunner,
+        runner: EngineCycleRunner,
         status: OperationalStatus,
         *,
         interval: timedelta = DEFAULT_ENGINE_INTERVAL,
