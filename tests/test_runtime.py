@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import re
 import threading
@@ -31,6 +32,7 @@ from news_bulletin_playlist.spotify.auth import (
     PRODUCTION_SCOPES,
     AuthorizationState,
     SpotifyAuthService,
+    SpotifyCredentialRecord,
     SpotifyCredentialStore,
     TokenResponse,
 )
@@ -51,6 +53,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class _FakeTokenTransport:
+    def __init__(self) -> None:
+        self.exchange_calls: list[dict[str, str]] = []
+
     def exchange_code(
         self,
         *,
@@ -60,18 +65,35 @@ class _FakeTokenTransport:
         verifier: str,
     ) -> TokenResponse:
         assert client_id == "client-id"
-        assert code == "authorization-code"
         assert redirect_uri == "https://news.example.test/admin/spotify/callback"
         assert verifier
+        self.exchange_calls.append(
+            {
+                "client_id": client_id,
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "verifier": verifier,
+            }
+        )
         return TokenResponse(
-            access_token="access-secret",
+            access_token="access-secret-sentinel",
             expires_in=3600,
             granted_scopes=PRODUCTION_SCOPES,
-            refresh_token="refresh-secret",
+            refresh_token="refresh-secret-sentinel",
         )
 
     def refresh_token(self, *, client_id: str, refresh_token: str) -> TokenResponse:
         raise AssertionError("refresh not expected in runtime Web UI test")
+
+
+class _CountingStore(SpotifyCredentialStore):
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.save_calls = 0
+
+    def save(self, record: SpotifyCredentialRecord) -> None:
+        self.save_calls += 1
+        super().save(record)
 
 
 @pytest.fixture(autouse=True)
@@ -154,6 +176,33 @@ def test_runtime_spotify_auth_requires_complete_secure_configuration(tmp_path: P
             },
         )
 
+    with pytest.raises(RuntimeError, match="TRUSTED_PROXY_CIDRS"):
+        build_runtime_auth(
+            tmp_path,
+            environ={
+                "SPOTIFY_CLIENT_ID": "client-id",
+                "NEWS_PLAYLIST_EXTERNAL_URL": "https://news.example.test",
+                "NEWS_PLAYLIST_ADMIN_PASSWORD": "long-enough-admin-password",
+            },
+        )
+
+    admin, spotify = build_runtime_auth(
+        tmp_path,
+        environ={
+            "SPOTIFY_CLIENT_ID": "client-id",
+            "NEWS_PLAYLIST_EXTERNAL_URL": "https://news.example.test",
+            "NEWS_PLAYLIST_ADMIN_PASSWORD": "long-enough-admin-password",
+            "NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS": "10.0.0.2/32",
+        },
+    )
+    assert admin is not None
+    assert spotify is not None
+    assert admin.is_secure_transport("10.0.0.2", ["https"])
+    assert not admin.is_secure_transport("10.0.0.3", ["https"])
+    assert not admin.is_secure_transport("10.0.0.2", ["http"])
+    assert not admin.is_secure_transport("10.0.0.2", ["https,http"])
+    assert not admin.is_secure_transport("127.0.0.1", ["https"])
+
 
 def test_status_portal_reports_runtime_without_sensitive_details(tmp_path: Path) -> None:
     HealthHandler.data_dir = tmp_path
@@ -211,6 +260,33 @@ def test_admin_surface_requires_basic_authentication(tmp_path: Path) -> None:
         server.server_close()
 
 
+def test_admin_surface_rejects_direct_http_before_basic_challenge(tmp_path: Path) -> None:
+    password = "long-enough-admin-password"
+    HealthHandler.data_dir = tmp_path
+    HealthHandler.admin_security = AdminSecurity(
+        password,
+        trusted_proxy_networks=(ipaddress.ip_network("10.0.0.2/32"),),
+        allow_direct_loopback=False,
+    )
+    server = HTTPServer(("127.0.0.1", 0), HealthHandler)
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_port}/admin/",
+        headers={
+            "Authorization": _basic_header(password),
+            "X-Forwarded-Proto": "https",
+        },
+    )
+    thread = _serve_one(server)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(request, timeout=2)
+        assert raised.value.code == HTTPStatus.FORBIDDEN
+        assert raised.value.headers.get("WWW-Authenticate") is None
+    finally:
+        thread.join(timeout=2)
+        server.server_close()
+
+
 def test_admin_connect_requires_csrf(tmp_path: Path) -> None:
     password = "long-enough-admin-password"
     HealthHandler.data_dir = tmp_path
@@ -240,6 +316,78 @@ def test_admin_connect_requires_csrf(tmp_path: Path) -> None:
             assert raised.value.code == HTTPStatus.FORBIDDEN
         finally:
             thread.join(timeout=2)
+    finally:
+        server.server_close()
+
+
+def test_admin_connect_rejects_oversized_form_before_oauth(tmp_path: Path) -> None:
+    password = "long-enough-admin-password"
+    transport = _FakeTokenTransport()
+    HealthHandler.data_dir = tmp_path
+    HealthHandler.admin_security = AdminSecurity(password)
+    HealthHandler.spotify_auth = SpotifyAuthService(
+        client_id="client-id",
+        redirect_uri="https://news.example.test/admin/spotify/callback",
+        store=SpotifyCredentialStore(tmp_path / "spotify-auth.json"),
+        transport=transport,
+    )
+    server = HTTPServer(("127.0.0.1", 0), HealthHandler)
+    payload = b"x" * (runtime._MAX_FORM_BYTES + 1)
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_port}/admin/spotify/connect",
+        data=payload,
+        headers={
+            "Authorization": _basic_header(password),
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    thread = _serve_one(server)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(request, timeout=2)
+        assert raised.value.code == HTTPStatus.BAD_REQUEST
+        assert raised.value.read() == b"Invalid form length"
+        assert transport.exchange_calls == []
+    finally:
+        thread.join(timeout=2)
+        server.server_close()
+
+
+def test_admin_csrf_token_is_single_use(tmp_path: Path) -> None:
+    password = "long-enough-admin-password"
+    transport = _FakeTokenTransport()
+    security = AdminSecurity(password)
+    HealthHandler.data_dir = tmp_path
+    HealthHandler.admin_security = security
+    HealthHandler.spotify_auth = SpotifyAuthService(
+        client_id="client-id",
+        redirect_uri="https://news.example.test/admin/spotify/callback",
+        store=SpotifyCredentialStore(tmp_path / "spotify-auth.json"),
+        transport=transport,
+    )
+    server = HTTPServer(("127.0.0.1", 0), HealthHandler)
+    token = security.issue_csrf_token()
+    payload = urllib.parse.urlencode({"csrf_token": token}).encode()
+
+    try:
+        for expected in (HTTPStatus.SEE_OTHER, HTTPStatus.FORBIDDEN):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/admin/spotify/connect",
+                data=payload,
+                headers={
+                    "Authorization": _basic_header(password),
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                method="POST",
+            )
+            thread = _serve_one(server)
+            try:
+                response = _no_redirect_open(request)
+                assert response.code == expected
+            finally:
+                thread.join(timeout=2)
+        assert transport.exchange_calls == []
     finally:
         server.server_close()
 
@@ -313,8 +461,68 @@ def test_admin_connect_and_callback_complete_without_manual_url_paste(tmp_path: 
             is AuthorizationState.CONNECTED
         )
         persisted = store.path.read_text(encoding="utf-8")
-        assert "refresh-secret" in persisted
-        assert "access-secret" not in persisted
+        assert "refresh-secret-sentinel" in persisted
+        assert "access-secret-sentinel" not in persisted
+    finally:
+        server.server_close()
+
+
+def test_admin_callback_replay_is_fail_closed_and_leaks_no_secrets(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    password = "long-enough-admin-password"
+    transport = _FakeTokenTransport()
+    store = _CountingStore(tmp_path / "spotify-auth.json")
+    service = SpotifyAuthService(
+        client_id="client-id",
+        redirect_uri="https://news.example.test/admin/spotify/callback",
+        store=store,
+        transport=transport,
+    )
+    HealthHandler.data_dir = tmp_path
+    HealthHandler.admin_security = AdminSecurity(password)
+    HealthHandler.spotify_auth = service
+    server = HTTPServer(("127.0.0.1", 0), HealthHandler)
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    authorize_url = service.start_authorization()
+    state = urllib.parse.parse_qs(urllib.parse.urlsplit(authorize_url).query)["state"][0]
+    code = "authorization-code-sentinel"
+    callback_url = f"{base_url}/admin/spotify/callback?" + urllib.parse.urlencode(
+        {"state": state, "code": code}
+    )
+
+    try:
+        first_request = urllib.request.Request(callback_url)
+        thread = _serve_one(server)
+        try:
+            first = _no_redirect_open(first_request)
+        finally:
+            thread.join(timeout=2)
+        assert first.code == HTTPStatus.SEE_OTHER
+
+        second_request = urllib.request.Request(callback_url)
+        thread = _serve_one(server)
+        try:
+            with pytest.raises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(second_request, timeout=2)
+            error_body = raised.value.read().decode("utf-8")
+        finally:
+            thread.join(timeout=2)
+
+        assert raised.value.code == HTTPStatus.BAD_REQUEST
+        assert len(transport.exchange_calls) == 1
+        assert store.save_calls == 1
+        verifier = transport.exchange_calls[0]["verifier"]
+        captured = capsys.readouterr()
+        for secret in (
+            code,
+            verifier,
+            "access-secret-sentinel",
+            "refresh-secret-sentinel",
+        ):
+            assert secret not in error_body
+            assert secret not in captured.out
+            assert secret not in captured.err
     finally:
         server.server_close()
 
