@@ -232,11 +232,23 @@ class SQLiteStore:
             last_seen_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, source_native_id) DO UPDATE SET
-            title = excluded.title,
-            published_at = excluded.published_at,
-            edition_at = excluded.edition_at,
-            duration_seconds = excluded.duration_seconds,
-            last_seen_at = excluded.last_seen_at
+            title = CASE
+                WHEN excluded.last_seen_at >= canonical_editions.last_seen_at
+                THEN excluded.title ELSE canonical_editions.title
+            END,
+            published_at = CASE
+                WHEN excluded.last_seen_at >= canonical_editions.last_seen_at
+                THEN excluded.published_at ELSE canonical_editions.published_at
+            END,
+            edition_at = CASE
+                WHEN excluded.last_seen_at >= canonical_editions.last_seen_at
+                THEN excluded.edition_at ELSE canonical_editions.edition_at
+            END,
+            duration_seconds = CASE
+                WHEN excluded.last_seen_at >= canonical_editions.last_seen_at
+                THEN excluded.duration_seconds ELSE canonical_editions.duration_seconds
+            END,
+            last_seen_at = MAX(canonical_editions.last_seen_at, excluded.last_seen_at)
         """
         with self._connection("upsert canonical editions") as connection:
             connection.executemany(sql, rows)
@@ -259,7 +271,11 @@ class SQLiteStore:
             ).fetchone()
         return None if row is None else _edition_from_row(row)
 
-    def list_editions(self, *, source_id: SourceId | None = None) -> tuple[CanonicalEdition, ...]:
+    def list_editions(
+        self,
+        *,
+        source_id: SourceId | None = None,
+    ) -> tuple[CanonicalEdition, ...]:
         """List canonical editions without introducing playlist-specific copies."""
         with self._connection("list canonical editions") as connection:
             if source_id is None:
@@ -312,6 +328,7 @@ class SQLiteStore:
                     ok = excluded.ok,
                     edition_count = excluded.edition_count,
                     error = excluded.error
+                WHERE excluded.finished_at >= source_runs.finished_at
                 """,
                 (str(source_id), started, finished, int(ok), edition_count, last_error),
             )
@@ -321,12 +338,25 @@ class SQLiteStore:
                     source_id, last_attempt_at, last_success_at, last_error
                 ) VALUES (?, ?, ?, ?)
                 ON CONFLICT(source_id) DO UPDATE SET
-                    last_attempt_at = excluded.last_attempt_at,
-                    last_success_at = COALESCE(
-                        excluded.last_success_at,
-                        source_state.last_success_at
+                    last_attempt_at = MAX(
+                        source_state.last_attempt_at,
+                        excluded.last_attempt_at
                     ),
-                    last_error = excluded.last_error
+                    last_success_at = CASE
+                        WHEN source_state.last_success_at IS NULL
+                            THEN excluded.last_success_at
+                        WHEN excluded.last_success_at IS NULL
+                            THEN source_state.last_success_at
+                        ELSE MAX(
+                            source_state.last_success_at,
+                            excluded.last_success_at
+                        )
+                    END,
+                    last_error = CASE
+                        WHEN excluded.last_attempt_at >= source_state.last_attempt_at
+                            THEN excluded.last_error
+                        ELSE source_state.last_error
+                    END
                 """,
                 (str(source_id), finished, success_at, last_error),
             )
@@ -384,6 +414,7 @@ class SQLiteStore:
                     spotify_episode_uri = excluded.spotify_episode_uri,
                     diagnostics = excluded.diagnostics,
                     updated_at = excluded.updated_at
+                WHERE excluded.updated_at >= spotify_matches.updated_at
                 """,
                 (
                     str(source_id),
@@ -469,6 +500,7 @@ class SQLiteStore:
                     desired_count = excluded.desired_count,
                     applied_count = excluded.applied_count,
                     error = excluded.error
+                WHERE excluded.finished_at >= playlist_runs.finished_at
                 """,
                 (
                     str(playlist_id),
@@ -486,12 +518,25 @@ class SQLiteStore:
                     playlist_id, last_attempt_at, last_success_at, last_error
                 ) VALUES (?, ?, ?, ?)
                 ON CONFLICT(playlist_id) DO UPDATE SET
-                    last_attempt_at = excluded.last_attempt_at,
-                    last_success_at = COALESCE(
-                        excluded.last_success_at,
-                        playlist_state.last_success_at
+                    last_attempt_at = MAX(
+                        playlist_state.last_attempt_at,
+                        excluded.last_attempt_at
                     ),
-                    last_error = excluded.last_error
+                    last_success_at = CASE
+                        WHEN playlist_state.last_success_at IS NULL
+                            THEN excluded.last_success_at
+                        WHEN excluded.last_success_at IS NULL
+                            THEN playlist_state.last_success_at
+                        ELSE MAX(
+                            playlist_state.last_success_at,
+                            excluded.last_success_at
+                        )
+                    END,
+                    last_error = CASE
+                        WHEN excluded.last_attempt_at >= playlist_state.last_attempt_at
+                            THEN excluded.last_error
+                        ELSE playlist_state.last_error
+                    END
                 """,
                 (str(playlist_id), finished, success_at, last_error),
             )
