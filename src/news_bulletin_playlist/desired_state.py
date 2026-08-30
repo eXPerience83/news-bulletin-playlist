@@ -108,11 +108,22 @@ def build_playlist_desired_state(
     items.sort(key=lambda item: (str(item.source_id), item.source_native_id))
     items.sort(key=lambda item: item.published_at, reverse=True)
 
+    # Distinct canonical source assets may legitimately converge on the same Spotify
+    # episode URI (notably duplicate source-native identities). A destination playlist
+    # should contain that Spotify episode once, keeping the newest canonical occurrence.
+    unique_items: list[DesiredPlaylistItem] = []
+    seen_uris: set[str] = set()
+    for item in items:
+        if item.spotify_episode_uri in seen_uris:
+            continue
+        seen_uris.add(item.spotify_episode_uri)
+        unique_items.append(item)
+
     limit = min(playlist.max_episodes, SPOTIFY_PLAYLIST_ITEM_LIMIT)
     return DesiredPlaylistState(
         playlist_id=playlist.id,
         generated_at=generated_at,
-        items=tuple(items[:limit]),
+        items=tuple(unique_items[:limit]),
     )
 
 
