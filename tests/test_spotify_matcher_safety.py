@@ -89,6 +89,22 @@ class WrongReleaseDateClient:
         }
 
 
+class CountingCatalogClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def show_episodes(
+        self,
+        show_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        del show_id, limit, offset
+        self.calls += 1
+        return {"items": [], "next": None}
+
+
 def _prepared_store(tmp_path: Path, edition: CanonicalEdition) -> SQLiteStore:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.initialize()
@@ -129,3 +145,25 @@ def test_matching_title_with_incompatible_release_date_stays_pending(tmp_path: P
     assert outcome.status is MatchStatus.PENDING
     assert outcome.spotify_episode_uri is None
     assert store.get_spotify_episode_uri(edition.source_id, edition.source_native_id) is None
+
+
+def test_future_retry_state_is_reused_until_matcher_clock_catches_up(tmp_path: Path) -> None:
+    source = _source()
+    edition = _edition(source)
+    store = _prepared_store(tmp_path, edition)
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    store.set_match_state(
+        edition.source_id,
+        edition.source_native_id,
+        status=MatchStatus.PENDING,
+        diagnostics="future persisted state",
+        updated_at=now + timedelta(minutes=5),
+    )
+    client = CountingCatalogClient()
+
+    result = match_source_editions(client, store, source, (edition,), now=now)
+
+    assert result.catalogue_calls == 0
+    assert client.calls == 0
+    assert result.outcomes[0].status is MatchStatus.PENDING
+    assert result.outcomes[0].from_cache
