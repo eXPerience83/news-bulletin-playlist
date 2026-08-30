@@ -8,6 +8,7 @@ import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from http import HTTPStatus
 from pathlib import Path
+from typing import ClassVar
 
 from news_bulletin_playlist.first_release import (
     DEFAULT_CONFIG_FILENAME,
@@ -262,7 +263,7 @@ def parse_lan_callback_url(callback_url: str) -> str:
 class LanAdminHandler(HealthHandler):
     """Add trusted-LAN Spotify login and one-time first-release provisioning."""
 
-    runtime_restart: Callable[[], None] | None = None
+    runtime_restart: ClassVar[Callable[[], None] | None] = None
 
     def _is_lan_admin_mode(self) -> bool:
         return isinstance(self.admin_security, LanAdminSecurity)
@@ -399,14 +400,19 @@ class LanAdminHandler(HealthHandler):
             message = str(exc)
             if exc.playlist_id is not None:
                 message = f"{message}. Created Spotify playlist ID: {exc.playlist_id}"
+            status = (
+                HTTPStatus.CONFLICT
+                if exc.playlist_id is None
+                else HTTPStatus.INTERNAL_SERVER_ERROR
+            )
             self._reply(
-                HTTPStatus.CONFLICT if exc.playlist_id is None else HTTPStatus.INTERNAL_SERVER_ERROR,
+                status,
                 message.encode(),
                 content_type="text/plain; charset=utf-8",
             )
             return
 
-        restart = self.runtime_restart
+        restart = type(self).runtime_restart
         payload = _provisioned_page(result.playlist_id, restarting=restart is not None)
         self._reply(HTTPStatus.CREATED, payload)
         if restart is not None:
