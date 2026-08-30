@@ -61,9 +61,10 @@ def _match(
     edition: CanonicalEdition,
     *,
     status: MatchStatus = MatchStatus.MATCHED,
+    uri: str | None = None,
 ) -> EditionMatch:
-    uri = (
-        f"spotify:episode:{edition.source_id!s}-{edition.source_native_id}"
+    spotify_uri = (
+        uri or f"spotify:episode:{edition.source_id!s}-{edition.source_native_id}"
         if status is MatchStatus.MATCHED
         else None
     )
@@ -71,7 +72,7 @@ def _match(
         source_id=edition.source_id,
         source_native_id=edition.source_native_id,
         status=status,
-        spotify_episode_uri=uri,
+        spotify_episode_uri=spotify_uri,
         diagnostics=None,
         updated_at=NOW,
     )
@@ -144,6 +145,26 @@ def test_equal_publication_times_have_stable_identity_tiebreaker() -> None:
         (SourceId("ser"), "a"),
         (SourceId("ser"), "b"),
     )
+
+
+def test_duplicate_spotify_uri_keeps_only_newest_canonical_occurrence() -> None:
+    newest = _edition("new", NOW - timedelta(minutes=1), source="rne")
+    older = _edition("old", NOW - timedelta(minutes=2), source="rne")
+    duplicate_uri = "spotify:episode:shared"
+    matches = {
+        newest.identity: _match(newest, uri=duplicate_uri),
+        older.identity: _match(older, uri=duplicate_uri),
+    }
+
+    desired = build_playlist_desired_state(
+        _playlist(sources=("rne",)),
+        (older, newest),
+        matches,
+        now=NOW,
+    )
+
+    assert desired.uris == (duplicate_uri,)
+    assert desired.items[0].identity == newest.identity
 
 
 def test_overlapping_playlists_share_canonical_input_but_not_destination_state() -> None:
