@@ -222,12 +222,16 @@ def serve(
     stopped = stop_event if stop_event is not None else threading.Event()
     scheduler_thread: threading.Thread | None = None
 
-    def request_stop(signum: int, frame: FrameType | None) -> None:
-        del signum, frame
+    def request_runtime_restart() -> None:
         stopped.set()
         if scheduler is not None:
             scheduler.wake()
 
+    def request_stop(signum: int, frame: FrameType | None) -> None:
+        del signum, frame
+        request_runtime_restart()
+
+    OperationalHealthHandler.runtime_restart = request_runtime_restart
     handlers_installed = (
         stop_event is None and threading.current_thread() is threading.main_thread()
     )
@@ -269,6 +273,7 @@ def serve(
                     "news-bulletin-playlist engine shutdown exceeded graceful wait; exiting",
                     flush=True,
                 )
+        OperationalHealthHandler.runtime_restart = None
         OperationalHealthHandler.engine_scheduler = None
         OperationalHealthHandler.auth_synchronization = None
         if handlers_installed:
