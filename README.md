@@ -117,11 +117,18 @@ Do not commit Spotify client secrets, refresh tokens, `.env` files or the runtim
 
 ## Roadmap
 
-1. **P0** — provider contracts, hardened container/TrueNAS runtime and authenticated Spotify catalogue/write probes for the first Spain / Spanish-language playlist.
-2. **P1** — shared feed collection, canonical metadata model, playlist configuration and SQLite persistence.
-3. **P2** — RSS-to-Spotify matcher and reconciliation rules shared across playlists.
-4. **P3** — multi-playlist reconciliation and idempotent scheduled engine cycles.
-5. **P4** — provider watchdog via GitHub Actions.
-6. **P5** — private admin UI, production token persistence and operational hardening.
-7. **P6** — public first playlist / first release.
-8. **P7** — expand sources and playlist definitions to additional languages and European countries.
+The authoritative production-engine roadmap is the [P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13). P1 deliberately contains the complete path from shared collection to an unattended multi-playlist runtime rather than splitting those engine stages into separate top-level P2/P3/P5 phases.
+
+1. **P0 — validated foundation** — provider contracts and watchdog, hardened container/TrueNAS runtime, plus Spotify catalogue/write probes for the first Spain / Spanish-language playlist.
+2. **P1 — production multi-playlist engine**:
+   - [x] **P1.1 / #14** — source, canonical edition and playlist configuration/domain model; completed via #21.
+   - [x] **P1.2 / #15** — shared RSS collection and canonical normalization; completed via #22.
+   - [ ] **P1.3 / #16** — SQLite persistence, migrations and 30-day operational retention.
+   - [ ] **P1.4 / #17** — deterministic source-to-Spotify episode matching.
+   - [ ] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation.
+   - [ ] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI.
+   - [ ] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime.
+3. **First release** — provision and operate the first public Spain / Spanish-language playlist once the P1 exit criteria are satisfied.
+4. **Expansion** — add source and playlist definitions for additional languages and European countries without duplicating the engine.
+
+Parallel/non-blocking product work such as the playlist cover-art system in #12 may land when its configuration hook is stable, but it must never block bulletin synchronization.
