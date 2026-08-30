@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,11 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.registry import get_title_parser
 from news_bulletin_playlist.spotify.client import SpotifyTransportError
-from news_bulletin_playlist.spotify.matcher import match_source_editions
+from news_bulletin_playlist.spotify.matcher import (
+    MatchConfigurationError,
+    MatchResponseError,
+    match_source_editions,
+)
 
 
 def _source() -> SourceDefinition:
@@ -105,6 +110,18 @@ class CountingCatalogClient:
         return {"items": [], "next": None}
 
 
+class MalformedCatalogClient:
+    def show_episodes(
+        self,
+        show_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        del show_id, limit, offset
+        return {"items": None, "next": None}
+
+
 def _prepared_store(tmp_path: Path, edition: CanonicalEdition) -> SQLiteStore:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.initialize()
@@ -167,3 +184,39 @@ def test_future_retry_state_is_reused_until_matcher_clock_catches_up(tmp_path: P
     assert client.calls == 0
     assert result.outcomes[0].status is MatchStatus.PENDING
     assert result.outcomes[0].from_cache
+
+
+def test_missing_spotify_show_reference_fails_before_catalogue_call(tmp_path: Path) -> None:
+    source = replace(_source(), external_references=())
+    edition = _edition(source)
+    store = _prepared_store(tmp_path, edition)
+    client = CountingCatalogClient()
+
+    with pytest.raises(MatchConfigurationError, match="exactly one Spotify show"):
+        match_source_editions(
+            client,
+            store,
+            source,
+            (edition,),
+            now=datetime(2026, 8, 30, 12, 0, tzinfo=UTC),
+        )
+
+    assert client.calls == 0
+    assert store.get_match_state(edition.source_id, edition.source_native_id) is None
+
+
+def test_malformed_catalogue_response_does_not_persist_false_pending(tmp_path: Path) -> None:
+    source = _source()
+    edition = _edition(source)
+    store = _prepared_store(tmp_path, edition)
+
+    with pytest.raises(MatchResponseError, match="item list"):
+        match_source_editions(
+            MalformedCatalogClient(),
+            store,
+            source,
+            (edition,),
+            now=datetime(2026, 8, 30, 12, 0, tzinfo=UTC),
+        )
+
+    assert store.get_match_state(edition.source_id, edition.source_native_id) is None
