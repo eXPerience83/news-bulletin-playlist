@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -87,10 +88,8 @@ class ManagedStateStore:
             os.chmod(self.path, 0o600)
             _fsync_directory(parent)
         finally:
-            try:
+            with suppress(FileNotFoundError):
                 temp_path.unlink()
-            except FileNotFoundError:
-                pass
 
 
 def activate_template(
@@ -134,7 +133,9 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
             raise ManagedStateError(
                 f"managed playlist {managed.id} references unknown template {managed.template_id}"
             )
-        unknown_sources = [source_id for source_id in managed.source_ids if source_id not in source_ids]
+        unknown_sources = [
+            source_id for source_id in managed.source_ids if source_id not in source_ids
+        ]
         if unknown_sources:
             raise ManagedStateError(
                 f"managed playlist {managed.id} references unknown source {unknown_sources[0]}"
