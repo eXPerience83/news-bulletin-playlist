@@ -163,7 +163,18 @@ def _cached_outcome(
 
     if state.status in {MatchStatus.PENDING, MatchStatus.AMBIGUOUS}:
         age = now - state.updated_at
-        if timedelta(0) <= age <= retry_grace:
+        if age < timedelta(0):
+            return MatchOutcome(
+                edition=edition,
+                status=state.status,
+                spotify_episode_uri=None,
+                diagnostics=(
+                    state.diagnostics
+                    or "reused persisted state because its timestamp is ahead of matcher clock"
+                ),
+                from_cache=True,
+            )
+        if age <= retry_grace:
             return MatchOutcome(
                 edition=edition,
                 status=state.status,
