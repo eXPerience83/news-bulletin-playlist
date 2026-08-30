@@ -24,15 +24,14 @@ from news_bulletin_playlist.engine import (
     OperationalStatusSnapshot,
     SpotifyAuthProvider,
 )
+from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
 from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
     DEFAULT_HEALTH_PORT,
-    HealthHandler,
     _data_dir_ready,
-    build_runtime_auth,
     initialize_runtime_storage,
 )
 from news_bulletin_playlist.spotify.auth import AuthorizationState, SpotifyAuthService
@@ -106,7 +105,7 @@ class ReloadingEngineCycleRunner:
         return EngineRunner(config, self.store, self.auth).run_cycle()
 
 
-class OperationalHealthHandler(HealthHandler):
+class OperationalHealthHandler(LanAdminHandler):
     """Extend the existing secure HTTP surface with read-only engine status."""
 
     operational_status: OperationalStatus | None = None
@@ -129,12 +128,21 @@ class OperationalHealthHandler(HealthHandler):
             super()._handle_spotify_callback(query)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        before = self._spotify_state()
         synchronization = self.auth_synchronization
         if synchronization is None:
             super().do_POST()
-            return
-        with synchronization.hold():
-            super().do_POST()
+        else:
+            with synchronization.hold():
+                super().do_POST()
+        after = self._spotify_state()
+        scheduler = self.engine_scheduler
+        if (
+            before is not AuthorizationState.CONNECTED
+            and after is AuthorizationState.CONNECTED
+            and scheduler is not None
+        ):
+            scheduler.wake()
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         try:
@@ -182,12 +190,13 @@ def serve(
     env = os.environ if environ is None else environ
     database_path = initialize_runtime_storage(data_dir)
     store = SQLiteStore(database_path)
-    admin_security, spotify_auth = build_runtime_auth(data_dir, environ=env)
+    admin_security, spotify_auth = build_engine_runtime_auth(data_dir, environ=env)
     config = _load_runtime_config(data_dir, env)
     configured = config is not None
     if configured and spotify_auth is None:
         raise RuntimeError(
-            "engine configuration requires production Spotify Web UI authorization settings"
+            "engine configuration requires production Spotify authorization settings "
+            "or explicit LAN development authorization"
         )
 
     scheduler_interval = interval if interval is not None else _runtime_interval(env)
