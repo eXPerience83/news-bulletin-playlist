@@ -92,7 +92,14 @@ def _collect_source(source: SourceDefinition, fetcher: FeedFetcher) -> SourceCol
     try:
         payload = fetcher(source.endpoint_url)
         editions = normalize_rss_source(source, payload)
-    except (OSError, TimeoutError, urllib.error.URLError, ET.ParseError, ValueError, KeyError) as exc:
+    except (
+        OSError,
+        TimeoutError,
+        urllib.error.URLError,
+        ET.ParseError,
+        ValueError,
+        KeyError,
+    ) as exc:
         detail = str(exc).strip() or type(exc).__name__
         return SourceCollectionResult(source.id, error=detail)
     return SourceCollectionResult(source.id, editions=editions)
