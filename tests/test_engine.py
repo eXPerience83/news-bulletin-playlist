@@ -274,6 +274,38 @@ def test_auth_failure_is_reported_without_empty_success(tmp_path: Path) -> None:
     assert auth.calls == 1
 
 
+def test_access_token_is_consumed_but_never_exposed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    access_token = "access-token-sentinel"
+    spotify = _Spotify(fail_playlist="destination-first")
+
+    class SentinelAuth:
+        def get_access_token(self, *, now: datetime | None = None) -> str:
+            assert now is not None
+            return access_token
+
+    def client_factory(token: str) -> _Spotify:
+        assert token == access_token
+        return spotify
+
+    result = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        SentinelAuth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=client_factory,
+        clock=lambda: NOW,
+    ).run_cycle()
+
+    captured = capsys.readouterr()
+    assert not result.ok
+    assert access_token not in repr(result)
+    assert access_token not in captured.out
+    assert access_token not in captured.err
+
+
 def test_concurrent_cycle_is_rejected(tmp_path: Path) -> None:
     entered = threading.Event()
     release = threading.Event()
@@ -320,7 +352,7 @@ def test_scheduler_wake_runs_early_and_stop_prevents_another_cycle() -> None:
 
     status = OperationalStatus(configured=True)
     scheduler = EngineScheduler(
-        Runner(),  # type: ignore[arg-type]
+        Runner(),
         status,
         interval=timedelta(hours=1),
         clock=lambda: NOW,
@@ -336,5 +368,36 @@ def test_scheduler_wake_runs_early_and_stop_prevents_another_cycle() -> None:
     thread.join(timeout=2)
 
     assert calls == 2
+    assert not thread.is_alive()
+    assert status.snapshot().next_run_at is None
+
+
+def test_scheduler_stop_event_interrupts_wait_without_explicit_wake() -> None:
+    calls = 0
+    first_done = threading.Event()
+
+    class Runner:
+        def run_cycle(self) -> EngineCycleResult:
+            nonlocal calls
+            calls += 1
+            first_done.set()
+            return EngineCycleResult(NOW, NOW, True, (), ())
+
+    status = OperationalStatus(configured=True)
+    scheduler = EngineScheduler(
+        Runner(),
+        status,
+        interval=timedelta(hours=1),
+        clock=lambda: NOW,
+    )
+    stop = threading.Event()
+    thread = threading.Thread(target=scheduler.run, args=(stop,))
+    thread.start()
+    assert first_done.wait(timeout=2)
+
+    stop.set()
+    thread.join(timeout=2)
+
+    assert calls == 1
     assert not thread.is_alive()
     assert status.snapshot().next_run_at is None
