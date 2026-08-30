@@ -2,9 +2,7 @@ name: Render playlist covers
 
 on:
   push:
-    branches:
-      - main
-      - assets/final-playlist-covers
+    branches: [main]
     paths:
       - "assets/covers/master/**"
       - ".github/workflows/render-playlist-covers.yml"
@@ -76,13 +74,6 @@ jobs:
 
               print(f"{output}: {output.stat().st_size} bytes")
           PY
-
-      - name: Upload preview artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: playlist-covers-preview
-          path: assets/covers/spotify/*.jpg
-          retention-days: 1
 
       - name: Commit derived covers
         shell: bash
