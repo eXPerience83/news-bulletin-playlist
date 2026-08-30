@@ -160,15 +160,15 @@ def _source_native_id(item: ET.Element) -> str | None:
         if value is not None:
             return value
 
-    link = _child(item, "link")
-    if link is not None:
-        value = _element_text(link) or _nonempty(link.attrib.get("href"))
-        if value is not None:
-            return value
-
     enclosure = _child(item, "enclosure")
     if enclosure is not None:
         value = _nonempty(enclosure.attrib.get("url"))
+        if value is not None:
+            return value
+
+    link = _child(item, "link")
+    if link is not None:
+        value = _element_text(link) or _nonempty(link.attrib.get("href"))
         if value is not None:
             return value
     return None
