@@ -16,6 +16,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -53,6 +54,8 @@ class AdminSecurity:
     """Protect the small server-rendered administration surface."""
 
     def __init__(self, password: str) -> None:
+        if not password.strip():
+            raise RuntimeError("administration password must not be blank")
         if len(password) < 16:
             raise RuntimeError("administration password must contain at least 16 characters")
         if "\r" in password or "\n" in password:
@@ -131,7 +134,7 @@ def initialize_runtime_storage(data_dir: Path) -> Path:
 def build_runtime_auth(
     data_dir: Path,
     *,
-    environ: dict[str, str] | os._Environ[str] | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> tuple[AdminSecurity | None, SpotifyAuthService | None]:
     """Build optional private administration and Spotify auth from runtime-only settings."""
     env = os.environ if environ is None else environ
@@ -207,7 +210,11 @@ def _admin_page(
     csrf_token: str,
 ) -> bytes:
     spotify = html.escape(_authorization_state_label(spotify_state))
-    action = "Reconnect Spotify" if spotify_state is AuthorizationState.CONNECTED else "Connect Spotify"
+    action = (
+        "Reconnect Spotify"
+        if spotify_state is AuthorizationState.CONNECTED
+        else "Connect Spotify"
+    )
     disabled = " disabled" if spotify_state is None else ""
     explanation = (
         "Spotify Web UI authorization is not configured for this runtime."
@@ -248,7 +255,7 @@ def _callback_error_page(message: str) -> bytes:
         "<!doctype html><meta charset='utf-8'>"
         "<title>Spotify authorization</title>"
         f"<p>{html.escape(message)}</p><p><a href='/admin/'>Return to administration</a></p>"
-    ).encode("utf-8")
+    ).encode()
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -370,7 +377,11 @@ class HealthHandler(BaseHTTPRequestHandler):
             self._reply(HTTPStatus.BAD_REQUEST, b"Invalid request")
             return
         if parsed.path != "/admin/spotify/connect":
-            self._reply(HTTPStatus.NOT_FOUND, b"Not found", content_type="text/plain; charset=utf-8")
+            self._reply(
+                HTTPStatus.NOT_FOUND,
+                b"Not found",
+                content_type="text/plain; charset=utf-8",
+            )
             return
 
         security = self._require_admin()
@@ -433,7 +444,11 @@ class HealthHandler(BaseHTTPRequestHandler):
     def _handle_spotify_callback(self, query: str) -> None:
         auth_service = self.spotify_auth
         if auth_service is None:
-            self._reply(HTTPStatus.NOT_FOUND, b"Not found", content_type="text/plain; charset=utf-8")
+            self._reply(
+                HTTPStatus.NOT_FOUND,
+                b"Not found",
+                content_type="text/plain; charset=utf-8",
+            )
             return
         try:
             auth_service.complete_callback(query)
@@ -536,7 +551,7 @@ def healthcheck(*, url: str = DEFAULT_HEALTH_URL, timeout: float = 2.0) -> int:
     return 0 if isinstance(payload, dict) and payload.get("status") == "ok" else 1
 
 
-def _load_admin_password(environ: dict[str, str] | os._Environ[str]) -> str | None:
+def _load_admin_password(environ: Mapping[str, str]) -> str | None:
     direct = _optional_setting(environ.get(_ADMIN_PASSWORD_ENV), strip=False)
     file_setting = _optional_setting(environ.get(_ADMIN_PASSWORD_FILE_ENV))
     if direct is not None and file_setting is not None:
