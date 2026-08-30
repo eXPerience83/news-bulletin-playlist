@@ -126,6 +126,11 @@ def test_runtime_auth_is_disabled_by_default(tmp_path: Path) -> None:
     assert spotify is None
 
 
+def test_admin_security_rejects_blank_password() -> None:
+    with pytest.raises(RuntimeError, match="must not be blank"):
+        AdminSecurity(" " * 16)
+
+
 def test_runtime_spotify_auth_requires_complete_secure_configuration(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="must be configured together"):
         build_runtime_auth(tmp_path, environ={"SPOTIFY_CLIENT_ID": "client-id"})
