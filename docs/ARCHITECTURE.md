@@ -182,6 +182,22 @@ The default playlist policy is 48 retention hours, 100 episodes and descending s
 time. `CORE_PROVIDERS` remains temporarily available to the P0 provider watch and Spotify probes;
 new P1 code resolves parsers independently and does not consume that legacy tuple.
 
+## P1.2 shared collection contract
+
+The collection stage implements the first half of the core invariant without introducing playlist-specific collectors:
+
+- required sources are the union of explicit source selections across all enabled playlists;
+- each required enabled source is fetched and parsed at most once per collection cycle;
+- runtime collection uses the configured source endpoint, including Onda Cero's real RSS feed; watchdog-only webpage fallbacks are not production metadata authorities;
+- RSS/provider identity is preserved independently from title and timestamps. Native identity prefers `guid`/`id`, then the enclosure asset URL, then an editorial link when no stronger source-native identifier exists;
+- title/date/hour are never used to synthesize identity, so distinct native assets with identical visible metadata remain distinct;
+- RSS publication metadata produces `published_at`, while the provider title parser produces the editorial `edition_at`; the configured `SourceDefinition.timezone` is authoritative for interpreting that local editorial wall clock before the canonical model normalizes it to UTC;
+- collection returns an explicit success/failure result for each source. A malformed feed, failed fetch, missing required endpoint, or feed with no valid canonical bulletin editions is a source failure for that cycle rather than an invented empty-success state;
+- one source failure does not prevent unrelated sources from being collected;
+- RSS response bodies are bounded to 10 MiB before parsing so an unhealthy or misconfigured endpoint cannot consume unbounded process memory.
+
+P1.2 deliberately does not persist state, perform Spotify catalogue matching, apply playlist retention/order policy, or reconcile destinations. Those responsibilities belong to later P1 workstreams.
+
 ## Deployment invariant
 
 One deployed engine/container should be capable of updating multiple configured playlists in one scheduled execution. We should not require one Docker container, cron job or GitHub Actions workflow per playlist merely because the number of playlists grows.
