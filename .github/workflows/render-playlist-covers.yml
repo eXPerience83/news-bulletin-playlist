@@ -1,0 +1,81 @@
+name: Render playlist covers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "assets/covers/master/**"
+      - ".github/workflows/render-playlist-covers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install renderer
+        run: python -m pip install --disable-pip-version-check cairosvg pillow
+
+      - name: Render Spotify JPEGs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from io import BytesIO
+          from pathlib import Path
+
+          import cairosvg
+          from PIL import Image
+
+          source_dir = Path("assets/covers/master")
+          output_dir = Path("assets/covers/spotify")
+          output_dir.mkdir(parents=True, exist_ok=True)
+
+          for source in sorted(source_dir.glob("*.svg")):
+              png = cairosvg.svg2png(
+                  url=str(source),
+                  output_width=1000,
+                  output_height=1000,
+              )
+              image = Image.open(BytesIO(png)).convert("RGB")
+              output = output_dir / f"{source.stem}.jpg"
+
+              for quality in range(94, 69, -1):
+                  image.save(
+                      output,
+                      "JPEG",
+                      quality=quality,
+                      optimize=True,
+                      progressive=True,
+                      subsampling=0,
+                  )
+                  if output.stat().st_size <= 240 * 1024:
+                      break
+
+              if output.stat().st_size > 256 * 1024:
+                  raise RuntimeError(f"{output} exceeds Spotify's 256 KB cover limit")
+
+              print(f"{output}: {output.stat().st_size} bytes")
+          PY
+
+      - name: Commit derived covers
+        shell: bash
+        run: |
+          git add assets/covers/spotify
+          if git diff --cached --quiet; then
+            echo "No derived cover changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "assets: render Spotify playlist covers"
+          git push
