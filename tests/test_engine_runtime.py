@@ -15,15 +15,27 @@ from news_bulletin_playlist.engine import (
 from news_bulletin_playlist.engine_runtime import (
     DEFAULT_CONFIG_FILENAME,
     AuthSynchronization,
+    ReloadingEngineCycleRunner,
     _load_runtime_config,
     _operational_status_page,
     _runtime_interval,
     serve,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
+
+
+class _NeverAuth:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def get_access_token(self, *, now: datetime | None = None) -> str:
+        del now
+        self.calls += 1
+        raise AssertionError("authorization must not be reached for invalid configuration")
 
 
 def _valid_config() -> str:
@@ -54,6 +66,12 @@ playlists:
       adapter_id: spotify
       external_id: playlist-id
 """
+
+
+def _store(tmp_path: Path) -> SQLiteStore:
+    store = SQLiteStore(tmp_path / "engine.sqlite3")
+    store.initialize()
+    return store
 
 
 def test_runtime_interval_defaults_to_ten_minutes() -> None:
@@ -90,11 +108,48 @@ def test_explicit_missing_runtime_config_fails_closed(tmp_path: Path) -> None:
         _load_runtime_config(tmp_path, {"NEWS_PLAYLIST_CONFIG": str(missing)})
 
 
+def test_reloading_runner_revalidates_config_each_cycle(tmp_path: Path) -> None:
+    config_path = tmp_path / DEFAULT_CONFIG_FILENAME
+    config_path.write_text(_valid_config(), encoding="utf-8")
+    assert _load_runtime_config(tmp_path, {}) is not None
+
+    auth = _NeverAuth()
+    runner = ReloadingEngineCycleRunner(tmp_path, {}, _store(tmp_path), auth)
+    config_path.write_text("schema_version: 999\nsources: []\nplaylists: []\n", encoding="utf-8")
+
+    result = runner.run_cycle()
+
+    assert not result.ok
+    assert "invalid engine configuration" in (result.error or "")
+    assert auth.calls == 0
+
+
+def test_reloading_runner_fails_closed_if_config_disappears(tmp_path: Path) -> None:
+    config_path = tmp_path / DEFAULT_CONFIG_FILENAME
+    config_path.write_text(_valid_config(), encoding="utf-8")
+    auth = _NeverAuth()
+    runner = ReloadingEngineCycleRunner(tmp_path, {}, _store(tmp_path), auth)
+    config_path.unlink()
+
+    result = runner.run_cycle()
+
+    assert not result.ok
+    assert result.error == "production engine configuration is no longer available"
+    assert auth.calls == 0
+
+
 def test_configured_engine_requires_production_spotify_auth(tmp_path: Path) -> None:
     (tmp_path / DEFAULT_CONFIG_FILENAME).write_text(_valid_config(), encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="requires production Spotify"):
         serve(data_dir=tmp_path, stop_event=threading.Event(), environ={})
+
+
+def test_unconfigured_runtime_stops_cleanly_when_requested(tmp_path: Path) -> None:
+    stop = threading.Event()
+    stop.set()
+
+    assert serve(host="127.0.0.1", port=0, data_dir=tmp_path, stop_event=stop, environ={}) == 0
 
 
 def test_operational_status_page_reports_cycle_without_secret_material() -> None:
