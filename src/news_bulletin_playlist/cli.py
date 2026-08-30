@@ -6,13 +6,13 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
+from news_bulletin_playlist.engine_runtime import serve
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
     DEFAULT_HEALTH_PORT,
     DEFAULT_HEALTH_URL,
     healthcheck,
-    serve,
 )
 
 
