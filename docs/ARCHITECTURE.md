@@ -198,6 +198,43 @@ The collection stage implements the first half of the core invariant without int
 
 P1.2 deliberately does not persist state, perform Spotify catalogue matching, apply playlist retention/order policy, or reconcile destinations. Those responsibilities belong to later P1 workstreams.
 
+## P1.3 persistence contract
+
+Operational state is stored once in SQLite under `/data`, independent from any one playlist:
+
+- canonical editions are keyed globally by `(source_id, source_native_id)` and are never duplicated per playlist;
+- schema upgrades use a small explicit, repeatable migration mechanism rather than an ORM;
+- source run history, latest-attempt state and last-known-good timestamps are persisted separately;
+- Spotify matching state persists `matched`, `pending` and `ambiguous` outcomes plus diagnostics and the durable source-identity to Spotify episode URI mapping;
+- playlist run history and latest playlist state are persisted without owning copies of canonical editions;
+- logical writes are transactional and persistence failures surface as `PersistenceError` rather than being interpreted as an empty fresh state;
+- state updates are monotonic, so replaying older collection/matching/reconciliation work cannot regress newer canonical metadata, mappings, source status or playlist status;
+- run history is eligible for deterministic 30-day pruning;
+- canonical editions older than the retention boundary may be removed only when the caller explicitly supplies the identities that still need protection for playlist correctness. If that protection boundary is unknown, canonical state is retained by default;
+- deleting an eligible canonical edition removes its dependent Spotify mapping transactionally through the database relationship.
+
+The runtime initializes and migrates the database automatically under its persistent data directory on container start. P1.3 does not itself decide which collected editions to match or which playlist items to write.
+
+## P1.4 deterministic Spotify matching contract
+
+Matching maps already-persisted canonical source identities to Spotify episode URIs without changing source identity or publication metadata:
+
+- each source resolves exactly one configured Spotify `show` external reference; enabled-source matching never falls back to global Spotify search;
+- persisted successful mappings are reused before any catalogue request;
+- recent `PENDING` or `AMBIGUOUS` outcomes are reused for a 15-minute retry grace to avoid repeated catalogue churn; a future persisted timestamp is also retained until the matcher clock catches up so P1.3 monotonicity cannot be violated;
+- unresolved editions are matched in a source batch, so Spotify catalogue pages are fetched once and reused across all editions for that source rather than once per bulletin;
+- catalogue traversal is deliberately bounded to two pages of at most 50 episodes each: 100 candidates maximum per source matching pass;
+- matching is scoped to the known show and reuses the source's existing title parser to convert Spotify episode titles to the same editorial `edition_at` representation used during collection;
+- the configured source timezone remains authoritative when interpreting the parsed Spotify title wall clock;
+- Spotify release-date precision must be compatible with the canonical edition date before a candidate is viable;
+- when canonical `edition_at` is unavailable, only normalized exact-title equality is accepted as the title signal;
+- duration may be recorded in diagnostics but never decides a match;
+- one viable candidate produces `MATCHED`; more than one produces `AMBIGUOUS`; none produces `PENDING`. A Spotify API/transport failure is not rewritten as `PENDING` and therefore cannot masquerade as a valid empty catalogue result;
+- all three match outcomes and useful diagnostics are persisted through P1.3;
+- distinct RNE source-native identities remain distinct even when Spotify represents them with the same episode URI. Destination-level URI deduplication, if required, belongs to playlist desired-state construction in P1.5.
+
+P1.4 does not write playlists, choose playlist retention/order policy, schedule engine runs or own the production OAuth lifecycle.
+
 ## Deployment invariant
 
 One deployed engine/container should be capable of updating multiple configured playlists in one scheduled execution. We should not require one Docker container, cron job or GitHub Actions workflow per playlist merely because the number of playlists grows.
