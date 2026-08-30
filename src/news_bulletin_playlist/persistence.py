@@ -58,6 +58,7 @@ class EditionMatch:
 class RetentionResult:
     source_runs_deleted: int
     playlist_runs_deleted: int
+    canonical_editions_deleted: int = 0
 
 
 _MIGRATION_TABLE_SQL = """
@@ -566,11 +567,17 @@ class SQLiteStore:
         *,
         now: datetime,
         retention_days: int = DEFAULT_RETENTION_DAYS,
+        protected_identities: Iterable[tuple[SourceId, str]] | None = None,
     ) -> RetentionResult:
-        """Delete eligible old run history while retaining correctness-critical state."""
+        """Prune old history and only delete canonical state proven safe to retire."""
         if retention_days <= 0:
             raise ValueError("retention_days must be positive")
         cutoff = _format_timestamp(now - timedelta(days=retention_days))
+        protected = (
+            None
+            if protected_identities is None
+            else {(str(source_id), native_id) for source_id, native_id in protected_identities}
+        )
 
         with self._connection("prune operational history") as connection:
             source_cursor = connection.execute(
@@ -581,9 +588,39 @@ class SQLiteStore:
                 "DELETE FROM playlist_runs WHERE finished_at < ?",
                 (cutoff,),
             )
+            canonical_deleted = 0
+            if protected is not None:
+                rows = connection.execute(
+                    """
+                    SELECT source_id, source_native_id
+                    FROM canonical_editions
+                    WHERE published_at < ?
+                    """,
+                    (cutoff,),
+                ).fetchall()
+                stale = [
+                    (_row_str(row, "source_id"), _row_str(row, "source_native_id"))
+                    for row in rows
+                    if (
+                        _row_str(row, "source_id"),
+                        _row_str(row, "source_native_id"),
+                    )
+                    not in protected
+                ]
+                if stale:
+                    connection.executemany(
+                        """
+                        DELETE FROM canonical_editions
+                        WHERE source_id = ? AND source_native_id = ?
+                        """,
+                        stale,
+                    )
+                canonical_deleted = len(stale)
+
         return RetentionResult(
             source_runs_deleted=max(source_cursor.rowcount, 0),
             playlist_runs_deleted=max(playlist_cursor.rowcount, 0),
+            canonical_editions_deleted=canonical_deleted,
         )
 
     def _schema_version(self, connection: sqlite3.Connection) -> int:
