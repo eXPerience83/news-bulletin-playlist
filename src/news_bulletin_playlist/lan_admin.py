@@ -5,10 +5,16 @@ from __future__ import annotations
 import html
 import ipaddress
 import urllib.parse
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from http import HTTPStatus
 from pathlib import Path
 
+from news_bulletin_playlist.first_release import (
+    DEFAULT_CONFIG_FILENAME,
+    FIRST_PLAYLIST_NAME,
+    FirstReleaseProvisioningError,
+    provision_first_release,
+)
 from news_bulletin_playlist.runtime import (
     AdminSecurity,
     HealthHandler,
@@ -20,9 +26,11 @@ from news_bulletin_playlist.runtime import (
 from news_bulletin_playlist.spotify.auth import (
     SPOTIFY_AUTH_FILENAME,
     AuthorizationState,
+    SpotifyAuthError,
     SpotifyAuthService,
     SpotifyCredentialStore,
 )
+from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
 LAN_ADMIN_MODE_ENV = "NEWS_PLAYLIST_ADMIN_MODE"
 LAN_ADMIN_MODE = "lan"
@@ -90,13 +98,40 @@ def build_engine_runtime_auth(
     return security, spotify_auth
 
 
-def _lan_admin_page(*, spotify_state: AuthorizationState | None, csrf_token: str) -> bytes:
+def _lan_admin_page(
+    *,
+    spotify_state: AuthorizationState | None,
+    spotify_csrf_token: str,
+    provision_csrf_token: str,
+    config_exists: bool,
+) -> bytes:
     spotify = html.escape(_authorization_state_label(spotify_state))
     action = (
         "Reconnect Spotify"
         if spotify_state is AuthorizationState.CONNECTED
         else "Connect Spotify"
     )
+    if config_exists:
+        provisioning = "<p>Engine configuration: <strong>Present</strong></p>"
+    elif spotify_state is AuthorizationState.CONNECTED:
+        provisioning = f"""
+  <hr>
+  <h2>First playlist</h2>
+  <p>Create the reviewed private <strong>{html.escape(FIRST_PLAYLIST_NAME)}</strong> playlist,
+     save its destination ID in <code>/data/{DEFAULT_CONFIG_FILENAME}</code>, then restart the
+     runtime once so automatic scheduling starts.</p>
+  <form method="post" action="/admin/provision-first-playlist">
+    <input type="hidden" name="csrf_token"
+           value="{html.escape(provision_csrf_token, quote=True)}">
+    <button type="submit">Provision first playlist</button>
+  </form>
+"""
+    else:
+        provisioning = (
+            "<p>Engine configuration: <strong>Not configured</strong>. "
+            "Connect Spotify before provisioning the first playlist.</p>"
+        )
+
     document = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -122,9 +157,11 @@ def _lan_admin_page(*, spotify_state: AuthorizationState | None, csrf_token: str
   <p>Spotify uses Authorization Code + PKCE. Only the refresh credential is persisted under
      <code>/data</code>; access tokens remain memory-only.</p>
   <form method="post" action="/admin/spotify/connect">
-    <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
+    <input type="hidden" name="csrf_token"
+           value="{html.escape(spotify_csrf_token, quote=True)}">
     <button type="submit">{html.escape(action)}</button>
   </form>
+  {provisioning}
   <p><a href="/">Return to status</a></p>
 </body>
 </html>
@@ -175,6 +212,31 @@ def _lan_authorization_page(*, authorize_url: str, csrf_token: str) -> bytes:
     return document.encode()
 
 
+def _provisioned_page(playlist_id: str, *, restarting: bool) -> bytes:
+    restart_message = (
+        "The runtime is restarting automatically. Return to the status page in a few seconds."
+        if restarting
+        else "Restart the application once to activate automatic scheduling."
+    )
+    document = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Playlist provisioned · News Bulletin Playlists</title>
+</head>
+<body>
+  <h1>First playlist provisioned</h1>
+  <p><strong>{html.escape(FIRST_PLAYLIST_NAME)}</strong> was created privately in Spotify.</p>
+  <p>Destination ID: <code>{html.escape(playlist_id)}</code></p>
+  <p>{html.escape(restart_message)}</p>
+  <p><a href="/">Return to status</a></p>
+</body>
+</html>
+"""
+    return document.encode()
+
+
 def parse_lan_callback_url(callback_url: str) -> str:
     """Validate the pasted loopback callback URL and return only its query string."""
     value = callback_url.strip()
@@ -198,7 +260,9 @@ def parse_lan_callback_url(callback_url: str) -> str:
 
 
 class LanAdminHandler(HealthHandler):
-    """Add the manual browser callback-paste flow only when LAN mode is explicit."""
+    """Add trusted-LAN Spotify login and one-time first-release provisioning."""
+
+    runtime_restart: Callable[[], None] | None = None
 
     def _is_lan_admin_mode(self) -> bool:
         return isinstance(self.admin_security, LanAdminSecurity)
@@ -223,7 +287,9 @@ class LanAdminHandler(HealthHandler):
                 return
             payload = _lan_admin_page(
                 spotify_state=self._spotify_state(),
-                csrf_token=security.issue_csrf_token(),
+                spotify_csrf_token=security.issue_csrf_token(),
+                provision_csrf_token=security.issue_csrf_token(),
+                config_exists=(self.data_dir / DEFAULT_CONFIG_FILENAME).exists(),
             )
             self._reply(HTTPStatus.OK, payload)
             return
@@ -238,6 +304,7 @@ class LanAdminHandler(HealthHandler):
         if not self._is_lan_admin_mode() or parsed.path not in {
             "/admin/spotify/connect",
             "/admin/spotify/manual-callback",
+            "/admin/provision-first-playlist",
         }:
             super().do_POST()
             return
@@ -280,6 +347,10 @@ class LanAdminHandler(HealthHandler):
             self._reply(HTTPStatus.OK, payload)
             return
 
+        if parsed.path == "/admin/provision-first-playlist":
+            self._provision_first_playlist(auth_service)
+            return
+
         callback_values = form.get("callback_url", [])
         if len(callback_values) != 1:
             self._reply(
@@ -298,3 +369,45 @@ class LanAdminHandler(HealthHandler):
             )
             return
         self._handle_spotify_callback(query)
+
+    def _provision_first_playlist(self, auth_service: SpotifyAuthService) -> None:
+        if (self.data_dir / DEFAULT_CONFIG_FILENAME).exists():
+            self._reply(
+                HTTPStatus.CONFLICT,
+                b"Engine configuration already exists; provisioning refused",
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+        try:
+            access_token = auth_service.get_access_token()
+            result = provision_first_release(self.data_dir, access_token)
+        except SpotifyAuthError as exc:
+            self._reply(
+                HTTPStatus.CONFLICT,
+                str(exc).encode(),
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+        except (SpotifyApiError, SpotifyTransportError) as exc:
+            self._reply(
+                HTTPStatus.BAD_GATEWAY,
+                str(exc).encode(),
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+        except FirstReleaseProvisioningError as exc:
+            message = str(exc)
+            if exc.playlist_id is not None:
+                message = f"{message}. Created Spotify playlist ID: {exc.playlist_id}"
+            self._reply(
+                HTTPStatus.CONFLICT if exc.playlist_id is None else HTTPStatus.INTERNAL_SERVER_ERROR,
+                message.encode(),
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+
+        restart = self.runtime_restart
+        payload = _provisioned_page(result.playlist_id, restarting=restart is not None)
+        self._reply(HTTPStatus.CREATED, payload)
+        if restart is not None:
+            restart()
