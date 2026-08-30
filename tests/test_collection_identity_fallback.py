@@ -1,3 +1,5 @@
+from zoneinfo import ZoneInfo
+
 from news_bulletin_playlist.collection import normalize_rss_source
 from news_bulletin_playlist.models import (
     CountryCode,
@@ -6,7 +8,6 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
 )
-from zoneinfo import ZoneInfo
 
 
 def test_enclosure_identity_precedes_shared_editorial_link() -> None:
