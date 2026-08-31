@@ -18,6 +18,9 @@ from news_bulletin_playlist.managed_state import (
 from news_bulletin_playlist.models import PlaylistId, SourceId
 from news_bulletin_playlist.spotify.client import SpotifyClient
 
+MAX_PLAYLIST_NAME_LENGTH = 100
+MAX_PLAYLIST_DESCRIPTION_LENGTH = 300
+
 
 class ManagedAdminError(RuntimeError):
     """Safe operator-facing error for managed playlist administration."""
@@ -105,18 +108,19 @@ class ManagedAdminService:
         if any(playlist.template_id == template.id for playlist in state.playlists):
             raise ManagedAdminError(f"playlist template {template.id} is already managed")
         selected_sources = self._source_ids(source_ids, allow_empty=False)
-        name = _required_text(display_name, "playlist name")
-        cover = _required_text(cover_id, "cover id")
+        name = _playlist_name(display_name)
+        safe_description = _playlist_description(description)
+        cover = self._cover_id(cover_id)
 
         response = self.client_factory(access_token).create_private_playlist(
             name,
-            description=description,
+            description=safe_description,
         )
         destination_id = _spotify_playlist_id(response)
         managed = replace(
             activate_template(template, destination_id),
             display_name=name,
-            description=description,
+            description=safe_description,
             cover_id=cover,
             source_ids=selected_sources,
         )
@@ -147,9 +151,9 @@ class ManagedAdminService:
         updated = replace(
             current,
             enabled=enabled,
-            display_name=_required_text(display_name, "playlist name"),
-            description=description,
-            cover_id=_required_text(cover_id, "cover id"),
+            display_name=_playlist_name(display_name),
+            description=_playlist_description(description),
+            cover_id=self._cover_id(cover_id),
             source_ids=selected_sources,
         )
         next_state = self._state_with_replacement(state, updated)
@@ -251,12 +255,37 @@ class ManagedAdminService:
             raise ManagedAdminError(f"unknown catalog source: {unknown}")
         return selected
 
+    def _cover_id(self, value: str) -> str:
+        cover_id = _required_text(value, "cover id")
+        known = {template.cover_id for template in self.catalog.playlists}
+        if cover_id not in known:
+            raise ManagedAdminError(f"unknown bundled cover: {cover_id}")
+        return cover_id
+
 
 def _required_text(value: str, label: str) -> str:
     result = value.strip()
     if not result:
         raise ManagedAdminError(f"{label} must not be empty")
     return result
+
+
+def _playlist_name(value: str) -> str:
+    result = _required_text(value, "playlist name")
+    if len(result) > MAX_PLAYLIST_NAME_LENGTH:
+        raise ManagedAdminError(
+            f"playlist name must be at most {MAX_PLAYLIST_NAME_LENGTH} characters"
+        )
+    return result
+
+
+def _playlist_description(value: str) -> str:
+    if len(value) > MAX_PLAYLIST_DESCRIPTION_LENGTH:
+        raise ManagedAdminError(
+            "playlist description must be at most "
+            f"{MAX_PLAYLIST_DESCRIPTION_LENGTH} characters"
+        )
+    return value
 
 
 def _spotify_playlist_id(response: object) -> str:
