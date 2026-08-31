@@ -54,6 +54,19 @@ class SpotifyClient:
             json_body={"name": name, "description": description, "public": False},
         )
 
+    def change_playlist_details(
+        self,
+        playlist_id: str,
+        *,
+        name: str,
+        description: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "PUT",
+            f"/playlists/{playlist_id}",
+            json_body={"name": name, "description": description},
+        )
+
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
         if len(uris) > 100:
             raise ValueError("playlist replacement is limited to 100 items")
