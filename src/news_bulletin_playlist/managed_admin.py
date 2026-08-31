@@ -16,7 +16,11 @@ from news_bulletin_playlist.managed_state import (
     compile_engine_config,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
-from news_bulletin_playlist.spotify.client import SpotifyClient, SpotifyTransportError
+from news_bulletin_playlist.spotify.client import (
+    SpotifyApiError,
+    SpotifyClient,
+    SpotifyTransportError,
+)
 
 MAX_PLAYLIST_NAME_LENGTH = 100
 MAX_PLAYLIST_DESCRIPTION_LENGTH = 300
@@ -53,8 +57,8 @@ class SpotifyPlaylistCreationUncertainError(ManagedAdminError):
 
     def __init__(self) -> None:
         super().__init__(
-            "Spotify playlist creation outcome is unknown because the request failed in transit; "
-            "inspect Spotify for a newly created playlist before retrying"
+            "Spotify playlist creation outcome is unknown because Spotify did not confirm the "
+            "result; inspect Spotify for a newly created playlist before retrying"
         )
 
 
@@ -127,9 +131,16 @@ class ManagedAdminService:
                 name,
                 description=safe_description,
             )
+        except SpotifyApiError as exc:
+            if exc.status < 500:
+                raise
+            raise SpotifyPlaylistCreationUncertainError() from exc
         except SpotifyTransportError as exc:
             raise SpotifyPlaylistCreationUncertainError() from exc
-        destination_id = _spotify_playlist_id(response)
+        try:
+            destination_id = _spotify_playlist_id(response)
+        except ManagedAdminError as exc:
+            raise SpotifyPlaylistCreationUncertainError() from exc
         managed = replace(
             activate_template(template, destination_id),
             display_name=name,

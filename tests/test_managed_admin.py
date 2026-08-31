@@ -15,7 +15,7 @@ from news_bulletin_playlist.managed_admin import (
 )
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
-from news_bulletin_playlist.spotify.client import SpotifyTransportError
+from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
 
 class _FakeSpotifyClient:
@@ -43,6 +43,12 @@ class _FailingCreateSpotifyClient(_FakeSpotifyClient):
     def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
         self.create_calls.append((name, description))
         raise SpotifyTransportError("simulated create transport failure")
+
+
+class _FailingCreateSpotify5xxClient(_FakeSpotifyClient):
+    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+        self.create_calls.append((name, description))
+        raise SpotifyApiError(503, "simulated create server failure")
 
 
 class _FailingUpdateSpotifyClient(_FakeSpotifyClient):
@@ -200,6 +206,47 @@ def test_spotify_creation_transport_failure_blocks_blind_retry_and_redacts_token
     captured = capsys.readouterr()
     assert "create-token-sentinel" not in captured.out
     assert "create-token-sentinel" not in captured.err
+
+
+def test_spotify_creation_5xx_failure_is_treated_as_uncertain(tmp_path: Path) -> None:
+    factory = _Factory([])
+    factory.client = _FailingCreateSpotify5xxClient([])
+    service = ManagedAdminService(
+        ManagedStateStore(tmp_path / "managed-state.json"),
+        client_factory=factory,
+    )
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+
+    with pytest.raises(SpotifyPlaylistCreationUncertainError):
+        service.activate(
+            template_id=template.id,
+            display_name=template.display_name,
+            description=template.description,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            access_token="create-token-sentinel",
+        )
+
+    assert service.snapshot().managed == ()
+
+
+def test_spotify_creation_invalid_success_response_is_treated_as_uncertain(
+    tmp_path: Path,
+) -> None:
+    service, _ = _service(tmp_path, [{}])
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+
+    with pytest.raises(SpotifyPlaylistCreationUncertainError):
+        service.activate(
+            template_id=template.id,
+            display_name=template.display_name,
+            description=template.description,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            access_token="create-token-sentinel",
+        )
+
+    assert service.snapshot().managed == ()
 
 
 def test_spotify_creation_persistence_failure_surfaces_recoverable_destination_id(
