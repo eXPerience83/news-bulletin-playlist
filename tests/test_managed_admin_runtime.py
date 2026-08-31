@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
 from news_bulletin_playlist.effective_config import CONFIG_PATH_ENV
+from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
 from news_bulletin_playlist.engine_runtime import (
     ConfigurationSynchronization,
     EngineLifecycleController,
