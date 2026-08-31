@@ -17,6 +17,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     NEWS_PLAYLIST_DATA_DIR=/data
 
 COPY --from=builder /wheels /wheels
+COPY assets/covers/spotify /opt/news-bulletin-playlist/covers
 RUN python -m pip install --no-cache-dir /wheels/*.whl \
     && rm -rf /wheels \
     && mkdir -p /data \
