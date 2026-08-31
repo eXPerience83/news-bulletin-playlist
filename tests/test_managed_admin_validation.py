@@ -168,8 +168,9 @@ def test_available_template_requires_spotify_but_local_save_button_does_not(
         last_cycle=None,
         lan_mode=True,
     ).decode()
-    assert "Create private playlist</button>" in disconnected
-    assert "Create private playlist" in disconnected
+    assert (
+        '<button type="submit" disabled>Create private playlist</button>' in disconnected
+    )
     assert "Connect Spotify before activation" in disconnected
 
     _activate(service)

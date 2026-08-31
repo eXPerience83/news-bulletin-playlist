@@ -9,11 +9,13 @@ from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, Play
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
     ManagedAdminService,
+    SpotifyPlaylistCreationUncertainError,
     SpotifyPlaylistPersistenceError,
     SpotifyPlaylistProvisioningError,
 )
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
+from news_bulletin_playlist.spotify.client import SpotifyTransportError
 
 
 class _FakeSpotifyClient:
@@ -35,6 +37,24 @@ class _FakeSpotifyClient:
     ) -> dict[str, Any]:
         self.update_calls.append((playlist_id, name, description))
         return {}
+
+
+class _FailingCreateSpotifyClient(_FakeSpotifyClient):
+    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+        self.create_calls.append((name, description))
+        raise SpotifyTransportError("simulated create transport failure")
+
+
+class _FailingUpdateSpotifyClient(_FakeSpotifyClient):
+    def change_playlist_details(
+        self,
+        playlist_id: str,
+        *,
+        name: str,
+        description: str,
+    ) -> dict[str, Any]:
+        self.update_calls.append((playlist_id, name, description))
+        raise SpotifyTransportError("simulated update transport failure")
 
 
 class _Factory:
@@ -150,6 +170,38 @@ def test_activate_same_template_twice_does_not_create_duplicate_spotify_playlist
     assert factory.client.create_calls == [(template.display_name, template.description)]
 
 
+def test_spotify_creation_transport_failure_blocks_blind_retry_and_redacts_token(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    factory = _Factory([])
+    factory.client = _FailingCreateSpotifyClient([])
+    service = ManagedAdminService(
+        ManagedStateStore(tmp_path / "managed-state.json"),
+        client_factory=factory,
+    )
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+
+    with pytest.raises(SpotifyPlaylistCreationUncertainError) as raised:
+        service.activate(
+            template_id=template.id,
+            display_name=template.display_name,
+            description=template.description,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            access_token="create-token-sentinel",
+        )
+
+    assert service.snapshot().managed == ()
+    message = str(raised.value)
+    assert "inspect Spotify" in message
+    assert "before retrying" in message
+    assert "create-token-sentinel" not in message
+    captured = capsys.readouterr()
+    assert "create-token-sentinel" not in captured.out
+    assert "create-token-sentinel" not in captured.err
+
+
 def test_spotify_creation_persistence_failure_surfaces_recoverable_destination_id(
     tmp_path: Path,
 ) -> None:
@@ -202,6 +254,41 @@ def test_update_synchronizes_name_and_description_to_spotify(tmp_path: Path) -> 
     assert factory.client.update_calls == [
         ("destination", "Noticias España Ahora", "Descripción nueva")
     ]
+
+
+def test_metadata_transport_failure_keeps_local_state_and_redacts_token(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    service, factory = _service(tmp_path, [{"id": "destination"}])
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = service.activate(
+        template_id=template.id,
+        display_name=template.display_name,
+        description=template.description,
+        cover_id=template.cover_id,
+        source_ids=template.default_source_ids,
+        access_token="create-token",
+    )
+    factory.client = _FailingUpdateSpotifyClient([])
+    before = service.snapshot().managed[0]
+
+    with pytest.raises(SpotifyTransportError) as raised:
+        service.update(
+            managed.id,
+            display_name="Noticias España Ahora",
+            description=managed.description,
+            cover_id=managed.cover_id,
+            source_ids=managed.source_ids,
+            enabled=True,
+            access_token="update-token-sentinel",
+        )
+
+    assert service.snapshot().managed[0] == before
+    assert "update-token-sentinel" not in str(raised.value)
+    captured = capsys.readouterr()
+    assert "update-token-sentinel" not in captured.out
+    assert "update-token-sentinel" not in captured.err
 
 
 def test_source_only_update_does_not_write_spotify_metadata(tmp_path: Path) -> None:

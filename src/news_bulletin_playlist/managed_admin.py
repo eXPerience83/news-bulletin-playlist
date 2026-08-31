@@ -16,7 +16,7 @@ from news_bulletin_playlist.managed_state import (
     compile_engine_config,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
-from news_bulletin_playlist.spotify.client import SpotifyClient
+from news_bulletin_playlist.spotify.client import SpotifyClient, SpotifyTransportError
 
 MAX_PLAYLIST_NAME_LENGTH = 100
 MAX_PLAYLIST_DESCRIPTION_LENGTH = 300
@@ -46,6 +46,16 @@ class SpotifyPlaylistPersistenceError(ManagedAdminError):
             f"destination id {playlist_id!r} now requires operator reconciliation"
         )
         self.playlist_id = playlist_id
+
+
+class SpotifyPlaylistCreationUncertainError(ManagedAdminError):
+    """Prevent blind retries when Spotify creation may have succeeded remotely."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Spotify playlist creation outcome is unknown because the request failed in transit; "
+            "inspect Spotify for a newly created playlist before retrying"
+        )
 
 
 class PlaylistProvisioningClient(Protocol):
@@ -112,10 +122,13 @@ class ManagedAdminService:
         safe_description = _playlist_description(description)
         cover = self._cover_id(cover_id)
 
-        response = self.client_factory(access_token).create_private_playlist(
-            name,
-            description=safe_description,
-        )
+        try:
+            response = self.client_factory(access_token).create_private_playlist(
+                name,
+                description=safe_description,
+            )
+        except SpotifyTransportError as exc:
+            raise SpotifyPlaylistCreationUncertainError() from exc
         destination_id = _spotify_playlist_id(response)
         managed = replace(
             activate_template(template, destination_id),

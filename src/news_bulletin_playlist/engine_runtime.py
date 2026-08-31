@@ -114,7 +114,7 @@ class _MutableOperationalStatus(OperationalStatus):
 
 
 class EngineLifecycleController:
-    """Start, wake and stop one scheduler as active managed playlists change."""
+    """Start, wake and drain one scheduler as active managed playlists change."""
 
     def __init__(
         self,
@@ -128,6 +128,8 @@ class EngineLifecycleController:
         self._scheduler: EngineScheduler | None = None
         self._scheduler_stop: threading.Event | None = None
         self._scheduler_thread: threading.Thread | None = None
+        self._draining_threads: list[threading.Thread] = []
+        self._restart_waiter: threading.Thread | None = None
         self._lock = threading.RLock()
 
     @property
@@ -139,28 +141,16 @@ class EngineLifecycleController:
         """Make scheduler existence match whether any effective playlist is active."""
         with self._lock:
             self.status.set_configured(configured)
+            self._prune_draining_locked()
             if configured:
-                if self._scheduler is None:
-                    scheduler = EngineScheduler(
-                        self.runner,
-                        self.status,
-                        interval=self.interval,
-                    )
-                    scheduler_stop = threading.Event()
-                    scheduler_thread = threading.Thread(
-                        target=scheduler.run,
-                        args=(scheduler_stop,),
-                        name="news-playlist-engine",
-                        daemon=True,
-                    )
-                    self._scheduler = scheduler
-                    self._scheduler_stop = scheduler_stop
-                    self._scheduler_thread = scheduler_thread
-                    scheduler_thread.start()
-                else:
+                if self._scheduler is not None:
                     self._scheduler.wake()
+                elif self._draining_threads:
+                    self._ensure_restart_waiter_locked()
+                else:
+                    self._start_scheduler_locked()
                 return
-            self._stop_scheduler_locked(strict=True)
+            self._request_scheduler_stop_locked()
 
     def wake(self) -> None:
         with self._lock:
@@ -170,33 +160,79 @@ class EngineLifecycleController:
     def shutdown(self) -> None:
         with self._lock:
             self.status.set_configured(False)
-            self._stop_scheduler_locked(strict=False)
-
-    def _stop_scheduler_locked(self, *, strict: bool) -> None:
-        scheduler = self._scheduler
-        scheduler_stop = self._scheduler_stop
-        scheduler_thread = self._scheduler_thread
-        if scheduler is None or scheduler_stop is None or scheduler_thread is None:
-            self._scheduler = None
-            self._scheduler_stop = None
-            self._scheduler_thread = None
-            return
-        scheduler_stop.set()
-        scheduler.wake()
-        scheduler_thread.join(timeout=_SCHEDULER_SHUTDOWN_WAIT_SECONDS)
-        if scheduler_thread.is_alive():
-            if strict:
-                raise RuntimeError(
-                    "engine scheduler did not stop cleanly after configuration change"
-                )
+            self._request_scheduler_stop_locked()
+            draining = tuple(self._draining_threads)
+        for scheduler_thread in draining:
+            scheduler_thread.join(timeout=_SCHEDULER_SHUTDOWN_WAIT_SECONDS)
+        still_running = [thread for thread in draining if thread.is_alive()]
+        with self._lock:
+            self._prune_draining_locked()
+        if still_running:
             print(
                 "news-bulletin-playlist engine shutdown exceeded graceful wait; exiting",
                 flush=True,
             )
-            return
+
+    def _start_scheduler_locked(self) -> None:
+        scheduler = EngineScheduler(
+            self.runner,
+            self.status,
+            interval=self.interval,
+        )
+        scheduler_stop = threading.Event()
+        scheduler_thread = threading.Thread(
+            target=scheduler.run,
+            args=(scheduler_stop,),
+            name="news-playlist-engine",
+            daemon=True,
+        )
+        self._scheduler = scheduler
+        self._scheduler_stop = scheduler_stop
+        self._scheduler_thread = scheduler_thread
+        scheduler_thread.start()
+
+    def _request_scheduler_stop_locked(self) -> None:
+        scheduler = self._scheduler
+        scheduler_stop = self._scheduler_stop
+        scheduler_thread = self._scheduler_thread
         self._scheduler = None
         self._scheduler_stop = None
         self._scheduler_thread = None
+        if scheduler is None or scheduler_stop is None or scheduler_thread is None:
+            return
+        scheduler_stop.set()
+        scheduler.wake()
+        if scheduler_thread.is_alive() and scheduler_thread not in self._draining_threads:
+            self._draining_threads.append(scheduler_thread)
+
+    def _prune_draining_locked(self) -> None:
+        self._draining_threads = [
+            thread for thread in self._draining_threads if thread.is_alive()
+        ]
+
+    def _ensure_restart_waiter_locked(self) -> None:
+        if self._restart_waiter is not None and self._restart_waiter.is_alive():
+            return
+        restart_waiter = threading.Thread(
+            target=self._restart_after_drain,
+            name="news-playlist-engine-restart",
+            daemon=True,
+        )
+        self._restart_waiter = restart_waiter
+        restart_waiter.start()
+
+    def _restart_after_drain(self) -> None:
+        while True:
+            with self._lock:
+                self._prune_draining_locked()
+                if not self._draining_threads:
+                    self._restart_waiter = None
+                    if self.status.snapshot().configured and self._scheduler is None:
+                        self._start_scheduler_locked()
+                    return
+                draining = tuple(self._draining_threads)
+            for scheduler_thread in draining:
+                scheduler_thread.join(timeout=0.25)
 
 
 class ReloadingEngineCycleRunner:
@@ -487,6 +523,12 @@ class OperationalHealthHandler(LanAdminHandler):
                 configured = any(playlist.enabled for playlist in service.snapshot().managed)
             lifecycle.reconcile(configured=configured)
             self.__class__.engine_scheduler = lifecycle.scheduler
+        except ManagedStateError:
+            self._managed_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Managed playlist state could not be changed safely",
+            )
+            return
         except ValueError as exc:
             self._managed_error(HTTPStatus.BAD_REQUEST, str(exc))
             return
@@ -505,7 +547,7 @@ class OperationalHealthHandler(LanAdminHandler):
                 "Spotify could not apply the playlist change; local state was preserved",
             )
             return
-        except (ManagedStateError, OSError, RuntimeError):
+        except (OSError, RuntimeError):
             self._managed_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "Managed playlist state could not be changed safely",

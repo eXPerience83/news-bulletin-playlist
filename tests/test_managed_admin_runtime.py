@@ -12,6 +12,7 @@ from typing import Any
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
+from news_bulletin_playlist.effective_config import CONFIG_PATH_ENV
 from news_bulletin_playlist.engine_runtime import (
     ConfigurationSynchronization,
     EngineLifecycleController,
@@ -23,6 +24,7 @@ from news_bulletin_playlist.managed_admin import ManagedAdminService
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.spotify.client import SpotifyTransportError
 
 NOW = datetime(2026, 8, 31, 8, 0, tzinfo=UTC)
 _PASSWORD = "long-enough-admin-password"
@@ -47,6 +49,18 @@ class _FakeSpotifyClient:
     ) -> dict[str, Any]:
         self.update_calls.append((playlist_id, name, description))
         return {}
+
+
+class _FailingUpdateSpotifyClient(_FakeSpotifyClient):
+    def change_playlist_details(
+        self,
+        playlist_id: str,
+        *,
+        name: str,
+        description: str,
+    ) -> dict[str, Any]:
+        self.update_calls.append((playlist_id, name, description))
+        raise SpotifyTransportError("simulated transport failure")
 
 
 class _Factory:
@@ -161,6 +175,26 @@ class _CycleRunner:
     def run_cycle(self) -> EngineCycleResult:
         self.calls += 1
         self.called.set()
+        return EngineCycleResult(
+            started_at=NOW,
+            finished_at=NOW,
+            ok=True,
+            sources=(),
+            playlists=(),
+        )
+
+
+class _BlockingCycleRunner:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def run_cycle(self) -> EngineCycleResult:
+        self.calls += 1
+        self.started.set()
+        if not self.release.wait(timeout=2):
+            raise RuntimeError("test cycle was not released")
         return EngineCycleResult(
             started_at=NOW,
             finished_at=NOW,
@@ -375,6 +409,91 @@ def test_metadata_edit_without_spotify_token_fails_without_changing_local_state(
     assert lifecycle.reconcile_calls == []
 
 
+def test_metadata_transport_failure_is_502_fail_closed_and_redacted(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    client = _FailingUpdateSpotifyClient()
+    factory = _Factory(client)
+    service = ManagedAdminService(
+        ManagedStateStore(tmp_path / "managed-state.json"),
+        client_factory=factory,
+    )
+    _activate_direct(service)
+    current = service.snapshot().managed[0]
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    provider = _AccessTokenProvider("update-token-sentinel")
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/update",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(current.id)],
+            "display_name": ["Nuevo nombre"],
+            "description": [current.description],
+            "cover_id": [current.cover_id],
+            "source_id": [str(source_id) for source_id in current.source_ids],
+            "enabled": ["1"],
+        },
+        auth_provider=provider,
+        security=security,
+    )
+
+    handler.do_POST()
+
+    response = _response(handler)
+    assert response.status == HTTPStatus.BAD_GATEWAY
+    body = response.payload.decode()
+    assert "Spotify could not apply the playlist change; local state was preserved" in body
+    assert "simulated transport failure" not in body
+    assert "update-token-sentinel" not in body
+    assert service.snapshot().managed[0] == current
+    assert lifecycle.reconcile_calls == []
+    captured = capsys.readouterr()
+    assert "update-token-sentinel" not in captured.out
+    assert "update-token-sentinel" not in captured.err
+
+
+def test_managed_state_error_is_500_and_does_not_expose_storage_path(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    _activate_direct(service)
+    current = service.snapshot().managed[0]
+    state_path = tmp_path / "managed-state.json"
+    state_path.unlink()
+    state_path.mkdir()
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/update",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(current.id)],
+            "display_name": [current.display_name],
+            "description": [current.description],
+            "cover_id": [current.cover_id],
+            "source_id": [str(source_id) for source_id in current.source_ids],
+            "enabled": ["1"],
+        },
+        auth_provider=None,
+        security=security,
+    )
+
+    handler.do_POST()
+
+    response = _response(handler)
+    assert response.status == HTTPStatus.INTERNAL_SERVER_ERROR
+    body = response.payload.decode()
+    assert "Managed playlist state could not be changed safely" in body
+    assert str(state_path) not in body
+    assert lifecycle.reconcile_calls == []
+
+
 def test_stop_managing_keeps_spotify_destination_and_requests_scheduler_stop(
     tmp_path: Path,
 ) -> None:
@@ -429,6 +548,19 @@ def test_bundled_cover_route_is_authenticated_and_rejects_unknown_ids(tmp_path: 
     unknown.do_GET()
     assert _response(unknown).status == HTTPStatus.NOT_FOUND
 
+    for traversal_path in (
+        "/admin/covers/%2e%2e%2fmanaged-state.json.jpg",
+        "/admin/covers/..%2Fsecret.jpg",
+    ):
+        traversal = _HandlerHarness(
+            tmp_path=tmp_path,
+            service=service,
+            lifecycle=lifecycle,
+            path=traversal_path,
+        )
+        traversal.do_GET()
+        assert _response(traversal).status == HTTPStatus.NOT_FOUND
+
     unauthorized = _HandlerHarness(
         tmp_path=tmp_path,
         service=service,
@@ -478,11 +610,44 @@ def test_lifecycle_starts_stops_and_can_start_again_without_idle_cycles() -> Non
     assert controller.status.snapshot().configured is False
 
 
+def test_lifecycle_reactivation_waits_for_draining_cycle_then_restarts() -> None:
+    runner = _BlockingCycleRunner()
+    controller = EngineLifecycleController(  # type: ignore[arg-type]
+        runner,
+        interval=timedelta(hours=1),
+    )
+
+    controller.reconcile(configured=True)
+    assert runner.started.wait(timeout=2)
+    first_scheduler = controller.scheduler
+    assert first_scheduler is not None
+
+    controller.reconcile(configured=False)
+    assert controller.scheduler is None
+    assert controller.status.snapshot().configured is False
+
+    runner.started.clear()
+    controller.reconcile(configured=True)
+    assert controller.status.snapshot().configured is True
+    assert controller.scheduler is None
+    assert not runner.started.wait(timeout=0.05)
+
+    runner.release.set()
+    _wait_until(
+        lambda: controller.scheduler is not None and controller.scheduler is not first_scheduler
+    )
+    _wait_until(lambda: runner.calls >= 2)
+
+    controller.shutdown()
+    assert controller.scheduler is None
+    assert controller.status.snapshot().configured is False
+
+
 def test_legacy_or_explicit_yaml_disables_managed_web_service(tmp_path: Path) -> None:
     spotify_auth = object()
     assert _build_managed_admin_service(  # type: ignore[arg-type]
         tmp_path,
-        {"NEWS_PLAYLIST_CONFIG": "/data/manual.yaml"},
+        {CONFIG_PATH_ENV: "/data/manual.yaml"},
         spotify_auth=spotify_auth,
     ) is None
 
