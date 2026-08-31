@@ -11,7 +11,7 @@ from news_bulletin_playlist.managed_admin import (
     ManagedAdminService,
     SpotifyPlaylistProvisioningError,
 )
-from news_bulletin_playlist.managed_state import ManagedStateStore
+from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
 
 
@@ -36,12 +36,15 @@ class _Factory:
 
 
 class _FailingSaveStore(ManagedStateStore):
-    def save(self, state: object) -> None:
+    def save(self, state: ManagedState) -> None:
         del state
         raise OSError("disk unavailable")
 
 
-def _service(tmp_path: Path, responses: list[dict[str, Any]]) -> tuple[ManagedAdminService, _Factory]:
+def _service(
+    tmp_path: Path,
+    responses: list[dict[str, Any]],
+) -> tuple[ManagedAdminService, _Factory]:
     factory = _Factory(responses)
     service = ManagedAdminService(
         ManagedStateStore(tmp_path / "managed-state.json"),
