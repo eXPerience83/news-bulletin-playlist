@@ -49,9 +49,24 @@ class BuiltInCatalog:
             raise ValueError("built-in catalog contains duplicate playlist template ids")
         known_sources = set(source_ids)
         for source in self.sources:
-            if not source.enabled or source.endpoint_url is None:
+            if (
+                not source.enabled
+                or source.endpoint_url is None
+                or not source.endpoint_url.strip()
+            ):
                 raise ValueError(
                     f"built-in source {source.id} must be operational and have an endpoint"
+                )
+            spotify_show_ids = {
+                reference.external_id.strip()
+                for reference in source.external_references
+                if reference.system.casefold() == "spotify"
+                and reference.resource_type.casefold() == "show"
+                and reference.external_id.strip()
+            }
+            if len(spotify_show_ids) != 1:
+                raise ValueError(
+                    f"built-in source {source.id} requires exactly one Spotify show reference"
                 )
         for template in self.playlists:
             if not template.display_name.strip() or not template.cover_id.strip():
