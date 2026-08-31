@@ -125,7 +125,9 @@ def test_activate_creates_one_private_destination_and_persists_explicit_choices(
     )
 
     assert factory.tokens == ["access-token-sentinel"]
-    assert factory.client.create_calls == [("Noticias España", render_spotify_description("Descripción personalizada"))]
+    assert factory.client.create_calls == [
+        ("Noticias España", render_spotify_description("Descripción personalizada"))
+    ]
     assert managed.destination.external_id == "spotify-destination"
     assert managed.source_ids == (SourceId("ser"), SourceId("cnn"))
     snapshot = service.snapshot()
@@ -174,7 +176,9 @@ def test_activate_same_template_twice_does_not_create_duplicate_spotify_playlist
             access_token="token",
         )
 
-    assert factory.client.create_calls == [(template.display_name, render_spotify_description(template.description))]
+    assert factory.client.create_calls == [
+        (template.display_name, render_spotify_description(template.description))
+    ]
 
 
 def test_spotify_creation_transport_failure_blocks_blind_retry_and_redacts_token(
@@ -272,7 +276,9 @@ def test_spotify_creation_persistence_failure_surfaces_recoverable_destination_i
 
     assert raised.value.playlist_id == "created-but-not-saved"
     assert "created-but-not-saved" in str(raised.value)
-    assert factory.client.create_calls == [(template.display_name, render_spotify_description(template.description))]
+    assert factory.client.create_calls == [
+        (template.display_name, render_spotify_description(template.description))
+    ]
 
 
 def test_update_synchronizes_name_and_description_to_spotify(tmp_path: Path) -> None:
@@ -501,5 +507,7 @@ def test_stop_managing_removes_local_instance_without_spotify_delete(tmp_path: P
     assert destination == "destination-to-keep"
     assert service.snapshot().managed == ()
     assert service.snapshot().available_templates == (template,)
-    assert factory.client.create_calls == [(template.display_name, render_spotify_description(template.description))]
+    assert factory.client.create_calls == [
+        (template.display_name, render_spotify_description(template.description))
+    ]
     assert factory.client.update_calls == []
