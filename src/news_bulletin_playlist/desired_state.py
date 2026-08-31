@@ -26,10 +26,23 @@ class DesiredPlaylistItem:
     source_native_id: str
     published_at: datetime
     spotify_episode_uri: str
+    edition_at: datetime | None = None
 
     @property
     def identity(self) -> tuple[SourceId, str]:
         return (self.source_id, self.source_native_id)
+
+
+def authoritative_playlist_time(
+    edition: CanonicalEdition | DesiredPlaylistItem,
+    ordering: OrderingPolicy,
+) -> datetime:
+    """Return the semantic timestamp used for retention and playlist chronology."""
+    if ordering is OrderingPolicy.EDITION_AT_DESC:
+        return edition.edition_at or edition.published_at
+    if ordering is OrderingPolicy.PUBLISHED_AT_DESC:
+        return edition.published_at
+    raise DesiredStateError(f"unsupported ordering {ordering!s}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +73,10 @@ def build_playlist_desired_state(
     generated_at = _as_utc(now)
     if not playlist.enabled:
         raise DesiredStateError(f"playlist {playlist.id!s} is disabled")
-    if playlist.ordering is not OrderingPolicy.PUBLISHED_AT_DESC:
+    if playlist.ordering not in {
+        OrderingPolicy.EDITION_AT_DESC,
+        OrderingPolicy.PUBLISHED_AT_DESC,
+    }:
         raise DesiredStateError(
             f"playlist {playlist.id!s} uses unsupported ordering {playlist.ordering!s}"
         )
@@ -72,7 +88,8 @@ def build_playlist_desired_state(
     for edition in editions:
         if edition.source_id not in selected_sources:
             continue
-        if edition.published_at < cutoff or edition.published_at > generated_at:
+        ordering_at = authoritative_playlist_time(edition, playlist.ordering)
+        if ordering_at < cutoff or ordering_at > generated_at:
             continue
         existing = canonical_by_identity.get(edition.identity)
         if existing is not None and existing != edition:
@@ -98,19 +115,23 @@ def build_playlist_desired_state(
                 source_id=edition.source_id,
                 source_native_id=edition.source_native_id,
                 published_at=edition.published_at,
+                edition_at=edition.edition_at,
                 spotify_episode_uri=uri,
             )
         )
 
     # Stable identity ordering provides a deterministic tie-breaker when two providers
-    # publish at the exact same instant; the second stable sort makes publication time
-    # authoritative and descending.
+    # have the exact same authoritative bulletin timestamp. The second stable sort makes
+    # semantic bulletin time authoritative and descending for managed playlists.
     items.sort(key=lambda item: (str(item.source_id), item.source_native_id))
-    items.sort(key=lambda item: item.published_at, reverse=True)
+    items.sort(
+        key=lambda item: authoritative_playlist_time(item, playlist.ordering),
+        reverse=True,
+    )
 
     # Distinct canonical source assets may legitimately converge on the same Spotify
-    # episode URI (notably duplicate source-native identities). A destination playlist
-    # should contain that Spotify episode once, keeping the newest canonical occurrence.
+    # episode URI. A destination playlist should contain that Spotify episode once,
+    # keeping the newest canonical occurrence under the configured ordering policy.
     unique_items: list[DesiredPlaylistItem] = []
     seen_uris: set[str] = set()
     for item in items:
