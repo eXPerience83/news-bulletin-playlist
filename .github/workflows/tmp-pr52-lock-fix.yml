@@ -1,0 +1,31 @@
+name: Temporary PR52 patch
+
+on:
+  push:
+    branches:
+      - feat/50-admin-managed-playlists
+    paths:
+      - .github/workflows/tmp-pr52-lock-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/50-admin-managed-playlists
+      - run: python tools/tmp_pr52_finalize.py
+      - run: git diff --check
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/news_bulletin_playlist/engine_runtime.py \
+                  src/news_bulletin_playlist/managed_admin.py \
+                  tests/test_managed_admin.py \
+                  tests/test_managed_admin_runtime.py \
+                  tests/test_managed_admin_validation.py
+          git commit -m "fix: close PR52 final review findings"
+          git push origin HEAD:feat/50-admin-managed-playlists
