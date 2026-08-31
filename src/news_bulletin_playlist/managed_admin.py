@@ -23,7 +23,15 @@ from news_bulletin_playlist.spotify.client import (
 )
 
 MAX_PLAYLIST_NAME_LENGTH = 100
-MAX_PLAYLIST_DESCRIPTION_LENGTH = 300
+SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT = 300
+PROJECT_REPOSITORY_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
+PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {PROJECT_REPOSITORY_URL}"
+_DESCRIPTION_SEPARATOR = "\n\n"
+MAX_PLAYLIST_DESCRIPTION_LENGTH = (
+    SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
+    - len(_DESCRIPTION_SEPARATOR)
+    - len(PROJECT_DESCRIPTION_FOOTER)
+)
 
 
 class ManagedAdminError(RuntimeError):
@@ -129,7 +137,7 @@ class ManagedAdminService:
         try:
             response = self.client_factory(access_token).create_private_playlist(
                 name,
-                description=safe_description,
+                description=render_spotify_description(safe_description),
             )
         except SpotifyApiError as exc:
             if exc.status < 500:
@@ -187,20 +195,22 @@ class ManagedAdminService:
             updated.display_name != current.display_name
             or updated.description != current.description
         )
-        if metadata_changed:
-            if access_token is None:
-                raise ManagedAdminError(
-                    "Spotify must be connected to change playlist name or description"
-                )
+        spotify_metadata_updated = False
+        if metadata_changed and access_token is None:
+            raise ManagedAdminError(
+                "Spotify must be connected to change playlist name or description"
+            )
+        if access_token is not None:
             self.client_factory(access_token).change_playlist_details(
                 current.destination.external_id,
                 name=updated.display_name,
-                description=updated.description,
+                description=render_spotify_description(updated.description),
             )
+            spotify_metadata_updated = True
         try:
             self.store.save(next_state)
         except (ManagedStateError, OSError) as exc:
-            if metadata_changed:
+            if spotify_metadata_updated:
                 raise SpotifyPlaylistPersistenceError(
                     current.destination.external_id
                 ) from exc
@@ -287,6 +297,14 @@ class ManagedAdminService:
         return cover_id
 
 
+def render_spotify_description(base_description: str) -> str:
+    """Render the product-owned Spotify description without mutating managed state."""
+    base = _playlist_description(base_description)
+    if not base:
+        return PROJECT_DESCRIPTION_FOOTER
+    return f"{base}{_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}"
+
+
 def _required_text(value: str, label: str) -> str:
     result = value.strip()
     if not result:
@@ -307,8 +325,11 @@ def _playlist_description(value: str) -> str:
     if len(value) > MAX_PLAYLIST_DESCRIPTION_LENGTH:
         raise ManagedAdminError(
             "playlist description must be at most "
-            f"{MAX_PLAYLIST_DESCRIPTION_LENGTH} characters"
+            f"{MAX_PLAYLIST_DESCRIPTION_LENGTH} characters so the project link fits"
         )
+    rendered_length = len(value) + len(_DESCRIPTION_SEPARATOR) + len(PROJECT_DESCRIPTION_FOOTER)
+    if value and rendered_length > SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT:
+        raise ManagedAdminError("rendered Spotify playlist description is too long")
     return value
 
 
