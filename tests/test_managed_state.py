@@ -97,6 +97,23 @@ def test_managed_state_store_round_trip_is_owner_only(tmp_path: Path) -> None:
     assert "spotify_show_id" not in raw
 
 
+def test_managed_state_store_rejects_broken_symlink_for_load_and_save(tmp_path: Path) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    state = ManagedState(playlists=(activate_template(template, "spotify-playlist-id"),))
+    path = tmp_path / MANAGED_STATE_FILENAME
+    missing_target = tmp_path / "missing-state.json"
+    path.symlink_to(missing_target)
+    store = ManagedStateStore(path)
+
+    with pytest.raises(ManagedStateError, match="not a regular file"):
+        store.load()
+    with pytest.raises(ManagedStateError, match="not a regular file"):
+        store.save(state)
+
+    assert path.is_symlink()
+    assert not missing_target.exists()
+
+
 def test_managed_state_repeated_save_is_idempotent(tmp_path: Path) -> None:
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
     state = ManagedState(playlists=(activate_template(template, "spotify-playlist-id"),))
