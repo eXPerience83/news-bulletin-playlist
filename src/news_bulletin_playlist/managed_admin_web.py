@@ -38,7 +38,6 @@ def render_managed_admin_page(
             catalog=catalog,
             csrf_token=csrf,
             last_cycle=last_cycle,
-            spotify_connected=spotify_connected,
         )
         for playlist in snapshot.managed
     ) or '<p class="empty">No managed playlists yet.</p>'
@@ -138,7 +137,6 @@ def _managed_card(
     catalog: BuiltInCatalog,
     csrf_token: str,
     last_cycle: EngineCycleResult | None,
-    spotify_connected: bool,
 ) -> str:
     outcome = None
     if last_cycle is not None:
@@ -150,7 +148,6 @@ def _managed_card(
     if outcome is not None:
         result = "Success" if outcome.ok else f"Failed: {outcome.error or 'unknown error'}"
     checked = " checked" if playlist.enabled else ""
-    spotify_disabled = "" if spotify_connected else " disabled"
     destination = html.escape(playlist.destination.external_id, quote=True)
     spotify_url = "https://open.spotify.com/playlist/" + urllib.parse.quote(
         playlist.destination.external_id,
@@ -187,7 +184,7 @@ def _managed_card(
     </label>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     <label><input type="checkbox" name="enabled" value="1"{checked}> Active</label>
-    <button type="submit"{spotify_disabled}>Save playlist</button>
+    <button type="submit">Save playlist</button>
   </form>
   <form method="post" action="/admin/playlists/stop">
     <input type="hidden" name="csrf_token" value="{csrf_token}">
