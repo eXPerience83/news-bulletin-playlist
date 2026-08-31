@@ -215,7 +215,7 @@ def _parse_playlist(value: object, path: str) -> PlaylistDefinition:
         raise ConfigError(
             f"{path}.source_selection.explicit: enabled playlist must select a source"
         )
-    ordering_raw = data.get("ordering", OrderingPolicy.PUBLISHED_AT_DESC.value)
+    ordering_raw = data.get("ordering", OrderingPolicy.EDITION_AT_DESC.value)
     ordering_text = _string(ordering_raw, f"{path}.ordering")
     try:
         ordering = OrderingPolicy(ordering_text)

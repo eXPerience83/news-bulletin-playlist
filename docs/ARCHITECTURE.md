@@ -171,15 +171,15 @@ playlists:
       external_id: replace-with-provisioned-playlist-id
     retention_hours: 48
     max_episodes: 100
-    ordering: published_at_desc
+    ordering: edition_at_desc
 ```
 
 `source_selection.explicit` is authoritative in schema version 1. Playlist countries and languages
 are independent editorial metadata and do not implicitly filter explicitly selected sources.
 Selectors may later evaluate source dimensions, but selectors are deliberately not part of P1.1.
 
-The default playlist policy is 48 retention hours, 100 episodes and descending source publication
-time. `CORE_PROVIDERS` remains temporarily available to the P0 provider watch and Spotify probes;
+The default playlist policy is 48 retention hours, 100 episodes and descending semantic bulletin
+time (`edition_at`), falling back to RSS `published_at` only when no reliable edition timestamp exists. `published_at_desc` remains available as an explicit legacy ordering policy. `CORE_PROVIDERS` remains temporarily available to the P0 provider watch and Spotify probes;
 new P1 code resolves parsers independently and does not consume that legacy tuple.
 
 ## P1.2 shared collection contract

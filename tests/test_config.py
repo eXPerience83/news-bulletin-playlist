@@ -63,7 +63,7 @@ def test_playlist_defaults_are_48_hours_100_episodes_and_newest_first() -> None:
 
     assert playlist.retention_hours == 48
     assert playlist.max_episodes == 100
-    assert playlist.ordering is OrderingPolicy.PUBLISHED_AT_DESC
+    assert playlist.ordering is OrderingPolicy.EDITION_AT_DESC
 
 
 def test_country_and_language_are_independent_metadata() -> None:
