@@ -9,20 +9,32 @@ from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, Play
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
     ManagedAdminService,
+    SpotifyPlaylistPersistenceError,
     SpotifyPlaylistProvisioningError,
 )
-from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
+from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
 
 
 class _FakeSpotifyClient:
     def __init__(self, responses: list[dict[str, Any]]) -> None:
         self.responses = responses
-        self.calls: list[tuple[str, str]] = []
+        self.create_calls: list[tuple[str, str]] = []
+        self.update_calls: list[tuple[str, str, str]] = []
 
     def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
-        self.calls.append((name, description))
+        self.create_calls.append((name, description))
         return self.responses.pop(0)
+
+    def change_playlist_details(
+        self,
+        playlist_id: str,
+        *,
+        name: str,
+        description: str,
+    ) -> dict[str, Any]:
+        self.update_calls.append((playlist_id, name, description))
+        return {}
 
 
 class _Factory:
@@ -36,9 +48,16 @@ class _Factory:
 
 
 class _FailingSaveStore(ManagedStateStore):
-    def save(self, state: ManagedState) -> None:
-        del state
-        raise OSError("disk unavailable")
+    def __init__(self, path: Path, *, fail_after: int = 0) -> None:
+        super().__init__(path)
+        self.fail_after = fail_after
+        self.saves = 0
+
+    def save(self, state: object) -> None:
+        if self.saves >= self.fail_after:
+            raise OSError("disk unavailable")
+        self.saves += 1
+        super().save(state)  # type: ignore[arg-type]
 
 
 def _service(
@@ -79,7 +98,7 @@ def test_activate_creates_one_private_destination_and_persists_explicit_choices(
     )
 
     assert factory.tokens == ["access-token-sentinel"]
-    assert factory.client.calls == [("Noticias España", "Descripción personalizada")]
+    assert factory.client.create_calls == [("Noticias España", "Descripción personalizada")]
     assert managed.destination.external_id == "spotify-destination"
     assert managed.source_ids == (SourceId("ser"), SourceId("cnn"))
     snapshot = service.snapshot()
@@ -101,7 +120,7 @@ def test_activate_rejects_unknown_source_before_spotify_write(tmp_path: Path) ->
         )
 
     assert factory.tokens == []
-    assert factory.client.calls == []
+    assert factory.client.create_calls == []
 
 
 def test_activate_same_template_twice_does_not_create_duplicate_spotify_playlist(
@@ -128,7 +147,7 @@ def test_activate_same_template_twice_does_not_create_duplicate_spotify_playlist
             access_token="token",
         )
 
-    assert factory.client.calls == [(template.display_name, template.description)]
+    assert factory.client.create_calls == [(template.display_name, template.description)]
 
 
 def test_spotify_creation_persistence_failure_surfaces_recoverable_destination_id(
@@ -153,7 +172,95 @@ def test_spotify_creation_persistence_failure_surfaces_recoverable_destination_i
 
     assert raised.value.playlist_id == "created-but-not-saved"
     assert "created-but-not-saved" in str(raised.value)
-    assert factory.client.calls == [(template.display_name, template.description)]
+    assert factory.client.create_calls == [(template.display_name, template.description)]
+
+
+def test_update_synchronizes_name_and_description_to_spotify(tmp_path: Path) -> None:
+    service, factory = _service(tmp_path, [{"id": "destination"}])
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = service.activate(
+        template_id=template.id,
+        display_name=template.display_name,
+        description=template.description,
+        cover_id=template.cover_id,
+        source_ids=template.default_source_ids,
+        access_token="create-token",
+    )
+
+    updated = service.update(
+        managed.id,
+        display_name="Noticias España Ahora",
+        description="Descripción nueva",
+        cover_id=managed.cover_id,
+        source_ids=("ser", "cnn"),
+        enabled=True,
+        access_token="update-token",
+    )
+
+    assert updated.display_name == "Noticias España Ahora"
+    assert factory.tokens == ["create-token", "update-token"]
+    assert factory.client.update_calls == [
+        ("destination", "Noticias España Ahora", "Descripción nueva")
+    ]
+
+
+def test_source_only_update_does_not_write_spotify_metadata(tmp_path: Path) -> None:
+    service, factory = _service(tmp_path, [{"id": "destination"}])
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = service.activate(
+        template_id=template.id,
+        display_name=template.display_name,
+        description=template.description,
+        cover_id=template.cover_id,
+        source_ids=template.default_source_ids,
+        access_token="create-token",
+    )
+
+    service.update(
+        managed.id,
+        display_name=managed.display_name,
+        description=managed.description,
+        cover_id=managed.cover_id,
+        source_ids=("rne",),
+        enabled=True,
+        access_token="unused-update-token",
+    )
+
+    assert factory.client.update_calls == []
+    assert factory.tokens == ["create-token"]
+
+
+def test_metadata_persistence_failure_surfaces_destination_for_reconciliation(
+    tmp_path: Path,
+) -> None:
+    factory = _Factory([{"id": "destination"}])
+    store = _FailingSaveStore(tmp_path / "managed-state.json", fail_after=1)
+    service = ManagedAdminService(store, client_factory=factory)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = service.activate(
+        template_id=template.id,
+        display_name=template.display_name,
+        description=template.description,
+        cover_id=template.cover_id,
+        source_ids=template.default_source_ids,
+        access_token="create-token",
+    )
+
+    with pytest.raises(SpotifyPlaylistPersistenceError) as raised:
+        service.update(
+            managed.id,
+            display_name="Nuevo nombre",
+            description=managed.description,
+            cover_id=managed.cover_id,
+            source_ids=managed.source_ids,
+            enabled=True,
+            access_token="update-token",
+        )
+
+    assert raised.value.playlist_id == "destination"
+    assert factory.client.update_calls == [
+        ("destination", "Nuevo nombre", managed.description)
+    ]
 
 
 def test_paused_playlist_may_have_no_sources_but_cannot_resume_until_sources_selected(
@@ -177,6 +284,7 @@ def test_paused_playlist_may_have_no_sources_but_cannot_resume_until_sources_sel
         cover_id=managed.cover_id,
         source_ids=(),
         enabled=False,
+        access_token="update-token",
     )
 
     assert paused.enabled is False
@@ -232,6 +340,7 @@ def test_editing_one_playlist_does_not_change_source_membership_of_another(
         cover_id=first.cover_id,
         source_ids=("rne",),
         enabled=True,
+        access_token="unused-update-token",
     )
 
     snapshot = service.snapshot()
@@ -257,4 +366,5 @@ def test_stop_managing_removes_local_instance_without_spotify_delete(tmp_path: P
     assert destination == "destination-to-keep"
     assert service.snapshot().managed == ()
     assert service.snapshot().available_templates == (template,)
-    assert factory.client.calls == [(template.display_name, template.description)]
+    assert factory.client.create_calls == [(template.display_name, template.description)]
+    assert factory.client.update_calls == []
