@@ -139,7 +139,7 @@ class ManagedAdminService:
         cover_id: str,
         source_ids: Sequence[SourceId | str],
         enabled: bool,
-        access_token: str,
+        access_token: str | None,
     ) -> ManagedPlaylist:
         state = self.store.load()
         current = self._managed(state, playlist_id)
@@ -160,6 +160,10 @@ class ManagedAdminService:
             or updated.description != current.description
         )
         if metadata_changed:
+            if access_token is None:
+                raise ManagedAdminError(
+                    "Spotify must be connected to change playlist name or description"
+                )
             self.client_factory(access_token).change_playlist_details(
                 current.destination.external_id,
                 name=updated.display_name,
