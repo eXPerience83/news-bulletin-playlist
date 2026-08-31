@@ -2,7 +2,7 @@ name: news-bulletin-playlist
 
 services:
   app:
-    image: ghcr.io/experience83/news-bulletin-playlist@sha256:f7d34aaa5e557cf71ba72b888693e680212f6403058aa9cabb9c0320a9e24b05
+    image: ghcr.io/experience83/news-bulletin-playlist@sha256:dea2f9f2404af6787bfe1b142a72cc08db86bba0f65c04c7203c86dadf9cb242
     restart: unless-stopped
     init: true
     user: "568:568"
