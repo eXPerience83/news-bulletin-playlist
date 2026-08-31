@@ -60,6 +60,15 @@ def test_catalog_rejects_template_that_references_unknown_source() -> None:
         BuiltInCatalog(sources=BUILTIN_CATALOG.sources, playlists=(broken,))
 
 
+def test_catalog_rejects_source_without_exactly_one_spotify_show_reference() -> None:
+    broken_source = replace(BUILTIN_CATALOG.sources[0], external_references=())
+    with pytest.raises(ValueError, match="exactly one Spotify show reference"):
+        BuiltInCatalog(
+            sources=(broken_source,) + BUILTIN_CATALOG.sources[1:],
+            playlists=BUILTIN_CATALOG.playlists,
+        )
+
+
 def test_activation_snapshots_defaults_instead_of_copying_the_catalog() -> None:
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
     managed = activate_template(template, "spotify-playlist-id")
@@ -130,6 +139,36 @@ def test_managed_state_store_rejects_duplicate_sources_before_write(tmp_path: Pa
 
     with pytest.raises(ManagedStateError, match="source_ids contains duplicates"):
         store.save(ManagedState(playlists=(duplicate,)))
+
+    assert not path.exists()
+
+
+def test_managed_state_store_rejects_enabled_playlist_without_sources_before_write(
+    tmp_path: Path,
+) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = activate_template(template, "spotify-playlist-id")
+    invalid = replace(managed, source_ids=())
+    path = tmp_path / MANAGED_STATE_FILENAME
+    store = ManagedStateStore(path)
+
+    with pytest.raises(ManagedStateError, match="must select a source"):
+        store.save(ManagedState(playlists=(invalid,)))
+
+    assert not path.exists()
+
+
+def test_managed_state_store_rejects_duplicate_enabled_destination_before_write(
+    tmp_path: Path,
+) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    first = activate_template(template, "spotify-playlist-id")
+    second = replace(first, id=PlaylistId("second-playlist"))
+    path = tmp_path / MANAGED_STATE_FILENAME
+    store = ManagedStateStore(path)
+
+    with pytest.raises(ManagedStateError, match="duplicate enabled destination"):
+        store.save(ManagedState(playlists=(first, second)))
 
     assert not path.exists()
 
