@@ -1,0 +1,129 @@
+name: Temporary PR52 lock-order fix
+
+on:
+  push:
+    branches:
+      - feat/50-admin-managed-playlists
+    paths:
+      - .github/workflows/tmp-pr52-lock-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/50-admin-managed-playlists
+          fetch-depth: 0
+      - name: Apply lock-order fix and regression
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime = Path("src/news_bulletin_playlist/engine_runtime.py")
+          text = runtime.read_text()
+          old = '''        try:
+              with synchronization.hold():
+                  if path == "/admin/playlists/activate":
+                      self._activate_managed_playlist(service, form)
+                  elif path == "/admin/playlists/update":
+                      self._update_managed_playlist(service, form)
+                  else:
+                      service.stop_managing(playlist_id_from_form(form))
+                  configured = any(playlist.enabled for playlist in service.snapshot().managed)
+                  lifecycle.reconcile(configured=configured)
+                  self.__class__.engine_scheduler = lifecycle.scheduler
+          '''
+          new = '''        try:
+              with synchronization.hold():
+                  if path == "/admin/playlists/activate":
+                      self._activate_managed_playlist(service, form)
+                  elif path == "/admin/playlists/update":
+                      self._update_managed_playlist(service, form)
+                  else:
+                      service.stop_managing(playlist_id_from_form(form))
+                  configured = any(playlist.enabled for playlist in service.snapshot().managed)
+              lifecycle.reconcile(configured=configured)
+              self.__class__.engine_scheduler = lifecycle.scheduler
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("expected managed-post lock block exactly once")
+          runtime.write_text(text.replace(old, new))
+
+          tests = Path("tests/test_managed_admin_runtime.py")
+          test_text = tests.read_text()
+          marker = "def test_lifecycle_reconcile_runs_after_configuration_lock_is_released()"
+          if marker not in test_text:
+              test_text += r'''
+
+
+class _TrackingHold:
+    def __init__(self, synchronization: "_TrackingSynchronization") -> None:
+        self.synchronization = synchronization
+
+    def __enter__(self) -> None:
+        self.synchronization.depth += 1
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del exc_type, exc, traceback
+        self.synchronization.depth -= 1
+
+
+class _TrackingSynchronization:
+    def __init__(self) -> None:
+        self.depth = 0
+
+    def hold(self) -> _TrackingHold:
+        return _TrackingHold(self)
+
+
+class _AssertUnlockedLifecycle(_FakeLifecycle):
+    def __init__(self, synchronization: _TrackingSynchronization) -> None:
+        super().__init__()
+        self.synchronization = synchronization
+
+    def reconcile(self, *, configured: bool) -> None:
+        assert self.synchronization.depth == 0
+        super().reconcile(configured=configured)
+
+
+def test_lifecycle_reconcile_runs_after_configuration_lock_is_released(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    _activate_direct(service)
+    current = service.snapshot().managed[0]
+    synchronization = _TrackingSynchronization()
+    lifecycle = _AssertUnlockedLifecycle(synchronization)
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/stop",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(current.id)],
+        },
+        auth_provider=None,
+        security=security,
+    )
+    handler.configuration_synchronization = synchronization  # type: ignore[assignment]
+
+    handler.do_POST()
+
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert synchronization.depth == 0
+    assert lifecycle.reconcile_calls == [False]
+'''
+              tests.write_text(test_text)
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/news_bulletin_playlist/engine_runtime.py tests/test_managed_admin_runtime.py
+          git diff --cached --check
+          git commit -m "fix: avoid scheduler stop under configuration lock"
+          git push origin HEAD:feat/50-admin-managed-playlists
