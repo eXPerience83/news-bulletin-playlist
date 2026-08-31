@@ -88,6 +88,52 @@ def test_managed_state_store_round_trip_is_owner_only(tmp_path: Path) -> None:
     assert "spotify_show_id" not in raw
 
 
+def test_managed_state_repeated_save_is_idempotent(tmp_path: Path) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    state = ManagedState(playlists=(activate_template(template, "spotify-playlist-id"),))
+    path = tmp_path / MANAGED_STATE_FILENAME
+    store = ManagedStateStore(path)
+
+    store.save(state)
+    first_document = path.read_bytes()
+    store.save(state)
+
+    assert path.read_bytes() == first_document
+    assert store.load() == state
+
+
+@pytest.mark.parametrize("field", ["retention_hours", "max_episodes"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_managed_state_store_rejects_non_positive_policy_before_write(
+    tmp_path: Path,
+    field: str,
+    value: int,
+) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = activate_template(template, "spotify-playlist-id")
+    invalid = replace(managed, **{field: value})
+    path = tmp_path / MANAGED_STATE_FILENAME
+    store = ManagedStateStore(path)
+
+    with pytest.raises(ManagedStateError, match="must be positive"):
+        store.save(ManagedState(playlists=(invalid,)))
+
+    assert not path.exists()
+
+
+def test_managed_state_store_rejects_duplicate_sources_before_write(tmp_path: Path) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = activate_template(template, "spotify-playlist-id")
+    duplicate = replace(managed, source_ids=(SourceId("ser"), SourceId("ser")))
+    path = tmp_path / MANAGED_STATE_FILENAME
+    store = ManagedStateStore(path)
+
+    with pytest.raises(ManagedStateError, match="source_ids contains duplicates"):
+        store.save(ManagedState(playlists=(duplicate,)))
+
+    assert not path.exists()
+
+
 def test_managed_state_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     path = tmp_path / MANAGED_STATE_FILENAME
     path.write_text('{"schema_version":1,"schema_version":1,"playlists":[]}', encoding="utf-8")
