@@ -492,3 +492,62 @@ def test_legacy_or_explicit_yaml_disables_managed_web_service(tmp_path: Path) ->
         {},
         spotify_auth=spotify_auth,
     ) is None
+
+
+
+class _TrackingHold:
+    def __init__(self, synchronization: "_TrackingSynchronization") -> None:
+        self.synchronization = synchronization
+
+    def __enter__(self) -> None:
+        self.synchronization.depth += 1
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del exc_type, exc, traceback
+        self.synchronization.depth -= 1
+
+
+class _TrackingSynchronization:
+    def __init__(self) -> None:
+        self.depth = 0
+
+    def hold(self) -> _TrackingHold:
+        return _TrackingHold(self)
+
+
+class _AssertUnlockedLifecycle(_FakeLifecycle):
+    def __init__(self, synchronization: _TrackingSynchronization) -> None:
+        super().__init__()
+        self.synchronization = synchronization
+
+    def reconcile(self, *, configured: bool) -> None:
+        assert self.synchronization.depth == 0
+        super().reconcile(configured=configured)
+
+
+def test_lifecycle_reconcile_runs_after_configuration_lock_is_released(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    _activate_direct(service)
+    current = service.snapshot().managed[0]
+    synchronization = _TrackingSynchronization()
+    lifecycle = _AssertUnlockedLifecycle(synchronization)
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/stop",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(current.id)],
+        },
+        auth_provider=None,
+        security=security,
+    )
+    handler.configuration_synchronization = synchronization  # type: ignore[assignment]
+
+    handler.do_POST()
+
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert synchronization.depth == 0
+    assert lifecycle.reconcile_calls == [False]

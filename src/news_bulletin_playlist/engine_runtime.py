@@ -485,8 +485,8 @@ class OperationalHealthHandler(LanAdminHandler):
                 else:
                     service.stop_managing(playlist_id_from_form(form))
                 configured = any(playlist.enabled for playlist in service.snapshot().managed)
-                lifecycle.reconcile(configured=configured)
-                self.__class__.engine_scheduler = lifecycle.scheduler
+            lifecycle.reconcile(configured=configured)
+            self.__class__.engine_scheduler = lifecycle.scheduler
         except ValueError as exc:
             self._managed_error(HTTPStatus.BAD_REQUEST, str(exc))
             return
