@@ -186,7 +186,9 @@ class EngineLifecycleController:
         scheduler_thread.join(timeout=_SCHEDULER_SHUTDOWN_WAIT_SECONDS)
         if scheduler_thread.is_alive():
             if strict:
-                raise RuntimeError("engine scheduler did not stop cleanly after configuration change")
+                raise RuntimeError(
+                    "engine scheduler did not stop cleanly after configuration change"
+                )
             print(
                 "news-bulletin-playlist engine shutdown exceeded graceful wait; exiting",
                 flush=True,
@@ -370,7 +372,11 @@ class OperationalHealthHandler(LanAdminHandler):
             return
         service = self.managed_admin_service
         if service is None:
-            self._reply(HTTPStatus.NOT_FOUND, b"Not found", content_type="text/plain; charset=utf-8")
+            self._reply(
+                HTTPStatus.NOT_FOUND,
+                b"Not found",
+                content_type="text/plain; charset=utf-8",
+            )
             return
         synchronization = self.configuration_synchronization
         try:
@@ -404,16 +410,28 @@ class OperationalHealthHandler(LanAdminHandler):
         prefix = "/admin/covers/"
         filename = urllib.parse.unquote(path[len(prefix) :])
         if not filename.endswith(".jpg") or "/" in filename or "\\" in filename:
-            self._reply(HTTPStatus.NOT_FOUND, b"Not found", content_type="text/plain; charset=utf-8")
+            self._reply(
+                HTTPStatus.NOT_FOUND,
+                b"Not found",
+                content_type="text/plain; charset=utf-8",
+            )
             return
         cover_id = filename[:-4]
         allowed = {template.cover_id for template in BUILTIN_CATALOG.playlists}
         if cover_id not in allowed:
-            self._reply(HTTPStatus.NOT_FOUND, b"Not found", content_type="text/plain; charset=utf-8")
+            self._reply(
+                HTTPStatus.NOT_FOUND,
+                b"Not found",
+                content_type="text/plain; charset=utf-8",
+            )
             return
         cover_path = _bundled_cover_path(filename)
         if cover_path is None:
-            self._reply(HTTPStatus.NOT_FOUND, b"Not found", content_type="text/plain; charset=utf-8")
+            self._reply(
+                HTTPStatus.NOT_FOUND,
+                b"Not found",
+                content_type="text/plain; charset=utf-8",
+            )
             return
         try:
             payload = cover_path.read_bytes()
@@ -539,7 +557,9 @@ class OperationalHealthHandler(LanAdminHandler):
         )
         if current is None:
             raise ManagedAdminError(f"unknown managed playlist: {playlist_id}")
-        metadata_changed = name.strip() != current.display_name or description != current.description
+        metadata_changed = (
+            name.strip() != current.display_name or description != current.description
+        )
         access_token: str | None = None
         if metadata_changed:
             auth = self.managed_admin_auth
@@ -562,7 +582,7 @@ class OperationalHealthHandler(LanAdminHandler):
         payload = (
             "<!doctype html><meta charset='utf-8'><title>Administration error</title>"
             f"<p>{html.escape(message)}</p><p><a href='/admin/'>Return to administration</a></p>"
-        ).encode("utf-8")
+        ).encode()
         self._reply(status, payload)
 
 
