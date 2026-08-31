@@ -14,7 +14,7 @@ from pathlib import Path
 from types import FrameType
 
 from news_bulletin_playlist import __version__
-from news_bulletin_playlist.config import ConfigError, load_config
+from news_bulletin_playlist.effective_config import load_effective_config
 from news_bulletin_playlist.engine import (
     DEFAULT_ENGINE_INTERVAL,
     EngineCycleResult,
@@ -278,17 +278,7 @@ def serve(
 
 
 def _load_runtime_config(data_dir: Path, environ: Mapping[str, str]) -> EngineConfig | None:
-    raw_path = environ.get(_CONFIG_PATH_ENV)
-    explicit_path = raw_path.strip() if raw_path is not None and raw_path.strip() else None
-    path = Path(explicit_path) if explicit_path is not None else data_dir / DEFAULT_CONFIG_FILENAME
-    if not path.exists():
-        if explicit_path is not None:
-            raise RuntimeError(f"configured engine YAML does not exist: {path}")
-        return None
-    try:
-        return load_config(path)
-    except ConfigError as exc:
-        raise RuntimeError(f"invalid engine configuration: {exc}") from exc
+    return load_effective_config(data_dir, environ)
 
 
 def _runtime_interval(environ: Mapping[str, str]) -> timedelta:
