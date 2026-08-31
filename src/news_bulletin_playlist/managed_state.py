@@ -195,7 +195,7 @@ def parse_managed_state(payload: object) -> ManagedState:
 def serialize_managed_state(state: ManagedState) -> dict[str, object]:
     if state.schema_version != _MANAGED_STATE_SCHEMA_VERSION:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
-    return {
+    payload: dict[str, object] = {
         "schema_version": state.schema_version,
         "playlists": [
             {
@@ -216,6 +216,10 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
             for playlist in state.playlists
         ],
     }
+    canonical = parse_managed_state(payload)
+    if canonical != state:
+        raise ManagedStateError("managed state contains non-canonical values")
+    return payload
 
 
 def _parse_playlist(value: object, path: str) -> ManagedPlaylist:
