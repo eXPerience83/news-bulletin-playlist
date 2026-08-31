@@ -189,6 +189,24 @@ def parse_managed_state(payload: object) -> ManagedState:
     ids = [playlist.id for playlist in playlists]
     if len(ids) != len(set(ids)):
         raise ManagedStateError("managed playlist ids must be unique")
+
+    seen_destinations: set[tuple[AdapterId, str]] = set()
+    for playlist in playlists:
+        if playlist.enabled and not playlist.source_ids:
+            raise ManagedStateError(
+                f"enabled managed playlist {playlist.id} must select a source"
+            )
+        destination_key = (
+            playlist.destination.adapter_id,
+            playlist.destination.external_id,
+        )
+        if playlist.enabled and destination_key in seen_destinations:
+            raise ManagedStateError(
+                f"duplicate enabled destination for managed playlist {playlist.id}"
+            )
+        if playlist.enabled:
+            seen_destinations.add(destination_key)
+
     return ManagedState(schema_version=schema_version, playlists=playlists)
 
 
