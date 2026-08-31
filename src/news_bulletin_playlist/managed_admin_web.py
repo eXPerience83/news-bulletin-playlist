@@ -161,6 +161,10 @@ def _managed_card(
         selected=set(playlist.source_ids),
         prefix=f"edit-{playlist.id}",
     )
+    description_control = (
+        f'<textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">'
+        f"{html.escape(playlist.description)}</textarea>"
+    )
     return f"""
 <article class="card">
   <div class="card-head">
@@ -182,7 +186,7 @@ def _managed_card(
              value="{html.escape(playlist.display_name, quote=True)}">
     </label>
     <label>Description
-      <textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">{html.escape(playlist.description)}</textarea>
+      {description_control}
     </label>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     <label><input type="checkbox" name="enabled" value="1"{checked}> Active</label>
@@ -211,6 +215,10 @@ def _template_card(
     )
     disabled = "" if spotify_connected else " disabled"
     hint = "" if spotify_connected else '<p class="muted">Connect Spotify before activation.</p>'
+    description_control = (
+        f'<textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">'
+        f"{html.escape(template.description)}</textarea>"
+    )
     return f"""
 <article class="card">
   <div class="card-head">
@@ -229,7 +237,7 @@ def _template_card(
              value="{html.escape(template.display_name, quote=True)}">
     </label>
     <label>Description
-      <textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">{html.escape(template.description)}</textarea>
+      {description_control}
     </label>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     {hint}
