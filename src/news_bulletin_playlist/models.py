@@ -15,6 +15,7 @@ LanguageTag = NewType("LanguageTag", str)
 
 
 class OrderingPolicy(StrEnum):
+    EDITION_AT_DESC = "edition_at_desc"
     PUBLISHED_AT_DESC = "published_at_desc"
 
 
@@ -94,7 +95,7 @@ class PlaylistDefinition:
     destination: DestinationReference
     retention_hours: int = 48
     max_episodes: int = 100
-    ordering: OrderingPolicy = OrderingPolicy.PUBLISHED_AT_DESC
+    ordering: OrderingPolicy = OrderingPolicy.EDITION_AT_DESC
 
 
 @dataclass(frozen=True, slots=True)
