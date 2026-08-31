@@ -57,9 +57,11 @@ class ManagedStateStore:
         self.path = path
 
     def load(self) -> ManagedState:
+        if self.path.is_symlink():
+            raise ManagedStateError(f"managed state path is not a regular file: {self.path}")
         if not self.path.exists():
             return ManagedState()
-        if self.path.is_symlink() or not self.path.is_file():
+        if not self.path.is_file():
             raise ManagedStateError(f"managed state path is not a regular file: {self.path}")
         try:
             payload = json.loads(
@@ -75,7 +77,7 @@ class ManagedStateStore:
         document = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         parent = self.path.parent
         parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists() and (self.path.is_symlink() or not self.path.is_file()):
+        if self.path.is_symlink() or (self.path.exists() and not self.path.is_file()):
             raise ManagedStateError(f"managed state path is not a regular file: {self.path}")
         temp_path = parent / f".{self.path.name}.{secrets.token_hex(8)}.tmp"
         descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
