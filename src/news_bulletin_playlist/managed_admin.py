@@ -196,11 +196,11 @@ class ManagedAdminService:
             or updated.description != current.description
         )
         spotify_metadata_updated = False
-        if metadata_changed and access_token is None:
-            raise ManagedAdminError(
-                "Spotify must be connected to change playlist name or description"
-            )
-        if access_token is not None:
+        if metadata_changed:
+            if access_token is None:
+                raise ManagedAdminError(
+                    "Spotify must be connected to change playlist name or description"
+                )
             self.client_factory(access_token).change_playlist_details(
                 current.destination.external_id,
                 name=updated.display_name,
