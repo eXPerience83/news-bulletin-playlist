@@ -7,9 +7,10 @@ from typing import Any, Protocol
 
 from news_bulletin_playlist.desired_state import (
     DesiredPlaylistState,
+    authoritative_playlist_time,
     build_playlist_desired_state,
 )
-from news_bulletin_playlist.models import PlaylistDefinition, PlaylistId, SourceId
+from news_bulletin_playlist.models import OrderingPolicy, PlaylistDefinition, PlaylistId, SourceId
 from news_bulletin_playlist.persistence import EditionMatch, SQLiteStore
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
@@ -56,10 +57,12 @@ def build_desired_state_from_store(
 
     for source_id in playlist.source_selection.explicit:
         for edition in store.list_editions(source_id=source_id):
-            if edition.published_at < cutoff:
-                # list_editions(source_id=...) is publication-time descending.
+            ordering_at = authoritative_playlist_time(edition, playlist.ordering)
+            if playlist.ordering is OrderingPolicy.PUBLISHED_AT_DESC and ordering_at < cutoff:
+                # list_editions(source_id=...) is publication-time descending, so only
+                # the explicit legacy publication-order policy can safely stop here.
                 break
-            if edition.published_at > observed_at:
+            if ordering_at < cutoff or ordering_at > observed_at:
                 continue
             editions.append(edition)
             match = store.get_match_state(edition.source_id, edition.source_native_id)
