@@ -8,7 +8,11 @@ from collections.abc import Mapping
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.engine import EngineCycleResult
-from news_bulletin_playlist.managed_admin import ManagedAdminSnapshot
+from news_bulletin_playlist.managed_admin import (
+    MAX_PLAYLIST_DESCRIPTION_LENGTH,
+    MAX_PLAYLIST_NAME_LENGTH,
+    ManagedAdminSnapshot,
+)
 from news_bulletin_playlist.managed_state import ManagedPlaylist
 from news_bulletin_playlist.models import PlaylistId, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
@@ -148,7 +152,6 @@ def _managed_card(
     if outcome is not None:
         result = "Success" if outcome.ok else f"Failed: {outcome.error or 'unknown error'}"
     checked = " checked" if playlist.enabled else ""
-    destination = html.escape(playlist.destination.external_id, quote=True)
     spotify_url = "https://open.spotify.com/playlist/" + urllib.parse.quote(
         playlist.destination.external_id,
         safe="",
@@ -174,13 +177,12 @@ def _managed_card(
     <input type="hidden" name="csrf_token" value="{csrf_token}">
     <input type="hidden" name="playlist_id" value="{html.escape(str(playlist.id), quote=True)}">
     <input type="hidden" name="cover_id" value="{html.escape(playlist.cover_id, quote=True)}">
-    <input type="hidden" name="destination_id" value="{destination}">
     <label>Name
-      <input type="text" name="display_name" required maxlength="100"
+      <input type="text" name="display_name" required maxlength="{MAX_PLAYLIST_NAME_LENGTH}"
              value="{html.escape(playlist.display_name, quote=True)}">
     </label>
     <label>Description
-      <textarea name="description" maxlength="300">{html.escape(playlist.description)}</textarea>
+      <textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">{html.escape(playlist.description)}</textarea>
     </label>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     <label><input type="checkbox" name="enabled" value="1"{checked}> Active</label>
@@ -223,11 +225,11 @@ def _template_card(
     <input type="hidden" name="template_id" value="{html.escape(str(template.id), quote=True)}">
     <input type="hidden" name="cover_id" value="{html.escape(template.cover_id, quote=True)}">
     <label>Name
-      <input type="text" name="display_name" required maxlength="100"
+      <input type="text" name="display_name" required maxlength="{MAX_PLAYLIST_NAME_LENGTH}"
              value="{html.escape(template.display_name, quote=True)}">
     </label>
     <label>Description
-      <textarea name="description" maxlength="300">{html.escape(template.description)}</textarea>
+      <textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">{html.escape(template.description)}</textarea>
     </label>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     {hint}
