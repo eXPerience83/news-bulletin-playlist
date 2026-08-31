@@ -34,8 +34,27 @@ class SpotifyPlaylistProvisioningError(ManagedAdminError):
         self.playlist_id = playlist_id
 
 
+class SpotifyPlaylistPersistenceError(ManagedAdminError):
+    """Report remote metadata success followed by a local persistence failure."""
+
+    def __init__(self, playlist_id: str) -> None:
+        super().__init__(
+            "Spotify playlist metadata was updated but local managed state could not be saved; "
+            f"destination id {playlist_id!r} now requires operator reconciliation"
+        )
+        self.playlist_id = playlist_id
+
+
 class PlaylistProvisioningClient(Protocol):
     def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]: ...
+
+    def change_playlist_details(
+        self,
+        playlist_id: str,
+        *,
+        name: str,
+        description: str,
+    ) -> dict[str, Any]: ...
 
 
 PlaylistClientFactory = Callable[[str], PlaylistProvisioningClient]
@@ -120,6 +139,7 @@ class ManagedAdminService:
         cover_id: str,
         source_ids: Sequence[SourceId | str],
         enabled: bool,
+        access_token: str,
     ) -> ManagedPlaylist:
         state = self.store.load()
         current = self._managed(state, playlist_id)
@@ -132,7 +152,27 @@ class ManagedAdminService:
             cover_id=_required_text(cover_id, "cover id"),
             source_ids=selected_sources,
         )
-        self._replace(state, updated)
+        next_state = self._state_with_replacement(state, updated)
+        self._validate_state(next_state)
+
+        metadata_changed = (
+            updated.display_name != current.display_name
+            or updated.description != current.description
+        )
+        if metadata_changed:
+            self.client_factory(access_token).change_playlist_details(
+                current.destination.external_id,
+                name=updated.display_name,
+                description=updated.description,
+            )
+        try:
+            self.store.save(next_state)
+        except (ManagedStateError, OSError) as exc:
+            if metadata_changed:
+                raise SpotifyPlaylistPersistenceError(
+                    current.destination.external_id
+                ) from exc
+            raise
         return updated
 
     def set_enabled(self, playlist_id: PlaylistId | str, enabled: bool) -> ManagedPlaylist:
@@ -154,18 +194,26 @@ class ManagedAdminService:
         return current.destination.external_id
 
     def _replace(self, state: ManagedState, updated: ManagedPlaylist) -> None:
+        self._save_validated(self._state_with_replacement(state, updated))
+
+    def _state_with_replacement(
+        self,
+        state: ManagedState,
+        updated: ManagedPlaylist,
+    ) -> ManagedState:
         playlists = tuple(
             updated if playlist.id == updated.id else playlist
             for playlist in state.playlists
         )
-        self._save_validated(
-            ManagedState(schema_version=state.schema_version, playlists=playlists)
-        )
+        return ManagedState(schema_version=state.schema_version, playlists=playlists)
+
+    def _validate_state(self, state: ManagedState) -> None:
+        compile_engine_config(self.catalog, state)
 
     def _save_validated(self, state: ManagedState) -> None:
         # Cross-check catalog references before replacing durable state. The state-store parser
         # intentionally does not know the image-shipped catalog.
-        compile_engine_config(self.catalog, state)
+        self._validate_state(state)
         self.store.save(state)
 
     def _template(self, template_id: PlaylistId | str) -> PlaylistTemplate:
