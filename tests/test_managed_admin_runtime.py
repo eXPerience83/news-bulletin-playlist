@@ -496,7 +496,7 @@ def test_legacy_or_explicit_yaml_disables_managed_web_service(tmp_path: Path) ->
 
 
 class _TrackingHold:
-    def __init__(self, synchronization: "_TrackingSynchronization") -> None:
+    def __init__(self, synchronization: _TrackingSynchronization) -> None:
         self.synchronization = synchronization
 
     def __enter__(self) -> None:
