@@ -90,6 +90,42 @@ class _FakeSpotify:
         return {"snapshot_id": "snapshot"}
 
 
+class _UnavailableMediaSpotify(_FakeSpotify):
+    def __init__(self, media_key: str) -> None:
+        super().__init__({"playlist": ["spotify:episode:old"]})
+        self.media_key = media_key
+
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if not self.writes:
+            self.reads.append((playlist_id, limit, offset))
+            return {
+                "items": [
+                    {self.media_key: None},
+                    {self.media_key: {"uri": "spotify:episode:old"}},
+                ],
+                "next": None,
+            }
+        return super().playlist_items(playlist_id, limit=limit, offset=offset)
+
+
+class _MissingMediaSpotify(_FakeSpotify):
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        self.reads.append((playlist_id, limit, offset))
+        return {"items": [{}], "next": None}
+
+
 def test_unchanged_desired_state_performs_zero_writes() -> None:
     client = _FakeSpotify({"playlist": ["spotify:episode:one", "spotify:episode:two"]})
 
@@ -114,6 +150,28 @@ def test_changed_state_is_replaced_and_exactly_read_back() -> None:
     assert client.writes == [("playlist", list(desired))]
     assert client.reads == [("playlist", 100, 0), ("playlist", 100, 0)]
     assert client.states["playlist"] == list(desired)
+
+
+@pytest.mark.parametrize("media_key", ["item", "track"])
+def test_unavailable_media_item_does_not_block_replacement(media_key: str) -> None:
+    client = _UnavailableMediaSpotify(media_key)
+    desired = ("spotify:episode:new", "spotify:episode:second")
+
+    wrote = reconcile_playlist_items(client, "playlist", desired)
+
+    assert wrote is True
+    assert client.writes == [("playlist", list(desired))]
+    assert client.states["playlist"] == list(desired)
+    assert client.reads == [("playlist", 100, 0), ("playlist", 100, 0)]
+
+
+def test_missing_media_field_still_fails_closed() -> None:
+    client = _MissingMediaSpotify({"playlist": []})
+
+    with pytest.raises(SpotifyReconciliationError, match="without a media object"):
+        reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
+
+    assert client.writes == []
 
 
 def test_post_write_order_mismatch_fails_closed() -> None:
