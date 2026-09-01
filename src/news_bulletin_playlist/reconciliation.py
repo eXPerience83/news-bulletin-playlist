@@ -93,8 +93,6 @@ def build_desired_state_from_store(
         for edition in store.list_editions(source_id=source_id):
             ordering_at = authoritative_playlist_time(edition, playlist.ordering)
             if playlist.ordering is OrderingPolicy.PUBLISHED_AT_DESC and ordering_at < cutoff:
-                # list_editions(source_id=...) is publication-time descending, so only
-                # the explicit legacy publication-order policy can safely stop here.
                 break
             if ordering_at < cutoff or ordering_at > observed_at:
                 continue
@@ -182,8 +180,6 @@ def _reconcile_playlist_items(
                     phase="prewrite",
                 )
             except SpotifyReconciliationError:
-                # A structurally missing/malformed snapshot cannot attest this read.
-                # Heal with a fresh write; transport/API failures still propagate.
                 current_snapshot = None
             if current_snapshot == attestation.snapshot_id:
                 warning = _degraded_warning(current.unavailable_indices)
@@ -194,13 +190,7 @@ def _reconcile_playlist_items(
                 )
 
     write_response = client.replace_playlist_items(playlist_id, list(desired))
-    write_snapshot = _require_snapshot(
-        write_response,
-        context="Spotify playlist write response",
-    )
 
-    # Preserve the legacy strict helper semantics when no durable attestation store
-    # is available. Production passes the store and can prove partially opaque reads.
     allow_degraded_readback = store is not None and logical_playlist_id is not None
     readback = _read_spotify_playlist(
         client,
@@ -215,16 +205,17 @@ def _reconcile_playlist_items(
         )
 
     if not readback.had_unavailable_item:
-        assert store is None or logical_playlist_id is not None
         if store is not None and logical_playlist_id is not None:
             assert attestation_updated_at is not None
-            store.set_playlist_attestation(
-                logical_playlist_id,
-                destination_id=playlist_id,
-                snapshot_id=write_snapshot,
-                desired_fingerprint=desired_fingerprint,
-                updated_at=attestation_updated_at,
-            )
+            write_snapshot = _optional_snapshot(write_response)
+            if write_snapshot is not None:
+                store.set_playlist_attestation(
+                    logical_playlist_id,
+                    destination_id=playlist_id,
+                    snapshot_id=write_snapshot,
+                    desired_fingerprint=desired_fingerprint,
+                    updated_at=attestation_updated_at,
+                )
         return _PlaylistItemsReconciliationResult(wrote=True)
 
     if store is None or logical_playlist_id is None or attestation_updated_at is None:
@@ -232,6 +223,10 @@ def _reconcile_playlist_items(
             "Spotify playlist readback contained unavailable media without durable attestation"
         )
 
+    write_snapshot = _require_snapshot(
+        write_response,
+        context="Spotify playlist write response",
+    )
     current_snapshot = _read_current_snapshot(
         client,
         playlist_id,
@@ -565,6 +560,13 @@ def _require_snapshot(container: object, *, context: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise SpotifyReconciliationError(f"{context} did not contain a valid snapshot_id")
     return value.strip()
+
+
+def _optional_snapshot(container: object) -> str | None:
+    try:
+        return _require_snapshot(container, context="Spotify playlist write response")
+    except SpotifyReconciliationError:
+        return None
 
 
 def _degraded_warning(indices: Sequence[int]) -> str:
