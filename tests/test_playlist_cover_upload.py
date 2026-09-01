@@ -9,7 +9,7 @@ import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.engine_runtime import _load_bundled_cover
-from news_bulletin_playlist.managed_admin import ManagedAdminService
+from news_bulletin_playlist.managed_admin import ManagedAdminService, render_spotify_description
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyClient
 
@@ -176,8 +176,7 @@ def test_explicit_sync_reapplies_metadata_and_retries_cover(tmp_path: Path) -> N
         (
             "destination",
             managed.display_name,
-            __import__("news_bulletin_playlist.managed_admin", fromlist=["render_spotify_description"])
-            .render_spotify_description(managed.description),
+            render_spotify_description(managed.description),
         )
     ]
     assert client.cover_calls == [("destination", jpeg)]
