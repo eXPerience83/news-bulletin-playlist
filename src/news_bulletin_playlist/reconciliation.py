@@ -56,7 +56,7 @@ class _SpotifyPlaylistRead:
 class _SpotifyPlaylistPage:
     items: list[object]
     next_url: str | None
-    total: int
+    total: int | None
 
 
 def build_desired_state_from_store(
@@ -204,13 +204,12 @@ def _read_spotify_playlist(
         limit = min(_SPOTIFY_PLAYLIST_PAGE_SIZE, _MANAGED_PLAYLIST_MAX_ITEMS - offset)
         raw_page = client.playlist_items(playlist_id, limit=limit, offset=offset)
         page = _require_playlist_page(raw_page, phase=phase, offset=offset)
-        if expected_total is None:
-            expected_total = page.total
-        elif page.total != expected_total:
-            raise SpotifyReconciliationError(
-                f"Spotify playlist {phase} pagination total changed "
-                f"(offset={offset} expected_total={expected_total} total={page.total})"
-            )
+        expected_total = _validate_total_consistency(
+            page.total,
+            expected_total=expected_total,
+            phase=phase,
+            offset=offset,
+        )
 
         page_uris, page_unavailable = _extract_playlist_uris(
             page.items,
@@ -222,24 +221,58 @@ def _read_spotify_playlist(
         offset += len(page.items)
 
         if page.next_url is None:
+            if len(page.items) == limit:
+                overflow_uris, overflow_unavailable = _read_overflow_item(
+                    client,
+                    playlist_id,
+                    offset=offset,
+                    allow_unavailable=allow_unavailable,
+                    phase=phase,
+                    expected_total=expected_total,
+                )
+                had_unavailable = had_unavailable or overflow_unavailable
+                if overflow_uris:
+                    uris.append(overflow_uris[0])
             return _SpotifyPlaylistRead(tuple(uris), had_unavailable)
 
-    raw_overflow = client.playlist_items(playlist_id, limit=1, offset=offset)
-    overflow = _require_playlist_page(raw_overflow, phase=phase, offset=offset)
-    if expected_total is not None and overflow.total != expected_total:
-        raise SpotifyReconciliationError(
-            f"Spotify playlist {phase} pagination total changed "
-            f"(offset={offset} expected_total={expected_total} total={overflow.total})"
-        )
-    overflow_uris, overflow_unavailable = _extract_playlist_uris(
-        overflow.items,
+    overflow_uris, overflow_unavailable = _read_overflow_item(
+        client,
+        playlist_id,
+        offset=offset,
         allow_unavailable=allow_unavailable,
-        context=f"Spotify playlist {phase} overflow response at offset {offset}",
+        phase=phase,
+        expected_total=expected_total,
     )
     had_unavailable = had_unavailable or overflow_unavailable
     if overflow_uris:
         uris.append(overflow_uris[0])
     return _SpotifyPlaylistRead(tuple(uris), had_unavailable)
+
+
+def _read_overflow_item(
+    client: SpotifyPlaylistClient,
+    playlist_id: str,
+    *,
+    offset: int,
+    allow_unavailable: bool,
+    phase: str,
+    expected_total: int | None,
+) -> tuple[list[str], bool]:
+    raw_overflow = client.playlist_items(playlist_id, limit=1, offset=offset)
+    overflow = _require_playlist_page(raw_overflow, phase=phase, offset=offset)
+    _validate_total_consistency(
+        overflow.total,
+        expected_total=expected_total,
+        phase=phase,
+        offset=offset,
+    )
+    if not overflow.items:
+        return [], False
+    return _extract_playlist_uris(
+        overflow.items,
+        allow_unavailable=allow_unavailable,
+        context=f"Spotify playlist {phase} overflow response at offset {offset}",
+    )
 
 
 def _require_playlist_page(
@@ -271,42 +304,55 @@ def _require_playlist_page(
             f"{context} pagination contained invalid next "
             f"(offset={offset} returned={len(items)})"
         )
-
-    if "total" not in container:
-        raise SpotifyReconciliationError(
-            f"{context} pagination was missing total "
-            f"(offset={offset} returned={len(items)})"
-        )
-    total = container["total"]
-    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
-        raise SpotifyReconciliationError(
-            f"{context} pagination contained invalid total "
-            f"(offset={offset} returned={len(items)})"
-        )
-
-    consumed = offset + len(items)
-    if consumed > total:
-        raise SpotifyReconciliationError(
-            f"{context} pagination exceeded total "
-            f"(offset={offset} returned={len(items)} total={total})"
-        )
-    if consumed < total and next_value is None:
-        raise SpotifyReconciliationError(
-            f"{context} pagination truncated before total "
-            f"(offset={offset} returned={len(items)} total={total} next=null)"
-        )
-    if consumed >= total and next_value is not None:
-        raise SpotifyReconciliationError(
-            f"{context} pagination continued past total "
-            f"(offset={offset} returned={len(items)} total={total} next=present)"
-        )
     if not items and next_value is not None:
         raise SpotifyReconciliationError(
-            f"{context} pagination advanced without returning an item "
-            f"(offset={offset} total={total})"
+            f"{context} pagination advanced without returning an item (offset={offset})"
         )
 
+    total: int | None = None
+    if "total" in container:
+        total_value = container["total"]
+        if isinstance(total_value, bool) or not isinstance(total_value, int) or total_value < 0:
+            raise SpotifyReconciliationError(
+                f"{context} pagination contained invalid total "
+                f"(offset={offset} returned={len(items)})"
+            )
+        total = total_value
+        consumed = offset + len(items)
+        if consumed > total:
+            raise SpotifyReconciliationError(
+                f"{context} pagination exceeded total "
+                f"(offset={offset} returned={len(items)} total={total})"
+            )
+        if consumed < total and next_value is None:
+            raise SpotifyReconciliationError(
+                f"{context} pagination truncated before total "
+                f"(offset={offset} returned={len(items)} total={total} next=null)"
+            )
+        if consumed >= total and next_value is not None:
+            raise SpotifyReconciliationError(
+                f"{context} pagination continued past total "
+                f"(offset={offset} returned={len(items)} total={total} next=present)"
+            )
+
     return _SpotifyPlaylistPage(items, next_value, total)
+
+
+def _validate_total_consistency(
+    total: int | None,
+    *,
+    expected_total: int | None,
+    phase: str,
+    offset: int,
+) -> int | None:
+    if total is None:
+        return expected_total
+    if expected_total is not None and total != expected_total:
+        raise SpotifyReconciliationError(
+            f"Spotify playlist {phase} pagination total changed "
+            f"(offset={offset} expected_total={expected_total} total={total})"
+        )
+    return total
 
 
 def _extract_playlist_uris(
