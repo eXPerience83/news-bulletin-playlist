@@ -134,8 +134,8 @@ def _store(path: Path) -> SQLiteStore:
             "rne",
             "Europe/Madrid",
             "0UgidTKsoaHiHDARuPQNW1",
-            "NOTICIAS RNE - 29.08.2026 - 18.30 H",
-            "NOTICIAS RNE - 29.08.2026 - 18,30 H",
+            "NOTICIAS RNE - 01.09.2026 - 14.00 H",
+            "NOTICIAS RNE - 01092026 - 1400H",
         ),
         (
             "ondacero",
