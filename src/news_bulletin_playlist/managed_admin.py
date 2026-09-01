@@ -200,6 +200,7 @@ class ManagedAdminService:
     ) -> ManagedPlaylist:
         state = self.store.load()
         current = self._managed(state, playlist_id)
+        current_description = _playlist_description(current.description)
         selected_sources = self._source_ids(source_ids, allow_empty=not enabled)
         updated = replace(
             current,
@@ -214,7 +215,7 @@ class ManagedAdminService:
 
         metadata_changed = (
             updated.display_name != current.display_name
-            or updated.description != current.description
+            or updated.description != current_description
         )
         spotify_metadata_updated = False
         if metadata_changed:
@@ -416,15 +417,31 @@ def _playlist_name(value: str) -> str:
 
 
 def _playlist_description(value: str) -> str:
-    if len(value) > MAX_PLAYLIST_DESCRIPTION_LENGTH:
+    result = _strip_terminal_project_footer(value)
+    if len(result) > MAX_PLAYLIST_DESCRIPTION_LENGTH:
         raise ManagedAdminError(
             "playlist description must be at most "
             f"{MAX_PLAYLIST_DESCRIPTION_LENGTH} characters so the project link fits"
         )
-    rendered_length = len(value) + len(_DESCRIPTION_SEPARATOR) + len(PROJECT_DESCRIPTION_FOOTER)
-    if value and rendered_length > SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT:
+    rendered_length = len(result) + len(_DESCRIPTION_SEPARATOR) + len(PROJECT_DESCRIPTION_FOOTER)
+    if result and rendered_length > SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT:
         raise ManagedAdminError("rendered Spotify playlist description is too long")
-    return value
+    return result
+
+
+def _strip_terminal_project_footer(value: str) -> str:
+    result = value
+    while True:
+        candidate = result.rstrip()
+        if candidate == PROJECT_DESCRIPTION_FOOTER:
+            result = ""
+            continue
+        if not candidate.endswith(PROJECT_DESCRIPTION_FOOTER):
+            return result
+        prefix = candidate[: -len(PROJECT_DESCRIPTION_FOOTER)]
+        if not prefix.endswith(("\n", "\r")):
+            return result
+        result = prefix.rstrip()
 
 
 def _spotify_playlist_id(response: object) -> str:
