@@ -276,3 +276,4 @@ if old not in text:
     raise SystemExit("cover test Save retry fragment not found")
 text = text.replace(old, new, 1)
 cover_tests.write_text(text, encoding="utf-8")
+# Trigger the temporary patch workflow after it is configured for this script.
