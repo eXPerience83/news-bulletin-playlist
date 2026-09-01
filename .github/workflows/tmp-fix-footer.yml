@@ -1,0 +1,61 @@
+name: Temporary footer normalization fix
+
+on:
+  push:
+    branches: [fix/58-idempotent-description-footer]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fix/58-idempotent-description-footer
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Apply focused patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/news_bulletin_playlist/managed_admin.py")
+          text = path.read_text()
+          old = '''def _playlist_description(value: str) -> str:\n    if len(value) > MAX_PLAYLIST_DESCRIPTION_LENGTH:\n        raise ManagedAdminError(\n            "playlist description must be at most "\n            f"{MAX_PLAYLIST_DESCRIPTION_LENGTH} characters so the project link fits"\n        )\n    rendered_length = len(value) + len(_DESCRIPTION_SEPARATOR) + len(PROJECT_DESCRIPTION_FOOTER)\n    if value and rendered_length > SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT:\n        raise ManagedAdminError("rendered Spotify playlist description is too long")\n    return value\n'''
+          new = '''def _playlist_description(value: str) -> str:\n    result = _strip_terminal_project_footer(value)\n    if len(result) > MAX_PLAYLIST_DESCRIPTION_LENGTH:\n        raise ManagedAdminError(\n            "playlist description must be at most "\n            f"{MAX_PLAYLIST_DESCRIPTION_LENGTH} characters so the project link fits"\n        )\n    rendered_length = len(result) + len(_DESCRIPTION_SEPARATOR) + len(PROJECT_DESCRIPTION_FOOTER)\n    if result and rendered_length > SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT:\n        raise ManagedAdminError("rendered Spotify playlist description is too long")\n    return result\n\n\ndef _strip_terminal_project_footer(value: str) -> str:\n    result = value\n    while True:\n        candidate = result.rstrip()\n        if candidate == PROJECT_DESCRIPTION_FOOTER:\n            result = ""\n            continue\n        if not candidate.endswith(PROJECT_DESCRIPTION_FOOTER):\n            return result\n        prefix = candidate[: -len(PROJECT_DESCRIPTION_FOOTER)]\n        if not prefix.endswith(("\\n", "\\r")):\n            return result\n        result = prefix.rstrip()\n'''
+          assert text.count(old) == 1, "playlist description implementation changed"
+          path.write_text(text.replace(old, new))
+
+          path = Path("tests/test_playlist_description_footer.py")
+          text = path.read_text()
+          old = '''    PROJECT_DESCRIPTION_FOOTER,\n    ManagedAdminError,\n'''
+          new = '''    PROJECT_DESCRIPTION_FOOTER,\n    PROJECT_REPOSITORY_URL,\n    ManagedAdminError,\n'''
+          assert text.count(old) == 1, "footer test import block changed"
+          text = text.replace(old, new)
+          marker = '''def test_managed_state_keeps_only_editable_base_description(tmp_path: Path) -> None:\n'''
+          addition = '''@pytest.mark.parametrize(\n    "contaminated",\n    [\n        f"Descripción\\n\\n{PROJECT_DESCRIPTION_FOOTER}",\n        f"Descripción\\r\\n\\r\\n{PROJECT_DESCRIPTION_FOOTER}\\r\\n",\n        (\n            f"Descripción\\n\\n{PROJECT_DESCRIPTION_FOOTER}"\n            f"\\n\\n{PROJECT_DESCRIPTION_FOOTER}"\n        ),\n    ],\n)\ndef test_renderer_normalizes_terminal_project_footer(contaminated: str) -> None:\n    rendered = render_spotify_description(contaminated)\n\n    assert rendered == f"Descripción\\n\\n{PROJECT_DESCRIPTION_FOOTER}"\n    assert rendered.count(PROJECT_DESCRIPTION_FOOTER) == 1\n\n\ndef test_renderer_preserves_normal_repository_mention() -> None:\n    base = f"Más información: {PROJECT_REPOSITORY_URL}"\n\n    assert render_spotify_description(base) == f"{base}\\n\\n{PROJECT_DESCRIPTION_FOOTER}"\n\n\n'''
+          assert text.count(marker) == 1, "footer test insertion point changed"
+          text = text.replace(marker, addition + marker)
+          marker = '''def test_description_limit_reserves_space_for_project_footer(tmp_path: Path) -> None:\n'''
+          addition = '''def test_metadata_update_strips_terminal_footer_from_editable_state(\n    tmp_path: Path,\n) -> None:\n    spotify = _Spotify()\n    service = ManagedAdminService(\n        ManagedStateStore(tmp_path / "managed-state.json"),\n        client_factory=lambda _token: spotify,\n    )\n    template = BUILTIN_CATALOG.playlist("spain_spanish_news")\n    managed = service.activate(\n        template_id=template.id,\n        display_name=template.display_name,\n        description="Base editable",\n        cover_id=template.cover_id,\n        source_ids=template.default_source_ids,\n        access_token="token",\n    )\n\n    updated = service.update(\n        managed.id,\n        display_name=managed.display_name,\n        description=f"Editada\\r\\n\\r\\n{PROJECT_DESCRIPTION_FOOTER}\\r\\n",\n        cover_id=managed.cover_id,\n        source_ids=managed.source_ids,\n        enabled=True,\n        access_token="token",\n    )\n\n    assert updated.description == "Editada"\n    assert service.snapshot().managed[0].description == "Editada"\n    assert spotify.update_calls[-1][2] == render_spotify_description("Editada")\n\n\ndef test_footer_is_removed_before_description_limit_validation(tmp_path: Path) -> None:\n    spotify = _Spotify()\n    service = ManagedAdminService(\n        ManagedStateStore(tmp_path / "managed-state.json"),\n        client_factory=lambda _token: spotify,\n    )\n    template = BUILTIN_CATALOG.playlist("spain_spanish_news")\n    maximum = "x" * MAX_PLAYLIST_DESCRIPTION_LENGTH\n\n    managed = service.activate(\n        template_id=template.id,\n        display_name=template.display_name,\n        description=f"{maximum}\\n\\n{PROJECT_DESCRIPTION_FOOTER}",\n        cover_id=template.cover_id,\n        source_ids=template.default_source_ids,\n        access_token="token",\n    )\n\n    assert managed.description == maximum\n    assert spotify.create_calls[-1][1] == render_spotify_description(maximum)\n    assert len(spotify.create_calls[-1][1]) == 300\n\n\n'''
+          assert text.count(marker) == 1, "description limit test insertion point changed"
+          path.write_text(text.replace(marker, addition + marker))
+          PY
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e '.[dev]'
+      - run: ruff check .
+      - run: mypy src
+      - run: pytest
+      - name: Commit verified functional change
+        if: success()
+        run: |
+          rm .github/workflows/tmp-fix-footer.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/news_bulletin_playlist/managed_admin.py tests/test_playlist_description_footer.py .github/workflows/tmp-fix-footer.yml
+          git commit -m "fix: make playlist repository footer idempotent"
+          git push origin HEAD:fix/58-idempotent-description-footer
