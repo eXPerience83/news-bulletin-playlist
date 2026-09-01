@@ -71,3 +71,4 @@ text = text.replace(
 )
 
 path.write_text(text, encoding="utf-8")
+# Trigger the temporary workflow after it exists.
