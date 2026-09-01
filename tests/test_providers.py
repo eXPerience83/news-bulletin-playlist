@@ -44,6 +44,9 @@ def test_ser_rejects_unknown_shape() -> None:
         ("NOTICIAS RNE -20.06.2026- 18,30H", datetime(2026, 6, 20, 18, 30, tzinfo=MADRID)),
         ("NOTICIAS RNE - 17.04.2026 - 1930H", datetime(2026, 4, 17, 19, 30, tzinfo=MADRID)),
         ("NOTICIAS RNE - 24.08.2026 - 12.00H", datetime(2026, 8, 24, 12, 0, tzinfo=MADRID)),
+        ("NOTICIAS RNE - 010926 - 15.00H", datetime(2026, 9, 1, 15, 0, tzinfo=MADRID)),
+        ("NOTICIAS RNE - 01092026 - 1400H", datetime(2026, 9, 1, 14, 0, tzinfo=MADRID)),
+        ("NOTICIAS RNE - 01.09.2026 - 1230H", datetime(2026, 9, 1, 12, 30, tzinfo=MADRID)),
     ],
 )
 def test_rne_variants(title: str, expected: datetime) -> None:
@@ -54,6 +57,10 @@ def test_rne_variants(title: str, expected: datetime) -> None:
 
 def test_rne_rejects_invalid_time() -> None:
     assert RneParser().parse("NOTICIAS RNE - 25.08.2026 - 25.30 H") is None
+
+
+def test_rne_rejects_invalid_compact_date() -> None:
+    assert RneParser().parse("NOTICIAS RNE - 321326 - 15.00H") is None
 
 
 @pytest.mark.parametrize(
