@@ -200,6 +200,7 @@ class ManagedAdminService:
     ) -> ManagedPlaylist:
         state = self.store.load()
         current = self._managed(state, playlist_id)
+        current_description = _playlist_description(current.description)
         selected_sources = self._source_ids(source_ids, allow_empty=not enabled)
         updated = replace(
             current,
@@ -214,7 +215,7 @@ class ManagedAdminService:
 
         metadata_changed = (
             updated.display_name != current.display_name
-            or updated.description != current.description
+            or updated.description != current_description
         )
         spotify_metadata_updated = False
         if metadata_changed:

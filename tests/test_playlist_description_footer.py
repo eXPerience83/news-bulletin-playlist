@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -166,6 +167,44 @@ def test_metadata_update_strips_terminal_footer_from_editable_state(
     assert updated.description == "Editada"
     assert service.snapshot().managed[0].description == "Editada"
     assert spotify.update_calls[-1][2] == render_spotify_description("Editada")
+
+
+def test_source_only_update_cleans_legacy_footer_without_spotify_metadata_write(
+    tmp_path: Path,
+) -> None:
+    spotify = _Spotify()
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    service = ManagedAdminService(store, client_factory=lambda _token: spotify)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = service.activate(
+        template_id=template.id,
+        display_name=template.display_name,
+        description="Base editable",
+        cover_id=template.cover_id,
+        source_ids=template.default_source_ids,
+        access_token="token",
+    )
+    state = store.load()
+    contaminated = replace(
+        managed,
+        description=f"Base editable\n\n{PROJECT_DESCRIPTION_FOOTER}",
+    )
+    store.save(replace(state, playlists=(contaminated,)))
+
+    updated = service.update(
+        managed.id,
+        display_name=managed.display_name,
+        description=contaminated.description,
+        cover_id=managed.cover_id,
+        source_ids=managed.source_ids[:-1],
+        enabled=True,
+        access_token=None,
+    )
+
+    assert updated.description == "Base editable"
+    assert updated.source_ids == managed.source_ids[:-1]
+    assert store.load().playlists[0].description == "Base editable"
+    assert spotify.update_calls == []
 
 
 def test_footer_is_removed_before_description_limit_validation(tmp_path: Path) -> None:
