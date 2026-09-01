@@ -114,6 +114,20 @@ class _UnavailableMediaSpotify(_FakeSpotify):
         return super().playlist_items(playlist_id, limit=limit, offset=offset)
 
 
+class _UnavailableAfterWriteSpotify(_FakeSpotify):
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if self.writes:
+            self.reads.append((playlist_id, limit, offset))
+            return {"items": [{"item": None}], "next": None}
+        return super().playlist_items(playlist_id, limit=limit, offset=offset)
+
+
 class _MissingMediaSpotify(_FakeSpotify):
     def playlist_items(
         self,
@@ -163,6 +177,26 @@ def test_unavailable_media_item_does_not_block_replacement(media_key: str) -> No
     assert client.writes == [("playlist", list(desired))]
     assert client.states["playlist"] == list(desired)
     assert client.reads == [("playlist", 100, 0), ("playlist", 100, 0)]
+
+
+def test_unavailable_media_item_forces_healing_when_visible_uris_match() -> None:
+    client = _UnavailableMediaSpotify("item")
+    desired = ("spotify:episode:old",)
+
+    wrote = reconcile_playlist_items(client, "playlist", desired)
+
+    assert wrote is True
+    assert client.writes == [("playlist", list(desired))]
+    assert client.states["playlist"] == list(desired)
+
+
+def test_unavailable_media_item_after_write_fails_exact_readback() -> None:
+    client = _UnavailableAfterWriteSpotify({"playlist": ["spotify:episode:old"]})
+
+    with pytest.raises(SpotifyReconciliationError, match="unavailable media item"):
+        reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
+
+    assert client.writes == [("playlist", ["spotify:episode:new"])]
 
 
 def test_missing_media_field_still_fails_closed() -> None:
