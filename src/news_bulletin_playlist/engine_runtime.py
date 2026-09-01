@@ -603,13 +603,19 @@ class OperationalHealthHandler(LanAdminHandler):
             name.strip() != current.display_name or description != current.description
         )
         access_token: str | None = None
+        auth = self.managed_admin_auth
         if metadata_changed:
-            auth = self.managed_admin_auth
             if auth is None:
                 raise ManagedAdminError(
                     "Spotify must be connected to change playlist name or description"
                 )
             access_token = auth.get_access_token()
+        elif auth is not None:
+            try:
+                access_token = auth.get_access_token()
+            except SpotifyAuthError:
+                # Local source/pause changes remain available when optional cover sync cannot auth.
+                access_token = None
         service.update(
             playlist_id,
             display_name=name,
@@ -751,7 +757,17 @@ def _build_managed_admin_service(
     legacy_path = data_dir / DEFAULT_CONFIG_FILENAME
     if legacy_path.is_symlink() or legacy_path.exists():
         return None
-    return ManagedAdminService(ManagedStateStore(data_dir / MANAGED_STATE_FILENAME))
+    return ManagedAdminService(
+        ManagedStateStore(data_dir / MANAGED_STATE_FILENAME),
+        cover_loader=_load_bundled_cover,
+    )
+
+
+def _load_bundled_cover(cover_id: str) -> bytes:
+    cover_path = _bundled_cover_path(f"{cover_id}.jpg")
+    if cover_path is None:
+        raise FileNotFoundError("bundled playlist cover is unavailable")
+    return cover_path.read_bytes()
 
 
 def _bundled_cover_path(filename: str) -> Path | None:

@@ -175,6 +175,7 @@ def _managed_card(
       <p><a href="{html.escape(spotify_url, quote=True)}" target="_blank"
             rel="noopener noreferrer">Open in Spotify</a></p>
       <p class="muted">Last result: {html.escape(result)}</p>
+      <p class="muted">Bundled cover is applied on Save when Spotify image permission is granted.</p>
     </div>
   </div>
   <form method="post" action="/admin/playlists/update">
@@ -226,6 +227,7 @@ def _template_card(
     <div>
       <h3>{html.escape(template.display_name)}</h3>
       <p class="muted">Built-in template · creates a private Spotify playlist</p>
+      <p class="muted">The bundled cover is uploaded when Spotify grants image permission.</p>
     </div>
   </div>
   <form method="post" action="/admin/playlists/activate">

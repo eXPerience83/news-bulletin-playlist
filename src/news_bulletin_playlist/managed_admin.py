@@ -81,8 +81,11 @@ class PlaylistProvisioningClient(Protocol):
         description: str,
     ) -> dict[str, Any]: ...
 
+    def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]: ...
+
 
 PlaylistClientFactory = Callable[[str], PlaylistProvisioningClient]
+CoverAssetLoader = Callable[[str], bytes]
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,10 +103,12 @@ class ManagedAdminService:
         *,
         catalog: BuiltInCatalog = BUILTIN_CATALOG,
         client_factory: PlaylistClientFactory | None = None,
+        cover_loader: CoverAssetLoader | None = None,
     ) -> None:
         self.store = store
         self.catalog = catalog
         self.client_factory = client_factory or SpotifyClient
+        self.cover_loader = cover_loader
 
     def snapshot(self) -> ManagedAdminSnapshot:
         state = self.store.load()
@@ -134,8 +139,9 @@ class ManagedAdminService:
         safe_description = _playlist_description(description)
         cover = self._cover_id(cover_id)
 
+        client = self.client_factory(access_token)
         try:
-            response = self.client_factory(access_token).create_private_playlist(
+            response = client.create_private_playlist(
                 name,
                 description=render_spotify_description(safe_description),
             )
@@ -164,6 +170,7 @@ class ManagedAdminService:
             self._save_validated(next_state)
         except (ManagedStateError, OSError) as exc:
             raise SpotifyPlaylistProvisioningError(destination_id) from exc
+        self._best_effort_cover_upload(client, destination_id, cover)
         return managed
 
     def update(
@@ -196,12 +203,13 @@ class ManagedAdminService:
             or updated.description != current.description
         )
         spotify_metadata_updated = False
+        client = None if access_token is None else self.client_factory(access_token)
         if metadata_changed:
-            if access_token is None:
+            if client is None:
                 raise ManagedAdminError(
                     "Spotify must be connected to change playlist name or description"
                 )
-            self.client_factory(access_token).change_playlist_details(
+            client.change_playlist_details(
                 current.destination.external_id,
                 name=updated.display_name,
                 description=render_spotify_description(updated.description),
@@ -215,6 +223,12 @@ class ManagedAdminService:
                     current.destination.external_id
                 ) from exc
             raise
+        if client is not None:
+            self._best_effort_cover_upload(
+                client,
+                current.destination.external_id,
+                updated.cover_id,
+            )
         return updated
 
     def set_enabled(self, playlist_id: PlaylistId | str, enabled: bool) -> ManagedPlaylist:
@@ -234,6 +248,21 @@ class ManagedAdminService:
             ManagedState(schema_version=state.schema_version, playlists=remaining)
         )
         return current.destination.external_id
+
+    def _best_effort_cover_upload(
+        self,
+        client: PlaylistProvisioningClient,
+        playlist_id: str,
+        cover_id: str,
+    ) -> None:
+        if self.cover_loader is None:
+            return
+        try:
+            jpeg_bytes = self.cover_loader(cover_id)
+            client.upload_playlist_cover(playlist_id, jpeg_bytes)
+        except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
+            # Cover art is product metadata. It must never block playlist state or bulletin sync.
+            return
 
     def _replace(self, state: ManagedState, updated: ManagedPlaylist) -> None:
         self._save_validated(self._state_with_replacement(state, updated))
