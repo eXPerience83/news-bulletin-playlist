@@ -140,6 +140,40 @@ class _MissingMediaSpotify(_FakeSpotify):
         return {"items": [{}], "next": None}
 
 
+class _MalformedPagingSpotify(_FakeSpotify):
+    def __init__(self, page: dict[str, Any]) -> None:
+        super().__init__({"playlist": []})
+        self.page = page
+
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        self.reads.append((playlist_id, limit, offset))
+        return dict(self.page)
+
+
+class _FalseTerminalSpotify(_FakeSpotify):
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if not self.writes and offset == 0:
+            self.reads.append((playlist_id, limit, offset))
+            state = self.states[playlist_id]
+            return {
+                "items": [{"item": {"uri": uri}} for uri in state[:limit]],
+                "next": None,
+            }
+        return super().playlist_items(playlist_id, limit=limit, offset=offset)
+
+
 def test_unchanged_desired_state_performs_zero_writes() -> None:
     client = _FakeSpotify({"playlist": ["spotify:episode:one", "spotify:episode:two"]})
 
@@ -193,7 +227,55 @@ def test_current_state_over_100_forces_bounded_replacement() -> None:
         ("playlist", 1, 100),
         ("playlist", 50, 0),
         ("playlist", 50, 50),
+        ("playlist", 1, 100),
     ]
+
+
+def test_full_terminal_page_is_probed_for_hidden_overflow() -> None:
+    current = [f"spotify:episode:{index}" for index in range(51)]
+    desired = tuple(current[:50])
+    client = _FalseTerminalSpotify({"playlist": current})
+
+    wrote = reconcile_playlist_items(client, "playlist", desired)
+
+    assert wrote is True
+    assert client.writes == [("playlist", list(desired))]
+    assert client.states["playlist"] == list(desired)
+    assert client.reads == [
+        ("playlist", 50, 0),
+        ("playlist", 1, 50),
+        ("playlist", 50, 0),
+        ("playlist", 1, 50),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("page", "message"),
+    [
+        ({"items": []}, "pagination was missing next"),
+        ({"items": [], "next": ""}, "pagination contained invalid next"),
+        (
+            {"items": [{"item": {"uri": "spotify:episode:one"}}], "next": None, "total": 2},
+            "pagination truncated before total",
+        ),
+        (
+            {"items": [], "next": None, "total": -1},
+            "pagination contained invalid total",
+        ),
+    ],
+)
+def test_malformed_pagination_fails_closed_without_writing(
+    page: dict[str, Any],
+    message: str,
+) -> None:
+    client = _MalformedPagingSpotify(page)
+
+    with pytest.raises(SpotifyReconciliationError, match=message) as error:
+        reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
+
+    assert "prewrite" in str(error.value)
+    assert "offset=0" in str(error.value)
+    assert client.writes == []
 
 
 @pytest.mark.parametrize("media_key", ["item", "track"])
@@ -223,18 +305,23 @@ def test_unavailable_media_item_forces_healing_when_visible_uris_match() -> None
 def test_unavailable_media_item_after_write_fails_exact_readback() -> None:
     client = _UnavailableAfterWriteSpotify({"playlist": ["spotify:episode:old"]})
 
-    with pytest.raises(SpotifyReconciliationError, match="unavailable media item"):
+    with pytest.raises(SpotifyReconciliationError, match="unavailable media item") as error:
         reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
 
+    assert "readback" in str(error.value)
+    assert "offset=0" in str(error.value)
     assert client.writes == [("playlist", ["spotify:episode:new"])]
 
 
 def test_missing_media_field_still_fails_closed() -> None:
     client = _MissingMediaSpotify({"playlist": []})
 
-    with pytest.raises(SpotifyReconciliationError, match="without a media object"):
+    with pytest.raises(SpotifyReconciliationError, match="without a media object") as error:
         reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
 
+    assert "prewrite" in str(error.value)
+    assert "offset=0" in str(error.value)
+    assert "item_index=0" in str(error.value)
     assert client.writes == []
 
 
