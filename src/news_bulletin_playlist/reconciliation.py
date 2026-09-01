@@ -14,6 +14,9 @@ from news_bulletin_playlist.models import OrderingPolicy, PlaylistDefinition, Pl
 from news_bulletin_playlist.persistence import EditionMatch, SQLiteStore
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
+_SPOTIFY_PLAYLIST_PAGE_SIZE = 50
+_MANAGED_PLAYLIST_MAX_ITEMS = 100
+
 
 class SpotifyPlaylistClient(Protocol):
     """Small Spotify surface needed by playlist reconciliation."""
@@ -22,7 +25,7 @@ class SpotifyPlaylistClient(Protocol):
         self,
         playlist_id: str,
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]: ...
 
@@ -93,7 +96,7 @@ def reconcile_playlist_items(
 ) -> bool:
     """Replace only on change and verify exact order/count/content after every write."""
     desired = tuple(desired_uris)
-    if len(desired) > 100:
+    if len(desired) > _MANAGED_PLAYLIST_MAX_ITEMS:
         raise ValueError("playlist reconciliation is limited to 100 items")
 
     current = _read_spotify_playlist(client, playlist_id, allow_unavailable=True)
@@ -168,27 +171,42 @@ def _read_spotify_playlist(
     *,
     allow_unavailable: bool,
 ) -> _SpotifyPlaylistRead:
-    page = client.playlist_items(playlist_id, limit=100, offset=0)
-    items = _require_items(page, context="Spotify playlist response")
-    uris, had_unavailable = _extract_playlist_uris(
-        items,
-        allow_unavailable=allow_unavailable,
-    )
+    uris: list[str] = []
+    had_unavailable = False
+    offset = 0
 
-    if page.get("next"):
-        overflow = client.playlist_items(playlist_id, limit=1, offset=len(items))
-        overflow_items = _require_items(overflow, context="Spotify playlist overflow response")
-        overflow_uris, overflow_unavailable = _extract_playlist_uris(
-            overflow_items,
+    while offset < _MANAGED_PLAYLIST_MAX_ITEMS:
+        limit = min(_SPOTIFY_PLAYLIST_PAGE_SIZE, _MANAGED_PLAYLIST_MAX_ITEMS - offset)
+        page = client.playlist_items(playlist_id, limit=limit, offset=offset)
+        items = _require_items(page, context="Spotify playlist response")
+        if not items and page.get("next"):
+            raise SpotifyReconciliationError(
+                "Spotify playlist pagination advanced without returning an item"
+            )
+        page_uris, page_unavailable = _extract_playlist_uris(
+            items,
             allow_unavailable=allow_unavailable,
         )
-        had_unavailable = had_unavailable or overflow_unavailable
-        if not overflow_uris and not overflow_unavailable:
-            raise SpotifyReconciliationError(
-                "Spotify playlist pagination reported an item that was not returned"
-            )
-        if overflow_uris:
-            uris.append(overflow_uris[0])
+        uris.extend(page_uris)
+        had_unavailable = had_unavailable or page_unavailable
+        offset += len(items)
+
+        if not page.get("next"):
+            return _SpotifyPlaylistRead(tuple(uris), had_unavailable)
+
+    overflow = client.playlist_items(playlist_id, limit=1, offset=offset)
+    overflow_items = _require_items(overflow, context="Spotify playlist overflow response")
+    if not overflow_items:
+        raise SpotifyReconciliationError(
+            "Spotify playlist pagination reported an item that was not returned"
+        )
+    overflow_uris, overflow_unavailable = _extract_playlist_uris(
+        overflow_items,
+        allow_unavailable=allow_unavailable,
+    )
+    had_unavailable = had_unavailable or overflow_unavailable
+    if overflow_uris:
+        uris.append(overflow_uris[0])
     return _SpotifyPlaylistRead(tuple(uris), had_unavailable)
 
 
