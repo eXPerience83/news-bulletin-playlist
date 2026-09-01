@@ -70,8 +70,8 @@ class SpotifyClient:
         )
 
     def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]:
-        if not jpeg_bytes.startswith(b"\xff\xd8"):
-            raise ValueError("playlist cover must be a JPEG image")
+        if not jpeg_bytes.startswith(b"\xff\xd8") or not jpeg_bytes.endswith(b"\xff\xd9"):
+            raise ValueError("playlist cover must be a complete JPEG image")
         encoded = base64.b64encode(jpeg_bytes)
         if len(encoded) > _SPOTIFY_COVER_MAX_PAYLOAD_BYTES:
             raise ValueError("playlist cover exceeds Spotify's 256 KiB encoded payload limit")
@@ -121,10 +121,7 @@ class SpotifyClient:
         url = f"{self.api_base}{path}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
-        if json_body is not None:
-            data = json.dumps(json_body).encode("utf-8")
-        else:
-            data = raw_body
+        data = json.dumps(json_body).encode("utf-8") if json_body is not None else raw_body
         headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
         if json_body is not None:
             headers["Content-Type"] = "application/json"
