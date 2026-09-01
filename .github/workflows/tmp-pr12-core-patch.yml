@@ -5,7 +5,7 @@ on:
     branches:
       - feat/12-playlist-cover-upload
     paths:
-      - .github/scripts/tmp_patch_12_core.py
+      - .github/scripts/tmp_patch_12_sync_action.py
 
 permissions:
   contents: write
@@ -17,15 +17,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: feat/12-playlist-cover-upload
-      - run: python .github/scripts/tmp_patch_12_core.py
+      - run: python .github/scripts/tmp_patch_12_sync_action.py
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/news_bulletin_playlist/spotify/auth.py \
-                  src/news_bulletin_playlist/managed_admin.py \
+          git add src/news_bulletin_playlist/managed_admin.py \
                   src/news_bulletin_playlist/engine_runtime.py \
                   src/news_bulletin_playlist/managed_admin_web.py \
-                  tests/test_spotify_auth.py
+                  tests/test_playlist_cover_upload.py
           git diff --cached --quiet && exit 0
-          git commit -m "feat: integrate managed playlist cover uploads"
+          git commit -m "feat: add explicit Spotify metadata and cover sync"
           git push origin HEAD:feat/12-playlist-cover-upload
