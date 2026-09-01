@@ -175,7 +175,8 @@ def _managed_card(
       <p><a href="{html.escape(spotify_url, quote=True)}" target="_blank"
             rel="noopener noreferrer">Open in Spotify</a></p>
       <p class="muted">Last result: {html.escape(result)}</p>
-      <p class="muted">Reconnect Spotify once for image permission, then apply Spotify metadata and cover.</p>
+      <p class="muted">Reconnect Spotify once for image permission,
+        then apply Spotify metadata and cover.</p>
     </div>
   </div>
   <form method="post" action="/admin/playlists/update">
