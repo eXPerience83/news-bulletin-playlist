@@ -24,13 +24,17 @@ jobs:
         run: |
           python - <<'PY'
           import base64
-          import re
           from pathlib import Path
           workflow = Path('.github/workflows/issue65-explicit-sync-fix.yml').read_text()
-          match = re.search(r'^  B64_PATCH: "([A-Za-z0-9+/=]+)"$', workflow, re.MULTILINE)
-          if match is None:
+          payload = None
+          for line in workflow.splitlines():
+              stripped = line.strip()
+              if stripped.startswith('B64_PATCH:'):
+                  payload = stripped.split(':', 1)[1].strip().strip('"')
+                  break
+          if not payload:
               raise SystemExit('stored patch payload not found')
-          exec(base64.b64decode(match.group(1)), {'__name__': '__main__'})
+          exec(base64.b64decode(payload), {'__name__': '__main__'})
           PY
       - name: Install dev dependencies
         run: |
