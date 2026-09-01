@@ -13,7 +13,7 @@ from news_bulletin_playlist.models import CanonicalEdition, PlaylistId, SourceId
 DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
 DEFAULT_RETENTION_DAYS = 30
-LATEST_SCHEMA_VERSION = 1
+LATEST_SCHEMA_VERSION = 2
 
 
 class PersistenceError(RuntimeError):
@@ -42,6 +42,15 @@ class PlaylistState:
     last_attempt_at: datetime
     last_success_at: datetime | None
     last_error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PlaylistAttestation:
+    playlist_id: PlaylistId
+    destination_id: str
+    snapshot_id: str
+    desired_fingerprint: str
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +159,20 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
                 last_attempt_at TEXT NOT NULL,
                 last_success_at TEXT,
                 last_error TEXT
+            )
+            """,
+        ),
+    ),
+    (
+        2,
+        (
+            """
+            CREATE TABLE spotify_playlist_attestations (
+                playlist_id TEXT PRIMARY KEY,
+                destination_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                desired_fingerprint TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
             """,
         ),
@@ -560,6 +583,79 @@ class SQLiteStore:
             last_attempt_at=_parse_timestamp(_row_str(row, "last_attempt_at")),
             last_success_at=_parse_optional_timestamp(row["last_success_at"]),
             last_error=_optional_str(row["last_error"]),
+        )
+
+    def set_playlist_attestation(
+        self,
+        playlist_id: PlaylistId,
+        *,
+        destination_id: str,
+        snapshot_id: str,
+        desired_fingerprint: str,
+        updated_at: datetime,
+    ) -> None:
+        """Persist evidence tying one desired playlist state to a Spotify snapshot."""
+        destination = destination_id.strip()
+        snapshot = snapshot_id.strip()
+        fingerprint = desired_fingerprint.strip()
+        if not destination:
+            raise ValueError("playlist attestation destination_id must not be empty")
+        if not snapshot:
+            raise ValueError("playlist attestation snapshot_id must not be empty")
+        if len(fingerprint) != 64 or any(
+            character not in "0123456789abcdef" for character in fingerprint
+        ):
+            raise ValueError("playlist attestation fingerprint must be lowercase SHA-256")
+
+        with self._connection("set Spotify playlist attestation") as connection:
+            connection.execute(
+                """
+                INSERT INTO spotify_playlist_attestations (
+                    playlist_id,
+                    destination_id,
+                    snapshot_id,
+                    desired_fingerprint,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(playlist_id) DO UPDATE SET
+                    destination_id = excluded.destination_id,
+                    snapshot_id = excluded.snapshot_id,
+                    desired_fingerprint = excluded.desired_fingerprint,
+                    updated_at = excluded.updated_at
+                WHERE excluded.updated_at >= spotify_playlist_attestations.updated_at
+                """,
+                (
+                    str(playlist_id),
+                    destination,
+                    snapshot,
+                    fingerprint,
+                    _format_timestamp(updated_at),
+                ),
+            )
+
+    def get_playlist_attestation(
+        self,
+        playlist_id: PlaylistId,
+    ) -> PlaylistAttestation | None:
+        """Load the latest durable Spotify playlist attestation."""
+        with self._connection("read Spotify playlist attestation") as connection:
+            row = connection.execute(
+                """
+                SELECT playlist_id, destination_id, snapshot_id,
+                       desired_fingerprint, updated_at
+                FROM spotify_playlist_attestations
+                WHERE playlist_id = ?
+                """,
+                (str(playlist_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        return PlaylistAttestation(
+            playlist_id=PlaylistId(_row_str(row, "playlist_id")),
+            destination_id=_row_str(row, "destination_id"),
+            snapshot_id=_row_str(row, "snapshot_id"),
+            desired_fingerprint=_row_str(row, "desired_fingerprint"),
+            updated_at=_parse_timestamp(_row_str(row, "updated_at")),
         )
 
     def prune_operational_history(
