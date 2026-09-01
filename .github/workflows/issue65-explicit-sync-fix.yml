@@ -1,0 +1,351 @@
+name: Issue 65 explicit sync fix
+
+on:
+  push:
+    branches: [fix/spotify-explicit-sync-diagnostics]
+    paths:
+      - ".github/workflows/issue65-explicit-sync-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/spotify-explicit-sync-diagnostics
+      - name: Patch explicit Spotify sync diagnostics
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/news_bulletin_playlist/managed_admin.py")
+          text = path.read_text()
+          old = '''class SpotifyPlaylistCreationUncertainError(ManagedAdminError):
+    """Prevent blind retries when Spotify creation may have succeeded remotely."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Spotify playlist creation outcome is unknown because Spotify did not confirm the "
+            "result; inspect Spotify for a newly created playlist before retrying"
+        )
+
+
+class PlaylistProvisioningClient(Protocol):
+'''
+          new = '''class SpotifyPlaylistCreationUncertainError(ManagedAdminError):
+    """Prevent blind retries when Spotify creation may have succeeded remotely."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Spotify playlist creation outcome is unknown because Spotify did not confirm the "
+            "result; inspect Spotify for a newly created playlist before retrying"
+        )
+
+
+class SpotifyPlaylistSyncError(ManagedAdminError):
+    """Report safe per-operation results from an explicit Spotify metadata/cover sync."""
+
+    def __init__(
+        self,
+        *,
+        metadata_error: str | None,
+        cover_error: str | None,
+    ) -> None:
+        metadata = "applied" if metadata_error is None else f"failed ({metadata_error})"
+        cover = "applied" if cover_error is None else f"failed ({cover_error})"
+        super().__init__(f"Spotify explicit sync result: metadata {metadata}; cover {cover}")
+
+
+class PlaylistProvisioningClient(Protocol):
+'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''    def sync_spotify_metadata_and_cover(
+        self,
+        playlist_id: PlaylistId | str,
+        *,
+        access_token: str,
+    ) -> ManagedPlaylist:
+        state = self.store.load()
+        current = self._managed(state, playlist_id)
+        client = self.client_factory(access_token)
+        client.change_playlist_details(
+            current.destination.external_id,
+            name=current.display_name,
+            description=render_spotify_description(current.description),
+        )
+        self._best_effort_cover_upload(
+            client,
+            current.destination.external_id,
+            current.cover_id,
+        )
+        return current
+'''
+          new = '''    def sync_spotify_metadata_and_cover(
+        self,
+        playlist_id: PlaylistId | str,
+        *,
+        access_token: str,
+    ) -> ManagedPlaylist:
+        state = self.store.load()
+        current = self._managed(state, playlist_id)
+        client = self.client_factory(access_token)
+        metadata_error: str | None = None
+        cover_error: str | None = None
+        try:
+            client.change_playlist_details(
+                current.destination.external_id,
+                name=current.display_name,
+                description=render_spotify_description(current.description),
+            )
+        except (SpotifyApiError, SpotifyTransportError) as exc:
+            metadata_error = _safe_spotify_operation_error(exc)
+        try:
+            self._upload_cover_explicit(
+                client,
+                current.destination.external_id,
+                current.cover_id,
+            )
+        except (SpotifyApiError, SpotifyTransportError) as exc:
+            cover_error = _safe_spotify_operation_error(exc)
+        except (OSError, ValueError):
+            cover_error = "local cover error"
+        if metadata_error is not None or cover_error is not None:
+            raise SpotifyPlaylistSyncError(
+                metadata_error=metadata_error,
+                cover_error=cover_error,
+            )
+        return current
+'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''    def _best_effort_cover_upload(
+        self,
+        client: PlaylistProvisioningClient,
+        playlist_id: str,
+        cover_id: str,
+    ) -> None:
+        if self.cover_loader is None:
+            return
+        upload_playlist_cover = getattr(client, "upload_playlist_cover", None)
+        if not callable(upload_playlist_cover):
+            return
+        try:
+            jpeg_bytes = self.cover_loader(cover_id)
+            upload_playlist_cover(playlist_id, jpeg_bytes)
+        except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
+            # Cover art is product metadata. It must never block playlist state or bulletin sync.
+            return
+'''
+          new = '''    def _best_effort_cover_upload(
+        self,
+        client: PlaylistProvisioningClient,
+        playlist_id: str,
+        cover_id: str,
+    ) -> None:
+        try:
+            self._upload_cover_explicit(client, playlist_id, cover_id)
+        except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
+            # Cover art is product metadata. It must never block playlist state or bulletin sync.
+            return
+
+    def _upload_cover_explicit(
+        self,
+        client: PlaylistProvisioningClient,
+        playlist_id: str,
+        cover_id: str,
+    ) -> None:
+        if self.cover_loader is None:
+            raise ValueError("bundled cover loader is unavailable")
+        upload_playlist_cover = getattr(client, "upload_playlist_cover", None)
+        if not callable(upload_playlist_cover):
+            raise ValueError("Spotify client does not support cover upload")
+        jpeg_bytes = self.cover_loader(cover_id)
+        upload_playlist_cover(playlist_id, jpeg_bytes)
+'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          marker = '''def render_spotify_description(base_description: str) -> str:
+'''
+          helper = '''def _safe_spotify_operation_error(
+    error: SpotifyApiError | SpotifyTransportError,
+) -> str:
+    if isinstance(error, SpotifyApiError):
+        return f"HTTP {error.status}"
+    return "network error"
+
+
+'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, helper + marker)
+          path.write_text(text)
+
+          path = Path("src/news_bulletin_playlist/engine_runtime.py")
+          text = path.read_text()
+          old = '''from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
+'''
+          new = '''from news_bulletin_playlist.managed_admin import (
+    ManagedAdminError,
+    ManagedAdminService,
+    SpotifyPlaylistSyncError,
+)
+'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          old = '''        except ManagedAdminError as exc:
+            self._managed_error(HTTPStatus.CONFLICT, str(exc))
+            return
+'''
+          new = '''        except SpotifyPlaylistSyncError as exc:
+            self._managed_error(HTTPStatus.BAD_GATEWAY, str(exc))
+            return
+        except ManagedAdminError as exc:
+            self._managed_error(HTTPStatus.CONFLICT, str(exc))
+            return
+'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          path.write_text(text)
+
+          path = Path("tests/test_playlist_cover_admin_route.py")
+          text = path.read_text()
+          old = '''from news_bulletin_playlist.spotify.auth import AuthorizationState
+'''
+          new = '''from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
+'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          old = '''        self.block_updates = False
+        self.update_started = threading.Event()
+        self.update_release = threading.Event()
+'''
+          new = '''        self.block_updates = False
+        self.metadata_error: Exception | None = None
+        self.cover_error: Exception | None = None
+        self.update_started = threading.Event()
+        self.update_release = threading.Event()
+'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          old = '''        if self.block_updates:
+            self.update_started.set()
+            if not self.update_release.wait(timeout=5.0):
+                raise AssertionError("timed out waiting to release Spotify metadata update")
+        return {}
+
+    def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]:
+        self.cover_calls.append((playlist_id, jpeg_bytes))
+        return {}
+'''
+          new = '''        if self.block_updates:
+            self.update_started.set()
+            if not self.update_release.wait(timeout=5.0):
+                raise AssertionError("timed out waiting to release Spotify metadata update")
+        if self.metadata_error is not None:
+            raise self.metadata_error
+        return {}
+
+    def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]:
+        self.cover_calls.append((playlist_id, jpeg_bytes))
+        if self.cover_error is not None:
+            raise self.cover_error
+        return {}
+'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          addition = '''\n\ndef test_explicit_admin_sync_reports_metadata_http_status_and_still_attempts_cover(
+    tmp_path: Path,
+    capsys: object,
+) -> None:
+    service, client, managed = _managed_service(tmp_path)
+    lifecycle = _Lifecycle()
+    provider = _Provider()
+    security = LanAdminSecurity(_PASSWORD)
+    client.metadata_error = SpotifyApiError(403, "access-token-sentinel")
+    handler = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=provider,
+        security=security,
+        path="/admin/playlists/sync",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(managed.id)],
+        },
+    )
+
+    handler.do_POST()
+
+    assert handler.response is not None
+    body = handler.response.payload.decode()
+    assert handler.response.status == HTTPStatus.BAD_GATEWAY
+    assert "metadata failed (HTTP 403); cover applied" in body
+    assert "access-token-sentinel" not in body
+    assert client.cover_calls == [("destination", b"\\xff\\xd8cover\\xff\\xd9")]
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "access-token-sentinel" not in captured.out
+    assert "access-token-sentinel" not in captured.err
+    assert lifecycle.reconcile_calls == []
+
+
+def test_explicit_admin_sync_reports_cover_network_failure_without_raw_error(
+    tmp_path: Path,
+    capsys: object,
+) -> None:
+    service, client, managed = _managed_service(tmp_path)
+    lifecycle = _Lifecycle()
+    provider = _Provider()
+    security = LanAdminSecurity(_PASSWORD)
+    client.cover_error = SpotifyTransportError("refresh-token-sentinel")
+    handler = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=provider,
+        security=security,
+        path="/admin/playlists/sync",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(managed.id)],
+        },
+    )
+
+    handler.do_POST()
+
+    assert handler.response is not None
+    body = handler.response.payload.decode()
+    assert handler.response.status == HTTPStatus.BAD_GATEWAY
+    assert "metadata applied; cover failed (network error)" in body
+    assert "refresh-token-sentinel" not in body
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "refresh-token-sentinel" not in captured.out
+    assert "refresh-token-sentinel" not in captured.err
+    assert lifecycle.reconcile_calls == []
+'''
+          text += addition
+          path.write_text(text)
+          PY
+      - name: Ruff
+        run: python -m pip install -e .[dev] && ruff check .
+      - name: Mypy
+        run: mypy src
+      - name: Pytest
+        run: pytest -q
+      - name: Remove temporary workflow and commit
+        shell: bash
+        run: |
+          rm .github/workflows/issue65-explicit-sync-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/news_bulletin_playlist/managed_admin.py src/news_bulletin_playlist/engine_runtime.py tests/test_playlist_cover_admin_route.py .github/workflows/issue65-explicit-sync-fix.yml
+          git commit -m "fix: diagnose explicit Spotify metadata and cover sync"
+          git push origin HEAD:fix/spotify-explicit-sync-diagnostics
