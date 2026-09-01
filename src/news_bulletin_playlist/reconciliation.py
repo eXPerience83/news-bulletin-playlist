@@ -43,6 +43,12 @@ class PlaylistReconciliationResult:
     error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _SpotifyPlaylistRead:
+    uris: tuple[str, ...]
+    had_unavailable_item: bool
+
+
 def build_desired_state_from_store(
     store: SQLiteStore,
     playlist: PlaylistDefinition,
@@ -76,21 +82,8 @@ def read_spotify_playlist_uris(
     client: SpotifyPlaylistClient,
     playlist_id: str,
 ) -> tuple[str, ...]:
-    """Read the complete bounded playlist and detect unexpected >100-item overflow."""
-    page = client.playlist_items(playlist_id, limit=100, offset=0)
-    items = _require_items(page, context="Spotify playlist response")
-    uris = _extract_playlist_uris(items)
-
-    if page.get("next"):
-        overflow = client.playlist_items(playlist_id, limit=1, offset=len(items))
-        overflow_items = _require_items(overflow, context="Spotify playlist overflow response")
-        overflow_uris = _extract_playlist_uris(overflow_items)
-        if not overflow_uris:
-            raise SpotifyReconciliationError(
-                "Spotify playlist pagination reported an item that was not returned"
-            )
-        uris.append(overflow_uris[0])
-    return tuple(uris)
+    """Read the complete bounded playlist and fail closed on unavailable media."""
+    return _read_spotify_playlist(client, playlist_id, allow_unavailable=False).uris
 
 
 def reconcile_playlist_items(
@@ -103,8 +96,8 @@ def reconcile_playlist_items(
     if len(desired) > 100:
         raise ValueError("playlist reconciliation is limited to 100 items")
 
-    current = read_spotify_playlist_uris(client, playlist_id)
-    if current == desired:
+    current = _read_spotify_playlist(client, playlist_id, allow_unavailable=True)
+    if current.uris == desired and not current.had_unavailable_item:
         return False
 
     client.replace_playlist_items(playlist_id, list(desired))
@@ -169,6 +162,36 @@ def reconcile_spotify_destinations(
     return tuple(results)
 
 
+def _read_spotify_playlist(
+    client: SpotifyPlaylistClient,
+    playlist_id: str,
+    *,
+    allow_unavailable: bool,
+) -> _SpotifyPlaylistRead:
+    page = client.playlist_items(playlist_id, limit=100, offset=0)
+    items = _require_items(page, context="Spotify playlist response")
+    uris, had_unavailable = _extract_playlist_uris(
+        items,
+        allow_unavailable=allow_unavailable,
+    )
+
+    if page.get("next"):
+        overflow = client.playlist_items(playlist_id, limit=1, offset=len(items))
+        overflow_items = _require_items(overflow, context="Spotify playlist overflow response")
+        overflow_uris, overflow_unavailable = _extract_playlist_uris(
+            overflow_items,
+            allow_unavailable=allow_unavailable,
+        )
+        had_unavailable = had_unavailable or overflow_unavailable
+        if not overflow_uris and not overflow_unavailable:
+            raise SpotifyReconciliationError(
+                "Spotify playlist pagination reported an item that was not returned"
+            )
+        if overflow_uris:
+            uris.append(overflow_uris[0])
+    return _SpotifyPlaylistRead(tuple(uris), had_unavailable)
+
+
 def _require_items(container: object, *, context: str) -> list[object]:
     if not isinstance(container, dict):
         raise SpotifyReconciliationError(f"{context} was not an object")
@@ -178,8 +201,13 @@ def _require_items(container: object, *, context: str) -> list[object]:
     return items
 
 
-def _extract_playlist_uris(items: Sequence[object]) -> list[str]:
+def _extract_playlist_uris(
+    items: Sequence[object],
+    *,
+    allow_unavailable: bool,
+) -> tuple[list[str], bool]:
     uris: list[str] = []
+    had_unavailable = False
     for item in items:
         if not isinstance(item, dict):
             raise SpotifyReconciliationError(
@@ -195,9 +223,11 @@ def _extract_playlist_uris(items: Sequence[object]) -> list[str]:
         if value is None and has_item and has_track:
             value = item.get("track")
         if value is None:
-            # Spotify may retain an unavailable playlist entry while omitting its media object.
-            # Ignore that tombstone during the pre-write comparison so a later desired-state
-            # replacement can heal the managed playlist instead of blocking forever.
+            if not allow_unavailable:
+                raise SpotifyReconciliationError(
+                    "Spotify playlist response contained an unavailable media item"
+                )
+            had_unavailable = True
             continue
         if not isinstance(value, dict):
             raise SpotifyReconciliationError(
@@ -209,7 +239,7 @@ def _extract_playlist_uris(items: Sequence[object]) -> list[str]:
                 "Spotify playlist response contained an item without a URI"
             )
         uris.append(uri)
-    return uris
+    return uris, had_unavailable
 
 
 def _as_utc(value: datetime) -> datetime:
