@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import urllib.error
 import urllib.parse
@@ -8,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 _API_BASE = "https://api.spotify.com/v1"
+_SPOTIFY_COVER_MAX_PAYLOAD_BYTES = 256 * 1024
 
 
 class SpotifyApiError(RuntimeError):
@@ -67,6 +69,19 @@ class SpotifyClient:
             json_body={"name": name, "description": description},
         )
 
+    def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]:
+        if not jpeg_bytes.startswith(b"\xff\xd8"):
+            raise ValueError("playlist cover must be a JPEG image")
+        encoded = base64.b64encode(jpeg_bytes)
+        if len(encoded) > _SPOTIFY_COVER_MAX_PAYLOAD_BYTES:
+            raise ValueError("playlist cover exceeds Spotify's 256 KiB encoded payload limit")
+        return self._request(
+            "PUT",
+            f"/playlists/{playlist_id}/images",
+            raw_body=encoded,
+            content_type="image/jpeg",
+        )
+
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
         if len(uris) > 100:
             raise ValueError("playlist replacement is limited to 100 items")
@@ -98,14 +113,25 @@ class SpotifyClient:
         *,
         query: dict[str, str] | None = None,
         json_body: dict[str, Any] | None = None,
+        raw_body: bytes | None = None,
+        content_type: str | None = None,
     ) -> dict[str, Any]:
+        if json_body is not None and raw_body is not None:
+            raise ValueError("Spotify request cannot contain both JSON and raw bodies")
         url = f"{self.api_base}{path}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
-        data = None if json_body is None else json.dumps(json_body).encode("utf-8")
+        if json_body is not None:
+            data = json.dumps(json_body).encode("utf-8")
+        else:
+            data = raw_body
         headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
-        if data is not None:
+        if json_body is not None:
             headers["Content-Type"] = "application/json"
+        elif raw_body is not None:
+            if content_type is None:
+                raise ValueError("raw Spotify request body requires a content type")
+            headers["Content-Type"] = content_type
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=30.0) as response:
