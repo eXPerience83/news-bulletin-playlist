@@ -18,6 +18,10 @@ from news_bulletin_playlist.lan_admin import LanAdminSecurity
 from news_bulletin_playlist.managed_admin import ManagedAdminService, render_spotify_description
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.spotify.client import (
+    SpotifyApiError,
+    SpotifyTransportError,
+)
 
 _PASSWORD = "long-enough-admin-password"
 
@@ -27,6 +31,8 @@ class _SpotifyClient:
         self.update_calls: list[tuple[str, str, str]] = []
         self.cover_calls: list[tuple[str, bytes]] = []
         self.block_updates = False
+        self.metadata_error: Exception | None = None
+        self.cover_error: Exception | None = None
         self.update_started = threading.Event()
         self.update_release = threading.Event()
 
@@ -46,10 +52,14 @@ class _SpotifyClient:
             self.update_started.set()
             if not self.update_release.wait(timeout=5.0):
                 raise AssertionError("timed out waiting to release Spotify metadata update")
+        if self.metadata_error is not None:
+            raise self.metadata_error
         return {}
 
     def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]:
         self.cover_calls.append((playlist_id, jpeg_bytes))
+        if self.cover_error is not None:
+            raise self.cover_error
         return {}
 
 
@@ -271,4 +281,75 @@ def test_explicit_admin_sync_releases_configuration_lock_during_spotify_io(
     assert not cycle_thread.is_alive()
     assert handler.response is not None
     assert handler.response.status == HTTPStatus.SEE_OTHER
+    assert lifecycle.reconcile_calls == []
+
+
+def test_explicit_admin_sync_reports_metadata_http_status_and_still_attempts_cover(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    service, client, managed = _managed_service(tmp_path)
+    lifecycle = _Lifecycle()
+    provider = _Provider()
+    security = LanAdminSecurity(_PASSWORD)
+    client.metadata_error = SpotifyApiError(403, "access-token-sentinel")
+    handler = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=provider,
+        security=security,
+        path="/admin/playlists/sync",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(managed.id)],
+        },
+    )
+
+    handler.do_POST()
+
+    assert handler.response is not None
+    body = handler.response.payload.decode()
+    assert handler.response.status == HTTPStatus.BAD_GATEWAY
+    assert "metadata failed (HTTP 403); cover applied" in body
+    assert "access-token-sentinel" not in body
+    assert client.cover_calls == [("destination", b"\xff\xd8cover\xff\xd9")]
+    captured = capsys.readouterr()
+    assert "access-token-sentinel" not in captured.out
+    assert "access-token-sentinel" not in captured.err
+    assert lifecycle.reconcile_calls == []
+
+
+def test_explicit_admin_sync_reports_cover_network_failure_without_raw_error(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    service, client, managed = _managed_service(tmp_path)
+    lifecycle = _Lifecycle()
+    provider = _Provider()
+    security = LanAdminSecurity(_PASSWORD)
+    client.cover_error = SpotifyTransportError("refresh-token-sentinel")
+    handler = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=provider,
+        security=security,
+        path="/admin/playlists/sync",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(managed.id)],
+        },
+    )
+
+    handler.do_POST()
+
+    assert handler.response is not None
+    body = handler.response.payload.decode()
+    assert handler.response.status == HTTPStatus.BAD_GATEWAY
+    assert "metadata applied; cover failed (network error)" in body
+    assert "refresh-token-sentinel" not in body
+    captured = capsys.readouterr()
+    assert "refresh-token-sentinel" not in captured.out
+    assert "refresh-token-sentinel" not in captured.err
     assert lifecycle.reconcile_calls == []

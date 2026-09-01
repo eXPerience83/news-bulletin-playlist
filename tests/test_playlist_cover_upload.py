@@ -11,7 +11,11 @@ import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.engine_runtime import _load_bundled_cover
-from news_bulletin_playlist.managed_admin import ManagedAdminService, render_spotify_description
+from news_bulletin_playlist.managed_admin import (
+    ManagedAdminService,
+    SpotifyPlaylistSyncError,
+    render_spotify_description,
+)
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
@@ -273,7 +277,9 @@ def test_explicit_sync_reapplies_metadata_and_retries_cover(tmp_path: Path) -> N
     assert client.cover_calls == [("destination", jpeg)]
 
 
-def test_cover_failure_during_explicit_sync_does_not_fail_metadata_sync(tmp_path: Path) -> None:
+def test_cover_failure_during_explicit_sync_reports_failure_after_metadata_sync(
+    tmp_path: Path,
+) -> None:
     client = _CoverClient()
     jpeg = b"\xff\xd8cover\xff\xd9"
     service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
@@ -281,9 +287,12 @@ def test_cover_failure_during_explicit_sync_does_not_fail_metadata_sync(tmp_path
     client.cover_calls.clear()
     client.update_calls.clear()
 
-    synced = service.sync_spotify_metadata_and_cover(managed.id, access_token="token")
+    with pytest.raises(
+        SpotifyPlaylistSyncError,
+        match=r"metadata applied; cover failed \(HTTP 403\)",
+    ):
+        service.sync_spotify_metadata_and_cover(managed.id, access_token="token")
 
-    assert synced == managed
     assert len(client.update_calls) == 1
     assert client.cover_calls == [("destination", jpeg)]
 
