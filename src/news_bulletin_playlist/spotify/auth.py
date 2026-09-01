@@ -310,8 +310,8 @@ class SpotifyAuthService:
         self.store = store
         self.transport = transport if transport is not None else SpotifyAccountsClient()
         if scopes is None:
-            self.scopes = PRODUCTION_REQUESTED_SCOPES
-            self.required_scopes = PRODUCTION_SCOPES
+            self.scopes: tuple[str, ...] = PRODUCTION_REQUESTED_SCOPES
+            self.required_scopes: tuple[str, ...] = PRODUCTION_SCOPES
         else:
             self.scopes = tuple(scopes)
             self.required_scopes = tuple(required_scopes or self.scopes)
