@@ -68,7 +68,7 @@ class _FakeSpotify:
         self,
         playlist_id: str,
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
         self.reads.append((playlist_id, limit, offset))
@@ -99,7 +99,7 @@ class _UnavailableMediaSpotify(_FakeSpotify):
         self,
         playlist_id: str,
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
         if not self.writes:
@@ -119,7 +119,7 @@ class _UnavailableAfterWriteSpotify(_FakeSpotify):
         self,
         playlist_id: str,
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
         if self.writes:
@@ -133,7 +133,7 @@ class _MissingMediaSpotify(_FakeSpotify):
         self,
         playlist_id: str,
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
         self.reads.append((playlist_id, limit, offset))
@@ -151,7 +151,18 @@ def test_unchanged_desired_state_performs_zero_writes() -> None:
 
     assert wrote is False
     assert client.writes == []
-    assert client.reads == [("playlist", 100, 0)]
+    assert client.reads == [("playlist", 50, 0)]
+
+
+def test_unchanged_state_over_50_items_uses_multiple_pages() -> None:
+    desired = tuple(f"spotify:episode:{index}" for index in range(75))
+    client = _FakeSpotify({"playlist": list(desired)})
+
+    wrote = reconcile_playlist_items(client, "playlist", desired)
+
+    assert wrote is False
+    assert client.writes == []
+    assert client.reads == [("playlist", 50, 0), ("playlist", 50, 50)]
 
 
 def test_changed_state_is_replaced_and_exactly_read_back() -> None:
@@ -162,8 +173,27 @@ def test_changed_state_is_replaced_and_exactly_read_back() -> None:
 
     assert wrote is True
     assert client.writes == [("playlist", list(desired))]
-    assert client.reads == [("playlist", 100, 0), ("playlist", 100, 0)]
+    assert client.reads == [("playlist", 50, 0), ("playlist", 50, 0)]
     assert client.states["playlist"] == list(desired)
+
+
+def test_current_state_over_100_forces_bounded_replacement() -> None:
+    current = [f"spotify:episode:{index}" for index in range(101)]
+    desired = tuple(current[:100])
+    client = _FakeSpotify({"playlist": current})
+
+    wrote = reconcile_playlist_items(client, "playlist", desired)
+
+    assert wrote is True
+    assert client.writes == [("playlist", list(desired))]
+    assert client.states["playlist"] == list(desired)
+    assert client.reads == [
+        ("playlist", 50, 0),
+        ("playlist", 50, 50),
+        ("playlist", 1, 100),
+        ("playlist", 50, 0),
+        ("playlist", 50, 50),
+    ]
 
 
 @pytest.mark.parametrize("media_key", ["item", "track"])
@@ -176,7 +206,7 @@ def test_unavailable_media_item_does_not_block_replacement(media_key: str) -> No
     assert wrote is True
     assert client.writes == [("playlist", list(desired))]
     assert client.states["playlist"] == list(desired)
-    assert client.reads == [("playlist", 100, 0), ("playlist", 100, 0)]
+    assert client.reads == [("playlist", 50, 0), ("playlist", 50, 0)]
 
 
 def test_unavailable_media_item_forces_healing_when_visible_uris_match() -> None:
