@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -44,12 +46,28 @@ class PlaylistReconciliationResult:
     applied_count: int | None
     wrote: bool | None
     error: str | None = None
+    degraded_verification: bool = False
+    warning: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PlaylistItemsReconciliationResult:
+    wrote: bool
+    degraded_verification: bool = False
+    warning: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _SpotifyPlaylistRead:
-    uris: tuple[str, ...]
-    had_unavailable_item: bool
+    slots: tuple[str | None, ...]
+
+    @property
+    def had_unavailable_item(self) -> bool:
+        return any(slot is None for slot in self.slots)
+
+    @property
+    def unavailable_indices(self) -> tuple[int, ...]:
+        return tuple(index for index, slot in enumerate(self.slots) if slot is None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,12 +111,13 @@ def read_spotify_playlist_uris(
     playlist_id: str,
 ) -> tuple[str, ...]:
     """Read the complete bounded playlist and fail closed on unavailable media."""
-    return _read_spotify_playlist(
+    read = _read_spotify_playlist(
         client,
         playlist_id,
         allow_unavailable=False,
         phase="verification",
-    ).uris
+    )
+    return tuple(slot for slot in read.slots if slot is not None)
 
 
 def reconcile_playlist_items(
@@ -106,10 +125,33 @@ def reconcile_playlist_items(
     playlist_id: str,
     desired_uris: Sequence[str],
 ) -> bool:
-    """Replace only on change and verify exact order/count/content after every write."""
+    """Legacy strict helper: replace only on change and require exact readable readback."""
+    return _reconcile_playlist_items(
+        client,
+        playlist_id,
+        desired_uris,
+        store=None,
+        logical_playlist_id=None,
+        attestation_updated_at=None,
+    ).wrote
+
+
+def _reconcile_playlist_items(
+    client: SpotifyPlaylistClient,
+    playlist_id: str,
+    desired_uris: Sequence[str],
+    *,
+    store: SQLiteStore | None,
+    logical_playlist_id: PlaylistId | None,
+    attestation_updated_at: datetime | None,
+) -> _PlaylistItemsReconciliationResult:
     desired = tuple(desired_uris)
     if len(desired) > _MANAGED_PLAYLIST_MAX_ITEMS:
         raise ValueError("playlist reconciliation is limited to 100 items")
+    if (store is None) != (logical_playlist_id is None):
+        raise ValueError("playlist attestation requires both store and logical playlist id")
+    if store is not None and attestation_updated_at is None:
+        raise ValueError("playlist attestation requires an update timestamp")
 
     current = _read_spotify_playlist(
         client,
@@ -117,28 +159,109 @@ def reconcile_playlist_items(
         allow_unavailable=True,
         phase="prewrite",
     )
-    if current.uris == desired and not current.had_unavailable_item:
-        return False
+    if current.slots == desired:
+        return _PlaylistItemsReconciliationResult(wrote=False)
 
-    client.replace_playlist_items(playlist_id, list(desired))
+    desired_fingerprint = _desired_fingerprint(desired)
+    if (
+        store is not None
+        and logical_playlist_id is not None
+        and current.had_unavailable_item
+        and _visible_positions_match(current.slots, desired)
+    ):
+        attestation = store.get_playlist_attestation(logical_playlist_id)
+        if (
+            attestation is not None
+            and attestation.destination_id == playlist_id
+            and attestation.desired_fingerprint == desired_fingerprint
+        ):
+            try:
+                current_snapshot = _read_current_snapshot(
+                    client,
+                    playlist_id,
+                    phase="prewrite",
+                )
+            except SpotifyReconciliationError:
+                # A structurally missing/malformed snapshot cannot attest this read.
+                # Heal with a fresh write; transport/API failures still propagate.
+                current_snapshot = None
+            if current_snapshot == attestation.snapshot_id:
+                warning = _degraded_warning(current.unavailable_indices)
+                return _PlaylistItemsReconciliationResult(
+                    wrote=False,
+                    degraded_verification=True,
+                    warning=warning,
+                )
+
+    write_response = client.replace_playlist_items(playlist_id, list(desired))
+    write_snapshot = _require_snapshot(
+        write_response,
+        context="Spotify playlist write response",
+    )
+
+    # Preserve the legacy strict helper semantics when no durable attestation store
+    # is available. Production passes the store and can prove partially opaque reads.
+    allow_degraded_readback = store is not None and logical_playlist_id is not None
     readback = _read_spotify_playlist(
         client,
         playlist_id,
-        allow_unavailable=False,
+        allow_unavailable=allow_degraded_readback,
         phase="readback",
-    ).uris
-    if readback != desired:
+    )
+    if not _visible_positions_match(readback.slots, desired):
         raise SpotifyReconciliationError(
             "Spotify playlist readback did not match desired order/count/content "
-            f"(desired={len(desired)} returned={len(readback)})"
+            f"(desired={len(desired)} returned={len(readback.slots)})"
         )
-    return True
+
+    if not readback.had_unavailable_item:
+        assert store is None or logical_playlist_id is not None
+        if store is not None and logical_playlist_id is not None:
+            assert attestation_updated_at is not None
+            store.set_playlist_attestation(
+                logical_playlist_id,
+                destination_id=playlist_id,
+                snapshot_id=write_snapshot,
+                desired_fingerprint=desired_fingerprint,
+                updated_at=attestation_updated_at,
+            )
+        return _PlaylistItemsReconciliationResult(wrote=True)
+
+    if store is None or logical_playlist_id is None or attestation_updated_at is None:
+        raise SpotifyReconciliationError(
+            "Spotify playlist readback contained unavailable media without durable attestation"
+        )
+
+    current_snapshot = _read_current_snapshot(
+        client,
+        playlist_id,
+        phase="readback",
+    )
+    if current_snapshot != write_snapshot:
+        raise SpotifyReconciliationError(
+            "Spotify playlist snapshot changed during degraded readback verification"
+        )
+
+    store.set_playlist_attestation(
+        logical_playlist_id,
+        destination_id=playlist_id,
+        snapshot_id=write_snapshot,
+        desired_fingerprint=desired_fingerprint,
+        updated_at=attestation_updated_at,
+    )
+    return _PlaylistItemsReconciliationResult(
+        wrote=True,
+        degraded_verification=True,
+        warning=_degraded_warning(readback.unavailable_indices),
+    )
 
 
 def reconcile_spotify_playlist(
     client: SpotifyPlaylistClient,
     playlist: PlaylistDefinition,
     desired: DesiredPlaylistState,
+    *,
+    store: SQLiteStore | None = None,
 ) -> PlaylistReconciliationResult:
     """Reconcile one Spotify destination; errors are left to the batch isolator."""
     if not playlist.enabled:
@@ -152,17 +275,22 @@ def reconcile_spotify_playlist(
             f"desired state {desired.playlist_id!s} does not belong to playlist {playlist.id!s}"
         )
 
-    wrote = reconcile_playlist_items(
+    reconciled = _reconcile_playlist_items(
         client,
         playlist.destination.external_id,
         desired.uris,
+        store=store,
+        logical_playlist_id=playlist.id if store is not None else None,
+        attestation_updated_at=desired.generated_at if store is not None else None,
     )
     return PlaylistReconciliationResult(
         playlist_id=playlist.id,
         ok=True,
         desired_count=len(desired.items),
         applied_count=len(desired.items),
-        wrote=wrote,
+        wrote=reconciled.wrote,
+        degraded_verification=reconciled.degraded_verification,
+        warning=reconciled.warning,
     )
 
 
@@ -195,8 +323,7 @@ def _read_spotify_playlist(
     allow_unavailable: bool,
     phase: str,
 ) -> _SpotifyPlaylistRead:
-    uris: list[str] = []
-    had_unavailable = False
+    slots: list[str | None] = []
     offset = 0
     expected_total: int | None = None
 
@@ -211,18 +338,17 @@ def _read_spotify_playlist(
             offset=offset,
         )
 
-        page_uris, page_unavailable = _extract_playlist_uris(
+        page_slots = _extract_playlist_slots(
             page.items,
             allow_unavailable=allow_unavailable,
             context=f"Spotify playlist {phase} response (offset={offset})",
         )
-        uris.extend(page_uris)
-        had_unavailable = had_unavailable or page_unavailable
+        slots.extend(page_slots)
         offset += len(page.items)
 
         if page.next_url is None:
             if len(page.items) == limit:
-                overflow_uris, overflow_unavailable = _read_overflow_item(
+                overflow_slots = _read_overflow_item(
                     client,
                     playlist_id,
                     offset=offset,
@@ -230,12 +356,11 @@ def _read_spotify_playlist(
                     phase=phase,
                     expected_total=expected_total,
                 )
-                had_unavailable = had_unavailable or overflow_unavailable
-                if overflow_uris:
-                    uris.append(overflow_uris[0])
-            return _SpotifyPlaylistRead(tuple(uris), had_unavailable)
+                if overflow_slots:
+                    slots.append(overflow_slots[0])
+            return _SpotifyPlaylistRead(tuple(slots))
 
-    overflow_uris, overflow_unavailable = _read_overflow_item(
+    overflow_slots = _read_overflow_item(
         client,
         playlist_id,
         offset=offset,
@@ -243,10 +368,9 @@ def _read_spotify_playlist(
         phase=phase,
         expected_total=expected_total,
     )
-    had_unavailable = had_unavailable or overflow_unavailable
-    if overflow_uris:
-        uris.append(overflow_uris[0])
-    return _SpotifyPlaylistRead(tuple(uris), had_unavailable)
+    if overflow_slots:
+        slots.append(overflow_slots[0])
+    return _SpotifyPlaylistRead(tuple(slots))
 
 
 def _read_overflow_item(
@@ -257,7 +381,7 @@ def _read_overflow_item(
     allow_unavailable: bool,
     phase: str,
     expected_total: int | None,
-) -> tuple[list[str], bool]:
+) -> list[str | None]:
     raw_overflow = client.playlist_items(playlist_id, limit=1, offset=offset)
     overflow = _require_playlist_page(raw_overflow, phase=phase, offset=offset)
     _validate_total_consistency(
@@ -267,8 +391,8 @@ def _read_overflow_item(
         offset=offset,
     )
     if not overflow.items:
-        return [], False
-    return _extract_playlist_uris(
+        return []
+    return _extract_playlist_slots(
         overflow.items,
         allow_unavailable=allow_unavailable,
         context=f"Spotify playlist {phase} overflow response (offset={offset})",
@@ -355,14 +479,13 @@ def _validate_total_consistency(
     return total
 
 
-def _extract_playlist_uris(
+def _extract_playlist_slots(
     items: Sequence[object],
     *,
     allow_unavailable: bool,
     context: str,
-) -> tuple[list[str], bool]:
-    uris: list[str] = []
-    had_unavailable = False
+) -> list[str | None]:
+    slots: list[str | None] = []
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             raise SpotifyReconciliationError(
@@ -384,7 +507,7 @@ def _extract_playlist_uris(
                     f"{context} contained an unavailable media item "
                     f"(item_index={index})"
                 )
-            had_unavailable = True
+            slots.append(None)
             continue
         if not isinstance(value, dict):
             raise SpotifyReconciliationError(
@@ -395,8 +518,61 @@ def _extract_playlist_uris(
             raise SpotifyReconciliationError(
                 f"{context} contained an item without a URI (item_index={index})"
             )
-        uris.append(uri)
-    return uris, had_unavailable
+        slots.append(uri)
+    return slots
+
+
+def _visible_positions_match(
+    slots: Sequence[str | None],
+    desired: Sequence[str],
+) -> bool:
+    if len(slots) != len(desired):
+        return False
+    return all(slot is None or slot == desired[index] for index, slot in enumerate(slots))
+
+
+def _desired_fingerprint(desired: Sequence[str]) -> str:
+    encoded = json.dumps(
+        list(desired),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _read_current_snapshot(
+    client: SpotifyPlaylistClient,
+    playlist_id: str,
+    *,
+    phase: str,
+) -> str:
+    snapshot_reader = getattr(client, "playlist_snapshot", None)
+    if not callable(snapshot_reader):
+        raise SpotifyReconciliationError(
+            f"Spotify playlist {phase} snapshot reader is unavailable"
+        )
+    response = snapshot_reader(playlist_id)
+    return _require_snapshot(
+        response,
+        context=f"Spotify playlist {phase} snapshot response",
+    )
+
+
+def _require_snapshot(container: object, *, context: str) -> str:
+    if not isinstance(container, dict):
+        raise SpotifyReconciliationError(f"{context} was not an object")
+    value = container.get("snapshot_id")
+    if not isinstance(value, str) or not value.strip():
+        raise SpotifyReconciliationError(f"{context} did not contain a valid snapshot_id")
+    return value.strip()
+
+
+def _degraded_warning(indices: Sequence[int]) -> str:
+    index_text = ",".join(str(index) for index in indices)
+    return (
+        "Spotify verification degraded: unavailable media item(s) at index/indices "
+        f"[{index_text}]; snapshot attestation matched"
+    )
 
 
 def _as_utc(value: datetime) -> datetime:
