@@ -16,7 +16,7 @@ class FakePlaylistClient:
     reads: int = 0
 
     def playlist_items(
-        self, playlist_id: str, *, limit: int = 100, offset: int = 0
+        self, playlist_id: str, *, limit: int = 50, offset: int = 0
     ) -> dict[str, object]:
         self.reads += 1
         page = self.current[offset : offset + limit]
@@ -48,7 +48,7 @@ def test_reconciliation_detects_an_extra_item_after_first_100() -> None:
     assert reconcile_playlist_items(client, "playlist", desired)
     assert client.current == desired
     assert client.writes == 1
-    assert client.reads == 2
+    assert client.reads == 3
 
 
 def test_reconciliation_rejects_more_than_100_items_before_http_like_calls() -> None:
@@ -62,7 +62,7 @@ def test_reconciliation_rejects_more_than_100_items_before_http_like_calls() -> 
 @dataclass
 class InvalidPlaylistClient(FakePlaylistClient):
     def playlist_items(
-        self, playlist_id: str, *, limit: int = 100, offset: int = 0
+        self, playlist_id: str, *, limit: int = 50, offset: int = 0
     ) -> dict[str, object]:
         self.reads += 1
         return {"items": None, "next": None}
