@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import threading
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.client import HTTPMessage
@@ -25,6 +26,9 @@ class _SpotifyClient:
     def __init__(self) -> None:
         self.update_calls: list[tuple[str, str, str]] = []
         self.cover_calls: list[tuple[str, bytes]] = []
+        self.block_updates = False
+        self.update_started = threading.Event()
+        self.update_release = threading.Event()
 
     def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
         del name, description
@@ -38,6 +42,10 @@ class _SpotifyClient:
         description: str,
     ) -> dict[str, Any]:
         self.update_calls.append((playlist_id, name, description))
+        if self.block_updates:
+            self.update_started.set()
+            if not self.update_release.wait(timeout=5.0):
+                raise AssertionError("timed out waiting to release Spotify metadata update")
         return {}
 
     def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]:
@@ -214,4 +222,53 @@ def test_explicit_admin_sync_uses_token_and_does_not_restart_scheduler(tmp_path:
         )
     ]
     assert client.cover_calls == [("destination", b"\xff\xd8cover\xff\xd9")]
+    assert lifecycle.reconcile_calls == []
+
+
+def test_explicit_admin_sync_releases_configuration_lock_during_spotify_io(
+    tmp_path: Path,
+) -> None:
+    service, client, managed = _managed_service(tmp_path)
+    lifecycle = _Lifecycle()
+    provider = _Provider()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=provider,
+        security=security,
+        path="/admin/playlists/sync",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(managed.id)],
+        },
+    )
+    synchronization = handler.configuration_synchronization
+    assert synchronization is not None
+    client.block_updates = True
+
+    sync_thread = threading.Thread(target=handler.do_POST)
+    sync_thread.start()
+    assert client.update_started.wait(timeout=1.0)
+
+    cycle_acquired = threading.Event()
+
+    def acquire_for_engine_cycle() -> None:
+        with synchronization.hold():
+            cycle_acquired.set()
+
+    cycle_thread = threading.Thread(target=acquire_for_engine_cycle)
+    cycle_thread.start()
+    try:
+        assert cycle_acquired.wait(timeout=1.0)
+    finally:
+        client.update_release.set()
+        sync_thread.join(timeout=2.0)
+        cycle_thread.join(timeout=2.0)
+
+    assert not sync_thread.is_alive()
+    assert not cycle_thread.is_alive()
+    assert handler.response is not None
+    assert handler.response.status == HTTPStatus.SEE_OTHER
     assert lifecycle.reconcile_calls == []

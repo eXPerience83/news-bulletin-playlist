@@ -271,9 +271,12 @@ class ManagedAdminService:
     ) -> None:
         if self.cover_loader is None:
             return
+        upload_playlist_cover = getattr(client, "upload_playlist_cover", None)
+        if not callable(upload_playlist_cover):
+            return
         try:
             jpeg_bytes = self.cover_loader(cover_id)
-            client.upload_playlist_cover(playlist_id, jpeg_bytes)
+            upload_playlist_cover(playlist_id, jpeg_bytes)
         except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
             # Cover art is product metadata. It must never block playlist state or bulletin sync.
             return

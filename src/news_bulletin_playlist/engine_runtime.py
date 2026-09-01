@@ -514,18 +514,26 @@ class OperationalHealthHandler(LanAdminHandler):
             return
 
         try:
-            configuration_changed = path != "/admin/playlists/sync"
-            with synchronization.hold():
-                if path == "/admin/playlists/activate":
-                    self._activate_managed_playlist(service, form)
-                elif path == "/admin/playlists/update":
-                    self._update_managed_playlist(service, form)
-                elif path == "/admin/playlists/sync":
-                    self._sync_managed_playlist(service, form)
-                else:
-                    service.stop_managing(playlist_id_from_form(form))
-                configured = any(playlist.enabled for playlist in service.snapshot().managed)
-            if configuration_changed:
+            if path == "/admin/playlists/sync":
+                with synchronization.hold():
+                    playlist_id = playlist_id_from_form(form)
+                    if not any(
+                        playlist.id == playlist_id for playlist in service.snapshot().managed
+                    ):
+                        raise ManagedAdminError(f"unknown managed playlist: {playlist_id}")
+                # HTTPServer serves admin requests serially. Validate immutable managed state
+                # under the configuration lock, then keep Spotify I/O outside that lock so a
+                # slow metadata/cover request cannot delay an engine cycle.
+                self._sync_managed_playlist(service, form)
+            else:
+                with synchronization.hold():
+                    if path == "/admin/playlists/activate":
+                        self._activate_managed_playlist(service, form)
+                    elif path == "/admin/playlists/update":
+                        self._update_managed_playlist(service, form)
+                    else:
+                        service.stop_managing(playlist_id_from_form(form))
+                    configured = any(playlist.enabled for playlist in service.snapshot().managed)
                 lifecycle.reconcile(configured=configured)
                 self.__class__.engine_scheduler = lifecycle.scheduler
         except ManagedStateError:
