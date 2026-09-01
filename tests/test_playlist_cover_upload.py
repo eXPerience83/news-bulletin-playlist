@@ -158,24 +158,43 @@ def test_cover_api_failure_does_not_rollback_managed_playlist(tmp_path: Path) ->
     assert client.cover_calls == [("destination", jpeg)]
 
 
-def test_save_retries_cover_when_access_token_is_available(tmp_path: Path) -> None:
+def test_explicit_sync_reapplies_metadata_and_retries_cover(tmp_path: Path) -> None:
     client = _CoverClient(fail_cover=True)
     jpeg = b"\xff\xd8cover\xff\xd9"
     service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
     client.fail_cover = False
     client.cover_calls.clear()
+    client.update_calls.clear()
 
-    updated = service.update(
+    synced = service.sync_spotify_metadata_and_cover(
         managed.id,
-        display_name=managed.display_name,
-        description=managed.description,
-        cover_id=managed.cover_id,
-        source_ids=managed.source_ids,
-        enabled=True,
         access_token="reauthorized-token",
     )
 
-    assert updated == managed
+    assert synced == managed
+    assert client.update_calls == [
+        (
+            "destination",
+            managed.display_name,
+            __import__("news_bulletin_playlist.managed_admin", fromlist=["render_spotify_description"])
+            .render_spotify_description(managed.description),
+        )
+    ]
+    assert client.cover_calls == [("destination", jpeg)]
+
+
+def test_cover_failure_during_explicit_sync_does_not_fail_metadata_sync(tmp_path: Path) -> None:
+    client = _CoverClient()
+    jpeg = b"\xff\xd8cover\xff\xd9"
+    service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
+    client.fail_cover = True
+    client.cover_calls.clear()
+    client.update_calls.clear()
+
+    synced = service.sync_spotify_metadata_and_cover(managed.id, access_token="token")
+
+    assert synced == managed
+    assert len(client.update_calls) == 1
     assert client.cover_calls == [("destination", jpeg)]
 
 

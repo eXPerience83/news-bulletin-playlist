@@ -175,7 +175,7 @@ def _managed_card(
       <p><a href="{html.escape(spotify_url, quote=True)}" target="_blank"
             rel="noopener noreferrer">Open in Spotify</a></p>
       <p class="muted">Last result: {html.escape(result)}</p>
-      <p class="muted">Bundled cover is applied on Save when Spotify image permission is granted.</p>
+      <p class="muted">Reconnect Spotify once for image permission, then apply Spotify metadata and cover.</p>
     </div>
   </div>
   <form method="post" action="/admin/playlists/update">
@@ -192,6 +192,11 @@ def _managed_card(
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     <label><input type="checkbox" name="enabled" value="1"{checked}> Active</label>
     <button type="submit">Save playlist</button>
+  </form>
+  <form method="post" action="/admin/playlists/sync">
+    <input type="hidden" name="csrf_token" value="{csrf_token}">
+    <input type="hidden" name="playlist_id" value="{html.escape(str(playlist.id), quote=True)}">
+    <button type="submit">Apply Spotify metadata &amp; cover</button>
   </form>
   <form method="post" action="/admin/playlists/stop">
     <input type="hidden" name="csrf_token" value="{csrf_token}">

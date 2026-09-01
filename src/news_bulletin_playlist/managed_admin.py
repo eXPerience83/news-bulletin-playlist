@@ -203,13 +203,12 @@ class ManagedAdminService:
             or updated.description != current.description
         )
         spotify_metadata_updated = False
-        client = None if access_token is None else self.client_factory(access_token)
         if metadata_changed:
-            if client is None:
+            if access_token is None:
                 raise ManagedAdminError(
                     "Spotify must be connected to change playlist name or description"
                 )
-            client.change_playlist_details(
+            self.client_factory(access_token).change_playlist_details(
                 current.destination.external_id,
                 name=updated.display_name,
                 description=render_spotify_description(updated.description),
@@ -223,13 +222,28 @@ class ManagedAdminService:
                     current.destination.external_id
                 ) from exc
             raise
-        if client is not None:
-            self._best_effort_cover_upload(
-                client,
-                current.destination.external_id,
-                updated.cover_id,
-            )
         return updated
+
+    def sync_spotify_metadata_and_cover(
+        self,
+        playlist_id: PlaylistId | str,
+        *,
+        access_token: str,
+    ) -> ManagedPlaylist:
+        state = self.store.load()
+        current = self._managed(state, playlist_id)
+        client = self.client_factory(access_token)
+        client.change_playlist_details(
+            current.destination.external_id,
+            name=current.display_name,
+            description=render_spotify_description(current.description),
+        )
+        self._best_effort_cover_upload(
+            client,
+            current.destination.external_id,
+            current.cover_id,
+        )
+        return current
 
     def set_enabled(self, playlist_id: PlaylistId | str, enabled: bool) -> ManagedPlaylist:
         state = self.store.load()

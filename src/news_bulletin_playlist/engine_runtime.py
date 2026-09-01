@@ -64,6 +64,7 @@ _BUNDLED_COVER_DIR = Path("/opt/news-bulletin-playlist/covers")
 _MANAGED_POST_PATHS = {
     "/admin/playlists/activate",
     "/admin/playlists/update",
+    "/admin/playlists/sync",
     "/admin/playlists/stop",
 }
 
@@ -513,16 +514,20 @@ class OperationalHealthHandler(LanAdminHandler):
             return
 
         try:
+            configuration_changed = path != "/admin/playlists/sync"
             with synchronization.hold():
                 if path == "/admin/playlists/activate":
                     self._activate_managed_playlist(service, form)
                 elif path == "/admin/playlists/update":
                     self._update_managed_playlist(service, form)
+                elif path == "/admin/playlists/sync":
+                    self._sync_managed_playlist(service, form)
                 else:
                     service.stop_managing(playlist_id_from_form(form))
                 configured = any(playlist.enabled for playlist in service.snapshot().managed)
-            lifecycle.reconcile(configured=configured)
-            self.__class__.engine_scheduler = lifecycle.scheduler
+            if configuration_changed:
+                lifecycle.reconcile(configured=configured)
+                self.__class__.engine_scheduler = lifecycle.scheduler
         except ManagedStateError:
             self._managed_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -603,19 +608,13 @@ class OperationalHealthHandler(LanAdminHandler):
             name.strip() != current.display_name or description != current.description
         )
         access_token: str | None = None
-        auth = self.managed_admin_auth
         if metadata_changed:
+            auth = self.managed_admin_auth
             if auth is None:
                 raise ManagedAdminError(
                     "Spotify must be connected to change playlist name or description"
                 )
             access_token = auth.get_access_token()
-        elif auth is not None:
-            try:
-                access_token = auth.get_access_token()
-            except SpotifyAuthError:
-                # Local source/pause changes remain available when optional cover sync cannot auth.
-                access_token = None
         service.update(
             playlist_id,
             display_name=name,
@@ -624,6 +623,19 @@ class OperationalHealthHandler(LanAdminHandler):
             source_ids=form.get("source_id", []),
             enabled=enabled,
             access_token=access_token,
+        )
+
+    def _sync_managed_playlist(
+        self,
+        service: ManagedAdminService,
+        form: Mapping[str, list[str]],
+    ) -> None:
+        auth = self.managed_admin_auth
+        if auth is None:
+            raise ManagedAdminError("Spotify must be connected to apply metadata and cover")
+        service.sync_spotify_metadata_and_cover(
+            playlist_id_from_form(form),
+            access_token=auth.get_access_token(),
         )
 
     def _managed_error(self, status: HTTPStatus, message: str) -> None:
