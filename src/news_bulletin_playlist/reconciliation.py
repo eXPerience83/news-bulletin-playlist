@@ -185,10 +185,23 @@ def _extract_playlist_uris(items: Sequence[object]) -> list[str]:
             raise SpotifyReconciliationError(
                 "Spotify playlist response contained an invalid item"
             )
-        value = item.get("item") or item.get("track")
-        if not isinstance(value, dict):
+        has_item = "item" in item
+        has_track = "track" in item
+        if not has_item and not has_track:
             raise SpotifyReconciliationError(
                 "Spotify playlist response contained an item without a media object"
+            )
+        value = item.get("item") if has_item else item.get("track")
+        if value is None and has_item and has_track:
+            value = item.get("track")
+        if value is None:
+            # Spotify may retain an unavailable playlist entry while omitting its media object.
+            # Ignore that tombstone during the pre-write comparison so a later desired-state
+            # replacement can heal the managed playlist instead of blocking forever.
+            continue
+        if not isinstance(value, dict):
+            raise SpotifyReconciliationError(
+                "Spotify playlist response contained an invalid media object"
             )
         uri = value.get("uri")
         if not isinstance(uri, str) or not uri.strip():
