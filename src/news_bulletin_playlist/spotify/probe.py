@@ -13,6 +13,8 @@ from news_bulletin_playlist.spotify.client import (
 
 _RNE_DUPLICATE_DATE = "2026-08-25"
 _RNE_DUPLICATE_TIME_TOKENS = ("18.00", "18:00")
+_SPOTIFY_PLAYLIST_PAGE_SIZE = 50
+_PLAYLIST_PROBE_MAX_ITEMS = 100
 
 
 def _episode_summary(item: dict[str, Any]) -> str:
@@ -130,16 +132,25 @@ def _extract_playlist_uris(items: object) -> list[str]:
 
 
 def _read_playlist_uris(client: SpotifyClient, playlist_id: str) -> list[str]:
-    page = client.playlist_items(playlist_id, limit=100, offset=0)
-    items = _require_items(page, context="Spotify playlist response")
-    uris = _extract_playlist_uris(items)
-    if page.get("next"):
-        overflow = client.playlist_items(playlist_id, limit=1, offset=len(items))
-        overflow_items = _require_items(overflow, context="Spotify playlist overflow response")
-        overflow_uris = _extract_playlist_uris(overflow_items)
-        if not overflow_uris:
-            raise RuntimeError("Spotify playlist pagination reported an item that was not returned")
-        uris.append(overflow_uris[0])
+    uris: list[str] = []
+    offset = 0
+    while offset < _PLAYLIST_PROBE_MAX_ITEMS:
+        limit = min(_SPOTIFY_PLAYLIST_PAGE_SIZE, _PLAYLIST_PROBE_MAX_ITEMS - offset)
+        page = client.playlist_items(playlist_id, limit=limit, offset=offset)
+        items = _require_items(page, context="Spotify playlist response")
+        uris.extend(_extract_playlist_uris(items))
+        offset += len(items)
+        if not page.get("next"):
+            return uris
+        if not items:
+            raise RuntimeError("Spotify playlist pagination advanced without returning an item")
+
+    overflow = client.playlist_items(playlist_id, limit=1, offset=offset)
+    overflow_items = _require_items(overflow, context="Spotify playlist overflow response")
+    overflow_uris = _extract_playlist_uris(overflow_items)
+    if not overflow_uris:
+        raise RuntimeError("Spotify playlist pagination reported an item that was not returned")
+    uris.append(overflow_uris[0])
     return uris
 
 

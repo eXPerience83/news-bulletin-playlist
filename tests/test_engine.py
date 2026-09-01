@@ -88,10 +88,10 @@ class _Spotify:
         self,
         playlist_id: str,
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        assert limit in {1, 100}
+        assert limit in {1, 50}
         self.playlist_reads.append(playlist_id)
         if playlist_id == self.fail_playlist:
             raise SpotifyTransportError("simulated playlist outage")

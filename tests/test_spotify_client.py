@@ -48,7 +48,7 @@ def test_replace_playlist_hard_limit() -> None:
 def test_playlist_read_limit_guard() -> None:
     client = SpotifyClient("token")
     with pytest.raises(ValueError):
-        client.playlist_items("playlist", limit=101)
+        client.playlist_items("playlist", limit=51)
 
 
 def test_client_sends_authorization_market_and_pagination(
@@ -93,6 +93,12 @@ def test_client_write_and_readback_requests(monkeypatch: pytest.MonkeyPatch) -> 
     client.playlist_items("playlist", limit=50, offset=10)
     assert requests[0].method == "PUT"
     assert requests[1].method == "GET"
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(requests[1].full_url).query)
+    assert query == {
+        "limit": ["50"],
+        "offset": ["10"],
+        "additional_types": ["episode"],
+    }
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 429])

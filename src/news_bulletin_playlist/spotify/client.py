@@ -88,16 +88,20 @@ class SpotifyClient:
         return self._request("PUT", f"/playlists/{playlist_id}/items", json_body={"uris": uris})
 
     def playlist_items(
-        self, playlist_id: str, *, limit: int = 100, offset: int = 0
+        self, playlist_id: str, *, limit: int = 50, offset: int = 0
     ) -> dict[str, Any]:
-        if not 1 <= limit <= 100:
-            raise ValueError("playlist item limit must be between 1 and 100")
+        if not 1 <= limit <= 50:
+            raise ValueError("playlist item limit must be between 1 and 50")
         if offset < 0:
             raise ValueError("playlist item offset must not be negative")
         return self._request(
             "GET",
             f"/playlists/{playlist_id}/items",
-            query={"limit": str(limit), "offset": str(offset)},
+            query={
+                "limit": str(limit),
+                "offset": str(offset),
+                "additional_types": "episode",
+            },
         )
 
     def _market_query(self, limit: int, offset: int) -> dict[str, str]:
