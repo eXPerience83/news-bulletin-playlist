@@ -104,6 +104,14 @@ class SpotifyClient:
             },
         )
 
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+        """Read only the current playlist version identifier."""
+        return self._request(
+            "GET",
+            f"/playlists/{playlist_id}",
+            query={"fields": "snapshot_id"},
+        )
+
     def _market_query(self, limit: int, offset: int) -> dict[str, str]:
         params = {"limit": str(limit), "offset": str(offset)}
         if self.market is not None:
