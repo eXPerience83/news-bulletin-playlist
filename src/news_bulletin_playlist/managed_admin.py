@@ -70,6 +70,20 @@ class SpotifyPlaylistCreationUncertainError(ManagedAdminError):
         )
 
 
+class SpotifyPlaylistSyncError(ManagedAdminError):
+    """Report safe per-operation results from an explicit Spotify metadata/cover sync."""
+
+    def __init__(
+        self,
+        *,
+        metadata_error: str | None,
+        cover_error: str | None,
+    ) -> None:
+        metadata = "applied" if metadata_error is None else f"failed ({metadata_error})"
+        cover = "applied" if cover_error is None else f"failed ({cover_error})"
+        super().__init__(f"Spotify explicit sync result: metadata {metadata}; cover {cover}")
+
+
 class PlaylistProvisioningClient(Protocol):
     def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]: ...
 
@@ -233,16 +247,34 @@ class ManagedAdminService:
         state = self.store.load()
         current = self._managed(state, playlist_id)
         client = self.client_factory(access_token)
-        client.change_playlist_details(
-            current.destination.external_id,
-            name=current.display_name,
-            description=render_spotify_description(current.description),
-        )
-        self._best_effort_cover_upload(
-            client,
-            current.destination.external_id,
-            current.cover_id,
-        )
+        metadata_error: str | None = None
+        cover_error: str | None = None
+
+        try:
+            client.change_playlist_details(
+                current.destination.external_id,
+                name=current.display_name,
+                description=render_spotify_description(current.description),
+            )
+        except (SpotifyApiError, SpotifyTransportError) as exc:
+            metadata_error = _safe_spotify_operation_error(exc)
+
+        try:
+            self._upload_cover_explicit(
+                client,
+                current.destination.external_id,
+                current.cover_id,
+            )
+        except (SpotifyApiError, SpotifyTransportError) as exc:
+            cover_error = _safe_spotify_operation_error(exc)
+        except (OSError, ValueError):
+            cover_error = "local cover error"
+
+        if metadata_error is not None or cover_error is not None:
+            raise SpotifyPlaylistSyncError(
+                metadata_error=metadata_error,
+                cover_error=cover_error,
+            )
         return current
 
     def set_enabled(self, playlist_id: PlaylistId | str, enabled: bool) -> ManagedPlaylist:
@@ -268,18 +300,26 @@ class ManagedAdminService:
         client: PlaylistProvisioningClient,
         playlist_id: str,
         cover_id: str,
-    ) -> None:
-        if self.cover_loader is None:
-            return
-        upload_playlist_cover = getattr(client, "upload_playlist_cover", None)
-        if not callable(upload_playlist_cover):
-            return
+     ) -> None:
         try:
-            jpeg_bytes = self.cover_loader(cover_id)
-            upload_playlist_cover(playlist_id, jpeg_bytes)
+            self._upload_cover_explicit(client, playlist_id, cover_id)
         except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
             # Cover art is product metadata. It must never block playlist state or bulletin sync.
             return
+
+    def _upload_cover_explicit(
+        self,
+        client: PlaylistProvisioningClient,
+        playlist_id: str,
+        cover_id: str,
+    ) -> None:
+        if self.cover_loader is None:
+            raise ValueError("bundled cover loader is unavailable")
+        upload_playlist_cover = getattr(client, "upload_playlist_cover", None)
+        if not callable(upload_playlist_cover):
+            raise ValueError("Spotify client does not support cover upload")
+        jpeg_bytes = self.cover_loader(cover_id)
+        upload_playlist_cover(playlist_id, jpeg_bytes)
 
     def _replace(self, state: ManagedState, updated: ManagedPlaylist) -> None:
         self._save_validated(self._state_with_replacement(state, updated))
@@ -341,6 +381,14 @@ class ManagedAdminService:
         if cover_id not in known:
             raise ManagedAdminError(f"unknown bundled cover: {cover_id}")
         return cover_id
+
+
+def _safe_spotify_operation_error(
+    error: SpotifyApiError | SpotifyTransportError,
+) -> str:
+    if isinstance(error, SpotifyApiError):
+        return f"HTTP {error.status}"
+    return "network error"
 
 
 def render_spotify_description(base_description: str) -> str:

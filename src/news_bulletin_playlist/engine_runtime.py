@@ -30,7 +30,11 @@ from news_bulletin_playlist.engine import (
     SpotifyAuthProvider,
 )
 from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
-from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
+from news_bulletin_playlist.managed_admin import (
+    ManagedAdminError,
+    ManagedAdminService,
+    SpotifyPlaylistSyncError,
+)
 from news_bulletin_playlist.managed_admin_web import (
     playlist_id_from_form,
     render_managed_admin_page,
@@ -544,6 +548,9 @@ class OperationalHealthHandler(LanAdminHandler):
             return
         except ValueError as exc:
             self._managed_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except SpotifyPlaylistSyncError as exc:
+            self._managed_error(HTTPStatus.BAD_GATEWAY, str(exc))
             return
         except ManagedAdminError as exc:
             self._managed_error(HTTPStatus.CONFLICT, str(exc))
