@@ -214,7 +214,7 @@ def _read_spotify_playlist(
         page_uris, page_unavailable = _extract_playlist_uris(
             page.items,
             allow_unavailable=allow_unavailable,
-            context=f"Spotify playlist {phase} response at offset {offset}",
+            context=f"Spotify playlist {phase} response (offset={offset})",
         )
         uris.extend(page_uris)
         had_unavailable = had_unavailable or page_unavailable
@@ -271,7 +271,7 @@ def _read_overflow_item(
     return _extract_playlist_uris(
         overflow.items,
         allow_unavailable=allow_unavailable,
-        context=f"Spotify playlist {phase} overflow response at offset {offset}",
+        context=f"Spotify playlist {phase} overflow response (offset={offset})",
     )
 
 
