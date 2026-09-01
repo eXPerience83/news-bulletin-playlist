@@ -361,6 +361,7 @@ def test_missing_or_invalid_write_snapshot_fails_closed(
 ) -> None:
     store = _store(tmp_path)
     client = _AttestedSpotify(["spotify:episode:old"])
+    client.opaque_after_write = {0}
     client.write_response_override = write_response
 
     with pytest.raises(SpotifyReconciliationError, match="valid snapshot_id"):
@@ -376,7 +377,7 @@ def test_malformed_prewrite_snapshot_cannot_skip_and_is_healed_by_write(tmp_path
     client.opaque_after_write = {1}
     uris = ("spotify:episode:one", "spotify:episode:two")
     _apply(store, client, *uris)
-    client.snapshot_responses = [{}, {"snapshot_id": client.snapshot}]
+    client.snapshot_responses = [{}]
 
     result = _apply(
         store,
