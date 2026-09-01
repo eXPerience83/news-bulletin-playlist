@@ -28,6 +28,7 @@ PRODUCTION_SCOPES = (
     "playlist-modify-private",
     "playlist-modify-public",
 )
+PRODUCTION_REQUESTED_SCOPES = (*PRODUCTION_SCOPES, "ugc-image-upload")
 _AUTHORIZATION_TTL = timedelta(minutes=10)
 _ACCESS_TOKEN_REFRESH_SKEW = timedelta(seconds=60)
 
@@ -299,7 +300,8 @@ class SpotifyAuthService:
         redirect_uri: str,
         store: SpotifyCredentialStore,
         transport: SpotifyTokenTransport | None = None,
-        scopes: Sequence[str] = PRODUCTION_SCOPES,
+        scopes: Sequence[str] | None = None,
+        required_scopes: Sequence[str] | None = None,
     ) -> None:
         if not client_id.strip():
             raise SpotifyAuthConfigurationError("Spotify client ID is required")
@@ -307,9 +309,22 @@ class SpotifyAuthService:
         self.redirect_uri = validate_redirect_uri(redirect_uri)
         self.store = store
         self.transport = transport if transport is not None else SpotifyAccountsClient()
-        self.scopes = tuple(scopes)
+        if scopes is None:
+            self.scopes = PRODUCTION_REQUESTED_SCOPES
+            self.required_scopes = PRODUCTION_SCOPES
+        else:
+            self.scopes = tuple(scopes)
+            self.required_scopes = tuple(required_scopes or self.scopes)
         if not self.scopes or any(not scope.strip() for scope in self.scopes):
             raise SpotifyAuthConfigurationError("Spotify authorization scopes are invalid")
+        if not self.required_scopes or any(
+            not scope.strip() for scope in self.required_scopes
+        ):
+            raise SpotifyAuthConfigurationError("Spotify required scopes are invalid")
+        if not set(self.required_scopes).issubset(self.scopes):
+            raise SpotifyAuthConfigurationError(
+                "Spotify required scopes must be included in requested scopes"
+            )
         self._pending: PendingAuthorization | None = None
         self._access_token: _CachedAccessToken | None = None
         self._reauthorization_required = False
@@ -379,7 +394,7 @@ class SpotifyAuthService:
             redirect_uri=self.redirect_uri,
             verifier=pending.verifier,
         )
-        _require_scopes(token.granted_scopes, self.scopes)
+        _require_scopes(token.granted_scopes, self.required_scopes)
         if token.refresh_token is None or not token.refresh_token.strip():
             raise SpotifyTokenError("Spotify did not return a refresh token")
 
@@ -433,7 +448,7 @@ class SpotifyAuthService:
                 ) from exc
             raise
 
-        _require_scopes(token.granted_scopes, self.scopes)
+        _require_scopes(token.granted_scopes, self.required_scopes)
         if token.refresh_token is not None and token.refresh_token != refresh_token:
             self.store.save(
                 SpotifyCredentialRecord(
