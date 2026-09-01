@@ -64,6 +64,7 @@ _BUNDLED_COVER_DIR = Path("/opt/news-bulletin-playlist/covers")
 _MANAGED_POST_PATHS = {
     "/admin/playlists/activate",
     "/admin/playlists/update",
+    "/admin/playlists/sync",
     "/admin/playlists/stop",
 }
 
@@ -513,16 +514,28 @@ class OperationalHealthHandler(LanAdminHandler):
             return
 
         try:
-            with synchronization.hold():
-                if path == "/admin/playlists/activate":
-                    self._activate_managed_playlist(service, form)
-                elif path == "/admin/playlists/update":
-                    self._update_managed_playlist(service, form)
-                else:
-                    service.stop_managing(playlist_id_from_form(form))
-                configured = any(playlist.enabled for playlist in service.snapshot().managed)
-            lifecycle.reconcile(configured=configured)
-            self.__class__.engine_scheduler = lifecycle.scheduler
+            if path == "/admin/playlists/sync":
+                with synchronization.hold():
+                    playlist_id = playlist_id_from_form(form)
+                    if not any(
+                        playlist.id == playlist_id for playlist in service.snapshot().managed
+                    ):
+                        raise ManagedAdminError(f"unknown managed playlist: {playlist_id}")
+                # HTTPServer serves admin requests serially. Validate immutable managed state
+                # under the configuration lock, then keep Spotify I/O outside that lock so a
+                # slow metadata/cover request cannot delay an engine cycle.
+                self._sync_managed_playlist(service, form)
+            else:
+                with synchronization.hold():
+                    if path == "/admin/playlists/activate":
+                        self._activate_managed_playlist(service, form)
+                    elif path == "/admin/playlists/update":
+                        self._update_managed_playlist(service, form)
+                    else:
+                        service.stop_managing(playlist_id_from_form(form))
+                    configured = any(playlist.enabled for playlist in service.snapshot().managed)
+                lifecycle.reconcile(configured=configured)
+                self.__class__.engine_scheduler = lifecycle.scheduler
         except ManagedStateError:
             self._managed_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -618,6 +631,19 @@ class OperationalHealthHandler(LanAdminHandler):
             source_ids=form.get("source_id", []),
             enabled=enabled,
             access_token=access_token,
+        )
+
+    def _sync_managed_playlist(
+        self,
+        service: ManagedAdminService,
+        form: Mapping[str, list[str]],
+    ) -> None:
+        auth = self.managed_admin_auth
+        if auth is None:
+            raise ManagedAdminError("Spotify must be connected to apply metadata and cover")
+        service.sync_spotify_metadata_and_cover(
+            playlist_id_from_form(form),
+            access_token=auth.get_access_token(),
         )
 
     def _managed_error(self, status: HTTPStatus, message: str) -> None:
@@ -751,7 +777,17 @@ def _build_managed_admin_service(
     legacy_path = data_dir / DEFAULT_CONFIG_FILENAME
     if legacy_path.is_symlink() or legacy_path.exists():
         return None
-    return ManagedAdminService(ManagedStateStore(data_dir / MANAGED_STATE_FILENAME))
+    return ManagedAdminService(
+        ManagedStateStore(data_dir / MANAGED_STATE_FILENAME),
+        cover_loader=_load_bundled_cover,
+    )
+
+
+def _load_bundled_cover(cover_id: str) -> bytes:
+    cover_path = _bundled_cover_path(f"{cover_id}.jpg")
+    if cover_path is None:
+        raise FileNotFoundError("bundled playlist cover is unavailable")
+    return cover_path.read_bytes()
 
 
 def _bundled_cover_path(filename: str) -> Path | None:

@@ -10,6 +10,7 @@ import pytest
 
 import news_bulletin_playlist.spotify.auth as auth
 from news_bulletin_playlist.spotify.auth import (
+    PRODUCTION_REQUESTED_SCOPES,
     PRODUCTION_SCOPES,
     AuthorizationState,
     CredentialStatus,
@@ -154,7 +155,8 @@ def test_authorize_url_uses_pkce_state_exact_redirect_and_minimal_scopes(tmp_pat
     assert params["redirect_uri"] == [REDIRECT_URI]
     assert params["code_challenge_method"] == ["S256"]
     assert params["state"] == [state]
-    assert tuple(params["scope"][0].split()) == PRODUCTION_SCOPES
+    assert tuple(params["scope"][0].split()) == PRODUCTION_REQUESTED_SCOPES
+    assert "ugc-image-upload" in params["scope"][0].split()
     assert "client_secret" not in params
 
 
