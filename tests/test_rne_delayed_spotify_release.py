@@ -51,6 +51,8 @@ def _source(
     parser_id: str,
     timezone_name: str,
     show_id: str,
+    *,
+    spotify_release_delay_days: int = 0,
 ) -> SourceDefinition:
     return SourceDefinition(
         id=SourceId(source_id),
@@ -67,6 +69,17 @@ def _source(
                 external_id=show_id,
             ),
         ),
+        spotify_release_delay_days=spotify_release_delay_days,
+    )
+
+
+def _rne_source(show_id: str) -> SourceDefinition:
+    return _source(
+        "rne",
+        "rne",
+        "Europe/Madrid",
+        show_id,
+        spotify_release_delay_days=1,
     )
 
 
@@ -128,7 +141,7 @@ def _playlist(*source_ids: str) -> PlaylistDefinition:
 
 
 def test_next_day_rne_release_matches_and_enters_semantic_chronology(tmp_path: Path) -> None:
-    rne = _source("rne", "rne", "Europe/Madrid", "0UgidTKsoaHiHDARuPQNW1")
+    rne = _rne_source("0UgidTKsoaHiHDARuPQNW1")
     rne_21 = _edition(
         rne,
         "rne-20260901-2100",
@@ -188,7 +201,7 @@ def test_next_day_rne_release_matches_and_enters_semantic_chronology(tmp_path: P
 
 
 def test_next_day_release_does_not_override_semantic_time_mismatch(tmp_path: Path) -> None:
-    rne = _source("rne", "rne", "Europe/Madrid", "show-rne")
+    rne = _rne_source("show-rne")
     edition = _edition(
         rne,
         "rne-20260901-2100",
@@ -219,7 +232,7 @@ def test_next_day_release_does_not_override_semantic_time_mismatch(tmp_path: Pat
 
 
 def test_semantic_match_rejects_release_more_than_one_day_late(tmp_path: Path) -> None:
-    rne = _source("rne", "rne", "Europe/Madrid", "show-rne")
+    rne = _rne_source("show-rne")
     edition = _edition(
         rne,
         "rne-20260901-2100",
@@ -243,6 +256,37 @@ def test_semantic_match_rejects_release_more_than_one_day_late(tmp_path: Path) -
     )
 
     outcome = match_source_editions(client, store, rne, (edition,), now=now).outcomes[0]
+
+    assert outcome.status is MatchStatus.PENDING
+    assert "release_date_skew_rejected=1" in outcome.diagnostics
+
+
+def test_other_sources_do_not_inherit_rne_release_tolerance(tmp_path: Path) -> None:
+    ser = _source("ser", "ser", "Europe/Madrid", "show-ser")
+    edition = _edition(
+        ser,
+        "ser-20260901-2100",
+        "Las noticias de la SER, 21:00 (01/09/2026)",
+    )
+    store = _store(tmp_path)
+    now = datetime(2026, 9, 2, 8, 0, tzinfo=UTC)
+    store.upsert_editions((edition,), observed_at=now)
+    client = FakeCatalogClient(
+        pages=[
+            {
+                "items": [
+                    _candidate(
+                        title="Las noticias de la SER, 21:00 (01/09/2026)",
+                        release_date="2026-09-02",
+                        uri="spotify:episode:ser-next-day",
+                    )
+                ],
+                "next": None,
+            }
+        ]
+    )
+
+    outcome = match_source_editions(client, store, ser, (edition,), now=now).outcomes[0]
 
     assert outcome.status is MatchStatus.PENDING
     assert "release_date_skew_rejected=1" in outcome.diagnostics
