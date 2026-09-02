@@ -158,7 +158,7 @@ def _phase(error: str) -> str:
 
 def _operation(error: str, phase: str) -> str | None:
     lowered = error.casefold()
-    if "write response" in lowered:
+    if phase == "write" and "write response" in lowered:
         return "replace_items"
     if "snapshot" in lowered:
         return "snapshot"
