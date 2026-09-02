@@ -721,11 +721,13 @@ def serve(
     env = os.environ if environ is None else environ
     database_path = initialize_runtime_storage(data_dir)
     store = SQLiteStore(database_path)
-    diagnostic_store: DiagnosticEventStore | None = DiagnosticEventStore(database_path)
+    diagnostic_candidate = DiagnosticEventStore(database_path)
     try:
-        diagnostic_store.initialize()
+        diagnostic_candidate.initialize()
     except PersistenceError:
-        diagnostic_store = None
+        diagnostic_store: DiagnosticEventStore | None = None
+    else:
+        diagnostic_store = diagnostic_candidate
     diagnostics = OperationalDiagnostics(diagnostic_store)
     if diagnostic_store is None:
         diagnostics.emit(
