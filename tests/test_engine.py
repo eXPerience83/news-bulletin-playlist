@@ -100,6 +100,7 @@ class _Spotify:
         return {
             "items": [{"item": {"uri": uri}} for uri in selected],
             "next": None,
+            "total": len(uris),
         }
 
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:

@@ -451,30 +451,38 @@ def test_post_write_visible_mismatch_still_fails_closed(tmp_path: Path) -> None:
     assert store.get_playlist_attestation(PLAYLIST_ID) is None
 
 
-def test_attestation_and_warning_contain_no_auth_or_raw_error_material(tmp_path: Path) -> None:
+def test_exercised_sensitive_inputs_do_not_reach_attestation_or_operator_surfaces(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     store = _store(tmp_path)
     client = _AttestedSpotify(["spotify:episode:old"])
+    access_token = "ACCESS_TOKEN_SENTINEL"
+    client.access_token = access_token
     client.opaque_after_write = {0}
-    sentinels = (
-        "ACCESS_TOKEN_SENTINEL",
-        "REFRESH_TOKEN_SENTINEL",
-        "AUTH_CODE_SENTINEL",
-        "PKCE_VERIFIER_SENTINEL",
-        "RAW_PROVIDER_BODY_SENTINEL",
-    )
+    provider_material = "RAW_PROVIDER_BODY_SENTINEL"
+    desired_uri = f"spotify:episode:{provider_material}"
 
-    result = _apply(store, client, "spotify:episode:new")
+    result = _apply(store, client, desired_uri)
     attestation = store.get_playlist_attestation(PLAYLIST_ID)
+    captured = capsys.readouterr()
 
     assert result.warning is not None
     assert attestation is not None
-    exposed = " ".join(
+    operator_surfaces = " ".join(
         (
+            captured.out,
+            captured.err,
+            str(result),
             result.warning,
             attestation.destination_id,
             attestation.snapshot_id,
             attestation.desired_fingerprint,
         )
     )
-    for sentinel in sentinels:
-        assert sentinel not in exposed
+    persisted = store.path.read_bytes()
+    assert client.access_token == access_token
+    assert client.writes == [[desired_uri]]
+    for sentinel in (access_token, provider_material):
+        assert sentinel not in operator_surfaces
+        assert sentinel.encode() not in persisted

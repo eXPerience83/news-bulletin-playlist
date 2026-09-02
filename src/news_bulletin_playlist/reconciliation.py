@@ -33,6 +33,8 @@ class SpotifyPlaylistClient(Protocol):
 
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]: ...
 
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]: ...
+
 
 class SpotifyReconciliationError(RuntimeError):
     """Raised when Spotify playlist state cannot be read or verified safely."""
@@ -74,7 +76,7 @@ class _SpotifyPlaylistRead:
 class _SpotifyPlaylistPage:
     items: list[object]
     next_url: str | None
-    total: int | None
+    total: int
 
 
 def build_desired_state_from_store(
@@ -158,7 +160,18 @@ def _reconcile_playlist_items(
         phase="prewrite",
     )
     if current.slots == desired:
-        return _PlaylistItemsReconciliationResult(wrote=False)
+        if len(current.slots) <= _SPOTIFY_PLAYLIST_PAGE_SIZE:
+            return _PlaylistItemsReconciliationResult(wrote=False)
+        snapshot_before = _read_current_snapshot(client, playlist_id, phase="prewrite")
+        stable_current = _read_spotify_playlist(
+            client,
+            playlist_id,
+            allow_unavailable=True,
+            phase="prewrite",
+        )
+        snapshot_after = _read_current_snapshot(client, playlist_id, phase="prewrite")
+        if snapshot_before == snapshot_after and stable_current.slots == desired:
+            return _PlaylistItemsReconciliationResult(wrote=False)
 
     desired_fingerprint = _desired_fingerprint(desired)
     if (
@@ -205,9 +218,23 @@ def _reconcile_playlist_items(
         )
 
     if not readback.had_unavailable_item:
+        write_snapshot = _optional_snapshot(write_response)
+        if len(readback.slots) > _SPOTIFY_PLAYLIST_PAGE_SIZE:
+            write_snapshot = _require_snapshot(
+                write_response,
+                context="Spotify playlist write response",
+            )
+            current_snapshot = _read_current_snapshot(
+                client,
+                playlist_id,
+                phase="readback",
+            )
+            if current_snapshot != write_snapshot:
+                raise SpotifyReconciliationError(
+                    "Spotify playlist snapshot changed during exact readback verification"
+                )
         if store is not None and logical_playlist_id is not None:
             assert attestation_updated_at is not None
-            write_snapshot = _optional_snapshot(write_response)
             if write_snapshot is not None:
                 store.set_playlist_attestation(
                     logical_playlist_id,
@@ -428,44 +455,44 @@ def _require_playlist_page(
             f"{context} pagination advanced without returning an item (offset={offset})"
         )
 
-    total: int | None = None
-    if "total" in container:
-        total_value = container["total"]
-        if isinstance(total_value, bool) or not isinstance(total_value, int) or total_value < 0:
-            raise SpotifyReconciliationError(
-                f"{context} pagination contained invalid total "
-                f"(offset={offset} returned={len(items)})"
-            )
-        total = total_value
-        consumed = offset + len(items)
-        if consumed > total:
-            raise SpotifyReconciliationError(
-                f"{context} pagination exceeded total "
-                f"(offset={offset} returned={len(items)} total={total})"
-            )
-        if consumed < total and next_value is None:
-            raise SpotifyReconciliationError(
-                f"{context} pagination truncated before total "
-                f"(offset={offset} returned={len(items)} total={total} next=null)"
-            )
-        if consumed >= total and next_value is not None:
-            raise SpotifyReconciliationError(
-                f"{context} pagination continued past total "
-                f"(offset={offset} returned={len(items)} total={total} next=present)"
-            )
+    if "total" not in container:
+        raise SpotifyReconciliationError(
+            f"{context} pagination was missing total "
+            f"(offset={offset} returned={len(items)})"
+        )
+    total = container["total"]
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+        raise SpotifyReconciliationError(
+            f"{context} pagination contained invalid total "
+            f"(offset={offset} returned={len(items)})"
+        )
+    consumed = offset + len(items)
+    if consumed > total:
+        raise SpotifyReconciliationError(
+            f"{context} pagination exceeded total "
+            f"(offset={offset} returned={len(items)} total={total})"
+        )
+    if consumed < total and next_value is None:
+        raise SpotifyReconciliationError(
+            f"{context} pagination truncated before total "
+            f"(offset={offset} returned={len(items)} total={total} next=null)"
+        )
+    if consumed >= total and next_value is not None:
+        raise SpotifyReconciliationError(
+            f"{context} pagination continued past total "
+            f"(offset={offset} returned={len(items)} total={total} next=present)"
+        )
 
     return _SpotifyPlaylistPage(items, next_value, total)
 
 
 def _validate_total_consistency(
-    total: int | None,
+    total: int,
     *,
     expected_total: int | None,
     phase: str,
     offset: int,
-) -> int | None:
-    if total is None:
-        return expected_total
+) -> int:
     if expected_total is not None and total != expected_total:
         raise SpotifyReconciliationError(
             f"Spotify playlist {phase} pagination total changed "
@@ -493,9 +520,18 @@ def _extract_playlist_slots(
                 f"{context} contained an item without a media object "
                 f"(item_index={index})"
             )
-        value = item.get("item") if has_item else item.get("track")
-        if value is None and has_item and has_track:
-            value = item.get("track")
+        item_value = item.get("item") if has_item else None
+        track_value = item.get("track") if has_track else None
+        if item_value is not None and track_value is not None:
+            item_uri = _require_media_uri(item_value, context=context, index=index)
+            track_uri = _require_media_uri(track_value, context=context, index=index)
+            if item_uri != track_uri:
+                raise SpotifyReconciliationError(
+                    f"{context} contained contradictory media objects (item_index={index})"
+                )
+            slots.append(item_uri)
+            continue
+        value = item_value if item_value is not None else track_value
         if value is None:
             if not allow_unavailable:
                 raise SpotifyReconciliationError(
@@ -504,17 +540,21 @@ def _extract_playlist_slots(
                 )
             slots.append(None)
             continue
-        if not isinstance(value, dict):
-            raise SpotifyReconciliationError(
-                f"{context} contained an invalid media object (item_index={index})"
-            )
-        uri = value.get("uri")
-        if not isinstance(uri, str) or not uri.strip():
-            raise SpotifyReconciliationError(
-                f"{context} contained an item without a URI (item_index={index})"
-            )
-        slots.append(uri)
+        slots.append(_require_media_uri(value, context=context, index=index))
     return slots
+
+
+def _require_media_uri(value: object, *, context: str, index: int) -> str:
+    if not isinstance(value, dict):
+        raise SpotifyReconciliationError(
+            f"{context} contained an invalid media object (item_index={index})"
+        )
+    uri = value.get("uri")
+    if not isinstance(uri, str) or not uri.strip():
+        raise SpotifyReconciliationError(
+            f"{context} contained an item without a URI (item_index={index})"
+        )
+    return uri
 
 
 def _visible_positions_match(

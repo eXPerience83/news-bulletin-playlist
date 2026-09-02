@@ -63,6 +63,7 @@ class _FakeSpotify:
         self.reads: list[tuple[str, int, int]] = []
         self.fail_reads: set[str] = set()
         self.corrupt_after_write: set[str] = set()
+        self.snapshot = "snapshot-initial"
 
     def playlist_items(
         self,
@@ -80,14 +81,19 @@ class _FakeSpotify:
         return {
             "items": [{"item": {"uri": uri}} for uri in page],
             "next": next_url,
+            "total": len(state),
         }
 
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
         self.writes.append((playlist_id, list(uris)))
         self.states[playlist_id] = list(uris)
+        self.snapshot = f"snapshot-write-{len(self.writes)}"
         if playlist_id in self.corrupt_after_write and uris:
             self.states[playlist_id] = list(reversed(uris))
-        return {"snapshot_id": "snapshot"}
+        return {"snapshot_id": self.snapshot}
+
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+        return {"snapshot_id": self.snapshot}
 
 
 class _UnavailableMediaSpotify(_FakeSpotify):
@@ -110,6 +116,7 @@ class _UnavailableMediaSpotify(_FakeSpotify):
                     {self.media_key: {"uri": "spotify:episode:old"}},
                 ],
                 "next": None,
+                "total": 2,
             }
         return super().playlist_items(playlist_id, limit=limit, offset=offset)
 
@@ -124,7 +131,7 @@ class _UnavailableAfterWriteSpotify(_FakeSpotify):
     ) -> dict[str, Any]:
         if self.writes:
             self.reads.append((playlist_id, limit, offset))
-            return {"items": [{"item": None}], "next": None}
+            return {"items": [{"item": None}], "next": None, "total": 1}
         return super().playlist_items(playlist_id, limit=limit, offset=offset)
 
 
@@ -137,7 +144,7 @@ class _MissingMediaSpotify(_FakeSpotify):
         offset: int = 0,
     ) -> dict[str, Any]:
         self.reads.append((playlist_id, limit, offset))
-        return {"items": [{}], "next": None}
+        return {"items": [{}], "next": None, "total": 1}
 
 
 class _MalformedPagingSpotify(_FakeSpotify):
@@ -170,8 +177,71 @@ class _FalseTerminalSpotify(_FakeSpotify):
             return {
                 "items": [{"item": {"uri": uri}} for uri in state[:limit]],
                 "next": None,
+                "total": len(state),
             }
         return super().playlist_items(playlist_id, limit=limit, offset=offset)
+
+
+class _PrewritePaginationRaceSpotify(_FakeSpotify):
+    def __init__(self, desired: list[str]) -> None:
+        initial = list(desired)
+        initial[60] = "spotify:episode:old-at-60"
+        super().__init__({"playlist": initial})
+        self.desired = desired
+        self.snapshot = "snapshot-initial"
+        self.mutated = False
+
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        response = super().playlist_items(playlist_id, limit=limit, offset=offset)
+        if offset == 0 and not self.mutated:
+            self.states[playlist_id][0] = "spotify:episode:concurrent-at-0"
+            self.states[playlist_id][60] = self.desired[60]
+            self.snapshot = "snapshot-concurrent"
+            self.mutated = True
+        return response
+
+    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+        super().replace_playlist_items(playlist_id, uris)
+        self.snapshot = "snapshot-write"
+        return {"snapshot_id": self.snapshot}
+
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+        return {"snapshot_id": self.snapshot}
+
+
+class _PostwritePaginationRaceSpotify(_FakeSpotify):
+    def __init__(self) -> None:
+        super().__init__({"playlist": ["spotify:episode:old"]})
+        self.snapshot = "snapshot-initial"
+        self.mutated = False
+
+    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+        super().replace_playlist_items(playlist_id, uris)
+        self.snapshot = "snapshot-write"
+        return {"snapshot_id": self.snapshot}
+
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        response = super().playlist_items(playlist_id, limit=limit, offset=offset)
+        if self.writes and offset == 0 and not self.mutated:
+            self.states[playlist_id][0] = "spotify:episode:concurrent-at-0"
+            self.snapshot = "snapshot-concurrent"
+            self.mutated = True
+        return response
+
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+        return {"snapshot_id": self.snapshot}
 
 
 def test_unchanged_desired_state_performs_zero_writes() -> None:
@@ -196,7 +266,12 @@ def test_unchanged_state_over_50_items_uses_multiple_pages() -> None:
 
     assert wrote is False
     assert client.writes == []
-    assert client.reads == [("playlist", 50, 0), ("playlist", 50, 50)]
+    assert client.reads == [
+        ("playlist", 50, 0),
+        ("playlist", 50, 50),
+        ("playlist", 50, 0),
+        ("playlist", 50, 50),
+    ]
 
 
 def test_changed_state_is_replaced_and_exactly_read_back() -> None:
@@ -231,29 +306,53 @@ def test_current_state_over_100_forces_bounded_replacement() -> None:
     ]
 
 
-def test_full_terminal_page_is_probed_for_hidden_overflow() -> None:
+def test_false_terminal_page_with_total_fails_closed() -> None:
     current = [f"spotify:episode:{index}" for index in range(51)]
     desired = tuple(current[:50])
     client = _FalseTerminalSpotify({"playlist": current})
 
+    with pytest.raises(SpotifyReconciliationError, match="truncated before total"):
+        reconcile_playlist_items(client, "playlist", desired)
+
+    assert client.writes == []
+
+
+def test_short_false_terminal_page_without_total_never_reports_unchanged() -> None:
+    client = _MalformedPagingSpotify(
+        {"items": [{"item": {"uri": "spotify:episode:A"}}], "next": None}
+    )
+
+    with pytest.raises(SpotifyReconciliationError, match="missing total"):
+        reconcile_playlist_items(client, "playlist", ("spotify:episode:A",))
+
+    assert client.writes == []
+
+
+def test_prewrite_multi_page_comparison_cannot_mix_snapshots() -> None:
+    desired = [f"spotify:episode:{index}" for index in range(75)]
+    client = _PrewritePaginationRaceSpotify(desired)
+
     wrote = reconcile_playlist_items(client, "playlist", desired)
 
     assert wrote is True
-    assert client.writes == [("playlist", list(desired))]
-    assert client.states["playlist"] == list(desired)
-    assert client.reads == [
-        ("playlist", 50, 0),
-        ("playlist", 1, 50),
-        ("playlist", 50, 0),
-        ("playlist", 1, 50),
-    ]
+    assert client.states["playlist"] == desired
+
+
+def test_postwrite_multi_page_readback_cannot_mix_snapshots() -> None:
+    desired = [f"spotify:episode:{index}" for index in range(75)]
+    client = _PostwritePaginationRaceSpotify()
+
+    with pytest.raises(SpotifyReconciliationError, match="snapshot changed"):
+        reconcile_playlist_items(client, "playlist", desired)
+
+    assert client.writes == [("playlist", desired)]
 
 
 @pytest.mark.parametrize(
     ("page", "message"),
     [
         ({"items": []}, "pagination was missing next"),
-        ({"items": [], "next": ""}, "pagination contained invalid next"),
+        ({"items": [], "next": "", "total": 0}, "pagination contained invalid next"),
         (
             {"items": [{"item": {"uri": "spotify:episode:one"}}], "next": None, "total": 2},
             "pagination truncated before total",
@@ -292,6 +391,7 @@ def test_unavailable_media_item_does_not_block_replacement(media_key: str) -> No
 
 
 def test_unavailable_media_item_forces_healing_when_visible_uris_match() -> None:
+    # Opaque prewrite slots are not wildcard equality: they force a complete replacement.
     client = _UnavailableMediaSpotify("item")
     desired = ("spotify:episode:old",)
 
@@ -300,6 +400,51 @@ def test_unavailable_media_item_forces_healing_when_visible_uris_match() -> None
     assert wrote is True
     assert client.writes == [("playlist", list(desired))]
     assert client.states["playlist"] == list(desired)
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        {
+            "item": {"uri": "spotify:episode:one"},
+            "track": {"uri": "spotify:episode:two"},
+        },
+        {"item": {"uri": "spotify:episode:one"}, "track": "malformed"},
+        {"item": {"uri": "spotify:episode:one"}, "track": {}},
+    ],
+)
+def test_contradictory_wrapper_media_fails_closed(wrapper: dict[str, object]) -> None:
+    client = _MalformedPagingSpotify({"items": [wrapper], "next": None, "total": 1})
+
+    with pytest.raises(SpotifyReconciliationError):
+        reconcile_playlist_items(client, "playlist", ("spotify:episode:one",))
+
+    assert client.writes == []
+
+
+def test_matching_dual_wrapper_media_is_accepted() -> None:
+    uri = "spotify:episode:one"
+    client = _MalformedPagingSpotify(
+        {
+            "items": [{"item": {"uri": uri}, "track": {"uri": uri}}],
+            "next": None,
+            "total": 1,
+        }
+    )
+
+    assert reconcile_playlist_items(client, "playlist", (uri,)) is False
+    assert client.writes == []
+
+
+@pytest.mark.parametrize("null_field", ["item", "track"])
+def test_null_dual_wrapper_field_falls_back_to_valid_media(null_field: str) -> None:
+    uri = "spotify:episode:one"
+    wrapper = {"item": {"uri": uri}, "track": {"uri": uri}}
+    wrapper[null_field] = None
+    client = _MalformedPagingSpotify({"items": [wrapper], "next": None, "total": 1})
+
+    assert reconcile_playlist_items(client, "playlist", (uri,)) is False
+    assert client.writes == []
 
 
 def test_unavailable_media_item_after_write_fails_exact_readback() -> None:
