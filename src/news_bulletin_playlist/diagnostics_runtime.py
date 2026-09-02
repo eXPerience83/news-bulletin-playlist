@@ -158,8 +158,9 @@ def serve(
     interval: timedelta | None = None,
 ) -> int:
     """Run the production engine using the diagnostics-aware HTTP handler."""
-    original_handler = engine_runtime.OperationalHealthHandler
-    setattr(engine_runtime, "OperationalHealthHandler", DiagnosticOperationalHealthHandler)
+    runtime_namespace = vars(engine_runtime)
+    original_handler = runtime_namespace["OperationalHealthHandler"]
+    runtime_namespace["OperationalHealthHandler"] = DiagnosticOperationalHealthHandler
     try:
         return engine_runtime.serve(
             host=host,
@@ -170,7 +171,7 @@ def serve(
             interval=interval,
         )
     finally:
-        setattr(engine_runtime, "OperationalHealthHandler", original_handler)
+        runtime_namespace["OperationalHealthHandler"] = original_handler
 
 
 def _safe_operational_status_page(
