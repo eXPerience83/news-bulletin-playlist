@@ -252,7 +252,8 @@ def _reconcile_playlist_items(
                 )
                 if stable_readback.slots != desired:
                     raise SpotifyReconciliationError(
-                        "Spotify playlist content changed during exact snapshot recheck"
+                        "Spotify playlist snapshot changed because content changed "
+                        "during exact snapshot recheck"
                     )
                 stable_snapshot = _read_current_snapshot(
                     client,
