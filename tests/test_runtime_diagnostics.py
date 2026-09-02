@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,7 +19,9 @@ from news_bulletin_playlist.engine import (
     SourceCycleOutcome,
 )
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
+from news_bulletin_playlist.engine_runtime import serve
 from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.persistence import DEFAULT_DB_FILENAME
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics, cycle_id_for
 
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
@@ -168,3 +171,26 @@ def test_runtime_emitter_rejects_unsafe_allowed_field_without_leaking_it(tmp_pat
     rendered = output.getvalue()
     assert "diagnostic_persistence_failed" in rendered
     assert sentinel not in rendered
+
+
+def test_serve_persists_runtime_lifecycle_events(tmp_path: Path) -> None:
+    stop = threading.Event()
+    stop.set()
+
+    assert serve(
+        host="127.0.0.1",
+        port=0,
+        data_dir=tmp_path,
+        stop_event=stop,
+        environ={},
+    ) == 0
+
+    store = DiagnosticEventStore(tmp_path / DEFAULT_DB_FILENAME)
+    store.initialize()
+    events = store.list_events(limit=10)
+    assert [event.event_name for event in reversed(events)] == [
+        "runtime_ready",
+        "runtime_stopping",
+        "runtime_stopped",
+    ]
+    assert all(event.component == "runtime" for event in events)
