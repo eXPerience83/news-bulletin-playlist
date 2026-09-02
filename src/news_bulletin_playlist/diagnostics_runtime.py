@@ -10,12 +10,8 @@ from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
 
-from news_bulletin_playlist import __version__
-from news_bulletin_playlist import engine_runtime
-from news_bulletin_playlist.diagnostics import (
-    DiagnosticEvent,
-    DiagnosticEventStore,
-)
+from news_bulletin_playlist import __version__, engine_runtime
+from news_bulletin_playlist.diagnostics import DiagnosticEvent
 from news_bulletin_playlist.diagnostics_web import (
     DiagnosticFilters,
     build_diagnostic_bundle,
@@ -71,12 +67,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         try:
             filters, events = self._diagnostic_events(query)
-        except ValueError as exc:
-            self._reply(
-                HTTPStatus.BAD_REQUEST,
-                html.escape(str(exc)).encode("utf-8"),
-                content_type="text/plain; charset=utf-8",
-            )
+        except ValueError:
+            self._invalid_diagnostic_filters()
             return
         except RuntimeError:
             self._diagnostic_history_unavailable()
@@ -95,12 +87,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         try:
             filters, events = self._diagnostic_events(query)
-        except ValueError as exc:
-            self._reply(
-                HTTPStatus.BAD_REQUEST,
-                html.escape(str(exc)).encode("utf-8"),
-                content_type="text/plain; charset=utf-8",
-            )
+        except ValueError:
+            self._invalid_diagnostic_filters()
             return
         except RuntimeError:
             self._diagnostic_history_unavailable()
@@ -144,6 +132,13 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except PersistenceError as exc:
             raise RuntimeError("diagnostic store unavailable") from exc
         return filters, events
+
+    def _invalid_diagnostic_filters(self) -> None:
+        self._reply(
+            HTTPStatus.BAD_REQUEST,
+            b"Invalid diagnostics filters",
+            content_type="text/plain; charset=utf-8",
+        )
 
     def _diagnostic_history_unavailable(self) -> None:
         self._reply(
