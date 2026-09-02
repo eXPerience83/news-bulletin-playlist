@@ -267,10 +267,20 @@ def _reconcile_playlist_items(
                     snapshot_warning = _SNAPSHOT_PROPAGATION_WARNING
                     write_snapshot = None
                 else:
-                    raise SpotifyReconciliationError(
-                        "Spotify playlist snapshot remained unstable during exact "
-                        "readback verification"
+                    final_readback = _read_spotify_playlist(
+                        client,
+                        playlist_id,
+                        allow_unavailable=False,
+                        phase="readback",
                     )
+                    if final_readback.slots != desired:
+                        raise SpotifyReconciliationError(
+                            "Spotify playlist snapshot changed because content changed "
+                            "during advancing snapshot recheck"
+                        )
+                    degraded_verification = True
+                    snapshot_warning = _SNAPSHOT_PROPAGATION_WARNING
+                    write_snapshot = None
         if store is not None and logical_playlist_id is not None:
             assert attestation_updated_at is not None
             if write_snapshot is not None:
