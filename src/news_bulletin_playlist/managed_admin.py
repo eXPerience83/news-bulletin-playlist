@@ -248,17 +248,8 @@ class ManagedAdminService:
         state = self.store.load()
         current = self._managed(state, playlist_id)
         client = self.client_factory(access_token)
-        metadata_error: str | None = None
+        metadata_error = _sync_spotify_metadata_explicit(client, current)
         cover_error: str | None = None
-
-        try:
-            client.change_playlist_details(
-                current.destination.external_id,
-                name=current.display_name,
-                description=render_spotify_description(current.description),
-            )
-        except (SpotifyApiError, SpotifyTransportError) as exc:
-            metadata_error = _safe_spotify_operation_error(exc)
 
         try:
             self._upload_cover_explicit(
@@ -384,12 +375,95 @@ class ManagedAdminService:
         return cover_id
 
 
+def _sync_spotify_metadata_explicit(
+    client: PlaylistProvisioningClient,
+    current: ManagedPlaylist,
+) -> str | None:
+    """Run a safe differential probe when the concrete Spotify client supports it."""
+    change_name = getattr(client, "change_playlist_name", None)
+    change_description = getattr(client, "change_playlist_description", None)
+    if not callable(change_name) or not callable(change_description):
+        try:
+            client.change_playlist_details(
+                current.destination.external_id,
+                name=current.display_name,
+                description=render_spotify_description(current.description),
+            )
+        except (SpotifyApiError, SpotifyTransportError) as exc:
+            return _safe_spotify_operation_error(exc)
+        return None
+
+    results: list[str] = []
+    failed = False
+
+    try:
+        change_name(
+            current.destination.external_id,
+            name=current.display_name,
+        )
+        results.append("name applied")
+    except (SpotifyApiError, SpotifyTransportError) as exc:
+        failed = True
+        results.append(f"name failed ({_safe_spotify_operation_error(exc)})")
+
+    rendered_description = render_spotify_description(current.description)
+    try:
+        change_description(
+            current.destination.external_id,
+            description=rendered_description,
+        )
+        results.append("description with project footer applied")
+    except (SpotifyApiError, SpotifyTransportError) as exc:
+        failed = True
+        results.append(
+            "description with project footer failed "
+            f"({_safe_spotify_operation_error(exc)})"
+        )
+        if isinstance(exc, SpotifyApiError) and exc.status == 400:
+            bare_url_description = render_spotify_bare_repository_description(
+                current.description
+            )
+            try:
+                change_description(
+                    current.destination.external_id,
+                    description=bare_url_description,
+                )
+                results.append("description with bare repository URL applied")
+            except (SpotifyApiError, SpotifyTransportError) as bare_exc:
+                results.append(
+                    "description with bare repository URL failed "
+                    f"({_safe_spotify_operation_error(bare_exc)})"
+                )
+                if isinstance(bare_exc, SpotifyApiError) and bare_exc.status == 400:
+                    try:
+                        change_description(
+                            current.destination.external_id,
+                            description=current.description,
+                        )
+                        results.append("base description applied")
+                    except (SpotifyApiError, SpotifyTransportError) as base_exc:
+                        results.append(
+                            "base description failed "
+                            f"({_safe_spotify_operation_error(base_exc)})"
+                        )
+
+    return "; ".join(results) if failed else None
+
+
 def _safe_spotify_operation_error(
     error: SpotifyApiError | SpotifyTransportError,
 ) -> str:
     if isinstance(error, SpotifyApiError):
         return f"HTTP {error.status}"
     return "network error"
+
+
+def render_spotify_bare_repository_description(base_description: str) -> str:
+    """Render the exact bare-URL form already accepted by the first-party Spotify client."""
+    base = _playlist_description(base_description)
+    if not base:
+        return PROJECT_REPOSITORY_URL
+    return f"{base}\n{PROJECT_REPOSITORY_URL}"
 
 
 def render_spotify_description(base_description: str) -> str:
