@@ -92,7 +92,8 @@ class _SnapshotPropagationSpotify:
 
     def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
         del playlist_id
-        response = self.snapshot_responses[min(self.snapshot_calls, len(self.snapshot_responses) - 1)]
+        index = min(self.snapshot_calls, len(self.snapshot_responses) - 1)
+        response = self.snapshot_responses[index]
         self.snapshot_calls += 1
         return {"snapshot_id": response}
 
