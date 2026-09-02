@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, cast
@@ -166,13 +167,18 @@ class _LocalCallbackHandler(BaseHTTPRequestHandler):
 
 
 def receive_local_authorization_code(
-    *, state: str, timeout: float = _LOCAL_CALLBACK_TIMEOUT_SECONDS
+    *,
+    state: str,
+    timeout: float = _LOCAL_CALLBACK_TIMEOUT_SECONDS,
+    on_ready: Callable[[], None] | None = None,
 ) -> str:
     _LocalCallbackHandler.expected_state = state
     _LocalCallbackHandler.code = None
     _LocalCallbackHandler.error = None
     deadline = time.monotonic() + timeout
     with HTTPServer(("127.0.0.1", 8787), _LocalCallbackHandler) as server:
+        if on_ready is not None:
+            on_ready()
         while (
             _LocalCallbackHandler.code is None
             and _LocalCallbackHandler.error is None
@@ -324,15 +330,21 @@ def main() -> int:
         challenge=create_code_challenge(verifier),
         scopes=requested_scopes,
     )
-    present_authorization_url(
-        authorize_url,
-        authorization_url_file=args.authorization_url_file,
-    )
     if args.callback_mode == "manual":
+        present_authorization_url(
+            authorize_url,
+            authorization_url_file=args.authorization_url_file,
+        )
         _print_manual_instructions()
         code = receive_manual_authorization_code(state=state)
     else:
-        code = receive_local_authorization_code(state=state)
+        code = receive_local_authorization_code(
+            state=state,
+            on_ready=lambda: present_authorization_url(
+                authorize_url,
+                authorization_url_file=args.authorization_url_file,
+            ),
+        )
         print("OAuth callback received.")
     token = exchange_code(client_id, code, verifier)
     require_granted_scopes(token.granted_scopes, requested_scopes)
