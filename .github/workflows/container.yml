@@ -1,30 +1,20 @@
 name: Container
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-    paths:
-      - "Dockerfile"
-      - ".dockerignore"
-      - "compose.yaml"
-      - "deploy/**"
-      - "docs/DEPLOY_TRUENAS.md"
-      - "README.md"
-      - "src/**"
-      - "pyproject.toml"
-      - ".github/workflows/container.yml"
   pull_request:
     paths:
       - "Dockerfile"
       - ".dockerignore"
       - "compose.yaml"
       - "deploy/**"
-      - "docs/DEPLOY_TRUENAS.md"
+      - "docs/**"
       - "README.md"
+      - "LICENSE"
+      - "assets/**"
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/container.yml"
+      - ".github/workflows/publish-*.yml"
 
 permissions:
   contents: read
@@ -34,14 +24,15 @@ env:
 
 jobs:
   validate:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+
       - name: Validate TrueNAS and Compose configuration
         run: |
+          set -euo pipefail
           docker compose -f compose.yaml config --quiet
           docker compose -f deploy/truenas.yaml config --quiet
           rendered="$(docker compose -f deploy/truenas.yaml config)"
@@ -53,37 +44,45 @@ jobs:
           grep -q '^x-portals:' deploy/truenas.yaml
           grep -q 'host: 0.0.0.0' deploy/truenas.yaml
           grep -q 'port: 8788' deploy/truenas.yaml
-      - name: Verify TrueNAS image is anonymously pullable
-        run: |
+
           image="$(awk '/^[[:space:]]*image: ghcr\.io\/experience83\/news-bulletin-playlist/ {print $2; exit}' deploy/truenas.yaml)"
-          test -n "$image"
-          case "$image" in
-            "${IMAGE_NAME}:dev"|"${IMAGE_NAME}:edge"|"${IMAGE_NAME}:stable"|"${IMAGE_NAME}:latest"|*"@sha256:"*) ;;
-            *)
-              echo "Unexpected TrueNAS image reference: $image"
-              exit 1
-              ;;
-          esac
-          docker logout ghcr.io 2>/dev/null || true
-          if docker pull "$image"; then
-            docker image rm "$image"
-          elif [ "$image" = "${IMAGE_NAME}:dev" ]; then
-            # Bootstrap transition: :dev is first published when this PR reaches main.
-            docker pull "${IMAGE_NAME}:latest"
-            docker image rm "${IMAGE_NAME}:latest"
-          else
+          expected="${IMAGE_NAME}:edge-amd64"
+          if [ "$image" != "$expected" ]; then
+            echo "TrueNAS must follow the integrated AMD64 channel: $expected" >&2
+            echo "Found: $image" >&2
             exit 1
           fi
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Verify required deployment channel is anonymously pullable
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io 2>/dev/null || true
+          required="${IMAGE_NAME}:edge-amd64"
+
+          if docker pull "$required"; then
+            docker image rm "$required"
+            exit 0
+          fi
+
+          if [[ "$PR_NUMBER" == "87" ]]; then
+            echo "Bootstrap only for PR #87: edge-amd64 does not exist until this channel split reaches main." >&2
+            bootstrap="${IMAGE_NAME}:edge"
+            docker pull "$bootstrap"
+            docker image rm "$bootstrap"
+            exit 0
+          fi
+
+          echo "ERROR: required deployment channel is not anonymously pullable: $required" >&2
+          exit 1
+
       - name: Build container image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          push: false
-          load: true
-          tags: news-bulletin-playlist:ci
+        run: docker build --platform linux/amd64 --tag news-bulletin-playlist:ci .
+
       - name: Verify hardened runtime health and web portal
         run: |
+          set -euo pipefail
           docker volume create news-bulletin-ci-data
           docker run --detach --rm \
             --name news-bulletin-playlist-ci \
@@ -94,9 +93,10 @@ jobs:
             --publish 127.0.0.1:18788:8080 \
             --mount source=news-bulletin-ci-data,target=/data \
             news-bulletin-playlist:ci
+
           remaining=20
           while [ "$remaining" -gt 0 ]; do
-            status=$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)
+            status="$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)"
             if [ "$status" = healthy ]; then
               break
             fi
@@ -107,54 +107,13 @@ jobs:
             remaining=$((remaining - 1))
             sleep 1
           done
+
           test "$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)" = healthy
           curl --fail --silent --show-error http://127.0.0.1:18788/ | grep -q 'News Bulletin Playlists'
           curl --fail --silent --show-error http://127.0.0.1:18788/healthz | grep -q '"status":"ok"'
+
       - name: Stop validation container
         if: always()
         run: |
           docker stop news-bulletin-playlist-ci 2>/dev/null || true
           docker volume rm news-bulletin-ci-data 2>/dev/null || true
-
-  publish:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Validate Compose files
-        run: |
-          docker compose -f compose.yaml config --quiet
-          docker compose -f deploy/truenas.yaml config --quiet
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Compute image metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
-            type=sha,prefix=sha-
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-      - name: Build and publish image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
