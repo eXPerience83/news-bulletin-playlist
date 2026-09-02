@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import threading
 import urllib.parse
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -11,7 +12,10 @@ from pathlib import Path
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist import engine_runtime
-from news_bulletin_playlist.diagnostics import DiagnosticEventStore
+from news_bulletin_playlist.diagnostics import (
+    DiagnosticEvent,
+    DiagnosticEventStore,
+)
 from news_bulletin_playlist.diagnostics_web import (
     DiagnosticFilters,
     build_diagnostic_bundle,
@@ -19,6 +23,7 @@ from news_bulletin_playlist.diagnostics_web import (
     render_diagnostics_page,
 )
 from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
+from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
@@ -74,11 +79,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             )
             return
         except RuntimeError:
-            self._reply(
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                b"Diagnostic history is unavailable",
-                content_type="text/plain; charset=utf-8",
-            )
+            self._diagnostic_history_unavailable()
             return
         self._reply(
             HTTPStatus.OK,
@@ -90,11 +91,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         store = self.diagnostic_store
         if store is None:
-            self._reply(
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                b"Diagnostic history is unavailable",
-                content_type="text/plain; charset=utf-8",
-            )
+            self._diagnostic_history_unavailable()
             return
         try:
             filters, events = self._diagnostic_events(query)
@@ -106,11 +103,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             )
             return
         except RuntimeError:
-            self._reply(
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                b"Diagnostic history is unavailable",
-                content_type="text/plain; charset=utf-8",
-            )
+            self._diagnostic_history_unavailable()
             return
 
         status = self.operational_status
@@ -135,19 +128,29 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
     def _diagnostic_events(
         self,
         query: str,
-    ) -> tuple[DiagnosticFilters, tuple[object, ...]]:
+    ) -> tuple[DiagnosticFilters, tuple[DiagnosticEvent, ...]]:
         store = self.diagnostic_store
         if store is None:
             raise RuntimeError("diagnostic store unavailable")
         filters = parse_diagnostic_filters(query)
-        events = store.list_events(
-            since=filters.since(now=datetime.now(UTC)),
-            severity=filters.severity,
-            source_id=filters.source_id,
-            playlist_id=filters.playlist_id,
-            limit=filters.limit,
-        )
+        try:
+            events = store.list_events(
+                since=filters.since(now=datetime.now(UTC)),
+                severity=filters.severity,
+                source_id=filters.source_id,
+                playlist_id=filters.playlist_id,
+                limit=filters.limit,
+            )
+        except PersistenceError as exc:
+            raise RuntimeError("diagnostic store unavailable") from exc
         return filters, events
+
+    def _diagnostic_history_unavailable(self) -> None:
+        self._reply(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            b"Diagnostic history is unavailable",
+            content_type="text/plain; charset=utf-8",
+        )
 
 
 def serve(
@@ -155,7 +158,7 @@ def serve(
     host: str = DEFAULT_HEALTH_HOST,
     port: int = DEFAULT_HEALTH_PORT,
     data_dir: Path = DEFAULT_DATA_DIR,
-    stop_event=None,  # type: ignore[no-untyped-def]
+    stop_event: threading.Event | None = None,
     environ: Mapping[str, str] | None = None,
     interval: timedelta | None = None,
 ) -> int:
