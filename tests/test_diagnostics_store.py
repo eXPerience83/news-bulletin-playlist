@@ -96,6 +96,23 @@ def test_diagnostic_details_are_allow_listed_and_reject_secret_shaped_fields(
     assert sentinel.encode() not in diagnostics.path.read_bytes()
 
 
+def test_allowed_text_key_still_rejects_unlisted_secret_value(tmp_path: Path) -> None:
+    _, diagnostics = _stores(tmp_path)
+    sentinel = "access-token-sentinel-never-persist"
+
+    with pytest.raises(ValueError, match="phase contains an unsupported label"):
+        diagnostics.record(
+            occurred_at=NOW,
+            severity=DiagnosticSeverity.ERROR,
+            component="spotify.auth",
+            event_name="authorization_failed",
+            details={"phase": sentinel},
+        )
+
+    assert diagnostics.list_events() == ()
+    assert sentinel.encode() not in diagnostics.path.read_bytes()
+
+
 def test_diagnostic_row_cap_evicts_oldest_events_deterministically(tmp_path: Path) -> None:
     _, diagnostics = _stores(tmp_path, max_events=3)
 
