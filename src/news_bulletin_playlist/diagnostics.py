@@ -33,6 +33,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "matched_count",
         "next_state",
         "offset",
+        "operation",
         "phase",
         "returned_count",
         "total",
@@ -83,6 +84,13 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "running",
             "scheduled",
             "stopped",
+        }
+    ),
+    "operation": frozenset(
+        {
+            "playlist_items",
+            "replace_items",
+            "snapshot",
         }
     ),
     "phase": frozenset(
