@@ -25,7 +25,7 @@ class SpotifyPlaylistClient(Protocol):
 
     def playlist_items(
         self,
-        show_id: str,
+        playlist_id: str,
         *,
         limit: int = 50,
         offset: int = 0,
