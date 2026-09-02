@@ -19,6 +19,11 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     volumes:
       - news-bulletin-data:/data
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
     pids_limit: 128
     stop_grace_period: 15s
 

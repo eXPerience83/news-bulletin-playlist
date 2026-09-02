@@ -21,6 +21,11 @@ services:
         target: /data
         bind:
           create_host_path: false
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
     pids_limit: 128
     stop_grace_period: 15s
 
