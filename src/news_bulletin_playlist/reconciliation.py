@@ -267,7 +267,8 @@ def _reconcile_playlist_items(
                     write_snapshot = None
                 else:
                     raise SpotifyReconciliationError(
-                        "Spotify playlist snapshot remained unstable during exact readback verification"
+                        "Spotify playlist snapshot remained unstable during exact "
+                        "readback verification"
                     )
         if store is not None and logical_playlist_id is not None:
             assert attestation_updated_at is not None
