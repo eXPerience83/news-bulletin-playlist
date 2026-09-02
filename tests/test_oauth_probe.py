@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 import urllib.parse
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +51,65 @@ def test_authorize_url_uses_registered_redirect_and_requested_scopes() -> None:
     params = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
     assert params["redirect_uri"] == [oauth_probe.REDIRECT_URI]
     assert params["scope"] == ["user-read-playback-position user-read-private"]
+
+
+def test_browser_handoff_does_not_log_authorization_url_or_state(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    authorize_url = "https://accounts.spotify.test/authorize?state=oauth-state-sentinel"
+    opened: list[str] = []
+
+    def fake_open(url: str, *, new: int, autoraise: bool) -> bool:
+        assert new == 2
+        assert autoraise is True
+        opened.append(url)
+        return True
+
+    monkeypatch.setattr(oauth_probe.webbrowser, "open", fake_open)
+
+    oauth_probe.present_authorization_url(authorize_url, authorization_url_file=None)
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert opened == [authorize_url]
+    assert authorize_url not in combined
+    assert "oauth-state-sentinel" not in combined
+    assert "opened in the default browser" in captured.out
+
+
+def test_file_handoff_uses_private_new_file_without_logging_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    authorize_url = "https://accounts.spotify.test/authorize?state=oauth-state-sentinel"
+    path = tmp_path / "spotify-authorization-url"
+
+    oauth_probe.present_authorization_url(
+        authorize_url,
+        authorization_url_file=str(path),
+    )
+
+    assert path.read_text(encoding="utf-8") == f"{authorize_url}\n"
+    assert path.stat().st_mode & 0o777 == 0o600
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert str(path) in captured.out
+    assert authorize_url not in combined
+    assert "oauth-state-sentinel" not in combined
+
+
+def test_file_handoff_refuses_to_replace_existing_file(tmp_path: Path) -> None:
+    path = tmp_path / "spotify-authorization-url"
+    path.write_text("do-not-replace\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        oauth_probe.write_authorization_url_file(
+            str(path),
+            "https://accounts.spotify.test/authorize?state=secret",
+        )
+
+    assert path.read_text(encoding="utf-8") == "do-not-replace\n"
 
 
 @pytest.mark.parametrize(
