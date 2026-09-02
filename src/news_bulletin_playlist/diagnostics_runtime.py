@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import html
+import os
 import threading
 import urllib.parse
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from http import HTTPStatus
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist import __version__, engine_runtime
 from news_bulletin_playlist.diagnostics import DiagnosticEvent
@@ -31,6 +33,9 @@ from news_bulletin_playlist.spotify.auth import AuthorizationState
 
 class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler):
     """Add private diagnostic routes and keep detailed failures off the public page."""
+
+    diagnostic_timezone: tzinfo = UTC
+    diagnostic_timezone_label = "UTC"
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         try:
@@ -75,7 +80,12 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         self._reply(
             HTTPStatus.OK,
-            render_diagnostics_page(events=events, filters=filters),
+            render_diagnostics_page(
+                events=events,
+                filters=filters,
+                display_timezone=self.diagnostic_timezone,
+                timezone_label=self.diagnostic_timezone_label,
+            ),
         )
 
     def _serve_diagnostics_export(self, query: str) -> None:
@@ -160,7 +170,13 @@ def serve(
     """Run the production engine using the diagnostics-aware HTTP handler."""
     runtime_namespace = vars(engine_runtime)
     original_handler = runtime_namespace["OperationalHealthHandler"]
-    runtime_namespace["OperationalHealthHandler"] = DiagnosticOperationalHealthHandler
+    handler = DiagnosticOperationalHealthHandler
+    previous_timezone = handler.diagnostic_timezone
+    previous_timezone_label = handler.diagnostic_timezone_label
+    display_timezone, timezone_label = _diagnostic_display_timezone(environ)
+    handler.diagnostic_timezone = display_timezone
+    handler.diagnostic_timezone_label = timezone_label
+    runtime_namespace["OperationalHealthHandler"] = handler
     try:
         return engine_runtime.serve(
             host=host,
@@ -171,7 +187,22 @@ def serve(
             interval=interval,
         )
     finally:
+        handler.diagnostic_timezone = previous_timezone
+        handler.diagnostic_timezone_label = previous_timezone_label
         runtime_namespace["OperationalHealthHandler"] = original_handler
+
+
+def _diagnostic_display_timezone(
+    environ: Mapping[str, str] | None,
+) -> tuple[tzinfo, str]:
+    env = os.environ if environ is None else environ
+    timezone_name = env.get("TZ", "").strip()
+    if not timezone_name:
+        return UTC, "UTC"
+    try:
+        return ZoneInfo(timezone_name), timezone_name
+    except (ZoneInfoNotFoundError, ValueError):
+        return UTC, "UTC"
 
 
 def _safe_operational_status_page(
