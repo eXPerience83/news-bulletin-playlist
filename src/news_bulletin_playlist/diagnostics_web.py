@@ -277,9 +277,10 @@ def _event_row(event: DiagnosticEvent, *, display_timezone: tzinfo) -> str:
     details = " ".join(
         f"{key}={_plain_value(value)}" for key, value in sorted(event.details.items())
     ) or "—"
+    occurred_at = html.escape(_display_timestamp(event.occurred_at, display_timezone))
     return (
         "<tr>"
-        f"<td><code>{html.escape(_display_timestamp(event.occurred_at, display_timezone))}</code></td>"
+        f"<td><code>{occurred_at}</code></td>"
         f"<td>{html.escape(event.severity.value)}</td>"
         f"<td><code>{html.escape(event.component)}</code></td>"
         f"<td><code>{html.escape(event.event_name)}</code></td>"
