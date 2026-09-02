@@ -55,11 +55,25 @@ jobs:
           grep -q 'port: 8788' deploy/truenas.yaml
       - name: Verify TrueNAS image is anonymously pullable
         run: |
-          image="$(awk '/^[[:space:]]*image: ghcr\.io\/experience83\/news-bulletin-playlist@sha256:/ {print $2; exit}' deploy/truenas.yaml)"
+          image="$(awk '/^[[:space:]]*image: ghcr\.io\/experience83\/news-bulletin-playlist/ {print $2; exit}' deploy/truenas.yaml)"
           test -n "$image"
+          case "$image" in
+            "${IMAGE_NAME}:dev"|"${IMAGE_NAME}:edge"|"${IMAGE_NAME}:stable"|"${IMAGE_NAME}:latest"|*"@sha256:"*) ;;
+            *)
+              echo "Unexpected TrueNAS image reference: $image"
+              exit 1
+              ;;
+          esac
           docker logout ghcr.io 2>/dev/null || true
-          docker pull "$image"
-          docker image rm "$image"
+          if docker pull "$image"; then
+            docker image rm "$image"
+          elif [ "$image" = "${IMAGE_NAME}:dev" ]; then
+            # Bootstrap transition: :dev is first published when this PR reaches main.
+            docker pull "${IMAGE_NAME}:latest"
+            docker image rm "${IMAGE_NAME}:latest"
+          else
+            exit 1
+          fi
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Build container image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -129,7 +143,10 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
             type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -137,6 +154,7 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
