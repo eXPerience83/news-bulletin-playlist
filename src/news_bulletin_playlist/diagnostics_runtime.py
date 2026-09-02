@@ -159,7 +159,7 @@ def serve(
 ) -> int:
     """Run the production engine using the diagnostics-aware HTTP handler."""
     original_handler = engine_runtime.OperationalHealthHandler
-    engine_runtime.OperationalHealthHandler = DiagnosticOperationalHealthHandler
+    setattr(engine_runtime, "OperationalHealthHandler", DiagnosticOperationalHealthHandler)
     try:
         return engine_runtime.serve(
             host=host,
@@ -170,7 +170,7 @@ def serve(
             interval=interval,
         )
     finally:
-        engine_runtime.OperationalHealthHandler = original_handler
+        setattr(engine_runtime, "OperationalHealthHandler", original_handler)
 
 
 def _safe_operational_status_page(
