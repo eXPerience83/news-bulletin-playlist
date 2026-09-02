@@ -15,6 +15,7 @@ from types import FrameType
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.effective_config import (
     CONFIG_PATH_ENV,
     DEFAULT_CONFIG_FILENAME,
@@ -23,12 +24,14 @@ from news_bulletin_playlist.effective_config import (
 from news_bulletin_playlist.engine import (
     DEFAULT_ENGINE_INTERVAL,
     EngineCycleResult,
+    EngineCycleRunner,
     EngineRunner,
     EngineScheduler,
     OperationalStatus,
     OperationalStatusSnapshot,
     SpotifyAuthProvider,
 )
+from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
 from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
@@ -46,7 +49,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
 )
 from news_bulletin_playlist.models import EngineConfig
-from news_bulletin_playlist.persistence import SQLiteStore
+from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
@@ -54,6 +57,7 @@ from news_bulletin_playlist.runtime import (
     _data_dir_ready,
     initialize_runtime_storage,
 )
+from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.auth import (
     AuthorizationState,
     SpotifyAuthError,
@@ -123,12 +127,14 @@ class EngineLifecycleController:
 
     def __init__(
         self,
-        runner: ReloadingEngineCycleRunner,
+        runner: EngineCycleRunner,
         *,
         interval: timedelta,
+        diagnostics: OperationalDiagnostics | None = None,
     ) -> None:
         self.runner = runner
         self.interval = interval
+        self.diagnostics = diagnostics
         self.status = _MutableOperationalStatus(configured=False)
         self._scheduler: EngineScheduler | None = None
         self._scheduler_stop: threading.Event | None = None
@@ -149,7 +155,7 @@ class EngineLifecycleController:
             self._prune_draining_locked()
             if configured:
                 if self._scheduler is not None:
-                    self._scheduler.wake()
+                    self._wake_scheduler_locked()
                 elif self._draining_threads:
                     self._ensure_restart_waiter_locked()
                 else:
@@ -160,7 +166,7 @@ class EngineLifecycleController:
     def wake(self) -> None:
         with self._lock:
             if self._scheduler is not None:
-                self._scheduler.wake()
+                self._wake_scheduler_locked()
 
     def shutdown(self) -> None:
         with self._lock:
@@ -173,9 +179,10 @@ class EngineLifecycleController:
         with self._lock:
             self._prune_draining_locked()
         if still_running:
-            print(
-                "news-bulletin-playlist engine shutdown exceeded graceful wait; exiting",
-                flush=True,
+            self._emit_scheduler(
+                DiagnosticSeverity.WARNING,
+                "scheduler_shutdown_timeout",
+                details={"phase": "scheduler"},
             )
 
     def _start_scheduler_locked(self) -> None:
@@ -195,6 +202,22 @@ class EngineLifecycleController:
         self._scheduler_stop = scheduler_stop
         self._scheduler_thread = scheduler_thread
         scheduler_thread.start()
+        self._emit_scheduler(
+            DiagnosticSeverity.INFO,
+            "scheduler_started",
+            details={"next_state": "running"},
+        )
+
+    def _wake_scheduler_locked(self) -> None:
+        scheduler = self._scheduler
+        if scheduler is None:
+            return
+        scheduler.wake()
+        self._emit_scheduler(
+            DiagnosticSeverity.INFO,
+            "scheduler_wake_requested",
+            details={"next_state": "running"},
+        )
 
     def _request_scheduler_stop_locked(self) -> None:
         scheduler = self._scheduler
@@ -207,8 +230,31 @@ class EngineLifecycleController:
             return
         scheduler_stop.set()
         scheduler.wake()
+        self._emit_scheduler(
+            DiagnosticSeverity.INFO,
+            "scheduler_stop_requested",
+            details={"next_state": "stopped"},
+        )
         if scheduler_thread.is_alive() and scheduler_thread not in self._draining_threads:
             self._draining_threads.append(scheduler_thread)
+
+    def _emit_scheduler(
+        self,
+        severity: DiagnosticSeverity,
+        event_name: str,
+        *,
+        details: dict[str, str] | None = None,
+    ) -> None:
+        diagnostics = self.diagnostics
+        if diagnostics is None:
+            return
+        diagnostics.emit(
+            occurred_at=datetime.now(UTC),
+            severity=severity,
+            component="scheduler",
+            event_name=event_name,
+            details=details,
+        )
 
     def _prune_draining_locked(self) -> None:
         self._draining_threads = [
@@ -299,6 +345,7 @@ class OperationalHealthHandler(LanAdminHandler):
     configuration_synchronization: ConfigurationSynchronization | None = None
     managed_admin_service: ManagedAdminService | None = None
     managed_admin_auth: SpotifyAuthProvider | None = None
+    diagnostic_store: DiagnosticEventStore | None = None
 
     def _send_headers(
         self,
@@ -674,6 +721,21 @@ def serve(
     env = os.environ if environ is None else environ
     database_path = initialize_runtime_storage(data_dir)
     store = SQLiteStore(database_path)
+    diagnostic_store: DiagnosticEventStore | None = DiagnosticEventStore(database_path)
+    try:
+        diagnostic_store.initialize()
+    except PersistenceError:
+        diagnostic_store = None
+    diagnostics = OperationalDiagnostics(diagnostic_store)
+    if diagnostic_store is None:
+        diagnostics.emit(
+            occurred_at=datetime.now(UTC),
+            severity=DiagnosticSeverity.ERROR,
+            component="diagnostics",
+            event_name="diagnostic_store_unavailable",
+            details={"phase": "persistence"},
+        )
+
     admin_security, spotify_auth = build_engine_runtime_auth(data_dir, environ=env)
     config = _load_runtime_config(data_dir, env)
     configured = config is not None
@@ -693,14 +755,19 @@ def serve(
     )
     lifecycle: EngineLifecycleController | None = None
     if auth_provider is not None:
-        runner = ReloadingEngineCycleRunner(
+        base_runner = ReloadingEngineCycleRunner(
             data_dir,
             env,
             store,
             auth_provider,
             configuration_synchronization,
         )
-        lifecycle = EngineLifecycleController(runner, interval=scheduler_interval)
+        runner = InstrumentedEngineCycleRunner(base_runner, diagnostics)
+        lifecycle = EngineLifecycleController(
+            runner,
+            interval=scheduler_interval,
+            diagnostics=diagnostics,
+        )
         with configuration_synchronization.hold():
             lifecycle.reconcile(configured=configured)
         status: OperationalStatus = lifecycle.status
@@ -723,6 +790,7 @@ def serve(
     OperationalHealthHandler.configuration_synchronization = configuration_synchronization
     OperationalHealthHandler.managed_admin_service = managed_admin_service
     OperationalHealthHandler.managed_admin_auth = auth_provider
+    OperationalHealthHandler.diagnostic_store = diagnostic_store
     server = HTTPServer((host, port), OperationalHealthHandler)
     server.timeout = 0.5
     stopped = stop_event if stop_event is not None else threading.Event()
@@ -742,18 +810,24 @@ def serve(
         signal.signal(signal.SIGTERM, request_stop)
         signal.signal(signal.SIGINT, request_stop)
 
-    auth_status = "enabled" if spotify_auth is not None else "disabled"
-    engine_status = "enabled" if configured else "not-configured"
-    print(
-        f"news-bulletin-playlist runtime ready; web=http://{host}:{server.server_port}/ "
-        f"health=http://127.0.0.1:{server.server_port}/healthz data={data_dir} "
-        f"db={database_path} spotify_auth={auth_status} engine={engine_status}",
-        flush=True,
+    diagnostics.emit(
+        occurred_at=datetime.now(UTC),
+        severity=DiagnosticSeverity.INFO,
+        component="runtime",
+        event_name="runtime_ready",
+        details={"next_state": "running"},
     )
     try:
         while not stopped.is_set():
             server.handle_request()
     finally:
+        diagnostics.emit(
+            occurred_at=datetime.now(UTC),
+            severity=DiagnosticSeverity.INFO,
+            component="runtime",
+            event_name="runtime_stopping",
+            details={"next_state": "stopped"},
+        )
         stopped.set()
         server.server_close()
         if lifecycle is not None:
@@ -764,9 +838,17 @@ def serve(
         OperationalHealthHandler.configuration_synchronization = None
         OperationalHealthHandler.managed_admin_service = None
         OperationalHealthHandler.managed_admin_auth = None
+        OperationalHealthHandler.diagnostic_store = None
         if handlers_installed:
             signal.signal(signal.SIGTERM, previous_sigterm)
             signal.signal(signal.SIGINT, previous_sigint)
+        diagnostics.emit(
+            occurred_at=datetime.now(UTC),
+            severity=DiagnosticSeverity.INFO,
+            component="runtime",
+            event_name="runtime_stopped",
+            details={"next_state": "stopped"},
+        )
     return 0
 
 
