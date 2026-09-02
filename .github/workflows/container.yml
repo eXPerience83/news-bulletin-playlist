@@ -53,15 +53,29 @@ jobs:
             exit 1
           fi
 
-      - name: Verify public GHCR package remains anonymously pullable
+      - name: Verify required deployment channel is anonymously pullable
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           docker logout ghcr.io 2>/dev/null || true
-          # `edge-amd64` is first introduced by #86. The already-published
-          # generic `edge` tag proves package visibility during this transition;
-          # the edge publisher verifies both tags after #86 reaches main.
-          docker pull "${IMAGE_NAME}:edge"
-          docker image rm "${IMAGE_NAME}:edge"
+          required="${IMAGE_NAME}:edge-amd64"
+
+          if docker pull "$required"; then
+            docker image rm "$required"
+            exit 0
+          fi
+
+          if [[ "$PR_NUMBER" == "87" ]]; then
+            echo "Bootstrap only for PR #87: edge-amd64 does not exist until this channel split reaches main." >&2
+            bootstrap="${IMAGE_NAME}:edge"
+            docker pull "$bootstrap"
+            docker image rm "$bootstrap"
+            exit 0
+          fi
+
+          echo "ERROR: required deployment channel is not anonymously pullable: $required" >&2
+          exit 1
 
       - name: Build container image
         run: docker build --platform linux/amd64 --tag news-bulletin-playlist:ci .
