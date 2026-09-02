@@ -9,7 +9,7 @@ import re
 import urllib.parse
 import zipfile
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.diagnostics import (
@@ -107,9 +107,13 @@ def render_diagnostics_page(
     *,
     events: tuple[DiagnosticEvent, ...],
     filters: DiagnosticFilters,
+    display_timezone: tzinfo = UTC,
+    timezone_label: str = "UTC",
 ) -> bytes:
     """Render authenticated diagnostics without raw provider/error data."""
-    rows = "".join(_event_row(event) for event in events)
+    rows = "".join(
+        _event_row(event, display_timezone=display_timezone) for event in events
+    )
     if not rows:
         rows = '<tr><td colspan="8">No diagnostic events match these filters.</td></tr>'
     export_href = "/admin/diagnostics/export.zip?" + filters.query_string()
@@ -117,6 +121,7 @@ def render_diagnostics_page(
     source_value = "" if filters.source_id is None else filters.source_id
     playlist_value = "" if filters.playlist_id is None else filters.playlist_id
     hours_value = "all" if filters.hours is None else str(filters.hours)
+    timezone_heading = html.escape(timezone_label)
 
     document = f"""<!doctype html>
 <html lang="en">
@@ -165,7 +170,7 @@ def render_diagnostics_page(
   <p><a href="{html.escape(export_href, quote=True)}">Download sanitized diagnostics ZIP</a></p>
   <table>
     <thead><tr>
-      <th>Time (UTC)</th><th>Level</th><th>Component</th><th>Event</th>
+      <th>Time ({timezone_heading})</th><th>Level</th><th>Component</th><th>Event</th>
       <th>Cycle</th><th>Source</th><th>Playlist</th><th>Details</th>
     </tr></thead>
     <tbody>{rows}</tbody>
@@ -268,13 +273,13 @@ def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
     }
 
 
-def _event_row(event: DiagnosticEvent) -> str:
+def _event_row(event: DiagnosticEvent, *, display_timezone: tzinfo) -> str:
     details = " ".join(
         f"{key}={_plain_value(value)}" for key, value in sorted(event.details.items())
     ) or "—"
     return (
         "<tr>"
-        f"<td><code>{html.escape(_timestamp(event.occurred_at))}</code></td>"
+        f"<td><code>{html.escape(_display_timestamp(event.occurred_at, display_timezone))}</code></td>"
         f"<td>{html.escape(event.severity.value)}</td>"
         f"<td><code>{html.escape(event.component)}</code></td>"
         f"<td><code>{html.escape(event.event_name)}</code></td>"
@@ -379,6 +384,12 @@ def _writestr(archive: zipfile.ZipFile, name: str, content: str) -> None:
     info.compress_type = zipfile.ZIP_DEFLATED
     info.external_attr = 0o600 << 16
     archive.writestr(info, content.encode("utf-8"))
+
+
+def _display_timestamp(value: datetime, display_timezone: tzinfo) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("diagnostics timestamp must be timezone-aware")
+    return value.astimezone(display_timezone).isoformat(timespec="seconds")
 
 
 def _timestamp(value: datetime) -> str:
