@@ -18,8 +18,12 @@ _LOGGER_NAME = "news_bulletin_playlist"
 _HANDLER_MARKER = "_news_bulletin_operational_handler"
 
 
+def _utc_converter(timestamp: float | None) -> time.struct_time:
+    return time.gmtime(timestamp)
+
+
 class _UtcFormatter(logging.Formatter):
-    converter = time.gmtime
+    converter = staticmethod(_utc_converter)
 
 
 def configure_operational_logging() -> logging.Logger:
