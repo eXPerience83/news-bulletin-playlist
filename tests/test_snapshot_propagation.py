@@ -111,11 +111,45 @@ class _SnapshotContentRaceSpotify(_SnapshotPropagationSpotify):
         return super().playlist_items(playlist_id, limit=limit, offset=offset)
 
 
+class _LateSnapshotContentRaceSpotify(_SnapshotPropagationSpotify):
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if self.snapshot_calls == 2 and offset == 0 and self.writes:
+            self.state[0] = "spotify:episode:late-concurrent"
+        return super().playlist_items(playlist_id, limit=limit, offset=offset)
+
+
 def test_stable_stale_snapshot_becomes_degraded_without_attestation(tmp_path: Path) -> None:
     playlist = _playlist()
     desired = _desired(playlist)
     store = _store(tmp_path)
     client = _SnapshotPropagationSpotify(["snapshot-stale", "snapshot-stale"])
+
+    result = reconcile_spotify_playlist(client, playlist, desired, store=store)
+
+    assert result.ok is True
+    assert result.wrote is True
+    assert result.degraded_verification is True
+    assert result.warning == (
+        "Spotify verification degraded: snapshot propagation pending after exact readback"
+    )
+    assert client.writes == 1
+    assert client.snapshot_calls == 2
+    assert store.get_playlist_attestation(playlist.id) is None
+
+
+def test_advancing_stale_snapshot_becomes_degraded_after_final_exact_readback(
+    tmp_path: Path,
+) -> None:
+    playlist = _playlist()
+    desired = _desired(playlist)
+    store = _store(tmp_path)
+    client = _SnapshotPropagationSpotify(["snapshot-a", "snapshot-b"])
 
     result = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
@@ -154,6 +188,20 @@ def test_content_race_during_snapshot_recheck_still_fails_closed(tmp_path: Path)
     desired = _desired(playlist)
     store = _store(tmp_path)
     client = _SnapshotContentRaceSpotify(["snapshot-stale", "snapshot-stale"])
+
+    with pytest.raises(SpotifyReconciliationError, match="content changed"):
+        reconcile_spotify_playlist(client, playlist, desired, store=store)
+
+    assert store.get_playlist_attestation(playlist.id) is None
+
+
+def test_late_content_race_after_advancing_snapshot_still_fails_closed(
+    tmp_path: Path,
+) -> None:
+    playlist = _playlist()
+    desired = _desired(playlist)
+    store = _store(tmp_path)
+    client = _LateSnapshotContentRaceSpotify(["snapshot-a", "snapshot-b"])
 
     with pytest.raises(SpotifyReconciliationError, match="content changed"):
         reconcile_spotify_playlist(client, playlist, desired, store=store)
