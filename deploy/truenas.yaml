@@ -11,6 +11,8 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    environment:
+      TZ: "Europe/Madrid"
     ports:
       - "0.0.0.0:8788:8080"
     tmpfs:
