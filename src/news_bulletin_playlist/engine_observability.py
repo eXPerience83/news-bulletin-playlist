@@ -90,8 +90,14 @@ class InstrumentedEngineCycleRunner:
 
             if playlist.ok:
                 event_name = "playlist_reconciled"
-                severity = DiagnosticSeverity.INFO
+                severity = (
+                    DiagnosticSeverity.WARNING
+                    if playlist.error is not None
+                    else DiagnosticSeverity.INFO
+                )
                 details["write_decision"] = "applied" if playlist.wrote else "unchanged"
+                if playlist.error is not None:
+                    details["verification_outcome"] = "degraded"
             elif _destination_was_preserved(playlist.error):
                 event_name = "destination_preserved"
                 severity = DiagnosticSeverity.WARNING

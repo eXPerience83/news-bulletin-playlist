@@ -135,6 +135,47 @@ def test_instrumented_runner_records_correlated_source_playlist_and_cycle_events
     assert "provider-body-sentinel" not in output.getvalue()
 
 
+def test_degraded_playlist_verification_is_warning_without_raw_text(tmp_path: Path) -> None:
+    diagnostics, store, output = _diagnostics(tmp_path)
+    sentinel = "access-token-sentinel-never-persist"
+    result = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=1),
+        ok=True,
+        sources=(),
+        playlists=(
+            PlaylistCycleOutcome(
+                playlist_id=PlaylistId("spain_spanish_news"),
+                ok=True,
+                desired_count=82,
+                applied_count=82,
+                wrote=True,
+                last_success_at=NOW,
+                error=f"snapshot propagation pending {sentinel}",
+            ),
+        ),
+    )
+    runner = InstrumentedEngineCycleRunner(
+        _Runner(result),
+        diagnostics,
+        clock=lambda: NOW,
+    )
+
+    assert runner.run_cycle() is result
+
+    events = store.list_events(limit=10)
+    playlist_event = next(event for event in events if event.component == "playlist")
+    assert playlist_event.event_name == "playlist_reconciled"
+    assert playlist_event.severity is DiagnosticSeverity.WARNING
+    assert playlist_event.details == {
+        "applied_count": 82,
+        "desired_count": 82,
+        "verification_outcome": "degraded",
+        "write_decision": "applied",
+    }
+    assert sentinel not in output.getvalue()
+
+
 def test_unexpected_runner_exception_logs_only_safe_classification(tmp_path: Path) -> None:
     diagnostics, store, output = _diagnostics(tmp_path)
     runner = InstrumentedEngineCycleRunner(
