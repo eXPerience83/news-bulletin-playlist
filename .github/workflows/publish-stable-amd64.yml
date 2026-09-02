@@ -55,18 +55,7 @@ jobs:
           set -euo pipefail
           latest="$(
             git tag --list 'v*' --merged refs/remotes/origin/main |
-              python3 -c 'import re, sys
-pattern = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-best = None
-for raw in sys.stdin:
-    tag = raw.strip()
-    match = pattern.fullmatch(tag)
-    if not match:
-        continue
-    key = tuple(int(part) for part in match.groups())
-    if best is None or key > best[0]:
-        best = (key, tag)
-print(best[1] if best else "")'
+              python3 -c 'import re,sys; pattern=re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"); items=[(tuple(int(part) for part in match.groups()), tag) for raw in sys.stdin if (tag:=raw.strip()) and (match:=pattern.fullmatch(tag))]; print(max(items)[1] if items else "")'
           )"
           if [[ "$latest" != "$GITHUB_REF_NAME" ]]; then
             echo "ERROR: refusing stable regression; newest stable tag on main is $latest, current tag is $GITHUB_REF_NAME" >&2
@@ -238,19 +227,14 @@ print(best[1] if best else "")'
           local_id="$(docker image inspect news-bulletin-playlist:stable-candidate --format '{{.Id}}')"
 
           inspect_error="$(mktemp)"
+          trap 'rm -f "$inspect_error"' EXIT
           if digest="$(docker buildx imagetools inspect "$version_ref" --format '{{json .Manifest.Digest}}' 2>"$inspect_error" | tr -d '"')"; then
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "ERROR: existing version tag returned invalid digest: $digest" >&2
               exit 1
             fi
-            docker pull "$version_ref"
-            existing_id="$(docker image inspect "$version_ref" --format '{{.Id}}')"
-            if [[ "$existing_id" != "$local_id" ]]; then
-              echo "ERROR: immutable version tag ${VERSION} already exists with different image content" >&2
-              exit 1
-            fi
           else
-            if ! grep -Eqi 'manifest unknown|not found' "$inspect_error"; then
+            if ! grep -Fqi 'manifest unknown' "$inspect_error" && ! grep -Fqi "${version_ref}: not found" "$inspect_error"; then
               cat "$inspect_error" >&2
               echo "ERROR: could not safely determine whether immutable version tag exists" >&2
               exit 1
@@ -263,7 +247,14 @@ print(best[1] if best else "")'
               exit 1
             fi
           fi
-          rm -f "$inspect_error"
+
+          resolved_ref="${image}@${digest}"
+          docker pull "$resolved_ref"
+          resolved_id="$(docker image inspect "$resolved_ref" --format '{{.Id}}')"
+          if [[ "$resolved_id" != "$local_id" ]]; then
+            echo "ERROR: immutable version digest does not match the tested image" >&2
+            exit 1
+          fi
 
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "version_ref=$version_ref" >> "$GITHUB_OUTPUT"
