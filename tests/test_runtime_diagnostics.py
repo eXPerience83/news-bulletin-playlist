@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from news_bulletin_playlist.diagnostics import DiagnosticEventStore
+from news_bulletin_playlist.diagnostics import (
+    DiagnosticEventStore,
+    DiagnosticSeverity,
+)
 from news_bulletin_playlist.engine import (
     EngineCycleResult,
     PlaylistCycleOutcome,
@@ -153,12 +156,7 @@ def test_runtime_emitter_rejects_unsafe_allowed_field_without_leaking_it(tmp_pat
 
     diagnostics.emit(
         occurred_at=NOW,
-        severity=store.list_events.__annotations__.get("severity", None)  # type: ignore[arg-type]
-        if False
-        else __import__(
-            "news_bulletin_playlist.diagnostics",
-            fromlist=["DiagnosticSeverity"],
-        ).DiagnosticSeverity.ERROR,
+        severity=DiagnosticSeverity.ERROR,
         component="spotify.auth",
         event_name="authorization_failed",
         details={"phase": sentinel},
