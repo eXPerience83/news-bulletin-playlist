@@ -39,6 +39,68 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "write_decision",
     }
 )
+_ALLOWED_DETAIL_STRING_VALUES = {
+    "match_reason": frozenset(
+        {
+            "ambiguous",
+            "delayed_release_matched",
+            "matched",
+            "pending",
+            "release_date_mismatch",
+            "release_date_skew_rejected",
+            "semantic_time_mismatch",
+            "title_mismatch",
+            "title_parse_failed",
+        }
+    ),
+    "next_state": frozenset(
+        {
+            "connected",
+            "disabled",
+            "disconnected",
+            "enabled",
+            "expired",
+            "running",
+            "scheduled",
+            "stopped",
+        }
+    ),
+    "phase": frozenset(
+        {
+            "authorization",
+            "collection",
+            "complete",
+            "configuration",
+            "desired_state",
+            "matching",
+            "persistence",
+            "readback",
+            "reconciliation",
+            "retention",
+            "scheduler",
+        }
+    ),
+    "verification_outcome": frozenset(
+        {
+            "attested",
+            "degraded",
+            "mismatch",
+            "skipped",
+            "unavailable",
+            "verified",
+        }
+    ),
+    "write_decision": frozenset(
+        {
+            "applied",
+            "blocked",
+            "preserved",
+            "retry",
+            "skipped",
+            "unchanged",
+        }
+    ),
+}
 
 type DiagnosticValue = str | int | bool | None
 
@@ -336,10 +398,10 @@ def _normalize_details(
                 raise ValueError(f"diagnostic detail {key} must be non-negative")
             normalized[key] = value
         elif isinstance(value, str):
-            stripped = value.strip()
-            if not stripped or len(stripped) > 128 or "\n" in stripped or "\r" in stripped:
-                raise ValueError(f"diagnostic detail {key} contains invalid text")
-            normalized[key] = stripped
+            allowed_values = _ALLOWED_DETAIL_STRING_VALUES.get(key)
+            if allowed_values is None or value not in allowed_values:
+                raise ValueError(f"diagnostic detail {key} contains an unsupported label")
+            normalized[key] = value
         else:
             raise ValueError(f"diagnostic detail {key} has unsupported value type")
     return normalized
@@ -374,11 +436,7 @@ def _event_from_row(row: sqlite3.Row) -> DiagnosticEvent:
 
 def _identifier(value: str, label: str, *, max_length: int) -> str:
     result = value.strip()
-    if (
-        not result
-        or len(result) > max_length
-        or _IDENTIFIER.fullmatch(result) is None
-    ):
+    if not result or len(result) > max_length or _IDENTIFIER.fullmatch(result) is None:
         raise ValueError(f"diagnostic {label} contains an invalid identifier")
     return result
 
