@@ -15,7 +15,6 @@ from news_bulletin_playlist.registry import get_title_parser
 DEFAULT_PAGE_SIZE = 50
 DEFAULT_MAX_PAGES = 2
 DEFAULT_RETRY_GRACE = timedelta(minutes=15)
-MAX_SEMANTIC_RELEASE_DELAY_DAYS = 1
 
 _WHITESPACE = re.compile(r"\s+")
 _RELEASE_PRECISIONS = {"year", "month", "day"}
@@ -377,7 +376,7 @@ def _semantic_release_delay_days(
     target = edition.edition_at.astimezone(source.timezone).date()
     candidate_date = date.fromisoformat(candidate.release_date)
     delay_days = (candidate_date - target).days
-    if 0 <= delay_days <= MAX_SEMANTIC_RELEASE_DELAY_DAYS:
+    if 0 <= delay_days <= source.spotify_release_delay_days:
         return delay_days
     return None
 
