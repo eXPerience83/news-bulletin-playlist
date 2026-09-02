@@ -122,6 +122,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         external_references=(
             ExternalReference("spotify", "show", "0UgidTKsoaHiHDARuPQNW1"),
         ),
+        spotify_release_delay_days=1,
     ),
     SourceDefinition(
         id=SourceId("ondacero"),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -18,6 +19,13 @@ DEFAULT_RETRY_GRACE = timedelta(minutes=15)
 _WHITESPACE = re.compile(r"\s+")
 _RELEASE_PRECISIONS = {"year", "month", "day"}
 _EPISODE_URI_PREFIX = "spotify:episode:"
+_REJECTION_REASON_ORDER = (
+    "title_parse_failed",
+    "semantic_time_mismatch",
+    "release_date_skew_rejected",
+    "release_date_mismatch",
+    "title_mismatch",
+)
 
 
 class SpotifyCatalogClient(Protocol):
@@ -63,6 +71,14 @@ class _SpotifyEpisodeCandidate:
     release_date: str
     release_date_precision: str
     duration_seconds: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateEvaluation:
+    candidate: _SpotifyEpisodeCandidate
+    matched: bool
+    reason: str
+    release_delay_days: int = 0
 
 
 def match_source_editions(
@@ -115,14 +131,12 @@ def match_source_editions(
     )
 
     for index, edition in unresolved:
-        viable = tuple(
-            candidate
-            for candidate in candidates
-            if _candidate_matches(source, edition, candidate)
+        evaluations = tuple(
+            _evaluate_candidate(source, edition, candidate) for candidate in candidates
         )
         outcome = _resolve_outcome(
             edition,
-            viable,
+            evaluations,
             candidate_count=len(candidates),
             catalogue_calls=catalogue_calls,
         )
@@ -308,27 +322,63 @@ def _validate_release_date(value: str, precision: str) -> None:
         ) from exc
 
 
-def _candidate_matches(
+def _evaluate_candidate(
     source: SourceDefinition,
     edition: CanonicalEdition,
     candidate: _SpotifyEpisodeCandidate,
-) -> bool:
-    if not _release_date_compatible(source, edition, candidate):
-        return False
-
+) -> _CandidateEvaluation:
     if edition.edition_at is None:
-        return _normalize_title(candidate.name) == _normalize_title(edition.title)
+        if not _release_date_compatible(source, edition, candidate):
+            return _CandidateEvaluation(candidate, False, "release_date_mismatch")
+        if _normalize_title(candidate.name) != _normalize_title(edition.title):
+            return _CandidateEvaluation(candidate, False, "title_mismatch")
+        return _CandidateEvaluation(candidate, True, "matched")
 
     parser = get_title_parser(str(source.parser_id))
     parsed = parser.parse(candidate.name)
     if parsed is None:
-        return False
+        return _CandidateEvaluation(candidate, False, "title_parse_failed")
+
     candidate_edition_at = (
         parsed.edition_at.replace(tzinfo=None)
         .replace(tzinfo=source.timezone)
         .astimezone(UTC)
     )
-    return candidate_edition_at == edition.edition_at
+    if candidate_edition_at != edition.edition_at:
+        return _CandidateEvaluation(candidate, False, "semantic_time_mismatch")
+
+    release_delay_days = _semantic_release_delay_days(source, edition, candidate)
+    if release_delay_days is None:
+        return _CandidateEvaluation(candidate, False, "release_date_skew_rejected")
+    if release_delay_days:
+        return _CandidateEvaluation(
+            candidate,
+            True,
+            "delayed_release_matched",
+            release_delay_days=release_delay_days,
+        )
+    return _CandidateEvaluation(candidate, True, "matched")
+
+
+def _semantic_release_delay_days(
+    source: SourceDefinition,
+    edition: CanonicalEdition,
+    candidate: _SpotifyEpisodeCandidate,
+) -> int | None:
+    if edition.edition_at is None:
+        raise ValueError("semantic release delay requires edition_at")
+
+    # Coarse month/year release dates cannot prove a bounded day-level publication delay.
+    # Keep their existing strict calendar compatibility.
+    if candidate.release_date_precision != "day":
+        return 0 if _release_date_compatible(source, edition, candidate) else None
+
+    target = edition.edition_at.astimezone(source.timezone).date()
+    candidate_date = date.fromisoformat(candidate.release_date)
+    delay_days = (candidate_date - target).days
+    if 0 <= delay_days <= source.spotify_release_delay_days:
+        return delay_days
+    return None
 
 
 def _release_date_compatible(
@@ -350,25 +400,29 @@ def _release_date_compatible(
 
 def _resolve_outcome(
     edition: CanonicalEdition,
-    viable: Sequence[_SpotifyEpisodeCandidate],
+    evaluations: Sequence[_CandidateEvaluation],
     *,
     candidate_count: int,
     catalogue_calls: int,
 ) -> MatchOutcome:
+    viable = tuple(evaluation for evaluation in evaluations if evaluation.matched)
+
     if len(viable) == 1:
-        candidate = viable[0]
+        evaluation = viable[0]
+        candidate = evaluation.candidate
         duration_detail = _duration_diagnostic(edition, candidate)
+        release_detail = _release_delay_diagnostic(evaluation)
         return MatchOutcome(
             edition=edition,
             status=MatchStatus.MATCHED,
             spotify_episode_uri=candidate.uri,
             diagnostics=(
                 f"matched 1 of {candidate_count} candidate(s) in {catalogue_calls} call(s)"
-                f"{duration_detail}"
+                f"{release_detail}{duration_detail}"
             ),
         )
     if len(viable) > 1:
-        uris = ", ".join(candidate.uri for candidate in viable[:3])
+        uris = ", ".join(evaluation.candidate.uri for evaluation in viable[:3])
         suffix = ", ..." if len(viable) > 3 else ""
         return MatchOutcome(
             edition=edition,
@@ -378,15 +432,47 @@ def _resolve_outcome(
                 f"{len(viable)} viable Spotify candidates in known show: {uris}{suffix}"
             ),
         )
+
+    if candidate_count == 0:
+        diagnostics = f"no Spotify candidates fetched after {catalogue_calls} call(s)"
+    else:
+        diagnostics = (
+            f"no viable Spotify candidate among {candidate_count} episode(s) "
+            f"after {catalogue_calls} call(s)"
+        )
+        rejection_detail = _rejection_diagnostic(evaluations)
+        if rejection_detail:
+            diagnostics = f"{diagnostics}; {rejection_detail}"
+
     return MatchOutcome(
         edition=edition,
         status=MatchStatus.PENDING,
         spotify_episode_uri=None,
-        diagnostics=(
-            f"no viable Spotify candidate among {candidate_count} episode(s) "
-            f"after {catalogue_calls} call(s)"
-        ),
+        diagnostics=diagnostics,
     )
+
+
+def _release_delay_diagnostic(evaluation: _CandidateEvaluation) -> str:
+    if evaluation.reason != "delayed_release_matched":
+        return ""
+    return (
+        f"; delayed Spotify release=+{evaluation.release_delay_days}d accepted by "
+        "exact semantic edition time"
+    )
+
+
+def _rejection_diagnostic(evaluations: Sequence[_CandidateEvaluation]) -> str:
+    counts = Counter(
+        evaluation.reason for evaluation in evaluations if not evaluation.matched
+    )
+    parts = [
+        f"{reason}={counts[reason]}"
+        for reason in _REJECTION_REASON_ORDER
+        if counts[reason]
+    ]
+    extras = sorted(reason for reason in counts if reason not in _REJECTION_REASON_ORDER)
+    parts.extend(f"{reason}={counts[reason]}" for reason in extras)
+    return f"rejections: {', '.join(parts)}" if parts else ""
 
 
 def _duration_diagnostic(
