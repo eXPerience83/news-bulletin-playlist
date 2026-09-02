@@ -180,13 +180,17 @@ SIGTERM/SIGINT asks the HTTP host and scheduler to stop. The scheduler does not 
 
 ## Image integrity and updates
 
-The checked-in TrueNAS YAML is pinned to an exact GHCR `sha256` digest built and validated by CI. It does **not** deploy the mutable `latest` tag. Reinstall/restart therefore resolves to the same reviewed image.
+Container publication follows the channel contract documented in [`RELEASE_CHANNELS.md`](RELEASE_CHANNELS.md):
 
-CI verifies that the digest is anonymously pullable. If that check fails because the package is private, make the GHCR package **Public** rather than storing registry credentials in the repository or deployment YAML.
+`dev -> edge -> stable = latest`
 
-The GHCR workflow also publishes convenience `latest`, `sha-<git-sha>` and version tags from `main`, but TrueNAS should update through a reviewed PR that replaces the digest in `deploy/truenas.yaml`. The previous digest remains available in Git history for deterministic rollback.
+The checked-in TrueNAS YAML follows `ghcr.io/experience83/news-bulletin-playlist:edge-amd64`. That channel contains only code already integrated into `main`; it is updated automatically after relevant merged changes pass the image build and hardened runtime smoke test. Normal TrueNAS upgrades therefore do **not** require editing a digest in the YAML for every build.
 
-The `/data` dataset is deliberately external to the container image. Updating or rolling back the image does not erase SQLite state, Spotify refresh authorization or the production YAML.
+`dev-amd64` is reserved for deliberate pre-merge testing of an explicitly owner-authorized PR candidate. Normal PR CI never moves `dev`. `stable-amd64` and `latest` move only when an exact `vMAJOR.MINOR.PATCH` release from `main` is published, and `latest` is always the same stable image rather than an alias for current development.
+
+GHCR also keeps candidate/revision tags and immutable image digests for audit and rollback. When exact reproduction matters, temporarily pin `ghcr.io/experience83/news-bulletin-playlist@sha256:<digest>` rather than relying on a mutable channel.
+
+CI checks the deployment channel, package visibility, Compose rendering and the hardened health/web smoke test. The `/data` dataset is deliberately external to the container image, so updating or rolling back an image does not erase SQLite state, Spotify refresh authorization or managed configuration.
 
 ## P0/manual OAuth probe
 
