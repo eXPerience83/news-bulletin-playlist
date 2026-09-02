@@ -8,10 +8,15 @@ from dataclasses import dataclass
 from news_bulletin_playlist.diagnostics import DiagnosticValue
 
 _API_ERROR = re.compile(r"^Spotify API (?P<status>\d{3}):")
+_OPERATION_FAILURE = re.compile(
+    r"^Spotify playlist (?P<phase>prewrite|readback|verification|write) "
+    r"(?P<operation>playlist_items|replace_items|snapshot) "
+    r"(?P<kind>API|transport) failure"
+    r"(?: \(http_status=(?P<status>\d{3})\))?$"
+)
 _OFFSET = re.compile(r"(?:^|[ (])offset=(?P<value>\d+)(?:[ )]|$)")
 _RETURNED = re.compile(r"(?:^|[ (])returned=(?P<value>\d+)(?:[ )]|$)")
 _TOTAL = re.compile(r"(?:^|[ (])total=(?P<value>\d+)(?:[ )]|$)")
-_DESIRED = re.compile(r"(?:^|[ (])desired=(?P<value>\d+)(?:[ )]|$)")
 _UNAVAILABLE_INDICES = re.compile(r"index/indices \[(?P<values>[0-9,]*)\]")
 
 
@@ -21,6 +26,7 @@ class ReconciliationFailureDiagnostic:
 
     failure_class: str
     phase: str
+    operation: str | None = None
     offset: int | None = None
     returned_count: int | None = None
     total: int | None = None
@@ -36,6 +42,7 @@ class ReconciliationFailureDiagnostic:
             "phase": self.phase,
         }
         optional: tuple[tuple[str, DiagnosticValue], ...] = (
+            ("operation", self.operation),
             ("offset", self.offset),
             ("returned_count", self.returned_count),
             ("total", self.total),
@@ -53,6 +60,22 @@ def classify_reconciliation_failure(error: str | None) -> ReconciliationFailureD
     """Classify only known shapes; unknown text collapses to a generic safe result."""
     if error is None:
         return ReconciliationFailureDiagnostic("reconciliation_error", "reconciliation")
+
+    operation_match = _OPERATION_FAILURE.match(error)
+    if operation_match is not None:
+        status = operation_match.group("status")
+        return ReconciliationFailureDiagnostic(
+            "api_error" if operation_match.group("kind") == "API" else "transport_error",
+            operation_match.group("phase"),
+            operation=operation_match.group("operation"),
+            http_status=None if status is None else int(status),
+            verification_outcome="failed",
+            write_decision=(
+                "blocked"
+                if operation_match.group("phase") in {"prewrite", "verification"}
+                else None
+            ),
+        )
 
     api_match = _API_ERROR.match(error)
     if api_match is not None:
@@ -89,8 +112,6 @@ def classify_reconciliation_failure(error: str | None) -> ReconciliationFailureD
     elif "did not match desired order/count/content" in error:
         failure_class = "verification_mismatch"
         verification = "mismatch"
-        if values["returned_count"] is None:
-            values["returned_count"] = _number(_RETURNED, error)
     elif _is_response_shape_failure(error):
         failure_class = "response_shape_error"
         verification = "failed"
@@ -109,6 +130,7 @@ def classify_reconciliation_failure(error: str | None) -> ReconciliationFailureD
     return ReconciliationFailureDiagnostic(
         failure_class=failure_class,
         phase=phase,
+        operation=_operation(error, phase),
         offset=values["offset"],
         returned_count=values["returned_count"],
         total=values["total"],
@@ -132,6 +154,17 @@ def _phase(error: str) -> str:
     if "desired state" in lowered:
         return "desired_state"
     return "reconciliation"
+
+
+def _operation(error: str, phase: str) -> str | None:
+    lowered = error.casefold()
+    if "write response" in lowered:
+        return "replace_items"
+    if "snapshot" in lowered:
+        return "snapshot"
+    if phase in {"prewrite", "readback", "verification"}:
+        return "playlist_items"
+    return None
 
 
 def _next_state(error: str) -> str | None:
