@@ -1,0 +1,261 @@
+name: Publish reviewed PR candidate AMD64
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-pr-candidate-dev-amd64
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/publish-candidate ') &&
+      github.event.comment.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      short_sha: ${{ steps.pr.outputs.short_sha }}
+      artifact_name: ${{ steps.pr.outputs.artifact_name }}
+      archive_sha256: ${{ steps.archive.outputs.sha256 }}
+
+    steps:
+      - name: Resolve and authorize the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMAND_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          requested_sha="${COMMAND_BODY#'/publish-candidate '}"
+          if [[ ! "$requested_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: usage: /publish-candidate <full-40-character-head-sha>" >&2
+            exit 1
+          fi
+
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          head_repo="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
+          head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          base_ref="$(jq -r '.base.ref' <<<"$pr_json")"
+          state="$(jq -r '.state' <<<"$pr_json")"
+
+          if [[ "$head_repo" != "$GITHUB_REPOSITORY" ]]; then
+            echo "ERROR: candidate publication is limited to branches in $GITHUB_REPOSITORY" >&2
+            exit 1
+          fi
+          if [[ "$base_ref" != main ]]; then
+            echo "ERROR: candidate pull request must target main; got $base_ref" >&2
+            exit 1
+          fi
+          if [[ "$state" != open ]]; then
+            echo "ERROR: candidate pull request must be open; got $state" >&2
+            exit 1
+          fi
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: invalid pull-request head revision: $head_sha" >&2
+            exit 1
+          fi
+          if [[ "$requested_sha" != "$head_sha" ]]; then
+            echo "ERROR: authorized SHA $requested_sha is no longer the PR head $head_sha" >&2
+            exit 1
+          fi
+
+          short_sha="${head_sha:0:12}"
+          artifact_name="candidate-image-pr-${PR_NUMBER}-${short_sha}"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the exact pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Verify the checked-out revision
+        env:
+          EXPECTED_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Validate configuration and build exact candidate
+        env:
+          SOURCE_REVISION: ${{ steps.pr.outputs.head_sha }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml config --quiet
+          docker compose -f deploy/truenas.yaml config --quiet
+          docker build \
+            --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=${SOURCE_REVISION}" \
+            --label "org.opencontainers.image.version=candidate-pr-${PR_NUMBER}" \
+            --tag news-bulletin-playlist:candidate \
+            .
+
+      - name: Smoke test the exact candidate
+        run: |
+          set -euo pipefail
+          docker volume create news-bulletin-candidate-data
+          docker run --detach --rm \
+            --name news-bulletin-playlist-candidate \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --publish 127.0.0.1:18789:8080 \
+            --mount source=news-bulletin-candidate-data,target=/data \
+            news-bulletin-playlist:candidate
+
+          remaining=20
+          while [ "$remaining" -gt 0 ]; do
+            status="$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-candidate)"
+            if [ "$status" = healthy ]; then
+              break
+            fi
+            if [ "$status" = unhealthy ]; then
+              docker logs news-bulletin-playlist-candidate
+              exit 1
+            fi
+            remaining=$((remaining - 1))
+            sleep 1
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-candidate)" = healthy
+          curl --fail --silent --show-error http://127.0.0.1:18789/ | grep -q 'News Bulletin Playlists'
+          curl --fail --silent --show-error http://127.0.0.1:18789/healthz | grep -q '"status":"ok"'
+
+      - name: Stop candidate container
+        if: always()
+        run: |
+          docker stop news-bulletin-playlist-candidate 2>/dev/null || true
+          docker volume rm news-bulletin-candidate-data 2>/dev/null || true
+
+      - name: Export exact candidate image
+        id: archive
+        run: |
+          set -euo pipefail
+          docker save news-bulletin-playlist:candidate | gzip -1 > candidate-image.tar.gz
+          sha256="$(sha256sum candidate-image.tar.gz | awk '{print $1}')"
+          test "${#sha256}" -eq 64
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified candidate artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.pr.outputs.artifact_name }}
+          path: candidate-image.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      pull-requests: write
+
+    steps:
+      - name: Download the verified candidate artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" \
+            --dir candidate
+
+      - name: Verify artifact hash and load image
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          archive="candidate/candidate-image.tar.gz"
+          actual_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
+            echo "ERROR: candidate artifact changed after validation" >&2
+            exit 1
+          fi
+          gzip -dc "$archive" | docker load
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Publish candidate and promote dev channel
+        id: publish
+        env:
+          PR_NUMBER: ${{ needs.build.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.build.outputs.head_sha }}
+          SHORT_SHA: ${{ needs.build.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          namespace="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${namespace}/news-bulletin-playlist"
+          candidate_tag="candidate-pr-${PR_NUMBER}-${SHORT_SHA}"
+          candidate_ref="${image}:${candidate_tag}"
+
+          docker tag news-bulletin-playlist:candidate "$candidate_ref"
+          docker push "$candidate_ref"
+
+          digest="$(docker buildx imagetools inspect "$candidate_ref" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: could not resolve candidate digest: $digest" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create \
+            --prefer-index=false \
+            --tag "${image}:dev" \
+            --tag "${image}:dev-amd64" \
+            "${image}@${digest}"
+
+          for tag in "$candidate_tag" dev dev-amd64; do
+            actual="$(docker buildx imagetools inspect "${image}:${tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [[ "$actual" != "$digest" ]]; then
+              echo "ERROR: ${image}:${tag} resolved to $actual instead of $digest" >&2
+              exit 1
+            fi
+          done
+
+          echo "candidate_ref=$candidate_ref" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "dev_ref=${image}:dev-amd64" >> "$GITHUB_OUTPUT"
+          echo "source=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Comment the published candidate on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.build.outputs.pr_number }}
+          CANDIDATE_REF: ${{ steps.publish.outputs.candidate_ref }}
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+          DEV_REF: ${{ steps.publish.outputs.dev_ref }}
+          SOURCE_REVISION: ${{ steps.publish.outputs.source }}
+        run: |
+          set -euo pipefail
+          image="${CANDIDATE_REF%:*}"
+          body="Published the reviewed AMD64 candidate after exact-head validation and hardened runtime smoke tests passed.\n\n- Candidate: \`${CANDIDATE_REF}\`\n- Dev channel: \`${DEV_REF}\`\n- Immutable: \`${image}@${IMAGE_DIGEST}\`\n- Source revision: \`${SOURCE_REVISION}\`\n\nThe mutable \`dev\` channel may contain unmerged code. It is not \`edge\`, \`stable\`, or \`latest\`."
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$body"
