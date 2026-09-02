@@ -201,19 +201,14 @@ jobs:
           local_id="$(docker image inspect news-bulletin-playlist:edge-candidate --format '{{.Id}}')"
 
           inspect_error="$(mktemp)"
+          trap 'rm -f "$inspect_error"' EXIT
           if digest="$(docker buildx imagetools inspect "$sha_ref" --format '{{json .Manifest.Digest}}' 2>"$inspect_error" | tr -d '"')"; then
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "ERROR: existing SHA tag returned invalid digest: $digest" >&2
               exit 1
             fi
-            docker pull "$sha_ref"
-            existing_id="$(docker image inspect "$sha_ref" --format '{{.Id}}')"
-            if [[ "$existing_id" != "$local_id" ]]; then
-              echo "ERROR: immutable ${sha_tag} already exists with different image content" >&2
-              exit 1
-            fi
           else
-            if ! grep -Eqi 'manifest unknown|not found' "$inspect_error"; then
+            if ! grep -Fqi 'manifest unknown' "$inspect_error" && ! grep -Fqi "${sha_ref}: not found" "$inspect_error"; then
               cat "$inspect_error" >&2
               echo "ERROR: could not safely determine whether ${sha_tag} exists" >&2
               exit 1
@@ -226,7 +221,14 @@ jobs:
               exit 1
             fi
           fi
-          rm -f "$inspect_error"
+
+          resolved_ref="${image}@${digest}"
+          docker pull "$resolved_ref"
+          resolved_id="$(docker image inspect "$resolved_ref" --format '{{.Id}}')"
+          if [[ "$resolved_id" != "$local_id" ]]; then
+            echo "ERROR: immutable ${sha_tag} digest does not match the tested image" >&2
+            exit 1
+          fi
 
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "sha_ref=$sha_ref" >> "$GITHUB_OUTPUT"
