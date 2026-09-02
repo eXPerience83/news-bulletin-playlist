@@ -76,6 +76,7 @@ def test_live_shape_failure_is_safe_in_store_ui_and_zip(tmp_path: Path) -> None:
         "desired_count": 80,
         "failure_class": "pagination_error",
         "phase": "prewrite",
+        "operation": "playlist_items",
         "offset": 50,
         "returned_count": 24,
         "total": 80,
@@ -92,6 +93,7 @@ def test_live_shape_failure_is_safe_in_store_ui_and_zip(tmp_path: Path) -> None:
     )
     assert b"failure_class=pagination_error" in page
     assert b"phase=prewrite" in page
+    assert b"operation=playlist_items" in page
     assert SECRET.encode() not in page
 
     bundle = build_diagnostic_bundle(
@@ -104,5 +106,6 @@ def test_live_shape_failure_is_safe_in_store_ui_and_zip(tmp_path: Path) -> None:
     with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
         combined = b"\n".join(archive.read(name) for name in archive.namelist())
     assert b'"failure_class":"pagination_error"' in combined
+    assert b'"operation":"playlist_items"' in combined
     assert b'"offset":50' in combined
     assert SECRET.encode() not in combined
