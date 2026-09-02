@@ -12,6 +12,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, cast
@@ -165,13 +168,18 @@ class _LocalCallbackHandler(BaseHTTPRequestHandler):
 
 
 def receive_local_authorization_code(
-    *, state: str, timeout: float = _LOCAL_CALLBACK_TIMEOUT_SECONDS
+    *,
+    state: str,
+    timeout: float = _LOCAL_CALLBACK_TIMEOUT_SECONDS,
+    on_ready: Callable[[], None] | None = None,
 ) -> str:
     _LocalCallbackHandler.expected_state = state
     _LocalCallbackHandler.code = None
     _LocalCallbackHandler.error = None
     deadline = time.monotonic() + timeout
     with HTTPServer(("127.0.0.1", 8787), _LocalCallbackHandler) as server:
+        if on_ready is not None:
+            on_ready()
         while (
             _LocalCallbackHandler.code is None
             and _LocalCallbackHandler.error is None
@@ -245,14 +253,51 @@ def exchange_code(client_id: str, code: str, verifier: str) -> TokenResponse:
     return validate_token_response(cast(dict[str, Any], decoded))
 
 
-def _print_manual_instructions(authorize_url: str) -> None:
-    print("Open this Spotify authorization URL in your browser:")
-    print(authorize_url)
+def write_authorization_url_file(path: str, authorize_url: str) -> None:
+    """Write the one-time OAuth URL to a new private file instead of application logs."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(authorize_url)
+            stream.write("\n")
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(path)
+        raise
+
+
+def present_authorization_url(
+    authorize_url: str,
+    *,
+    authorization_url_file: str | None,
+) -> None:
+    """Hand off the sensitive one-time URL without echoing it to stdout/stderr."""
+    if authorization_url_file is not None:
+        write_authorization_url_file(authorization_url_file, authorize_url)
+        print(f"Spotify authorization URL written to private file: {authorization_url_file}")
+        return
+    try:
+        opened = webbrowser.open(authorize_url, new=2, autoraise=True)
+    except webbrowser.Error as exc:
+        raise RuntimeError(
+            "Could not open the Spotify authorization browser; rerun with "
+            "--authorization-url-file PATH"
+        ) from exc
+    if not opened:
+        raise RuntimeError(
+            "Could not open the Spotify authorization browser; rerun with "
+            "--authorization-url-file PATH"
+        )
+    print("Spotify authorization opened in the default browser.")
+
+
+def _print_manual_instructions() -> None:
     print(
         "After authorizing, Spotify will try http://127.0.0.1:8787/callback. "
         "A browser connection error is expected when this helper runs in a remote container."
     )
-    print("Copy the complete URL from the browser address bar and paste it below.")
+    print("Copy the complete callback URL from the browser address bar and paste it below.")
 
 
 def main() -> int:
@@ -261,6 +306,13 @@ def main() -> int:
         "--write", action="store_true", help="also run the private playlist write probe"
     )
     parser.add_argument("--callback-mode", choices=("manual", "local"), default="manual")
+    parser.add_argument(
+        "--authorization-url-file",
+        help=(
+            "write the one-time authorization URL to a new private file instead of opening "
+            "a browser"
+        ),
+    )
     parser.add_argument(
         "--market", default="ES", help="Spotify ISO 3166-1 alpha-2 market for this P0 probe"
     )
@@ -278,12 +330,20 @@ def main() -> int:
         scopes=requested_scopes,
     )
     if args.callback_mode == "manual":
-        _print_manual_instructions(authorize_url)
+        present_authorization_url(
+            authorize_url,
+            authorization_url_file=args.authorization_url_file,
+        )
+        _print_manual_instructions()
         code = receive_manual_authorization_code(state=state)
     else:
-        print("Open this Spotify authorization URL in your browser:")
-        print(authorize_url)
-        code = receive_local_authorization_code(state=state)
+        code = receive_local_authorization_code(
+            state=state,
+            on_ready=lambda: present_authorization_url(
+                authorize_url,
+                authorization_url_file=args.authorization_url_file,
+            ),
+        )
         print("OAuth callback received.")
     token = exchange_code(client_id, code, verifier)
     require_granted_scopes(token.granted_scopes, requested_scopes)

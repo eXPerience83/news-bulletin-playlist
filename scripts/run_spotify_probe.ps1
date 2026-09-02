@@ -40,12 +40,17 @@ Write-Host "Installing the local project..."
 
 $env:SPOTIFY_CLIENT_ID = $ClientId
 try {
-    $probeArgs = @("-m", "news_bulletin_playlist.spotify.oauth_probe")
+    $probeArgs = @(
+        "-m",
+        "news_bulletin_playlist.spotify.oauth_probe",
+        "--callback-mode",
+        "local"
+    )
     if ($Write) {
         $probeArgs += "--write"
     }
 
-    Write-Host "Starting Spotify PKCE authorization..."
+    Write-Host "Starting Spotify PKCE authorization in the default browser..."
     & $venvPython @probeArgs
     exit $LASTEXITCODE
 } finally {

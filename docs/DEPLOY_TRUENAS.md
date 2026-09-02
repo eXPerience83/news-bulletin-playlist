@@ -194,14 +194,24 @@ CI checks the deployment channel, package visibility, Compose rendering and the 
 
 ## P0/manual OAuth probe
 
-The original P0/manual probe remains available as a diagnostic tool from the workload shell:
+The original P0/manual probe remains available as a diagnostic tool from the workload shell. The
+one-time authorization URL contains OAuth `state` and is therefore written to a private file rather
+than application/container logs:
 
 ```sh
 export SPOTIFY_CLIENT_ID='your runtime client id'
-python -m news_bulletin_playlist.spotify.oauth_probe --callback-mode manual --market ES
+python -m news_bulletin_playlist.spotify.oauth_probe \
+  --callback-mode manual \
+  --authorization-url-file /tmp/spotify-authorization-url \
+  --market ES
 ```
 
-Do not add `--write` until the read-only output has been reviewed. Manual mode redirects to `http://127.0.0.1:8787/callback`; on a remote container a browser connection error is expected. Copying that loopback callback into the no-echo terminal prompt remains a **P0 diagnostic path only**, not normal production authorization.
+Do not add `--write` until the read-only output has been reviewed. The probe creates the URL file as
+a new mode-`0600` file and prints only its path. Inspect/open it deliberately outside retained
+application logs. Manual mode redirects to `http://127.0.0.1:8787/callback`; on a remote container a
+browser connection error is expected. Copy the complete loopback callback into the no-echo terminal
+prompt, then remove `/tmp/spotify-authorization-url`. This remains a **P0 diagnostic path only**, not
+normal production authorization.
 
 ## Runtime design
 
