@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from news_bulletin_playlist.diagnostics import (
@@ -72,7 +73,7 @@ class OperationalDiagnostics:
         cycle_id: str | None = None,
         source_id: str | None = None,
         playlist_id: str | None = None,
-        details: dict[str, DiagnosticValue] | None = None,
+        details: Mapping[str, DiagnosticValue] | None = None,
     ) -> None:
         """Persist first, then log only the same allow-listed fields.
 
@@ -80,7 +81,7 @@ class OperationalDiagnostics:
         failures therefore degrade to one fixed, non-secret logger event instead of
         propagating arbitrary exception text.
         """
-        normalized_details = details or {}
+        normalized_details = dict(details or {})
         if self.store is not None:
             try:
                 self.store.record(
