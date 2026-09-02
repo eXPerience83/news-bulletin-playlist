@@ -29,6 +29,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "http_status",
         "limit",
         "match_reason",
+        "matched_count",
         "next_state",
         "offset",
         "phase",
