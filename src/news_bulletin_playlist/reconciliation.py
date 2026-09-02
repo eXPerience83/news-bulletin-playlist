@@ -25,7 +25,7 @@ class SpotifyPlaylistClient(Protocol):
 
     def playlist_items(
         self,
-        playlist_id: str,
+        show_id: str,
         *,
         limit: int = 50,
         offset: int = 0,
@@ -627,16 +627,7 @@ def _read_current_snapshot(
         raise SpotifyReconciliationError(
             f"Spotify playlist {phase} snapshot reader is unavailable"
         )
-    try:
-        response = snapshot_reader(playlist_id)
-    except SpotifyApiError as exc:
-        raise SpotifyReconciliationError(
-            f"Spotify playlist {phase} snapshot API failure (http_status={exc.status})"
-        ) from exc
-    except SpotifyTransportError as exc:
-        raise SpotifyReconciliationError(
-            f"Spotify playlist {phase} snapshot transport failure"
-        ) from exc
+    response = snapshot_reader(playlist_id)
     return _require_snapshot(
         response,
         context=f"Spotify playlist {phase} snapshot response",
