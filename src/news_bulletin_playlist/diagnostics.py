@@ -26,12 +26,14 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "desired_count",
         "duration_ms",
         "edition_count",
+        "failure_class",
         "http_status",
         "limit",
         "match_reason",
         "matched_count",
         "next_state",
         "offset",
+        "operation",
         "phase",
         "returned_count",
         "total",
@@ -41,6 +43,20 @@ _ALLOWED_DETAIL_KEYS = frozenset(
     }
 )
 _ALLOWED_DETAIL_STRING_VALUES = {
+    "failure_class": frozenset(
+        {
+            "api_error",
+            "configuration_error",
+            "desired_state_error",
+            "pagination_error",
+            "reconciliation_error",
+            "response_shape_error",
+            "snapshot_error",
+            "transport_error",
+            "unavailable_media",
+            "verification_mismatch",
+        }
+    ),
     "match_reason": frozenset(
         {
             "ambiguous",
@@ -61,9 +77,20 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "disconnected",
             "enabled",
             "expired",
+            "invalid",
+            "missing",
+            "null",
+            "present",
             "running",
             "scheduled",
             "stopped",
+        }
+    ),
+    "operation": frozenset(
+        {
+            "playlist_items",
+            "replace_items",
+            "snapshot",
         }
     ),
     "phase": frozenset(
@@ -75,16 +102,20 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "desired_state",
             "matching",
             "persistence",
+            "prewrite",
             "readback",
             "reconciliation",
             "retention",
             "scheduler",
+            "verification",
+            "write",
         }
     ),
     "verification_outcome": frozenset(
         {
             "attested",
             "degraded",
+            "failed",
             "mismatch",
             "skipped",
             "unavailable",
