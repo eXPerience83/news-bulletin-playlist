@@ -47,6 +47,11 @@ class SourceDefinition:
     parser_id: ParserId
     endpoint_url: str | None = None
     external_references: tuple[ExternalReference, ...] = ()
+    spotify_release_delay_days: int = 0
+
+    def __post_init__(self) -> None:
+        if self.spotify_release_delay_days < 0:
+            raise ValueError("spotify_release_delay_days must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
