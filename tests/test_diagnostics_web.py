@@ -6,10 +6,12 @@ import threading
 import urllib.error
 import urllib.request
 import zipfile
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import HTTPServer
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -18,7 +20,10 @@ from news_bulletin_playlist.diagnostics import (
     DiagnosticEventStore,
     DiagnosticSeverity,
 )
-from news_bulletin_playlist.diagnostics_runtime import DiagnosticOperationalHealthHandler
+from news_bulletin_playlist.diagnostics_runtime import (
+    DiagnosticOperationalHealthHandler,
+    _diagnostic_display_timezone,
+)
 from news_bulletin_playlist.diagnostics_web import (
     DiagnosticFilters,
     build_diagnostic_bundle,
@@ -137,6 +142,40 @@ def test_diagnostics_page_contains_only_sanitized_event_fields() -> None:
     assert SECRET not in payload
 
 
+def test_diagnostics_page_renders_configured_timezone_with_dst() -> None:
+    madrid = ZoneInfo("Europe/Madrid")
+    summer_payload = render_diagnostics_page(
+        events=(_event(),),
+        filters=DiagnosticFilters(),
+        display_timezone=madrid,
+        timezone_label="Europe/Madrid",
+    ).decode()
+    winter_event = replace(
+        _event(),
+        occurred_at=datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+    )
+    winter_payload = render_diagnostics_page(
+        events=(winter_event,),
+        filters=DiagnosticFilters(),
+        display_timezone=madrid,
+        timezone_label="Europe/Madrid",
+    ).decode()
+
+    assert "Time (Europe/Madrid)" in summer_payload
+    assert "2026-09-02T12:00:00+02:00" in summer_payload
+    assert "2026-01-15T11:00:00+01:00" in winter_payload
+
+
+def test_diagnostic_display_timezone_uses_tz_and_falls_back_to_utc() -> None:
+    madrid, label = _diagnostic_display_timezone({"TZ": "Europe/Madrid"})
+    assert label == "Europe/Madrid"
+    assert NOW.astimezone(madrid).isoformat(timespec="seconds").endswith("+02:00")
+
+    fallback, fallback_label = _diagnostic_display_timezone({"TZ": "Invalid/Timezone"})
+    assert fallback_label == "UTC"
+    assert NOW.astimezone(fallback) == NOW
+
+
 def test_diagnostic_bundle_never_copies_raw_cycle_errors() -> None:
     payload = build_diagnostic_bundle(
         events=(_event(),),
@@ -155,10 +194,13 @@ def test_diagnostic_bundle_never_copies_raw_cycle_errors() -> None:
             "runtime.json",
             "status.json",
         }
+        jsonl = archive.read("diagnostics.jsonl")
         combined = b"\n".join(archive.read(name) for name in archive.namelist())
     assert SECRET.encode() not in combined
     assert b"destination_preserved" in combined
     assert b'"source_id": "rne"' in combined
+    assert b'"occurred_at":"2026-09-02T10:00:00Z"' in jsonl
+    assert b"+02:00" not in jsonl
 
 
 def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
@@ -185,12 +227,16 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
         handler.spotify_auth,
         handler.operational_status,
         handler.diagnostic_store,
+        handler.diagnostic_timezone,
+        handler.diagnostic_timezone_label,
     )
     handler.data_dir = tmp_path
     handler.admin_security = AdminSecurity(PASSWORD)
     handler.spotify_auth = None
     handler.operational_status = status
     handler.diagnostic_store = store
+    handler.diagnostic_timezone = ZoneInfo("Europe/Madrid")
+    handler.diagnostic_timezone_label = "Europe/Madrid"
     server = HTTPServer(("127.0.0.1", 0), handler)
     base_url = f"http://127.0.0.1:{server.server_port}"
 
@@ -216,6 +262,8 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
         finally:
             thread.join(timeout=2)
         assert b"destination_preserved" in diagnostics_body
+        assert b"Time (Europe/Madrid)" in diagnostics_body
+        assert b"2026-09-02T12:00:00+02:00" in diagnostics_body
         assert SECRET.encode() not in diagnostics_body
 
         thread = _serve_one(server)
@@ -234,7 +282,10 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
         assert disposition == 'attachment; filename="news-playlist-diagnostics.zip"'
         with zipfile.ZipFile(io.BytesIO(export_body)) as archive:
             combined_export = b"\n".join(archive.read(name) for name in archive.namelist())
+            exported_jsonl = archive.read("diagnostics.jsonl")
         assert SECRET.encode() not in combined_export
+        assert b'"occurred_at":"2026-09-02T10:00:00Z"' in exported_jsonl
+        assert b"+02:00" not in exported_jsonl
 
         thread = _serve_one(server)
         try:
@@ -253,4 +304,6 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
             handler.spotify_auth,
             handler.operational_status,
             handler.diagnostic_store,
+            handler.diagnostic_timezone,
+            handler.diagnostic_timezone_label,
         ) = previous
