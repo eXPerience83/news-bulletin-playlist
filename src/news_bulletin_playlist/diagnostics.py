@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import TypeAlias
 
 from news_bulletin_playlist.persistence import DEFAULT_DB_PATH, PersistenceError
 
@@ -41,7 +40,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
     }
 )
 
-DiagnosticValue: TypeAlias = str | int | bool | None
+type DiagnosticValue = str | int | bool | None
 
 
 class DiagnosticSeverity(StrEnum):
