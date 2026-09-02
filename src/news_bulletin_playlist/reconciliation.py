@@ -202,7 +202,16 @@ def _reconcile_playlist_items(
                     warning=warning,
                 )
 
-    write_response = client.replace_playlist_items(playlist_id, list(desired))
+    try:
+        write_response = client.replace_playlist_items(playlist_id, list(desired))
+    except SpotifyApiError as exc:
+        raise SpotifyReconciliationError(
+            f"Spotify playlist write replace_items API failure (http_status={exc.status})"
+        ) from exc
+    except SpotifyTransportError as exc:
+        raise SpotifyReconciliationError(
+            "Spotify playlist write replace_items transport failure"
+        ) from exc
 
     allow_degraded_readback = store is not None and logical_playlist_id is not None
     readback = _read_spotify_playlist(
@@ -351,7 +360,13 @@ def _read_spotify_playlist(
 
     while offset < _MANAGED_PLAYLIST_MAX_ITEMS:
         limit = min(_SPOTIFY_PLAYLIST_PAGE_SIZE, _MANAGED_PLAYLIST_MAX_ITEMS - offset)
-        raw_page = client.playlist_items(playlist_id, limit=limit, offset=offset)
+        raw_page = _read_playlist_page(
+            client,
+            playlist_id,
+            limit=limit,
+            offset=offset,
+            phase=phase,
+        )
         page = _require_playlist_page(raw_page, phase=phase, offset=offset)
         expected_total = _validate_total_consistency(
             page.total,
@@ -395,6 +410,26 @@ def _read_spotify_playlist(
     return _SpotifyPlaylistRead(tuple(slots))
 
 
+def _read_playlist_page(
+    client: SpotifyPlaylistClient,
+    playlist_id: str,
+    *,
+    limit: int,
+    offset: int,
+    phase: str,
+) -> dict[str, Any]:
+    try:
+        return client.playlist_items(playlist_id, limit=limit, offset=offset)
+    except SpotifyApiError as exc:
+        raise SpotifyReconciliationError(
+            f"Spotify playlist {phase} playlist_items API failure (http_status={exc.status})"
+        ) from exc
+    except SpotifyTransportError as exc:
+        raise SpotifyReconciliationError(
+            f"Spotify playlist {phase} playlist_items transport failure"
+        ) from exc
+
+
 def _read_overflow_item(
     client: SpotifyPlaylistClient,
     playlist_id: str,
@@ -404,7 +439,13 @@ def _read_overflow_item(
     phase: str,
     expected_total: int | None,
 ) -> list[str | None]:
-    raw_overflow = client.playlist_items(playlist_id, limit=1, offset=offset)
+    raw_overflow = _read_playlist_page(
+        client,
+        playlist_id,
+        limit=1,
+        offset=offset,
+        phase=phase,
+    )
     overflow = _require_playlist_page(raw_overflow, phase=phase, offset=offset)
     _validate_total_consistency(
         overflow.total,
@@ -586,7 +627,16 @@ def _read_current_snapshot(
         raise SpotifyReconciliationError(
             f"Spotify playlist {phase} snapshot reader is unavailable"
         )
-    response = snapshot_reader(playlist_id)
+    try:
+        response = snapshot_reader(playlist_id)
+    except SpotifyApiError as exc:
+        raise SpotifyReconciliationError(
+            f"Spotify playlist {phase} snapshot API failure (http_status={exc.status})"
+        ) from exc
+    except SpotifyTransportError as exc:
+        raise SpotifyReconciliationError(
+            f"Spotify playlist {phase} snapshot transport failure"
+        ) from exc
     return _require_snapshot(
         response,
         context=f"Spotify playlist {phase} snapshot response",
