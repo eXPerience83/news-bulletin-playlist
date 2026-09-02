@@ -60,7 +60,7 @@ def test_initialize_creates_temporary_data_database_and_is_repeatable(tmp_path: 
     assert data_dir.is_dir()
     assert store.path.is_file()
     assert store.schema_version() == LATEST_SCHEMA_VERSION
-    assert _count_rows(store.path, "schema_migrations") == 1
+    assert _count_rows(store.path, "schema_migrations") == LATEST_SCHEMA_VERSION
 
 
 def test_canonical_edition_survives_restart_and_upsert_is_idempotent(tmp_path: Path) -> None:

@@ -59,6 +59,8 @@ class SpotifyEngineClient(Protocol):
 
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]: ...
 
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]: ...
+
 
 class EngineCycleRunner(Protocol):
     def run_cycle(self) -> EngineCycleResult: ...
@@ -357,7 +359,12 @@ class EngineRunner:
                     now=playlist_started_at,
                 )
                 desired_count = len(desired.items)
-                reconciled = reconcile_spotify_playlist(client, playlist, desired)
+                reconciled = reconcile_spotify_playlist(
+                    client,
+                    playlist,
+                    desired,
+                    store=self.store,
+                )
                 playlist_finished_at = _as_utc(self.clock())
                 self.store.record_playlist_run(
                     playlist.id,
@@ -378,6 +385,7 @@ class EngineRunner:
                         last_success_at=(
                             None if playlist_state is None else playlist_state.last_success_at
                         ),
+                        error=reconciled.warning,
                     )
                 )
             except (

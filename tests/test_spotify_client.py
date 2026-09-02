@@ -101,6 +101,25 @@ def test_client_write_and_readback_requests(monkeypatch: pytest.MonkeyPatch) -> 
     }
 
 
+def test_client_reads_only_playlist_snapshot_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests: list[urllib.request.Request] = []
+
+    def fake_urlopen(request: object, *, timeout: float) -> _Response:
+        assert isinstance(request, urllib.request.Request)
+        requests.append(request)
+        return _Response(b'{"snapshot_id":"snapshot-1"}')
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    response = SpotifyClient("token").playlist_snapshot("playlist")
+
+    assert response == {"snapshot_id": "snapshot-1"}
+    assert requests[0].method == "GET"
+    assert urllib.parse.urlsplit(requests[0].full_url).path.endswith("/playlists/playlist")
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(requests[0].full_url).query) == {
+        "fields": ["snapshot_id"]
+    }
+
+
 @pytest.mark.parametrize("status", [400, 401, 403, 429])
 def test_client_sanitizes_http_errors(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
     def fake_urlopen(request: object, *, timeout: float) -> _Response:
