@@ -17,7 +17,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: publish-edge-amd64
@@ -27,9 +26,16 @@ env:
   IMAGE_NAME: ghcr.io/experience83/news-bulletin-playlist
 
 jobs:
-  publish-edge:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      archive_sha256: ${{ steps.archive.outputs.sha256 }}
+      source_sha: ${{ steps.meta.outputs.source_sha }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -42,6 +48,17 @@ jobs:
             echo "ERROR: edge may only be published from main; got $GITHUB_REF" >&2
             exit 1
           fi
+
+      - name: Resolve publication metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: invalid main revision: $GITHUB_SHA" >&2
+            exit 1
+          fi
+          echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=edge-image-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Validate configuration
         run: |
@@ -97,6 +114,62 @@ jobs:
           docker stop news-bulletin-playlist-edge 2>/dev/null || true
           docker volume rm news-bulletin-edge-data 2>/dev/null || true
 
+      - name: Export exact edge image
+        id: archive
+        run: |
+          set -euo pipefail
+          docker save news-bulletin-playlist:edge-candidate | gzip -1 > edge-image.tar.gz
+          sha256="$(sha256sum edge-image.tar.gz | awk '{print $1}')"
+          if [[ ! "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: invalid edge archive hash: $sha256" >&2
+            exit 1
+          fi
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified edge artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: edge-image.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download the verified edge artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" \
+            --dir edge
+
+      - name: Verify artifact hash and load image
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          archive="edge/edge-image.tar.gz"
+          actual_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
+            echo "ERROR: edge artifact changed after validation" >&2
+            exit 1
+          fi
+          gzip -dc "$archive" | docker load
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -104,26 +177,97 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Require source revision to remain current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          if [[ "$current_main" != "$SOURCE_SHA" ]]; then
+            echo "ERROR: refusing stale edge publication; current main is $current_main, candidate is $SOURCE_SHA" >&2
+            exit 1
+          fi
 
-      - name: Publish edge tags
+      - name: Publish or reuse immutable main SHA tag
+        id: immutable
+        env:
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
         run: |
           set -euo pipefail
           image="${IMAGE_NAME}"
-          for tag in edge edge-amd64 "sha-${GITHUB_SHA}"; do
-            docker tag news-bulletin-playlist:edge-candidate "${image}:${tag}"
-            docker push "${image}:${tag}"
-          done
+          sha_tag="sha-${SOURCE_SHA}"
+          sha_ref="${image}:${sha_tag}"
+          local_id="$(docker image inspect news-bulletin-playlist:edge-candidate --format '{{.Id}}')"
 
-          digest="$(docker buildx imagetools inspect "${image}:edge" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "ERROR: invalid edge digest: $digest" >&2
+          inspect_error="$(mktemp)"
+          if digest="$(docker buildx imagetools inspect "$sha_ref" --format '{{json .Manifest.Digest}}' 2>"$inspect_error" | tr -d '"')"; then
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: existing SHA tag returned invalid digest: $digest" >&2
+              exit 1
+            fi
+            docker pull "$sha_ref"
+            existing_id="$(docker image inspect "$sha_ref" --format '{{.Id}}')"
+            if [[ "$existing_id" != "$local_id" ]]; then
+              echo "ERROR: immutable ${sha_tag} already exists with different image content" >&2
+              exit 1
+            fi
+          else
+            if ! grep -Eqi 'manifest unknown|not found' "$inspect_error"; then
+              cat "$inspect_error" >&2
+              echo "ERROR: could not safely determine whether ${sha_tag} exists" >&2
+              exit 1
+            fi
+            docker tag news-bulletin-playlist:edge-candidate "$sha_ref"
+            docker push "$sha_ref"
+            digest="$(docker buildx imagetools inspect "$sha_ref" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: invalid published SHA digest: $digest" >&2
+              exit 1
+            fi
+          fi
+          rm -f "$inspect_error"
+
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "sha_ref=$sha_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Revalidate main immediately before edge promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          if [[ "$current_main" != "$SOURCE_SHA" ]]; then
+            echo "ERROR: main advanced during publication; refusing to move edge" >&2
             exit 1
           fi
-          for tag in edge edge-amd64 "sha-${GITHUB_SHA}"; do
+
+      - name: Promote exact digest to edge aliases
+        env:
+          IMAGE_DIGEST: ${{ steps.immutable.outputs.digest }}
+          SHA_REF: ${{ steps.immutable.outputs.sha_ref }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE_NAME}"
+          source_ref="${image}@${IMAGE_DIGEST}"
+
+          docker buildx imagetools create \
+            --prefer-index=false \
+            --tag "${image}:edge" \
+            --tag "${image}:edge-amd64" \
+            "$source_ref"
+
+          for tag in edge edge-amd64; do
             actual="$(docker buildx imagetools inspect "${image}:${tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-            if [[ "$actual" != "$digest" ]]; then
-              echo "ERROR: ${image}:${tag} resolved to $actual instead of $digest" >&2
+            if [[ "$actual" != "$IMAGE_DIGEST" ]]; then
+              echo "ERROR: ${image}:${tag} resolved to $actual instead of $IMAGE_DIGEST" >&2
               exit 1
             fi
           done
+
+          sha_digest="$(docker buildx imagetools inspect "$SHA_REF" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          if [[ "$sha_digest" != "$IMAGE_DIGEST" ]]; then
+            echo "ERROR: immutable main SHA tag changed during edge promotion" >&2
+            exit 1
+          fi
