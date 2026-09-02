@@ -232,7 +232,7 @@ def _reconcile_playlist_items(
     if not readback.had_unavailable_item:
         write_snapshot = _optional_snapshot(write_response)
         degraded_verification = False
-        warning: str | None = None
+        snapshot_warning: str | None = None
         if len(readback.slots) > _SPOTIFY_PLAYLIST_PAGE_SIZE:
             write_snapshot = _require_snapshot(
                 write_response,
@@ -263,7 +263,7 @@ def _reconcile_playlist_items(
                     pass
                 elif stable_snapshot == current_snapshot:
                     degraded_verification = True
-                    warning = _SNAPSHOT_PROPAGATION_WARNING
+                    snapshot_warning = _SNAPSHOT_PROPAGATION_WARNING
                     write_snapshot = None
                 else:
                     raise SpotifyReconciliationError(
@@ -283,7 +283,7 @@ def _reconcile_playlist_items(
         return _PlaylistItemsReconciliationResult(
             wrote=True,
             degraded_verification=degraded_verification,
-            warning=warning,
+            warning=snapshot_warning,
         )
 
     if store is None or logical_playlist_id is None or attestation_updated_at is None:
