@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, cast
@@ -261,10 +262,8 @@ def write_authorization_url_file(path: str, authorize_url: str) -> None:
             stream.write(authorize_url)
             stream.write("\n")
     except BaseException:
-        try:
+        with suppress(OSError):
             os.unlink(path)
-        except OSError:
-            pass
         raise
 
 
