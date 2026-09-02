@@ -69,6 +69,27 @@ class SpotifyClient:
             json_body={"name": name, "description": description},
         )
 
+    def change_playlist_name(self, playlist_id: str, *, name: str) -> dict[str, Any]:
+        """Change only the playlist name for bounded metadata diagnostics."""
+        return self._request(
+            "PUT",
+            f"/playlists/{playlist_id}",
+            json_body={"name": name},
+        )
+
+    def change_playlist_description(
+        self,
+        playlist_id: str,
+        *,
+        description: str,
+    ) -> dict[str, Any]:
+        """Change only the playlist description for bounded metadata diagnostics."""
+        return self._request(
+            "PUT",
+            f"/playlists/{playlist_id}",
+            json_body={"description": description},
+        )
+
     def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]:
         if not jpeg_bytes.startswith(b"\xff\xd8") or not jpeg_bytes.endswith(b"\xff\xd9"):
             raise ValueError("playlist cover must be a complete JPEG image")
