@@ -37,7 +37,9 @@ class _FailingRunner:
         raise RuntimeError("access-token-sentinel must never be logged")
 
 
-def _diagnostics(tmp_path: Path) -> tuple[OperationalDiagnostics, DiagnosticEventStore, io.StringIO]:
+def _diagnostics(
+    tmp_path: Path,
+) -> tuple[OperationalDiagnostics, DiagnosticEventStore, io.StringIO]:
     store = DiagnosticEventStore(tmp_path / "state.sqlite3")
     store.initialize()
     output = io.StringIO()
