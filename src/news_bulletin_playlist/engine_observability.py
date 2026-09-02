@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
 from news_bulletin_playlist.engine import EngineCycleResult, EngineCycleRunner
+from news_bulletin_playlist.reconciliation_diagnostics import classify_reconciliation_failure
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics, cycle_id_for
 
 Clock = Callable[[], datetime]
@@ -98,6 +99,7 @@ class InstrumentedEngineCycleRunner:
             else:
                 event_name = "playlist_reconciliation_failed"
                 severity = DiagnosticSeverity.ERROR
+                details.update(classify_reconciliation_failure(playlist.error).details())
 
             self.diagnostics.emit(
                 occurred_at=result.finished_at,
