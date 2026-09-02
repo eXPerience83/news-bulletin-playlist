@@ -2,7 +2,7 @@ name: news-bulletin-playlist
 
 services:
   app:
-    image: ghcr.io/experience83/news-bulletin-playlist:dev
+    image: ghcr.io/experience83/news-bulletin-playlist:edge-amd64
     restart: unless-stopped
     init: true
     user: "568:568"
