@@ -59,6 +59,7 @@ def _matches(*editions: CanonicalEdition) -> dict[tuple[SourceId, str], EditionM
             source_native_id=edition.source_native_id,
             status=MatchStatus.MATCHED,
             spotify_episode_uri=f"spotify:episode:{edition.source_id}-{edition.source_native_id}",
+            spotify_duration_seconds=60,
             diagnostics="matched",
             updated_at=NOW,
         )
@@ -149,6 +150,7 @@ def test_store_scan_does_not_break_on_old_publication_when_edition_is_current(
         publication_older_than_cutoff.source_native_id,
         status=MatchStatus.MATCHED,
         spotify_episode_uri="spotify:episode:late-canonical",
+        spotify_duration_seconds=60,
         diagnostics="matched",
         updated_at=NOW,
     )
