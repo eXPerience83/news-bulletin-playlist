@@ -13,7 +13,7 @@ from news_bulletin_playlist.models import CanonicalEdition, PlaylistId, SourceId
 DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
 DEFAULT_RETENTION_DAYS = 30
-LATEST_SCHEMA_VERSION = 2
+LATEST_SCHEMA_VERSION = 3
 
 
 class PersistenceError(RuntimeError):
@@ -59,6 +59,7 @@ class EditionMatch:
     source_native_id: str
     status: MatchStatus
     spotify_episode_uri: str | None
+    spotify_duration_seconds: int | None
     diagnostics: str | None
     updated_at: datetime
 
@@ -174,6 +175,16 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
                 desired_fingerprint TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
+            """,
+        ),
+    ),
+    (
+        3,
+        (
+            """
+            ALTER TABLE spotify_matches
+            ADD COLUMN spotify_duration_seconds INTEGER
+                CHECK (spotify_duration_seconds IS NULL OR spotify_duration_seconds >= 0)
             """,
         ),
     ),
@@ -411,6 +422,7 @@ class SQLiteStore:
         status: MatchStatus,
         updated_at: datetime,
         spotify_episode_uri: str | None = None,
+        spotify_duration_seconds: int | None = None,
         diagnostics: str | None = None,
     ) -> None:
         """Persist deterministic source-edition to Spotify matching state."""
@@ -419,6 +431,10 @@ class SQLiteStore:
                 raise ValueError("matched state requires spotify_episode_uri")
         elif spotify_episode_uri is not None:
             raise ValueError("non-matched state must not store spotify_episode_uri")
+        if spotify_duration_seconds is not None and spotify_duration_seconds < 0:
+            raise ValueError("spotify_duration_seconds must be non-negative")
+        if status is not MatchStatus.MATCHED and spotify_duration_seconds is not None:
+            raise ValueError("non-matched state must not store spotify_duration_seconds")
 
         with self._connection("set Spotify match state") as connection:
             connection.execute(
@@ -428,12 +444,14 @@ class SQLiteStore:
                     source_native_id,
                     status,
                     spotify_episode_uri,
+                    spotify_duration_seconds,
                     diagnostics,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id, source_native_id) DO UPDATE SET
                     status = excluded.status,
                     spotify_episode_uri = excluded.spotify_episode_uri,
+                    spotify_duration_seconds = excluded.spotify_duration_seconds,
                     diagnostics = excluded.diagnostics,
                     updated_at = excluded.updated_at
                 WHERE excluded.updated_at >= spotify_matches.updated_at
@@ -443,6 +461,7 @@ class SQLiteStore:
                     source_native_id,
                     status.value,
                     spotify_episode_uri,
+                    spotify_duration_seconds,
                     diagnostics,
                     _format_timestamp(updated_at),
                 ),
@@ -458,7 +477,7 @@ class SQLiteStore:
             row = connection.execute(
                 """
                 SELECT source_id, source_native_id, status, spotify_episode_uri,
-                       diagnostics, updated_at
+                       spotify_duration_seconds, diagnostics, updated_at
                 FROM spotify_matches
                 WHERE source_id = ? AND source_native_id = ?
                 """,
@@ -471,6 +490,7 @@ class SQLiteStore:
             source_native_id=_row_str(row, "source_native_id"),
             status=MatchStatus(_row_str(row, "status")),
             spotify_episode_uri=_optional_str(row["spotify_episode_uri"]),
+            spotify_duration_seconds=_optional_int(row["spotify_duration_seconds"]),
             diagnostics=_optional_str(row["diagnostics"]),
             updated_at=_parse_timestamp(_row_str(row, "updated_at")),
         )
@@ -800,6 +820,14 @@ def _row_str(row: sqlite3.Row, column: str) -> str:
     value = row[column]
     if not isinstance(value, str):
         raise PersistenceError(f"stored {column} is not text")
+    return value
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise PersistenceError("stored optional integer value is invalid")
     return value
 
 

@@ -181,6 +181,7 @@ def test_known_enabled_provider_cases_match_deterministically(
     outcome = result.outcomes[0]
     assert outcome.status is MatchStatus.MATCHED
     assert outcome.spotify_episode_uri == "spotify:episode:match"
+    assert outcome.spotify_duration_seconds == 65
     assert "duration delta=5s" in outcome.diagnostics
     assert store.get_spotify_episode_uri(edition.source_id, edition.source_native_id) == (
         "spotify:episode:match"
@@ -198,6 +199,7 @@ def test_persisted_mapping_short_circuits_catalogue_lookup(tmp_path: Path) -> No
         edition.source_native_id,
         status=MatchStatus.MATCHED,
         spotify_episode_uri="spotify:episode:persisted",
+        spotify_duration_seconds=60,
         diagnostics="known durable mapping",
         updated_at=now - timedelta(days=1),
     )
@@ -209,6 +211,47 @@ def test_persisted_mapping_short_circuits_catalogue_lookup(tmp_path: Path) -> No
     assert client.calls == []
     assert result.outcomes[0].from_cache
     assert result.outcomes[0].spotify_episode_uri == "spotify:episode:persisted"
+    assert result.outcomes[0].spotify_duration_seconds == 60
+
+
+def test_legacy_persisted_mapping_without_duration_is_refreshed(tmp_path: Path) -> None:
+    source = _source("ser", "ser", "Europe/Madrid", "show-ser")
+    edition = _edition(source, "legacy-native", "Las noticias de la SER, 11:00 (30/08/2026)")
+    store = _store(tmp_path)
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    store.upsert_editions((edition,), observed_at=now)
+    store.set_match_state(
+        edition.source_id,
+        edition.source_native_id,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:legacy",
+        diagnostics="schema-v2 durable mapping",
+        updated_at=now - timedelta(days=1),
+    )
+    client = FakeCatalogClient(
+        pages=[
+            {
+                "items": [
+                    _candidate(
+                        edition,
+                        source,
+                        uri="spotify:episode:legacy",
+                        duration_ms=66_000,
+                    )
+                ],
+                "next": None,
+            }
+        ]
+    )
+
+    result = match_source_editions(client, store, source, (edition,), now=now)
+
+    assert result.catalogue_calls == 1
+    assert not result.outcomes[0].from_cache
+    assert result.outcomes[0].spotify_duration_seconds == 66
+    state = store.get_match_state(edition.source_id, edition.source_native_id)
+    assert state is not None
+    assert state.spotify_duration_seconds == 66
 
 
 def test_multiple_viable_candidates_are_persisted_as_ambiguous(tmp_path: Path) -> None:

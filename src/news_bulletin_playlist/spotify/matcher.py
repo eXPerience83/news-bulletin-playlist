@@ -54,6 +54,7 @@ class MatchOutcome:
     status: MatchStatus
     spotify_episode_uri: str | None
     diagnostics: str
+    spotify_duration_seconds: int | None = None
     from_cache: bool = False
 
 
@@ -145,6 +146,7 @@ def match_source_editions(
             edition.source_native_id,
             status=outcome.status,
             spotify_episode_uri=outcome.spotify_episode_uri,
+            spotify_duration_seconds=outcome.spotify_duration_seconds,
             diagnostics=outcome.diagnostics,
             updated_at=observed_at,
         )
@@ -169,11 +171,16 @@ def _cached_outcome(
         return None
 
     if state.status is MatchStatus.MATCHED and state.spotify_episode_uri:
+        # Schema-v2 matches predate durable destination duration. Refresh those
+        # mappings once instead of treating unknown duration as eligibility proof.
+        if state.spotify_duration_seconds is None:
+            return None
         return MatchOutcome(
             edition=edition,
             status=state.status,
             spotify_episode_uri=state.spotify_episode_uri,
             diagnostics=state.diagnostics or "reused persisted Spotify mapping",
+            spotify_duration_seconds=state.spotify_duration_seconds,
             from_cache=True,
         )
 
@@ -410,6 +417,7 @@ def _resolve_outcome(
             edition=edition,
             status=MatchStatus.MATCHED,
             spotify_episode_uri=candidate.uri,
+            spotify_duration_seconds=candidate.duration_seconds,
             diagnostics=(
                 f"matched 1 of {candidate_count} candidate(s) in {catalogue_calls} call(s)"
                 f"{release_detail}{duration_detail}"
