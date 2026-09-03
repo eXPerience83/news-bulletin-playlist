@@ -8,6 +8,7 @@ import urllib.parse
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from http import HTTPStatus
 from http.server import HTTPServer
 from pathlib import Path
@@ -15,6 +16,7 @@ from types import FrameType
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.collection import FeedFetcher, fetch_feed
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.effective_config import (
     CONFIG_PATH_ENV,
@@ -23,6 +25,7 @@ from news_bulletin_playlist.effective_config import (
 )
 from news_bulletin_playlist.engine import (
     DEFAULT_ENGINE_INTERVAL,
+    Clock,
     EngineCycleResult,
     EngineCycleRunner,
     EngineRunner,
@@ -30,6 +33,7 @@ from news_bulletin_playlist.engine import (
     OperationalStatus,
     OperationalStatusSnapshot,
     SpotifyAuthProvider,
+    SpotifyClientFactory,
 )
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
 from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
@@ -48,8 +52,9 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     ManagedStateStore,
 )
-from news_bulletin_playlist.models import EngineConfig
+from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
+from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
@@ -93,7 +98,7 @@ class AuthSynchronization:
 
 
 class ConfigurationSynchronization:
-    """Serialize durable configuration mutations against complete engine cycles."""
+    """Serialize durable configuration snapshots/mutations and guarded playlist writes."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -288,7 +293,7 @@ class EngineLifecycleController:
 
 
 class ReloadingEngineCycleRunner:
-    """Load and validate durable configuration immediately before every engine cycle."""
+    """Snapshot durable configuration per cycle and guard only remote playlist mutations."""
 
     def __init__(
         self,
@@ -297,24 +302,29 @@ class ReloadingEngineCycleRunner:
         store: SQLiteStore,
         auth: SpotifyAuthProvider,
         configuration_synchronization: ConfigurationSynchronization | None = None,
+        *,
+        fetcher: FeedFetcher = fetch_feed,
+        client_factory: SpotifyClientFactory | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self.data_dir = data_dir
         self.environ = environ
         self.store = store
         self.auth = auth
         self.configuration_synchronization = configuration_synchronization
+        self.fetcher = fetcher
+        self.client_factory = client_factory
+        self.clock = clock
 
     def run_cycle(self) -> EngineCycleResult:
-        synchronization = self.configuration_synchronization
-        if synchronization is None:
-            return self._run_cycle()
-        with synchronization.hold():
-            return self._run_cycle()
-
-    def _run_cycle(self) -> EngineCycleResult:
         started_at = datetime.now(UTC)
+        synchronization = self.configuration_synchronization
         try:
-            config = _load_runtime_config(self.data_dir, self.environ)
+            if synchronization is None:
+                config = _load_runtime_config(self.data_dir, self.environ)
+            else:
+                with synchronization.hold():
+                    config = _load_runtime_config(self.data_dir, self.environ)
         except RuntimeError as exc:
             return EngineCycleResult(
                 started_at=started_at,
@@ -333,7 +343,68 @@ class ReloadingEngineCycleRunner:
                 playlists=(),
                 error="production engine configuration is no longer available",
             )
-        return EngineRunner(config, self.store, self.auth).run_cycle()
+
+        playlist_mutation_guard = (
+            None if synchronization is None else partial(self._playlist_mutation_guard, config)
+        )
+        return EngineRunner(
+            config,
+            self.store,
+            self.auth,
+            fetcher=self.fetcher,
+            client_factory=self.client_factory,
+            clock=self.clock,
+            playlist_mutation_guard=playlist_mutation_guard,
+        ).run_cycle()
+
+    @contextmanager
+    def _playlist_mutation_guard(
+        self,
+        expected_config: EngineConfig,
+        expected_playlist: PlaylistDefinition,
+    ) -> Iterator[None]:
+        synchronization = self.configuration_synchronization
+        if synchronization is None:
+            yield
+            return
+
+        expected_contract = _playlist_write_contract(expected_config, expected_playlist.id)
+        with synchronization.hold():
+            try:
+                current_config = _load_runtime_config(self.data_dir, self.environ)
+            except RuntimeError as exc:
+                raise SpotifyReconciliationError(
+                    "playlist configuration became unavailable during cycle; "
+                    "Spotify destination preserved"
+                ) from exc
+            current_contract = (
+                None
+                if current_config is None
+                else _playlist_write_contract(current_config, expected_playlist.id)
+            )
+            if current_contract != expected_contract:
+                raise SpotifyReconciliationError(
+                    f"playlist {expected_playlist.id} configuration changed during cycle; "
+                    "Spotify destination preserved"
+                )
+            yield
+
+
+def _playlist_write_contract(
+    config: EngineConfig,
+    playlist_id: PlaylistId,
+) -> tuple[PlaylistDefinition, tuple[object, ...]] | None:
+    playlist = next(
+        (candidate for candidate in config.playlists if candidate.id == playlist_id),
+        None,
+    )
+    if playlist is None or not playlist.enabled:
+        return None
+    selected_source_ids = set(playlist.source_selection.explicit)
+    selected_sources = tuple(
+        source for source in config.sources if source.id in selected_source_ids
+    )
+    return playlist, selected_sources
 
 
 class OperationalHealthHandler(LanAdminHandler):

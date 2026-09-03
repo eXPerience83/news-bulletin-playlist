@@ -3,8 +3,10 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -18,7 +20,12 @@ from news_bulletin_playlist.desired_state import (
     DesiredStateError,
     DurationEligibilityDecision,
 )
-from news_bulletin_playlist.models import EngineConfig, PlaylistId, SourceId
+from news_bulletin_playlist.models import (
+    EngineConfig,
+    PlaylistDefinition,
+    PlaylistId,
+    SourceId,
+)
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
@@ -175,6 +182,9 @@ class EngineRunner:
         fetcher: FeedFetcher = fetch_feed,
         client_factory: SpotifyClientFactory | None = None,
         clock: Clock | None = None,
+        playlist_mutation_guard: (
+            Callable[[PlaylistDefinition], AbstractContextManager[None]] | None
+        ) = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -182,6 +192,7 @@ class EngineRunner:
         self.fetcher = fetcher
         self.client_factory = client_factory or _spotify_client
         self.clock = clock or _utc_now
+        self.playlist_mutation_guard = playlist_mutation_guard
         self._cycle_lock = threading.Lock()
 
     def run_cycle(self) -> EngineCycleResult:
@@ -367,11 +378,17 @@ class EngineRunner:
                     source_timezones=self._source_timezones(),
                 )
                 desired_count = len(desired.items)
+                mutation_guard = (
+                    None
+                    if self.playlist_mutation_guard is None
+                    else partial(self.playlist_mutation_guard, playlist)
+                )
                 reconciled = reconcile_spotify_playlist(
                     client,
                     playlist,
                     desired,
                     store=self.store,
+                    mutation_guard=mutation_guard,
                 )
                 playlist_finished_at = _as_utc(self.clock())
                 self.store.record_playlist_run(
