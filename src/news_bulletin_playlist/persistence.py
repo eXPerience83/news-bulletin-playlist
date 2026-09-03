@@ -59,9 +59,9 @@ class EditionMatch:
     source_native_id: str
     status: MatchStatus
     spotify_episode_uri: str | None
-    spotify_duration_seconds: int | None
     diagnostics: str | None
     updated_at: datetime
+    spotify_duration_seconds: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
