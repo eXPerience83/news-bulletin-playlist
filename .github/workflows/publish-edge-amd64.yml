@@ -121,7 +121,7 @@ jobs:
           set -euo pipefail
           docker save news-bulletin-playlist:edge-candidate | gzip -1 > edge-image.tar.gz
           sha256="$(sha256sum edge-image.tar.gz | awk '{print $1}')"
-          if [[ ! "$sha256" =~ ^sha256:[0-9a-f]{64}$ && ! "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
+          if [[ ! "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
             echo "ERROR: invalid edge archive hash: $sha256" >&2
             exit 1
           fi
