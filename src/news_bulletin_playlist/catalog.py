@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import time
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import (
     CountryCode,
+    DurationPolicy,
+    DurationPolicyException,
     ExternalReference,
     LanguageTag,
     OrderingPolicy,
@@ -31,6 +34,7 @@ class PlaylistTemplate:
     retention_hours: int = 48
     max_episodes: int = 100
     ordering: OrderingPolicy = OrderingPolicy.EDITION_AT_DESC
+    duration_policy: DurationPolicy = field(default_factory=DurationPolicy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +79,12 @@ class BuiltInCatalog:
                 if source_id not in known_sources:
                     raise ValueError(
                         f"playlist template {template.id} references unknown source {source_id}"
+                    )
+            for exception in template.duration_policy.exceptions:
+                if exception.source_id not in known_sources:
+                    raise ValueError(
+                        f"playlist template {template.id} duration exception references "
+                        f"unknown source {exception.source_id}"
                     )
             if template.retention_hours <= 0 or template.max_episodes <= 0:
                 raise ValueError(f"playlist template {template.id} has invalid retention policy")
@@ -160,6 +170,16 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
             SourceId("cnn"),
         ),
         cover_id="spain_spanish_news",
+        duration_policy=DurationPolicy(
+            exceptions=(
+                DurationPolicyException(
+                    id="ser_morning_0800",
+                    source_id=SourceId("ser"),
+                    edition_local_time=time(8, 0),
+                    max_seconds=1800,
+                ),
+            )
+        ),
     ),
 )
 
