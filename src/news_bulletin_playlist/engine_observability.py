@@ -5,6 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from news_bulletin_playlist.desired_state import (
+    DURATION_EXCEEDS_DEFAULT_MAX,
+    DURATION_EXCEEDS_EXCEPTION_MAX,
+    DURATION_EXCEPTION,
+)
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
 from news_bulletin_playlist.engine import EngineCycleResult, EngineCycleRunner
 from news_bulletin_playlist.reconciliation_diagnostics import classify_reconciliation_failure
@@ -116,6 +121,34 @@ class InstrumentedEngineCycleRunner:
                 playlist_id=str(playlist.playlist_id),
                 details=details,
             )
+            for decision in playlist.duration_decisions:
+                if decision.reason not in {
+                    DURATION_EXCEPTION,
+                    DURATION_EXCEEDS_DEFAULT_MAX,
+                    DURATION_EXCEEDS_EXCEPTION_MAX,
+                }:
+                    continue
+                policy_details: dict[str, str | int | bool | None] = {
+                    "duration_seconds": decision.duration_seconds,
+                    "eligibility_reason": decision.reason,
+                    "max_seconds": decision.max_seconds,
+                }
+                if decision.exception_id is not None:
+                    policy_details["policy_exception"] = decision.exception_id
+                self.diagnostics.emit(
+                    occurred_at=result.finished_at,
+                    severity=DiagnosticSeverity.INFO,
+                    component="playlist.eligibility",
+                    event_name=(
+                        "duration_exception_applied"
+                        if decision.accepted
+                        else "duration_episode_excluded"
+                    ),
+                    cycle_id=cycle_id,
+                    source_id=str(decision.source_id),
+                    playlist_id=str(playlist.playlist_id),
+                    details=policy_details,
+                )
 
         duration_ms = max(
             round((result.finished_at - result.started_at).total_seconds() * 1000),

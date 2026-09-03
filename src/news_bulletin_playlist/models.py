@@ -122,16 +122,13 @@ class DurationPolicy:
         if len(ids) != len(set(ids)):
             raise ValueError("duration policy exception ids must be unique")
         selectors = [
-            (exception.source_id, exception.edition_local_time)
-            for exception in self.exceptions
+            (exception.source_id, exception.edition_local_time) for exception in self.exceptions
         ]
         if len(selectors) != len(set(selectors)):
             raise ValueError("duration policy exception selectors must be unique")
         for exception in self.exceptions:
             if exception.max_seconds <= self.default_max_seconds:
-                raise ValueError(
-                    "duration exception max_seconds must exceed default_max_seconds"
-                )
+                raise ValueError("duration exception max_seconds must exceed default_max_seconds")
 
 
 @dataclass(frozen=True, slots=True)

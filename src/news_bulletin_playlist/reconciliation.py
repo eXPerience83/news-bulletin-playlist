@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.desired_state import (
     DesiredPlaylistState,
@@ -87,6 +88,7 @@ def build_desired_state_from_store(
     playlist: PlaylistDefinition,
     *,
     now: datetime,
+    source_timezones: Mapping[SourceId, ZoneInfo] | None = None,
 ) -> DesiredPlaylistState:
     """Load only still-relevant durable state, then delegate to the pure builder."""
     observed_at = _as_utc(now)
@@ -106,7 +108,13 @@ def build_desired_state_from_store(
             if match is not None:
                 matches[edition.identity] = match
 
-    return build_playlist_desired_state(playlist, editions, matches, now=observed_at)
+    return build_playlist_desired_state(
+        playlist,
+        editions,
+        matches,
+        now=observed_at,
+        source_timezones=source_timezones,
+    )
 
 
 def read_spotify_playlist_uris(

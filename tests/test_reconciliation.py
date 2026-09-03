@@ -531,6 +531,7 @@ def test_failed_source_keeps_last_known_good_until_retention_expires(tmp_path: P
         edition.source_native_id,
         status=MatchStatus.MATCHED,
         spotify_episode_uri="spotify:episode:edition-1",
+        spotify_duration_seconds=60,
         diagnostics="matched",
         updated_at=NOW - timedelta(hours=2),
     )

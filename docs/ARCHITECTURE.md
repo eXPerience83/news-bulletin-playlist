@@ -248,3 +248,24 @@ The first release may contain only Spanish providers and one Spanish/Spain-orien
 What is not acceptable is introducing assumptions into the shared domain model, persistence layer, scheduler or reconciliation engine that make `Spain`, `Spanish`, or `one playlist` mandatory concepts.
 
 When implementation convenience conflicts with this invariant, prefer the smallest implementation that preserves the multi-playlist, multi-country, multi-language architecture.
+
+
+## Bulletin duration eligibility
+
+Duration is a common playlist eligibility policy, never provider-parser behavior. The
+default destination-side ceiling is 480 seconds. A longer bulletin is eligible only
+when a version-controlled, bounded exception matches its source and semantic local
+edition time. The initial exception is `ser_morning_0800`: SER 08:00 in the source
+timezone may run up to 1800 seconds. The exception is not a source-wide bypass.
+
+Final eligibility uses the matched destination episode duration (Spotify `duration_ms`
+converted to seconds). RSS/source duration remains diagnostic metadata only. If a
+matched destination duration is unavailable, desired-state construction fails closed
+and reconciliation preserves the existing destination rather than treating unknown
+metadata as an empty authoritative state. Non-default duration decisions are emitted
+to the bounded diagnostics event stream so exclusions and scoped exceptions are visible.
+
+To add a justified recurring exception, add one stable unique rule to the built-in
+playlist template with an existing `source_id`, exact `edition_local_time` in that
+source's timezone, and a finite `max_seconds` greater than the default. Do not add
+source-wide unlimited bypasses or provider-specific filtering.

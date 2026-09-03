@@ -75,6 +75,7 @@ def _match(
         spotify_episode_uri=spotify_uri,
         diagnostics=None,
         updated_at=NOW,
+        spotify_duration_seconds=60 if status is MatchStatus.MATCHED else None,
     )
 
 

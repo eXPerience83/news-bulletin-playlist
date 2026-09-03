@@ -35,6 +35,7 @@ class ReconciliationFailureDiagnostic:
     verification_outcome: str | None = None
     http_status: int | None = None
     write_decision: str | None = None
+    eligibility_reason: str | None = None
 
     def details(self) -> dict[str, DiagnosticValue]:
         result: dict[str, DiagnosticValue] = {
@@ -51,6 +52,7 @@ class ReconciliationFailureDiagnostic:
             ("verification_outcome", self.verification_outcome),
             ("http_status", self.http_status),
             ("write_decision", self.write_decision),
+            ("eligibility_reason", self.eligibility_reason),
         )
         result.update((key, value) for key, value in optional if value is not None)
         return result
@@ -60,6 +62,15 @@ def classify_reconciliation_failure(error: str | None) -> ReconciliationFailureD
     """Classify only known shapes; unknown text collapses to a generic safe result."""
     if error is None:
         return ReconciliationFailureDiagnostic("reconciliation_error", "reconciliation")
+
+    if error.startswith("desired state Spotify duration unavailable"):
+        return ReconciliationFailureDiagnostic(
+            "desired_state_error",
+            "desired_state",
+            verification_outcome="failed",
+            write_decision="blocked",
+            eligibility_reason="duration_metadata_unavailable",
+        )
 
     operation_match = _OPERATION_FAILURE.match(error)
     if operation_match is not None:
