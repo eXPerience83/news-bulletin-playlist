@@ -1,0 +1,231 @@
+name: Temporary #83 configuration lock validation
+
+on:
+  push:
+    branches:
+      - fix/83-configuration-lock-io
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/83-configuration-lock-io
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - run: pip install -e '.[dev]'
+      - name: Implement guarded playlist mutation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str, label: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 match, got {count}')
+              p.write_text(text.replace(old, new, 1))
+
+          # Reconciliation: reads remain outside synchronization; only the actual remote mutation
+          # executes inside an optional guard supplied by the runtime.
+          replace_once(
+              'src/news_bulletin_playlist/reconciliation.py',
+              'from collections.abc import Mapping, Sequence\n',
+              'from collections.abc import Callable, Mapping, Sequence\nfrom contextlib import AbstractContextManager, nullcontext\n',
+              'reconciliation imports',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/reconciliation.py',
+              'class SpotifyReconciliationError(RuntimeError):\n    """Raised when Spotify playlist state cannot be read or verified safely."""\n\n\n@dataclass',
+              'class SpotifyReconciliationError(RuntimeError):\n    """Raised when Spotify playlist state cannot be read or verified safely."""\n\n\nPlaylistMutationGuard = Callable[[], AbstractContextManager[None]]\n\n\n@dataclass',
+              'reconciliation guard type',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/reconciliation.py',
+              '    logical_playlist_id: PlaylistId | None,\n    attestation_updated_at: datetime | None,\n) -> _PlaylistItemsReconciliationResult:\n',
+              '    logical_playlist_id: PlaylistId | None,\n    attestation_updated_at: datetime | None,\n    mutation_guard: PlaylistMutationGuard | None,\n) -> _PlaylistItemsReconciliationResult:\n',
+              'reconciliation internal signature',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/reconciliation.py',
+              '        attestation_updated_at=None,\n    ).wrote\n',
+              '        attestation_updated_at=None,\n        mutation_guard=None,\n    ).wrote\n',
+              'legacy reconcile guard',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/reconciliation.py',
+              '    try:\n        write_response = client.replace_playlist_items(playlist_id, list(desired))\n    except SpotifyApiError as exc:\n        raise SpotifyReconciliationError(\n            f"Spotify playlist write replace_items API failure (http_status={exc.status})"\n        ) from exc\n    except SpotifyTransportError as exc:\n        raise SpotifyReconciliationError(\n            "Spotify playlist write replace_items transport failure"\n        ) from exc\n',
+              '    mutation_context = nullcontext() if mutation_guard is None else mutation_guard()\n    with mutation_context:\n        try:\n            write_response = client.replace_playlist_items(playlist_id, list(desired))\n        except SpotifyApiError as exc:\n            raise SpotifyReconciliationError(\n                f"Spotify playlist write replace_items API failure (http_status={exc.status})"\n            ) from exc\n        except SpotifyTransportError as exc:\n            raise SpotifyReconciliationError(\n                "Spotify playlist write replace_items transport failure"\n            ) from exc\n',
+              'guard actual write',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/reconciliation.py',
+              '    *,\n    store: SQLiteStore | None = None,\n) -> PlaylistReconciliationResult:\n',
+              '    *,\n    store: SQLiteStore | None = None,\n    mutation_guard: PlaylistMutationGuard | None = None,\n) -> PlaylistReconciliationResult:\n',
+              'public reconcile signature',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/reconciliation.py',
+              '        attestation_updated_at=desired.generated_at if store is not None else None,\n    )\n',
+              '        attestation_updated_at=desired.generated_at if store is not None else None,\n        mutation_guard=mutation_guard,\n    )\n',
+              'public reconcile guard delegation',
+          )
+
+          # Engine: allow the runtime to supply a per-playlist mutation guard without coupling the
+          # engine to managed-state storage or Web synchronization.
+          replace_once(
+              'src/news_bulletin_playlist/engine.py',
+              'from collections.abc import Callable, Mapping\n',
+              'from collections.abc import Callable, Mapping\nfrom contextlib import AbstractContextManager\nfrom functools import partial\n',
+              'engine context imports',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine.py',
+              'from news_bulletin_playlist.models import EngineConfig, PlaylistId, SourceId\n',
+              'from news_bulletin_playlist.models import (\n    EngineConfig,\n    PlaylistDefinition,\n    PlaylistId,\n    SourceId,\n)\n',
+              'engine playlist model import',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine.py',
+              '        client_factory: SpotifyClientFactory | None = None,\n        clock: Clock | None = None,\n    ) -> None:\n',
+              '        client_factory: SpotifyClientFactory | None = None,\n        clock: Clock | None = None,\n        playlist_mutation_guard: (\n            Callable[[PlaylistDefinition], AbstractContextManager[None]] | None\n        ) = None,\n    ) -> None:\n',
+              'engine constructor guard arg',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine.py',
+              '        self.client_factory = client_factory or _spotify_client\n        self.clock = clock or _utc_now\n        self._cycle_lock = threading.Lock()\n',
+              '        self.client_factory = client_factory or _spotify_client\n        self.clock = clock or _utc_now\n        self.playlist_mutation_guard = playlist_mutation_guard\n        self._cycle_lock = threading.Lock()\n',
+              'engine guard assignment',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine.py',
+              '                reconciled = reconcile_spotify_playlist(\n                    client,\n                    playlist,\n                    desired,\n                    store=self.store,\n                )\n',
+              '                mutation_guard = (\n                    None\n                    if self.playlist_mutation_guard is None\n                    else partial(self.playlist_mutation_guard, playlist)\n                )\n                reconciled = reconcile_spotify_playlist(\n                    client,\n                    playlist,\n                    desired,\n                    store=self.store,\n                    mutation_guard=mutation_guard,\n                )\n',
+              'engine reconcile guard',
+          )
+
+          # Runtime: snapshot configuration under the lock, run provider reads unlocked, then
+          # revalidate only the write-relevant playlist/source contract under the lock immediately
+          # before the remote playlist mutation. Hold the lock across replace to close the race.
+          replace_once(
+              'src/news_bulletin_playlist/engine_runtime.py',
+              'from collections.abc import Iterator, Mapping\n',
+              'from collections.abc import Iterator, Mapping\nfrom functools import partial\n',
+              'runtime partial import',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine_runtime.py',
+              'from news_bulletin_playlist.catalog import BUILTIN_CATALOG\n',
+              'from news_bulletin_playlist.catalog import BUILTIN_CATALOG\nfrom news_bulletin_playlist.collection import FeedFetcher, fetch_feed\n',
+              'runtime feed imports',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine_runtime.py',
+              '    DEFAULT_ENGINE_INTERVAL,\n    EngineCycleResult,\n',
+              '    DEFAULT_ENGINE_INTERVAL,\n    Clock,\n    EngineCycleResult,\n',
+              'runtime clock import',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine_runtime.py',
+              '    OperationalStatusSnapshot,\n    SpotifyAuthProvider,\n)',
+              '    OperationalStatusSnapshot,\n    SpotifyAuthProvider,\n    SpotifyClientFactory,\n)',
+              'runtime client factory import',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine_runtime.py',
+              'from news_bulletin_playlist.models import EngineConfig\n',
+              'from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId\n',
+              'runtime playlist imports',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine_runtime.py',
+              'from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore\n',
+              'from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore\nfrom news_bulletin_playlist.reconciliation import SpotifyReconciliationError\n',
+              'runtime reconciliation import',
+          )
+          replace_once(
+              'src/news_bulletin_playlist/engine_runtime.py',
+              'class ConfigurationSynchronization:\n    """Serialize durable configuration mutations against complete engine cycles."""\n',
+              'class ConfigurationSynchronization:\n    """Serialize durable configuration snapshots/mutations and guarded playlist writes."""\n',
+              'runtime synchronization docstring',
+          )
+          old_runner = '''class ReloadingEngineCycleRunner:\n    """Load and validate durable configuration immediately before every engine cycle."""\n\n    def __init__(\n        self,\n        data_dir: Path,\n        environ: Mapping[str, str],\n        store: SQLiteStore,\n        auth: SpotifyAuthProvider,\n        configuration_synchronization: ConfigurationSynchronization | None = None,\n    ) -> None:\n        self.data_dir = data_dir\n        self.environ = environ\n        self.store = store\n        self.auth = auth\n        self.configuration_synchronization = configuration_synchronization\n\n    def run_cycle(self) -> EngineCycleResult:\n        synchronization = self.configuration_synchronization\n        if synchronization is None:\n            return self._run_cycle()\n        with synchronization.hold():\n            return self._run_cycle()\n\n    def _run_cycle(self) -> EngineCycleResult:\n        started_at = datetime.now(UTC)\n        try:\n            config = _load_runtime_config(self.data_dir, self.environ)\n        except RuntimeError as exc:\n            return EngineCycleResult(\n                started_at=started_at,\n                finished_at=datetime.now(UTC),\n                ok=False,\n                sources=(),\n                playlists=(),\n                error=str(exc),\n            )\n        if config is None:\n            return EngineCycleResult(\n                started_at=started_at,\n                finished_at=datetime.now(UTC),\n                ok=False,\n                sources=(),\n                playlists=(),\n                error="production engine configuration is no longer available",\n            )\n        return EngineRunner(config, self.store, self.auth).run_cycle()\n'''
+          new_runner = '''class ReloadingEngineCycleRunner:\n    """Snapshot durable configuration per cycle and guard only remote playlist mutations."""\n\n    def __init__(\n        self,\n        data_dir: Path,\n        environ: Mapping[str, str],\n        store: SQLiteStore,\n        auth: SpotifyAuthProvider,\n        configuration_synchronization: ConfigurationSynchronization | None = None,\n        *,\n        fetcher: FeedFetcher = fetch_feed,\n        client_factory: SpotifyClientFactory | None = None,\n        clock: Clock | None = None,\n    ) -> None:\n        self.data_dir = data_dir\n        self.environ = environ\n        self.store = store\n        self.auth = auth\n        self.configuration_synchronization = configuration_synchronization\n        self.fetcher = fetcher\n        self.client_factory = client_factory\n        self.clock = clock\n\n    def run_cycle(self) -> EngineCycleResult:\n        started_at = datetime.now(UTC)\n        synchronization = self.configuration_synchronization\n        try:\n            if synchronization is None:\n                config = _load_runtime_config(self.data_dir, self.environ)\n            else:\n                with synchronization.hold():\n                    config = _load_runtime_config(self.data_dir, self.environ)\n        except RuntimeError as exc:\n            return EngineCycleResult(\n                started_at=started_at,\n                finished_at=datetime.now(UTC),\n                ok=False,\n                sources=(),\n                playlists=(),\n                error=str(exc),\n            )\n        if config is None:\n            return EngineCycleResult(\n                started_at=started_at,\n                finished_at=datetime.now(UTC),\n                ok=False,\n                sources=(),\n                playlists=(),\n                error="production engine configuration is no longer available",\n            )\n\n        playlist_mutation_guard = (\n            None\n            if synchronization is None\n            else partial(self._playlist_mutation_guard, config)\n        )\n        return EngineRunner(\n            config,\n            self.store,\n            self.auth,\n            fetcher=self.fetcher,\n            client_factory=self.client_factory,\n            clock=self.clock,\n            playlist_mutation_guard=playlist_mutation_guard,\n        ).run_cycle()\n\n    @contextmanager\n    def _playlist_mutation_guard(\n        self,\n        expected_config: EngineConfig,\n        expected_playlist: PlaylistDefinition,\n    ) -> Iterator[None]:\n        synchronization = self.configuration_synchronization\n        if synchronization is None:\n            yield\n            return\n\n        expected_contract = _playlist_write_contract(expected_config, expected_playlist.id)\n        with synchronization.hold():\n            try:\n                current_config = _load_runtime_config(self.data_dir, self.environ)\n            except RuntimeError as exc:\n                raise SpotifyReconciliationError(\n                    "playlist configuration became unavailable during cycle; "\n                    "Spotify destination preserved"\n                ) from exc\n            current_contract = (\n                None\n                if current_config is None\n                else _playlist_write_contract(current_config, expected_playlist.id)\n            )\n            if current_contract != expected_contract:\n                raise SpotifyReconciliationError(\n                    f"playlist {expected_playlist.id} configuration changed during cycle; "\n                    "Spotify destination preserved"\n                )\n            yield\n\n\ndef _playlist_write_contract(\n    config: EngineConfig,\n    playlist_id: PlaylistId,\n) -> tuple[PlaylistDefinition, tuple[object, ...]] | None:\n    playlist = next(\n        (candidate for candidate in config.playlists if candidate.id == playlist_id),\n        None,\n    )\n    if playlist is None or not playlist.enabled:\n        return None\n    selected_source_ids = set(playlist.source_selection.explicit)\n    selected_sources = tuple(\n        source for source in config.sources if source.id in selected_source_ids\n    )\n    return playlist, selected_sources\n'''
+          replace_once(
+              'src/news_bulletin_playlist/engine_runtime.py',
+              old_runner,
+              new_runner,
+              'runtime runner replacement',
+          )
+
+          # Reconciliation regression: configuration guard must be absent during all Spotify reads,
+          # held during replace only, then released before readback.
+          replace_once(
+              'tests/test_reconciliation.py',
+              'from datetime import UTC, datetime, timedelta\n',
+              'from contextlib import contextmanager\nfrom datetime import UTC, datetime, timedelta\n',
+              'reconciliation test context import',
+          )
+          replace_once(
+              'tests/test_reconciliation.py',
+              '    reconcile_playlist_items,\n    reconcile_spotify_destinations,\n)',
+              '    reconcile_playlist_items,\n    reconcile_spotify_destinations,\n    reconcile_spotify_playlist,\n)',
+              'reconciliation test public import',
+          )
+          reconciliation_test = '''\n\ndef test_mutation_guard_covers_replace_only_and_not_spotify_reads() -> None:\n    guard_depth = 0\n\n    class GuardAwareSpotify(_FakeSpotify):\n        def playlist_items(\n            self,\n            playlist_id: str,\n            *,\n            limit: int = 50,\n            offset: int = 0,\n        ) -> dict[str, Any]:\n            assert guard_depth == 0\n            return super().playlist_items(playlist_id, limit=limit, offset=offset)\n\n        def replace_playlist_items(\n            self, playlist_id: str, uris: list[str]\n        ) -> dict[str, Any]:\n            assert guard_depth == 1\n            return super().replace_playlist_items(playlist_id, uris)\n\n    @contextmanager\n    def mutation_guard():  # type: ignore[no-untyped-def]\n        nonlocal guard_depth\n        guard_depth += 1\n        try:\n            yield\n        finally:\n            guard_depth -= 1\n\n    playlist = _playlist("playlist")\n    client = GuardAwareSpotify({"playlist": []})\n\n    result = reconcile_spotify_playlist(\n        client,\n        playlist,\n        _desired(playlist, "spotify:episode:new"),\n        mutation_guard=mutation_guard,\n    )\n\n    assert result.ok\n    assert result.wrote is True\n    assert guard_depth == 0\n    assert client.writes == [("playlist", ["spotify:episode:new"])]\n'''
+          p = Path('tests/test_reconciliation.py')
+          text = p.read_text()
+          if 'test_mutation_guard_covers_replace_only_and_not_spotify_reads' in text:
+              raise SystemExit('reconciliation regression already exists')
+          p.write_text(text + reconciliation_test)
+
+          # Runtime regressions: prove the lock is acquirable while feed I/O waits and that pausing
+          # the playlist during that wait prevents the stale pending Spotify replace.
+          replace_once(
+              'tests/test_managed_runtime_reload.py',
+              'from dataclasses import replace\nfrom datetime import datetime\n',
+              'import threading\nfrom dataclasses import replace\nfrom datetime import UTC, datetime\nfrom typing import Any\n',
+              'runtime reload test imports',
+          )
+          replace_once(
+              'tests/test_managed_runtime_reload.py',
+              'from news_bulletin_playlist.engine_runtime import ReloadingEngineCycleRunner, _load_runtime_config\n',
+              'from news_bulletin_playlist.engine_runtime import (\n    ConfigurationSynchronization,\n    ReloadingEngineCycleRunner,\n    _load_runtime_config,\n)\n',
+              'runtime reload synchronization import',
+          )
+          replace_once(
+              'tests/test_managed_runtime_reload.py',
+              'from news_bulletin_playlist.persistence import SQLiteStore\n',
+              'from news_bulletin_playlist.models import SourceId\nfrom news_bulletin_playlist.persistence import SQLiteStore\n',
+              'runtime reload source import',
+          )
+          runtime_tests = '''\n\nNOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)\nSER_TITLE = "Las noticias de la SER, 11:00 (30/08/2026)"\nSER_URI = "spotify:episode:ser-1100"\n\n\nclass _Auth:\n    def get_access_token(self, *, now: datetime | None = None) -> str:\n        assert now is not None\n        return "access-token"\n\n\nclass _Spotify:\n    def __init__(self) -> None:\n        self.items: list[str] = []\n        self.replacements: list[tuple[str, tuple[str, ...]]] = []\n\n    def show_episodes(\n        self,\n        show_id: str,\n        *,\n        limit: int = 50,\n        offset: int = 0,\n    ) -> dict[str, Any]:\n        assert show_id == "4EwwdoHHYmbt49UXODQMpi"\n        assert offset == 0\n        return {\n            "items": [\n                {\n                    "uri": SER_URI,\n                    "name": SER_TITLE,\n                    "release_date": "2026-08-30",\n                    "release_date_precision": "day",\n                    "duration_ms": 60_000,\n                }\n            ],\n            "next": None,\n        }\n\n    def playlist_items(\n        self,\n        playlist_id: str,\n        *,\n        limit: int = 50,\n        offset: int = 0,\n    ) -> dict[str, Any]:\n        selected = self.items[offset : offset + limit]\n        return {\n            "items": [{"item": {"uri": uri}} for uri in selected],\n            "next": None,\n            "total": len(self.items),\n        }\n\n    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:\n        self.items = list(uris)\n        self.replacements.append((playlist_id, tuple(uris)))\n        return {"snapshot_id": "snapshot-write"}\n\n    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:\n        return {"snapshot_id": "snapshot-write"}\n\n\ndef _active_ser_state(tmp_path: Path):  # type: ignore[no-untyped-def]\n    template = BUILTIN_CATALOG.playlist("spain_spanish_news")\n    active = replace(\n        activate_template(template, "managed-destination"),\n        source_ids=(SourceId("ser"),),\n    )\n    state_store = ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME)\n    state_store.save(ManagedState(playlists=(active,)))\n    sqlite = SQLiteStore(tmp_path / "engine.sqlite3")\n    sqlite.initialize()\n    return active, state_store, sqlite\n\n\ndef _ser_rss() -> bytes:\n    return (\n        "<rss><channel><item>"\n        "<guid>ser-1</guid>"\n        f"<title>{SER_TITLE}</title>"\n        "<pubDate>Sun, 30 Aug 2026 09:05:00 +0000</pubDate>"\n        "</item></channel></rss>"\n    ).encode()\n\n\ndef test_reloading_runner_does_not_hold_configuration_lock_during_feed_io(\n    tmp_path: Path,\n) -> None:\n    _, state_store, sqlite = _active_ser_state(tmp_path)\n    synchronization = ConfigurationSynchronization()\n    fetch_started = threading.Event()\n    release_fetch = threading.Event()\n    admin_acquired = threading.Event()\n    spotify = _Spotify()\n    results: list[object] = []\n\n    def fetcher(_url: str) -> bytes:\n        fetch_started.set()\n        assert release_fetch.wait(timeout=2)\n        return _ser_rss()\n\n    runner = ReloadingEngineCycleRunner(\n        tmp_path,\n        {},\n        sqlite,\n        _Auth(),\n        synchronization,\n        fetcher=fetcher,\n        client_factory=lambda _token: spotify,\n        clock=lambda: NOW,\n    )\n    cycle = threading.Thread(target=lambda: results.append(runner.run_cycle()))\n    cycle.start()\n    assert fetch_started.wait(timeout=2)\n\n    def no_op_admin_save() -> None:\n        with synchronization.hold():\n            state_store.save(state_store.load())\n            admin_acquired.set()\n\n    admin = threading.Thread(target=no_op_admin_save)\n    admin.start()\n    assert admin_acquired.wait(timeout=0.5)\n    admin.join(timeout=1)\n    assert not admin.is_alive()\n\n    release_fetch.set()\n    cycle.join(timeout=2)\n    assert not cycle.is_alive()\n    assert len(results) == 1\n    result = results[0]\n    assert getattr(result, "ok") is True\n    assert spotify.replacements == [("managed-destination", (SER_URI,))]\n\n\ndef test_reloading_runner_prevents_stale_write_after_playlist_is_paused(\n    tmp_path: Path,\n) -> None:\n    active, state_store, sqlite = _active_ser_state(tmp_path)\n    synchronization = ConfigurationSynchronization()\n    fetch_started = threading.Event()\n    release_fetch = threading.Event()\n    spotify = _Spotify()\n    results: list[object] = []\n\n    def fetcher(_url: str) -> bytes:\n        fetch_started.set()\n        assert release_fetch.wait(timeout=2)\n        return _ser_rss()\n\n    runner = ReloadingEngineCycleRunner(\n        tmp_path,\n        {},\n        sqlite,\n        _Auth(),\n        synchronization,\n        fetcher=fetcher,\n        client_factory=lambda _token: spotify,\n        clock=lambda: NOW,\n    )\n    cycle = threading.Thread(target=lambda: results.append(runner.run_cycle()))\n    cycle.start()\n    assert fetch_started.wait(timeout=2)\n\n    with synchronization.hold():\n        state_store.save(ManagedState(playlists=(replace(active, enabled=False),)))\n\n    release_fetch.set()\n    cycle.join(timeout=2)\n    assert not cycle.is_alive()\n    assert len(results) == 1\n    result = results[0]\n    assert getattr(result, "ok") is False\n    playlists = getattr(result, "playlists")\n    assert len(playlists) == 1\n    assert playlists[0].wrote is None\n    assert "configuration changed during cycle" in (playlists[0].error or "")\n    assert spotify.replacements == []\n'''
+          p = Path('tests/test_managed_runtime_reload.py')
+          text = p.read_text()
+          if 'test_reloading_runner_does_not_hold_configuration_lock_during_feed_io' in text:
+              raise SystemExit('runtime concurrency regressions already exist')
+          p.write_text(text + runtime_tests)
+          PY
+      - name: Validate #83
+        run: |
+          python scripts/ruff_fix.py
+          ruff check .
+          ruff format --check .
+          mypy src
+          pytest -q
+      - name: Commit #83 implementation
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/news_bulletin_playlist/reconciliation.py src/news_bulletin_playlist/engine.py src/news_bulletin_playlist/engine_runtime.py tests/test_reconciliation.py tests/test_managed_runtime_reload.py
+          git commit -m 'fix(runtime): avoid holding config lock across provider I/O'
+          git push origin HEAD:fix/83-configuration-lock-io
