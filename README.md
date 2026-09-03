@@ -91,10 +91,19 @@ python3.14 -m venv .venv
 pip install -e '.[dev]'
 pytest
 ruff check .
+ruff format --check .
 mypy src
 ```
 
-CI runs Ruff, mypy and pytest on Python 3.14. A separate container workflow validates Docker/Compose changes and publishes successful `main` builds to GHCR.
+Before creating or updating a PR, developers and Codex can apply all Ruff lint fixes and formatting with one cross-platform command from the repository root:
+
+```bash
+python scripts/ruff_fix.py
+```
+
+That helper runs `ruff check --fix .` followed by `ruff format .`; Ruff remains the single source of truth and no additional formatting tool or pre-commit dependency is required.
+
+CI runs `ruff check .`, `ruff format --check .`, mypy and pytest on Python 3.14. A separate container workflow validates Docker/Compose changes and publishes successful `main` builds to GHCR.
 
 ## Domain and configuration contract
 
