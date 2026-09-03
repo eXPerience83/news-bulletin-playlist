@@ -101,6 +101,7 @@ jobs:
           docker compose -f deploy/truenas.yaml config --quiet
           docker build \
             --platform linux/amd64 \
+            --build-arg "SOURCE_REVISION=${SOURCE_REVISION}" \
             --label "org.opencontainers.image.revision=${SOURCE_REVISION}" \
             --label "org.opencontainers.image.version=candidate-pr-${PR_NUMBER}" \
             --tag news-bulletin-playlist:candidate \
