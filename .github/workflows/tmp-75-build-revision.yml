@@ -1,0 +1,146 @@
+name: Temporary build revision patch
+
+on:
+  push:
+    branches:
+      - feat/75-show-build-revision
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/75-show-build-revision
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - run: pip install -e '.[dev]'
+      - name: Apply build revision patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              path.write_text(text.replace(old, new, 1))
+
+          Path('src/news_bulletin_playlist/build_info.py').write_text('''"""Safe build metadata exposed to status and diagnostic support surfaces."""\n\nfrom __future__ import annotations\n\nimport os\nimport re\nfrom collections.abc import Mapping\n\n_BUILD_REVISION_ENV = "NEWS_PLAYLIST_BUILD_REVISION"\n_FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")\n\n\ndef build_revision(environ: Mapping[str, str] | None = None) -> str:\n    """Return a short source revision or ``dev`` for local/invalid builds."""\n    env = os.environ if environ is None else environ\n    raw = env.get(_BUILD_REVISION_ENV, "").strip().lower()\n    if _FULL_GIT_SHA.fullmatch(raw):\n        return raw[:12]\n    return "dev"\n''')
+
+          dockerfile = Path('Dockerfile')
+          replace_once(
+              dockerfile,
+              'FROM python:3.14.7-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6 AS runtime\n\nLABEL',
+              'FROM python:3.14.7-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6 AS runtime\n\nARG SOURCE_REVISION=dev\n\nLABEL',
+              'runtime build arg',
+          )
+          replace_once(
+              dockerfile,
+              '    HOME=/tmp \\\n    NEWS_PLAYLIST_DATA_DIR=/data\n',
+              '    HOME=/tmp \\\n    NEWS_PLAYLIST_DATA_DIR=/data \\\n    NEWS_PLAYLIST_BUILD_REVISION=${SOURCE_REVISION}\n',
+              'runtime revision env',
+          )
+
+          diagnostics_web = Path('src/news_bulletin_playlist/diagnostics_web.py')
+          replace_once(
+              diagnostics_web,
+              '    retention_days: int,\n    max_events: int,\n) -> bytes:\n',
+              '    retention_days: int,\n    max_events: int,\n    build_revision: str = "dev",\n) -> bytes:\n',
+              'bundle build revision parameter',
+          )
+          replace_once(
+              diagnostics_web,
+              '        "version": __version__,\n        "diagnostic_retention_days": retention_days,\n',
+              '        "version": __version__,\n        "build_revision": build_revision,\n        "diagnostic_retention_days": retention_days,\n',
+              'bundle runtime build revision',
+          )
+
+          diagnostics_runtime = Path('src/news_bulletin_playlist/diagnostics_runtime.py')
+          replace_once(
+              diagnostics_runtime,
+              'from news_bulletin_playlist import __version__, engine_runtime\n',
+              'from news_bulletin_playlist import __version__, engine_runtime\nfrom news_bulletin_playlist.build_info import build_revision as resolve_build_revision\n',
+              'build info import',
+          )
+          replace_once(
+              diagnostics_runtime,
+              '    diagnostic_timezone: tzinfo = UTC\n    diagnostic_timezone_label = "UTC"\n',
+              '    diagnostic_timezone: tzinfo = UTC\n    diagnostic_timezone_label = "UTC"\n    build_revision = "dev"\n',
+              'handler build revision',
+          )
+          replace_once(
+              diagnostics_runtime,
+              '            spotify_state=self._spotify_state(),\n            status=self.operational_status,\n        )\n',
+              '            spotify_state=self._spotify_state(),\n            status=self.operational_status,\n            build_revision=self.build_revision,\n        )\n',
+              'public status build revision',
+          )
+          replace_once(
+              diagnostics_runtime,
+              '            retention_days=store.retention_days,\n            max_events=store.max_events,\n        )\n',
+              '            retention_days=store.retention_days,\n            max_events=store.max_events,\n            build_revision=self.build_revision,\n        )\n',
+              'diagnostic export build revision',
+          )
+          replace_once(
+              diagnostics_runtime,
+              '    previous_timezone = handler.diagnostic_timezone\n    previous_timezone_label = handler.diagnostic_timezone_label\n    display_timezone, timezone_label = _diagnostic_display_timezone(environ)\n    handler.diagnostic_timezone = display_timezone\n    handler.diagnostic_timezone_label = timezone_label\n',
+              '    previous_timezone = handler.diagnostic_timezone\n    previous_timezone_label = handler.diagnostic_timezone_label\n    previous_build_revision = handler.build_revision\n    display_timezone, timezone_label = _diagnostic_display_timezone(environ)\n    handler.diagnostic_timezone = display_timezone\n    handler.diagnostic_timezone_label = timezone_label\n    handler.build_revision = resolve_build_revision(environ)\n',
+              'serve build revision setup',
+          )
+          replace_once(
+              diagnostics_runtime,
+              '        handler.diagnostic_timezone = previous_timezone\n        handler.diagnostic_timezone_label = previous_timezone_label\n        runtime_namespace["OperationalHealthHandler"] = original_handler\n',
+              '        handler.diagnostic_timezone = previous_timezone\n        handler.diagnostic_timezone_label = previous_timezone_label\n        handler.build_revision = previous_build_revision\n        runtime_namespace["OperationalHealthHandler"] = original_handler\n',
+              'serve build revision restore',
+          )
+          replace_once(
+              diagnostics_runtime,
+              '    spotify_state: AuthorizationState | None,\n    status: OperationalStatus | None,\n) -> bytes:\n',
+              '    spotify_state: AuthorizationState | None,\n    status: OperationalStatus | None,\n    build_revision: str = "dev",\n) -> bytes:\n',
+              'status build revision parameter',
+          )
+          replace_once(
+              diagnostics_runtime,
+              '    <dt>Version</dt><dd><code>{html.escape(__version__)}</code></dd>\n',
+              '    <dt>Version</dt><dd><code>{html.escape(__version__)}</code></dd>\n    <dt>Build</dt><dd><code>{html.escape(build_revision)}</code></dd>\n',
+              'status build row',
+          )
+
+          workflow_specs = (
+              ('.github/workflows/publish-pr-candidate-amd64.yml', '${SOURCE_REVISION}'),
+              ('.github/workflows/publish-edge-amd64.yml', '${GITHUB_SHA}'),
+              ('.github/workflows/publish-stable-amd64.yml', '${GITHUB_SHA}'),
+          )
+          for workflow_name, revision in workflow_specs:
+              workflow = Path(workflow_name)
+              replace_once(
+                  workflow,
+                  '          docker build \\\n            --platform linux/amd64 \\\n',
+                  '          docker build \\\n            --platform linux/amd64 \\\n            --build-arg "SOURCE_REVISION=' + revision + '" \\\n',
+                  f'{workflow_name} build arg',
+              )
+
+          Path('tests/test_build_revision.py').write_text('''from __future__ import annotations\n\nimport io\nimport json\nimport zipfile\nfrom datetime import UTC, datetime\n\nfrom news_bulletin_playlist.build_info import build_revision\nfrom news_bulletin_playlist.diagnostics_runtime import _safe_operational_status_page\nfrom news_bulletin_playlist.diagnostics_web import build_diagnostic_bundle\n\n\ndef test_build_revision_shortens_only_valid_full_git_sha() -> None:\n    full = "0123456789abcdef0123456789abcdef01234567"\n    assert build_revision({"NEWS_PLAYLIST_BUILD_REVISION": full}) == "0123456789ab"\n    assert build_revision({"NEWS_PLAYLIST_BUILD_REVISION": full.upper()}) == "0123456789ab"\n    assert build_revision({"NEWS_PLAYLIST_BUILD_REVISION": "0123456789ab"}) == "dev"\n    assert build_revision({"NEWS_PLAYLIST_BUILD_REVISION": "<script>"}) == "dev"\n    assert build_revision({}) == "dev"\n\n\ndef test_public_status_page_exposes_safe_build_revision() -> None:\n    body = _safe_operational_status_page(\n        ready=True,\n        spotify_state=None,\n        status=None,\n        build_revision="0123456789ab",\n    ).decode()\n    assert "<dt>Build</dt><dd><code>0123456789ab</code></dd>" in body\n\n\ndef test_diagnostic_bundle_includes_build_revision() -> None:\n    payload = build_diagnostic_bundle(\n        events=(),\n        generated_at=datetime(2026, 9, 3, tzinfo=UTC),\n        last_cycle=None,\n        retention_days=30,\n        max_events=10_000,\n        build_revision="0123456789ab",\n    )\n    with zipfile.ZipFile(io.BytesIO(payload)) as archive:\n        runtime = json.loads(archive.read("runtime.json"))\n    assert runtime["build_revision"] == "0123456789ab"\n''')
+          PY
+      - name: Format and validate
+        run: |
+          python scripts/ruff_fix.py
+          ruff check .
+          ruff format --check .
+          mypy src
+          pytest -q tests/test_build_revision.py tests/test_diagnostics_web.py tests/test_diagnostics_runtime.py
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Dockerfile src/news_bulletin_playlist/build_info.py src/news_bulletin_playlist/diagnostics_runtime.py src/news_bulletin_playlist/diagnostics_web.py tests/test_build_revision.py .github/workflows/publish-pr-candidate-amd64.yml .github/workflows/publish-edge-amd64.yml .github/workflows/publish-stable-amd64.yml
+          git commit -m 'feat(status): expose running build revision'
+          git push origin HEAD:feat/75-show-build-revision
