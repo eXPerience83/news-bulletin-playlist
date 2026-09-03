@@ -257,9 +257,7 @@ class EngineLifecycleController:
         )
 
     def _prune_draining_locked(self) -> None:
-        self._draining_threads = [
-            thread for thread in self._draining_threads if thread.is_alive()
-        ]
+        self._draining_threads = [thread for thread in self._draining_threads if thread.is_alive()]
 
     def _ensure_restart_waiter_locked(self) -> None:
         if self._restart_waiter is not None and self._restart_waiter.is_alive():
@@ -473,7 +471,7 @@ class OperationalHealthHandler(LanAdminHandler):
             else:
                 with synchronization.hold():
                     snapshot = service.snapshot()
-        except (ManagedStateError, OSError):
+        except ManagedStateError, OSError:
             self._reply(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 b"Managed playlist state could not be loaded safely",
@@ -608,13 +606,13 @@ class OperationalHealthHandler(LanAdminHandler):
                 "Spotify authorization is unavailable; reconnect Spotify and retry",
             )
             return
-        except (SpotifyApiError, SpotifyTransportError):
+        except SpotifyApiError, SpotifyTransportError:
             self._managed_error(
                 HTTPStatus.BAD_GATEWAY,
                 "Spotify could not apply the playlist change; local state was preserved",
             )
             return
-        except (OSError, RuntimeError):
+        except OSError, RuntimeError:
             self._managed_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "Managed playlist state could not be changed safely",
@@ -751,9 +749,7 @@ def serve(
     auth_synchronization = AuthSynchronization()
     configuration_synchronization = ConfigurationSynchronization()
     auth_provider = (
-        None
-        if spotify_auth is None
-        else _LockedAuthProvider(spotify_auth, auth_synchronization)
+        None if spotify_auth is None else _LockedAuthProvider(spotify_auth, auth_synchronization)
     )
     lifecycle: EngineLifecycleController | None = None
     if auth_provider is not None:
@@ -914,9 +910,7 @@ def _operational_status_page(
     status: OperationalStatus | None,
 ) -> bytes:
     snapshot = (
-        OperationalStatus(configured=False).snapshot()
-        if status is None
-        else status.snapshot()
+        OperationalStatus(configured=False).snapshot() if status is None else status.snapshot()
     )
     runtime_label = "Ready" if ready else "Degraded"
     storage_label = "Writable" if ready else "Unavailable"

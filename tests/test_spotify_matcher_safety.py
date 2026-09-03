@@ -47,9 +47,7 @@ def _edition(source: SourceDefinition) -> CanonicalEdition:
     parsed = get_title_parser("ser").parse(title)
     assert parsed is not None
     edition_at = (
-        parsed.edition_at.replace(tzinfo=None)
-        .replace(tzinfo=source.timezone)
-        .astimezone(UTC)
+        parsed.edition_at.replace(tzinfo=None).replace(tzinfo=source.timezone).astimezone(UTC)
     )
     return CanonicalEdition(
         source_id=source.id,

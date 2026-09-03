@@ -240,9 +240,7 @@ def _fetch_candidates(
         if "next" not in page:
             raise MatchResponseError("Spotify show episodes response did not contain next")
         next_page = page["next"]
-        if next_page is not None and (
-            not isinstance(next_page, str) or not next_page.strip()
-        ):
+        if next_page is not None and (not isinstance(next_page, str) or not next_page.strip()):
             raise MatchResponseError("Spotify show episodes response contained invalid next")
 
         for item in items:
@@ -275,9 +273,7 @@ def _candidate_from_item(item: object) -> _SpotifyEpisodeCandidate:
 
     precision = item.get("release_date_precision")
     if not isinstance(precision, str) or precision not in _RELEASE_PRECISIONS:
-        raise MatchResponseError(
-            "Spotify episode item contained invalid release_date_precision"
-        )
+        raise MatchResponseError("Spotify episode item contained invalid release_date_precision")
     _validate_release_date(release_date, precision)
 
     uri = item.get("uri")
@@ -340,9 +336,7 @@ def _evaluate_candidate(
         return _CandidateEvaluation(candidate, False, "title_parse_failed")
 
     candidate_edition_at = (
-        parsed.edition_at.replace(tzinfo=None)
-        .replace(tzinfo=source.timezone)
-        .astimezone(UTC)
+        parsed.edition_at.replace(tzinfo=None).replace(tzinfo=source.timezone).astimezone(UTC)
     )
     if candidate_edition_at != edition.edition_at:
         return _CandidateEvaluation(candidate, False, "semantic_time_mismatch")
@@ -428,9 +422,7 @@ def _resolve_outcome(
             edition=edition,
             status=MatchStatus.AMBIGUOUS,
             spotify_episode_uri=None,
-            diagnostics=(
-                f"{len(viable)} viable Spotify candidates in known show: {uris}{suffix}"
-            ),
+            diagnostics=(f"{len(viable)} viable Spotify candidates in known show: {uris}{suffix}"),
         )
 
     if candidate_count == 0:
@@ -462,14 +454,8 @@ def _release_delay_diagnostic(evaluation: _CandidateEvaluation) -> str:
 
 
 def _rejection_diagnostic(evaluations: Sequence[_CandidateEvaluation]) -> str:
-    counts = Counter(
-        evaluation.reason for evaluation in evaluations if not evaluation.matched
-    )
-    parts = [
-        f"{reason}={counts[reason]}"
-        for reason in _REJECTION_REASON_ORDER
-        if counts[reason]
-    ]
+    counts = Counter(evaluation.reason for evaluation in evaluations if not evaluation.matched)
+    parts = [f"{reason}={counts[reason]}" for reason in _REJECTION_REASON_ORDER if counts[reason]]
     extras = sorted(reason for reason in counts if reason not in _REJECTION_REASON_ORDER)
     parts.extend(f"{reason}={counts[reason]}" for reason in extras)
     return f"rejections: {', '.join(parts)}" if parts else ""

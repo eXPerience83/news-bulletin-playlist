@@ -80,9 +80,7 @@ def test_reconciliation_rejects_invalid_items_without_writing() -> None:
 class FakeCatalogClient:
     calls: list[tuple[str, int, int]] = field(default_factory=list)
 
-    def show_episodes(
-        self, show_id: str, *, limit: int = 50, offset: int = 0
-    ) -> dict[str, object]:
+    def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, object]:
         self.calls.append((show_id, limit, offset))
         provider_id = next(
             provider.provider_id
@@ -105,9 +103,7 @@ class FakeCatalogClient:
             "next": "next-page",
         }
 
-    def search_shows(
-        self, query: str, *, limit: int = 10, offset: int = 0
-    ) -> dict[str, object]:
+    def search_shows(self, query: str, *, limit: int = 10, offset: int = 0) -> dict[str, object]:
         return {"shows": {"items": []}}
 
 
@@ -124,9 +120,7 @@ def test_catalog_probe_only_uses_deep_paging_for_rne() -> None:
 class InvalidCatalogClient(FakeCatalogClient):
     invalid_show_id: str = CORE_PROVIDERS[0].spotify_show_id
 
-    def show_episodes(
-        self, show_id: str, *, limit: int = 50, offset: int = 0
-    ) -> dict[str, object]:
+    def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, object]:
         if show_id == self.invalid_show_id:
             self.calls.append((show_id, limit, offset))
             return {"items": None, "next": None}
@@ -139,14 +133,10 @@ def test_catalog_probe_reports_invalid_items_as_failure() -> None:
 
 @dataclass
 class EmptyCatalogClient:
-    def show_episodes(
-        self, show_id: str, *, limit: int = 50, offset: int = 0
-    ) -> dict[str, object]:
+    def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, object]:
         return {"items": [], "next": None}
 
-    def search_shows(
-        self, query: str, *, limit: int = 10, offset: int = 0
-    ) -> dict[str, object]:
+    def search_shows(self, query: str, *, limit: int = 10, offset: int = 0) -> dict[str, object]:
         return {"shows": {"items": []}}
 
 

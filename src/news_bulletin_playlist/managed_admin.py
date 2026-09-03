@@ -128,9 +128,7 @@ class ManagedAdminService:
         state = self.store.load()
         managed_templates = {playlist.template_id for playlist in state.playlists}
         available = tuple(
-            template
-            for template in self.catalog.playlists
-            if template.id not in managed_templates
+            template for template in self.catalog.playlists if template.id not in managed_templates
         )
         return ManagedAdminSnapshot(managed=state.playlists, available_templates=available)
 
@@ -233,9 +231,7 @@ class ManagedAdminService:
             self.store.save(next_state)
         except (ManagedStateError, OSError) as exc:
             if spotify_metadata_updated:
-                raise SpotifyPlaylistPersistenceError(
-                    current.destination.external_id
-                ) from exc
+                raise SpotifyPlaylistPersistenceError(current.destination.external_id) from exc
             raise
         return updated
 
@@ -268,7 +264,7 @@ class ManagedAdminService:
             )
         except (SpotifyApiError, SpotifyTransportError) as exc:
             cover_error = _safe_spotify_operation_error(exc)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             cover_error = "local cover error"
 
         if metadata_error is not None or cover_error is not None:
@@ -291,9 +287,7 @@ class ManagedAdminService:
         state = self.store.load()
         current = self._managed(state, playlist_id)
         remaining = tuple(playlist for playlist in state.playlists if playlist.id != current.id)
-        self._save_validated(
-            ManagedState(schema_version=state.schema_version, playlists=remaining)
-        )
+        self._save_validated(ManagedState(schema_version=state.schema_version, playlists=remaining))
         return current.destination.external_id
 
     def _best_effort_cover_upload(
@@ -301,10 +295,10 @@ class ManagedAdminService:
         client: PlaylistProvisioningClient,
         playlist_id: str,
         cover_id: str,
-     ) -> None:
+    ) -> None:
         try:
             self._upload_cover_explicit(client, playlist_id, cover_id)
-        except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
+        except OSError, ValueError, SpotifyApiError, SpotifyTransportError:
             # Cover art is product metadata. It must never block playlist state or bulletin sync.
             return
 
@@ -331,8 +325,7 @@ class ManagedAdminService:
         updated: ManagedPlaylist,
     ) -> ManagedState:
         playlists = tuple(
-            updated if playlist.id == updated.id else playlist
-            for playlist in state.playlists
+            updated if playlist.id == updated.id else playlist for playlist in state.playlists
         )
         return ManagedState(schema_version=state.schema_version, playlists=playlists)
 

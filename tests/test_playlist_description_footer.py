@@ -50,10 +50,7 @@ def test_renderer_appends_project_footer_exactly_once() -> None:
     [
         f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}",
         f"Descripción\r\n\r\n{PROJECT_DESCRIPTION_FOOTER}\r\n",
-        (
-            f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}"
-            f"\n\n{PROJECT_DESCRIPTION_FOOTER}"
-        ),
+        (f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}\n\n{PROJECT_DESCRIPTION_FOOTER}"),
     ],
 )
 def test_renderer_normalizes_terminal_project_footer(contaminated: str) -> None:

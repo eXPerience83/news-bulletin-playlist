@@ -94,10 +94,7 @@ class _AttestedSpotify:
         page = self.slots[offset : offset + limit]
         next_url = "next" if offset + limit < len(self.slots) else None
         return {
-            "items": [
-                {"item": None if uri is None else {"uri": uri}}
-                for uri in page
-            ],
+            "items": [{"item": None if uri is None else {"uri": uri}} for uri in page],
             "next": next_url,
             "total": len(self.slots),
         }
@@ -107,8 +104,7 @@ class _AttestedSpotify:
         self.writes.append(list(uris))
         self.snapshot = f"snapshot-write-{len(self.writes)}"
         self.slots = [
-            None if index in self.opaque_after_write else uri
-            for index, uri in enumerate(uris)
+            None if index in self.opaque_after_write else uri for index, uri in enumerate(uris)
         ]
         for index, uri in self.visible_after_write.items():
             if 0 <= index < len(self.slots):

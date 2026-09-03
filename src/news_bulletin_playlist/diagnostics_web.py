@@ -111,9 +111,7 @@ def render_diagnostics_page(
     timezone_label: str = "UTC",
 ) -> bytes:
     """Render authenticated diagnostics without raw provider/error data."""
-    rows = "".join(
-        _event_row(event, display_timezone=display_timezone) for event in events
-    )
+    rows = "".join(_event_row(event, display_timezone=display_timezone) for event in events)
     if not rows:
         rows = '<tr><td colspan="8">No diagnostic events match these filters.</td></tr>'
     export_href = "/admin/diagnostics/export.zip?" + filters.query_string()
@@ -194,8 +192,7 @@ def build_diagnostic_bundle(
     observed = _as_utc(generated_at)
     event_documents = [_event_document(event) for event in events]
     jsonl = "".join(
-        json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        + "\n"
+        json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
         for document in event_documents
     )
     readable = "".join(_event_text(document) for document in event_documents)
@@ -274,9 +271,10 @@ def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
 
 
 def _event_row(event: DiagnosticEvent, *, display_timezone: tzinfo) -> str:
-    details = " ".join(
-        f"{key}={_plain_value(value)}" for key, value in sorted(event.details.items())
-    ) or "—"
+    details = (
+        " ".join(f"{key}={_plain_value(value)}" for key, value in sorted(event.details.items()))
+        or "—"
+    )
     occurred_at = html.escape(_display_timestamp(event.occurred_at, display_timezone))
     return (
         "<tr>"
@@ -295,9 +293,7 @@ def _event_row(event: DiagnosticEvent, *, display_timezone: tzinfo) -> str:
 def _event_text(document: dict[str, object]) -> str:
     details = document["details"]
     assert isinstance(details, dict)
-    detail_text = " ".join(
-        f"{key}={_plain_value(value)}" for key, value in sorted(details.items())
-    )
+    detail_text = " ".join(f"{key}={_plain_value(value)}" for key, value in sorted(details.items()))
     fields = [
         str(document["occurred_at"]),
         str(document["severity"]),

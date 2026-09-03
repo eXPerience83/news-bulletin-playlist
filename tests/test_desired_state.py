@@ -101,9 +101,7 @@ def test_default_window_order_and_unmatched_exclusion() -> None:
 
 
 def test_newest_100_are_kept_deterministically() -> None:
-    editions = tuple(
-        _edition(str(index), NOW - timedelta(minutes=index)) for index in range(105)
-    )
+    editions = tuple(_edition(str(index), NOW - timedelta(minutes=index)) for index in range(105))
     matches = {edition.identity: _match(edition) for edition in editions}
 
     desired = build_playlist_desired_state(_playlist(), editions, matches, now=NOW)

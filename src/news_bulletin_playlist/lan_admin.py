@@ -73,9 +73,7 @@ def build_engine_runtime_auth(
     if _optional_setting(environ.get(_EXTERNAL_URL_ENV)) is not None:
         raise RuntimeError(f"{_EXTERNAL_URL_ENV} must not be set in LAN administration mode")
     if _optional_setting(environ.get(_TRUSTED_PROXY_CIDRS_ENV)) is not None:
-        raise RuntimeError(
-            f"{_TRUSTED_PROXY_CIDRS_ENV} must not be set in LAN administration mode"
-        )
+        raise RuntimeError(f"{_TRUSTED_PROXY_CIDRS_ENV} must not be set in LAN administration mode")
 
     admin_password = _load_admin_password(environ)
     if admin_password is None:
@@ -93,9 +91,7 @@ def build_engine_runtime_auth(
 def _lan_admin_page(*, spotify_state: AuthorizationState | None, csrf_token: str) -> bytes:
     spotify = html.escape(_authorization_state_label(spotify_state))
     action = (
-        "Reconnect Spotify"
-        if spotify_state is AuthorizationState.CONNECTED
-        else "Connect Spotify"
+        "Reconnect Spotify" if spotify_state is AuthorizationState.CONNECTED else "Connect Spotify"
     )
     document = f"""<!doctype html>
 <html lang="en">

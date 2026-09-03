@@ -87,10 +87,7 @@ def run_catalog_probe(client: SpotifyClient) -> int:
                 item
                 for item in items
                 if item.get("release_date") == _RNE_DUPLICATE_DATE
-                and any(
-                    token in str(item.get("name", ""))
-                    for token in _RNE_DUPLICATE_TIME_TOKENS
-                )
+                and any(token in str(item.get("name", "")) for token in _RNE_DUPLICATE_TIME_TOKENS)
             ]
             print(f"  RNE duplicate probe: {len(matches)} matching Spotify episode(s)")
             for item in matches:

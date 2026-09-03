@@ -191,9 +191,7 @@ class SQLiteStore:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            raise PersistenceError(
-                f"initialize database failed for {self.path}: {exc}"
-            ) from exc
+            raise PersistenceError(f"initialize database failed for {self.path}: {exc}") from exc
 
         with self._connection("initialize database") as connection:
             connection.execute("PRAGMA journal_mode=WAL")

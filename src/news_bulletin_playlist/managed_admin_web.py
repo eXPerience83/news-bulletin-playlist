@@ -36,24 +36,30 @@ def render_managed_admin_page(
     notice_html = _message("notice", notice)
     error_html = _message("error", error)
     csrf = html.escape(csrf_token, quote=True)
-    managed = "".join(
-        _managed_card(
-            playlist,
-            catalog=catalog,
-            csrf_token=csrf,
-            last_cycle=last_cycle,
+    managed = (
+        "".join(
+            _managed_card(
+                playlist,
+                catalog=catalog,
+                csrf_token=csrf,
+                last_cycle=last_cycle,
+            )
+            for playlist in snapshot.managed
         )
-        for playlist in snapshot.managed
-    ) or '<p class="empty">No managed playlists yet.</p>'
-    available = "".join(
-        _template_card(
-            template,
-            catalog=catalog,
-            csrf_token=csrf,
-            spotify_connected=spotify_connected,
+        or '<p class="empty">No managed playlists yet.</p>'
+    )
+    available = (
+        "".join(
+            _template_card(
+                template,
+                catalog=catalog,
+                csrf_token=csrf,
+                spotify_connected=spotify_connected,
+            )
+            for template in snapshot.available_templates
         )
-        for template in snapshot.available_templates
-    ) or '<p class="empty">No additional built-in playlists are available.</p>'
+        or '<p class="empty">No additional built-in playlists are available.</p>'
+    )
     sources = _sources_table(snapshot, catalog, last_cycle)
     spotify_action = "Reconnect Spotify" if spotify_connected else "Connect Spotify"
 
@@ -171,7 +177,7 @@ def _managed_card(
     {_cover_image(playlist.cover_id, playlist.display_name)}
     <div>
       <h3>{html.escape(playlist.display_name)}</h3>
-      <p><strong>{'Active' if playlist.enabled else 'Paused'}</strong> · Private when created</p>
+      <p><strong>{"Active" if playlist.enabled else "Paused"}</strong> · Private when created</p>
       <p><a href="{html.escape(spotify_url, quote=True)}" target="_blank"
             rel="noopener noreferrer">Open in Spotify</a></p>
       <p class="muted">Last result: {html.escape(result)}</p>
@@ -269,7 +275,7 @@ def _source_checkboxes(
             f'<label for="{html.escape(control_id, quote=True)}">'
             f'<input id="{html.escape(control_id, quote=True)}" type="checkbox" '
             f'name="source_id" value="{html.escape(str(source.id), quote=True)}"{checked}> '
-            f'{html.escape(source.display_name)}</label>'
+            f"{html.escape(source.display_name)}</label>"
         )
     return "".join(rows)
 

@@ -199,8 +199,7 @@ class EngineRunner:
             for result in collection.sources:
                 previous_source_state = self.store.get_source_state(result.source_id)
                 if not result.ok and (
-                    previous_source_state is None
-                    or previous_source_state.last_success_at is None
+                    previous_source_state is None or previous_source_state.last_success_at is None
                 ):
                     unsafe_source_ids.add(result.source_id)
                 if result.ok:
@@ -266,8 +265,7 @@ class EngineRunner:
                         now=matching_now,
                     )
                     matched_count = sum(
-                        outcome.spotify_episode_uri is not None
-                        for outcome in match_result.outcomes
+                        outcome.spotify_episode_uri is not None for outcome in match_result.outcomes
                     )
                 else:
                     matched_count = 0
@@ -535,9 +533,7 @@ class EngineRunner:
 
     def _matching_cutoff(self, now: datetime) -> datetime:
         enabled = [
-            playlist.retention_hours
-            for playlist in self.config.playlists
-            if playlist.enabled
+            playlist.retention_hours for playlist in self.config.playlists if playlist.enabled
         ]
         retention_hours = max(enabled, default=48)
         return now - timedelta(hours=retention_hours)

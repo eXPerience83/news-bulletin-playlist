@@ -104,7 +104,7 @@ class AdminSecurity:
             return False
         try:
             decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
-        except (binascii.Error, UnicodeDecodeError):
+        except binascii.Error, UnicodeDecodeError:
             return False
         username, separator, password = decoded.partition(":")
         if separator != ":" or username != "admin":
@@ -269,9 +269,7 @@ def _admin_page(
 ) -> bytes:
     spotify = html.escape(_authorization_state_label(spotify_state))
     action = (
-        "Reconnect Spotify"
-        if spotify_state is AuthorizationState.CONNECTED
-        else "Connect Spotify"
+        "Reconnect Spotify" if spotify_state is AuthorizationState.CONNECTED else "Connect Spotify"
     )
     disabled = " disabled" if spotify_state is None else ""
     explanation = (
@@ -620,7 +618,7 @@ def healthcheck(*, url: str = DEFAULT_HEALTH_URL, timeout: float = 2.0) -> int:
             if response.status != HTTPStatus.OK:
                 return 1
             payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, ValueError, urllib.error.URLError):
+    except OSError, ValueError, urllib.error.URLError:
         return 1
     return 0 if isinstance(payload, dict) and payload.get("status") == "ok" else 1
 
@@ -669,9 +667,7 @@ def _parse_trusted_proxy_networks(
         try:
             networks.append(ipaddress.ip_network(entry, strict=False))
         except ValueError as exc:
-            raise RuntimeError(
-                f"{_TRUSTED_PROXY_CIDRS_ENV} contains an invalid IP/CIDR"
-            ) from exc
+            raise RuntimeError(f"{_TRUSTED_PROXY_CIDRS_ENV} contains an invalid IP/CIDR") from exc
     return tuple(networks)
 
 

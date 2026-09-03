@@ -126,10 +126,7 @@ def test_redirect_uri_requires_https_except_explicit_loopback() -> None:
         build_redirect_uri("http://127.0.0.1:8788")
         == "http://127.0.0.1:8788/admin/spotify/callback"
     )
-    assert (
-        build_redirect_uri("http://[::1]:8788")
-        == "http://[::1]:8788/admin/spotify/callback"
-    )
+    assert build_redirect_uri("http://[::1]:8788") == "http://[::1]:8788/admin/spotify/callback"
 
     for invalid in (
         "http://192.168.1.20:8788",

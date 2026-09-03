@@ -14,8 +14,7 @@ from news_bulletin_playlist.providers.base import TitleParser
 from news_bulletin_playlist.registry import CORE_PROVIDERS, ProviderConfig
 
 _USER_AGENT = (
-    "news-bulletin-playlist/0.0.1 "
-    "(+https://github.com/eXPerience83/news-bulletin-playlist)"
+    "news-bulletin-playlist/0.0.1 (+https://github.com/eXPerience83/news-bulletin-playlist)"
 )
 _SAMPLE_SIZE = 6
 _MIN_PARSE_RATIO = 0.5
