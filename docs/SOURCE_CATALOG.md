@@ -67,7 +67,7 @@ inventory that the managed runtime exposes today.
 | --- | --- | --- | --- | --- | --- |
 | `ser` | ES | es | Cadena SER — Las noticias de la SER | `implemented` | Hourly core source. The recurring long 08:00 edition is handled by the bounded `ser_morning_0800` playlist-policy exception rather than parser logic. |
 | `rne` | ES | es | RNE — Noticias RNE | `implemented` | Frequent short national bulletins. Runtime matching supports the observed delayed Spotify release date. |
-| `ondacero` | ES | es | Onda Cero — Las noticias en Onda Cero | `implemented / review` | Existing deterministic runtime path; continue checking whether a shorter or more granular bulletin feed is preferable. |
+| `ondacero` | ES | es | Onda Cero — Las noticias en Onda Cero | `implemented` | Re-checked 2026-09-04: the current official programme is already the granular hourly bulletin product; recent public episodes are normally within the common short-bulletin duration profile, so no replacement feed is currently justified. |
 | `cnn` | US | es | CNN — 5 Cosas | `implemented` | Spanish-language international source currently available to the Spain playlist through explicit source membership. |
 
 ## Research inventory
@@ -77,8 +77,8 @@ claim that the source is ready for production.
 
 | Country | Lang | Bulletin/source | Status | Current research note |
 | --- | --- | --- | --- | --- |
-| ES | es | ABC — Las Noticias de ABC | `candidate` | Short daily bulletin candidate; deterministic runtime verification still required. |
-| ES | es | COPE — boletines | `blocked` | Parser/research exists, but a deterministic Spotify catalogue path was not verified in the P0 work. |
+| ES | es | ABC — Las Noticias de ABC | `candidate` | Re-checked 2026-09-04: active daily podcast, stable Omny programme/RSS path and public Spotify show `0cLJl7pvrr1bkUaKiVRggf` are now identified; recent episodes are generally about 4–6 minutes. Keep as candidate until RSS identity/GUID behaviour and deterministic parser/matching support are verified and tested. |
+| ES | es | COPE — boletines | `blocked` | Re-checked 2026-09-04: COPE still publishes frequent short boletines and the repository already has a provider parser, but no deterministic Spotify show identity was established from the public review. Keep blocked on destination-catalogue identity rather than guessing via global search. |
 | DE | de | Deutschlandfunk — Die Nachrichten | `candidate` | Hourly, with additional half-hour editions during parts of weekdays; strong product fit to verify. |
 | DE | de | Tagesschau in 100 Sekunden | `candidate` | Multiple very short updates per day; verify feed identity and deterministic Spotify path. |
 | FR | fr | RTL — Le journal RTL | `candidate` | Hourly short bulletin candidate; full deterministic verification pending. |
@@ -99,6 +99,46 @@ claim that the source is ready for production.
 | IE | en | RTÉ news bulletins | `research` | Search for a better short/frequent candidate than long-form programmes. |
 | NL | nl | NOS | `research` | Continue searching for a true short recurring bulletin rather than single-topic explainers. |
 | RO | ro | Radio România Actualități — Știri | `candidate` | Hourly schedule appears promising; verify feed and Spotify catalogue. |
+
+## Review record
+
+### Spain / Spanish — 2026-09-04
+
+Evidence reviewed:
+
+- SER official podcast page still describes hourly updates and exposes RSS/Spotify distribution:
+  <https://cadenaser.com/podcast/cadena-ser/1043/>.
+- Spotify still exposes the deterministic SER show as
+  <https://open.spotify.com/show/4EwwdoHHYmbt49UXODQMpi>.
+- Spotify still exposes Noticias RNE as
+  <https://open.spotify.com/show/0UgidTKsoaHiHDARuPQNW1>; current catalogue entries include both
+  normal short bulletins and longer non-bulletin/outlier items, reinforcing the common eligibility
+  policy rather than a source-wide duration bypass.
+- Onda Cero's official bulletin page is actively publishing hourly editions:
+  <https://www.ondacero.es/podcast/programas/boletines/>. Recent public Spotify episodes reviewed
+  were typically around 3–6 minutes, so the existing implemented programme is already the granular
+  source previously sought by the `implemented / review` note.
+- ABC's podcast is active daily on Apple Podcasts
+  (<https://podcasts.apple.com/es/podcast/las-noticias-de-abc/id1439939819>), has a stable Omny
+  programme with RSS discovery
+  (<https://omny.fm/shows/las-noticias-de-abc-1/playlists/podcast> and
+  <https://omny.fm/shows/las-noticias-de-abc-1/playlists/podcast.rss>), and a public Spotify show
+  (<https://open.spotify.com/show/0cLJl7pvrr1bkUaKiVRggf>). This removes the old feed/catalogue
+  discovery uncertainty, but the repository still lacks an ABC parser and deterministic identity /
+  matching tests, so promotion is intentionally deferred.
+- COPE continues to expose short, frequent boletines on its official site
+  (<https://www.cope.es/podcasts/audios>) and through Apple Podcasts
+  (<https://podcasts.apple.com/es/podcast/boletines-cope/id1320143861>). The existing `CopeParser`
+  remains useful, but the review did not establish a deterministic Spotify show identity. COPE
+  therefore remains `blocked` rather than being promoted through an uncertain global-search guess.
+
+Status changes from this review:
+
+- `ondacero`: `implemented / review` -> `implemented`;
+- ABC: remains `candidate`, but its next blocker is now parser/identity/matching verification rather
+  than basic feed/Spotify discovery;
+- COPE: remains `blocked` on deterministic Spotify catalogue identity;
+- no new duration exception is justified by this review.
 
 ## Coverage backlog
 
