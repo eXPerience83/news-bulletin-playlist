@@ -94,10 +94,8 @@ class OperationalDiagnostics:
                     playlist_id=playlist_id,
                     details=normalized_details,
                 )
-            except (PersistenceError, ValueError):
-                self.logger.error(
-                    "event=diagnostic_persistence_failed component=diagnostics"
-                )
+            except PersistenceError, ValueError:
+                self.logger.error("event=diagnostic_persistence_failed component=diagnostics")
                 return
 
         fields = [

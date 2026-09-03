@@ -152,9 +152,7 @@ def _body(handler: _HandlerHarness) -> str:
 
 
 def _callback_url(state: str, code: str) -> str:
-    return LAN_SPOTIFY_REDIRECT_URI + "?" + urllib.parse.urlencode(
-        {"state": state, "code": code}
-    )
+    return LAN_SPOTIFY_REDIRECT_URI + "?" + urllib.parse.urlencode({"state": state, "code": code})
 
 
 def test_lan_mode_configuration_is_explicit_and_conflicts_fail_closed(tmp_path: Path) -> None:
@@ -194,9 +192,7 @@ def test_lan_transport_accepts_private_direct_client_and_rejects_forwarded_heade
 
 
 def test_pasted_callback_url_must_match_exact_loopback_redirect_without_secret_echo() -> None:
-    query = parse_lan_callback_url(
-        "http://127.0.0.1:8787/admin/spotify/callback?state=s&code=c"
-    )
+    query = parse_lan_callback_url("http://127.0.0.1:8787/admin/spotify/callback?state=s&code=c")
     assert query == "state=s&code=c"
 
     code = "authorization-code-sentinel"

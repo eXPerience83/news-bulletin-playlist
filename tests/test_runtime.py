@@ -234,9 +234,7 @@ def test_admin_surface_is_absent_when_not_configured(tmp_path: Path) -> None:
     thread = _serve_one(server)
     try:
         with pytest.raises(urllib.error.HTTPError) as raised:
-            urllib.request.urlopen(
-                f"http://127.0.0.1:{server.server_port}/admin/", timeout=2
-            )
+            urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/admin/", timeout=2)
         assert raised.value.code == HTTPStatus.NOT_FOUND
     finally:
         thread.join(timeout=2)
@@ -250,9 +248,7 @@ def test_admin_surface_requires_basic_authentication(tmp_path: Path) -> None:
     thread = _serve_one(server)
     try:
         with pytest.raises(urllib.error.HTTPError) as raised:
-            urllib.request.urlopen(
-                f"http://127.0.0.1:{server.server_port}/admin/", timeout=2
-            )
+            urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/admin/", timeout=2)
         assert raised.value.code == HTTPStatus.UNAUTHORIZED
         assert raised.value.headers["WWW-Authenticate"].startswith("Basic ")
     finally:
@@ -441,9 +437,7 @@ def test_admin_connect_and_callback_complete_without_manual_url_paste(tmp_path: 
             "https://news.example.test/admin/spotify/callback"
         ]
 
-        callback_query = urllib.parse.urlencode(
-            {"state": state, "code": "authorization-code"}
-        )
+        callback_query = urllib.parse.urlencode({"state": state, "code": "authorization-code"})
         callback_request = urllib.request.Request(
             f"{base_url}/admin/spotify/callback?{callback_query}"
         )
@@ -456,10 +450,7 @@ def test_admin_connect_and_callback_complete_without_manual_url_paste(tmp_path: 
         assert callback_redirect.headers["Location"] == "/admin/"
 
         assert HealthHandler.spotify_auth is not None
-        assert (
-            HealthHandler.spotify_auth.authorization_state()
-            is AuthorizationState.CONNECTED
-        )
+        assert HealthHandler.spotify_auth.authorization_state() is AuthorizationState.CONNECTED
         persisted = store.path.read_text(encoding="utf-8")
         assert "refresh-secret-sentinel" in persisted
         assert "access-secret-sentinel" not in persisted
@@ -549,9 +540,7 @@ def test_health_endpoint_fails_closed_when_data_path_is_missing(tmp_path: Path) 
     thread = _serve_one(server)
     try:
         try:
-            urllib.request.urlopen(
-                f"http://127.0.0.1:{server.server_port}/healthz", timeout=2
-            )
+            urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/healthz", timeout=2)
         except urllib.error.HTTPError as exc:
             assert exc.code == HTTPStatus.SERVICE_UNAVAILABLE
         else:
@@ -574,9 +563,7 @@ def test_health_endpoint_fails_closed_when_real_write_fails(
     thread = _serve_one(server)
     try:
         try:
-            urllib.request.urlopen(
-                f"http://127.0.0.1:{server.server_port}/healthz", timeout=2
-            )
+            urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/healthz", timeout=2)
         except urllib.error.HTTPError as exc:
             assert exc.code == HTTPStatus.SERVICE_UNAVAILABLE
         else:

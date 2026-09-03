@@ -218,13 +218,16 @@ def test_serve_persists_runtime_lifecycle_events(tmp_path: Path) -> None:
     stop = threading.Event()
     stop.set()
 
-    assert serve(
-        host="127.0.0.1",
-        port=0,
-        data_dir=tmp_path,
-        stop_event=stop,
-        environ={},
-    ) == 0
+    assert (
+        serve(
+            host="127.0.0.1",
+            port=0,
+            data_dir=tmp_path,
+            stop_event=stop,
+            environ={},
+        )
+        == 0
+    )
 
     store = DiagnosticEventStore(tmp_path / DEFAULT_DB_FILENAME)
     store.initialize()

@@ -49,11 +49,7 @@ class BuiltInCatalog:
             raise ValueError("built-in catalog contains duplicate playlist template ids")
         known_sources = set(source_ids)
         for source in self.sources:
-            if (
-                not source.enabled
-                or source.endpoint_url is None
-                or not source.endpoint_url.strip()
-            ):
+            if not source.enabled or source.endpoint_url is None or not source.endpoint_url.strip():
                 raise ValueError(
                     f"built-in source {source.id} must be operational and have an endpoint"
                 )
@@ -106,9 +102,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("ser"),
         endpoint_url="https://fapi-top.prisasd.com/podcast/playser/boletines.xml",
-        external_references=(
-            ExternalReference("spotify", "show", "4EwwdoHHYmbt49UXODQMpi"),
-        ),
+        external_references=(ExternalReference("spotify", "show", "4EwwdoHHYmbt49UXODQMpi"),),
     ),
     SourceDefinition(
         id=SourceId("rne"),
@@ -119,9 +113,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("rne"),
         endpoint_url="https://api.rtve.es/api/adapter/programas/1750/audios.rss",
-        external_references=(
-            ExternalReference("spotify", "show", "0UgidTKsoaHiHDARuPQNW1"),
-        ),
+        external_references=(ExternalReference("spotify", "show", "0UgidTKsoaHiHDARuPQNW1"),),
         spotify_release_delay_days=1,
     ),
     SourceDefinition(
@@ -136,9 +128,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
             "https://www.ondacero.es/rss/podcast/mount/"
             "ATRESMEDIA_LAS_NOTICIAS_EN_ONDA_CERO_P/fastly"
         ),
-        external_references=(
-            ExternalReference("spotify", "show", "0tjEexypyczHXW9vE3SU3P"),
-        ),
+        external_references=(ExternalReference("spotify", "show", "0tjEexypyczHXW9vE3SU3P"),),
     ),
     SourceDefinition(
         id=SourceId("cnn"),
@@ -149,9 +139,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("cnn"),
         endpoint_url="https://feeds.megaphone.fm/WMHY5696831164",
-        external_references=(
-            ExternalReference("spotify", "show", "0vDgnorbpBr65YZzFVVouE"),
-        ),
+        external_references=(ExternalReference("spotify", "show", "0vDgnorbpBr65YZzFVVouE"),),
     ),
 )
 

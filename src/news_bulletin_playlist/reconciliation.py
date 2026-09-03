@@ -341,9 +341,7 @@ def reconcile_spotify_playlist(
     if not playlist.enabled:
         raise SpotifyReconciliationError(f"playlist {playlist.id!s} is disabled")
     if str(playlist.destination.adapter_id) != "spotify":
-        raise SpotifyReconciliationError(
-            f"playlist {playlist.id!s} destination is not Spotify"
-        )
+        raise SpotifyReconciliationError(f"playlist {playlist.id!s} destination is not Spotify")
     if desired.playlist_id != playlist.id:
         raise SpotifyReconciliationError(
             f"desired state {desired.playlist_id!s} does not belong to playlist {playlist.id!s}"
@@ -523,16 +521,12 @@ def _require_playlist_page(
 
     if "next" not in container:
         raise SpotifyReconciliationError(
-            f"{context} pagination was missing next "
-            f"(offset={offset} returned={len(items)})"
+            f"{context} pagination was missing next (offset={offset} returned={len(items)})"
         )
     next_value = container["next"]
-    if next_value is not None and (
-        not isinstance(next_value, str) or not next_value.strip()
-    ):
+    if next_value is not None and (not isinstance(next_value, str) or not next_value.strip()):
         raise SpotifyReconciliationError(
-            f"{context} pagination contained invalid next "
-            f"(offset={offset} returned={len(items)})"
+            f"{context} pagination contained invalid next (offset={offset} returned={len(items)})"
         )
     if not items and next_value is not None:
         raise SpotifyReconciliationError(
@@ -541,14 +535,12 @@ def _require_playlist_page(
 
     if "total" not in container:
         raise SpotifyReconciliationError(
-            f"{context} pagination was missing total "
-            f"(offset={offset} returned={len(items)})"
+            f"{context} pagination was missing total (offset={offset} returned={len(items)})"
         )
     total = container["total"]
     if isinstance(total, bool) or not isinstance(total, int) or total < 0:
         raise SpotifyReconciliationError(
-            f"{context} pagination contained invalid total "
-            f"(offset={offset} returned={len(items)})"
+            f"{context} pagination contained invalid total (offset={offset} returned={len(items)})"
         )
     consumed = offset + len(items)
     if consumed > total:
@@ -601,8 +593,7 @@ def _extract_playlist_slots(
         has_track = "track" in item
         if not has_item and not has_track:
             raise SpotifyReconciliationError(
-                f"{context} contained an item without a media object "
-                f"(item_index={index})"
+                f"{context} contained an item without a media object (item_index={index})"
             )
         item_value = item.get("item") if has_item else None
         track_value = item.get("track") if has_track else None
@@ -619,8 +610,7 @@ def _extract_playlist_slots(
         if value is None:
             if not allow_unavailable:
                 raise SpotifyReconciliationError(
-                    f"{context} contained an unavailable media item "
-                    f"(item_index={index})"
+                    f"{context} contained an unavailable media item (item_index={index})"
                 )
             slots.append(None)
             continue
@@ -667,9 +657,7 @@ def _read_current_snapshot(
 ) -> str:
     snapshot_reader = getattr(client, "playlist_snapshot", None)
     if not callable(snapshot_reader):
-        raise SpotifyReconciliationError(
-            f"Spotify playlist {phase} snapshot reader is unavailable"
-        )
+        raise SpotifyReconciliationError(f"Spotify playlist {phase} snapshot reader is unavailable")
     response = snapshot_reader(playlist_id)
     return _require_snapshot(
         response,

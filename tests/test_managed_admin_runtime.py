@@ -645,19 +645,24 @@ def test_lifecycle_reactivation_waits_for_draining_cycle_then_restarts() -> None
 
 def test_legacy_or_explicit_yaml_disables_managed_web_service(tmp_path: Path) -> None:
     spotify_auth = object()
-    assert _build_managed_admin_service(  # type: ignore[arg-type]
-        tmp_path,
-        {CONFIG_PATH_ENV: "/data/manual.yaml"},
-        spotify_auth=spotify_auth,
-    ) is None
+    assert (
+        _build_managed_admin_service(  # type: ignore[arg-type]
+            tmp_path,
+            {CONFIG_PATH_ENV: "/data/manual.yaml"},
+            spotify_auth=spotify_auth,
+        )
+        is None
+    )
 
     (tmp_path / "news-bulletin-playlist.yaml").write_text("legacy")
-    assert _build_managed_admin_service(  # type: ignore[arg-type]
-        tmp_path,
-        {},
-        spotify_auth=spotify_auth,
-    ) is None
-
+    assert (
+        _build_managed_admin_service(  # type: ignore[arg-type]
+            tmp_path,
+            {},
+            spotify_auth=spotify_auth,
+        )
+        is None
+    )
 
 
 class _TrackingHold:

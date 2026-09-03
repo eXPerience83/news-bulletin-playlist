@@ -195,9 +195,7 @@ def parse_managed_state(payload: object) -> ManagedState:
     seen_destinations: set[tuple[AdapterId, str]] = set()
     for playlist in playlists:
         if playlist.enabled and not playlist.source_ids:
-            raise ManagedStateError(
-                f"enabled managed playlist {playlist.id} must select a source"
-            )
+            raise ManagedStateError(f"enabled managed playlist {playlist.id} must select a source")
         destination_key = (
             playlist.destination.adapter_id,
             playlist.destination.external_id,
@@ -272,9 +270,7 @@ def _parse_playlist(value: object, path: str) -> ManagedPlaylist:
     retention_hours = _positive_integer(
         _required(data, "retention_hours", path), f"{path}.retention_hours"
     )
-    max_episodes = _positive_integer(
-        _required(data, "max_episodes", path), f"{path}.max_episodes"
-    )
+    max_episodes = _positive_integer(_required(data, "max_episodes", path), f"{path}.max_episodes")
     return ManagedPlaylist(
         id=PlaylistId(_nonempty_string(_required(data, "id", path), f"{path}.id")),
         template_id=PlaylistId(

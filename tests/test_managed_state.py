@@ -76,9 +76,7 @@ def test_activation_snapshots_defaults_instead_of_copying_the_catalog() -> None:
     assert managed.description == template.description
     assert managed.source_ids == template.default_source_ids
     assert managed.cover_id == template.cover_id
-    assert managed.destination == DestinationReference(
-        AdapterId("spotify"), "spotify-playlist-id"
-    )
+    assert managed.destination == DestinationReference(AdapterId("spotify"), "spotify-playlist-id")
 
 
 def test_managed_state_store_round_trip_is_owner_only(tmp_path: Path) -> None:

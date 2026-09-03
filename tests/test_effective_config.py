@@ -146,8 +146,6 @@ def test_managed_state_changes_are_observed_on_each_load(tmp_path: Path) -> None
     assert first.playlists[0].enabled is True
 
     paused = replace(state.playlists[0], enabled=False)
-    ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME).save(
-        ManagedState(playlists=(paused,))
-    )
+    ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME).save(ManagedState(playlists=(paused,)))
 
     assert load_effective_config(tmp_path, {}) is None

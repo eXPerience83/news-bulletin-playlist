@@ -219,9 +219,7 @@ class DiagnosticEventStore:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            raise PersistenceError(
-                f"initialize diagnostics failed for {self.path}: {exc}"
-            ) from exc
+            raise PersistenceError(f"initialize diagnostics failed for {self.path}: {exc}") from exc
         with self._connection("initialize diagnostics") as connection:
             connection.execute(_SCHEMA_SQL)
             for statement in _INDEXES:
@@ -392,9 +390,7 @@ class _DiagnosticConnection:
             connection.execute("PRAGMA busy_timeout=5000")
             connection.execute("BEGIN")
         except sqlite3.Error as exc:
-            raise PersistenceError(
-                f"{self.operation} failed for {self.path}: {exc}"
-            ) from exc
+            raise PersistenceError(f"{self.operation} failed for {self.path}: {exc}") from exc
         self.connection = connection
         return connection
 

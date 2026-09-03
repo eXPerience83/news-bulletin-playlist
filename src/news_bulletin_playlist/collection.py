@@ -21,8 +21,7 @@ from news_bulletin_playlist.registry import get_title_parser
 FeedFetcher = Callable[[str], bytes]
 
 _USER_AGENT = (
-    "news-bulletin-playlist/0.0.1 "
-    "(+https://github.com/eXPerience83/news-bulletin-playlist)"
+    "news-bulletin-playlist/0.0.1 (+https://github.com/eXPerience83/news-bulletin-playlist)"
 )
 _MAX_FEED_BYTES = 10 * 1024 * 1024
 
@@ -181,7 +180,7 @@ def _source_native_id(item: ET.Element) -> str | None:
 def _parse_published_at(value: str, source_timezone: ZoneInfo) -> datetime:
     try:
         parsed = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         try:
             parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
         except ValueError as exc:

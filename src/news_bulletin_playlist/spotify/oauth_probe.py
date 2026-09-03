@@ -216,9 +216,7 @@ def require_granted_scopes(
     granted = set(granted_scopes)
     missing = [scope for scope in required_scopes if scope not in granted]
     if missing:
-        raise RuntimeError(
-            "Spotify did not grant all requested scopes: " + ", ".join(missing)
-        )
+        raise RuntimeError("Spotify did not grant all requested scopes: " + ", ".join(missing))
 
 
 def exchange_code(client_id: str, code: str, verifier: str) -> TokenResponse:

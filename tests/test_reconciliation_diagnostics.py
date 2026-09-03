@@ -14,9 +14,7 @@ def test_classifies_safe_spotify_api_and_transport_failures() -> None:
         "verification_outcome": "failed",
     }
 
-    transport = classify_reconciliation_failure(
-        "Spotify API request failed due to a network error"
-    )
+    transport = classify_reconciliation_failure("Spotify API request failed due to a network error")
     assert transport.details() == {
         "failure_class": "transport_error",
         "phase": "reconciliation",
@@ -107,9 +105,7 @@ def test_classifies_readback_mismatch_and_unavailable_media() -> None:
 
 def test_unknown_error_collapses_to_generic_classification_without_secret() -> None:
     sentinel = "access-token-sentinel-never-persist"
-    diagnostic = classify_reconciliation_failure(
-        f"completely unknown provider failure {sentinel}"
-    )
+    diagnostic = classify_reconciliation_failure(f"completely unknown provider failure {sentinel}")
 
     assert diagnostic.details() == {
         "failure_class": "reconciliation_error",

@@ -317,9 +317,7 @@ class SpotifyAuthService:
             self.required_scopes = tuple(required_scopes or self.scopes)
         if not self.scopes or any(not scope.strip() for scope in self.scopes):
             raise SpotifyAuthConfigurationError("Spotify authorization scopes are invalid")
-        if not self.required_scopes or any(
-            not scope.strip() for scope in self.required_scopes
-        ):
+        if not self.required_scopes or any(not scope.strip() for scope in self.required_scopes):
             raise SpotifyAuthConfigurationError("Spotify required scopes are invalid")
         if not set(self.required_scopes).issubset(self.scopes):
             raise SpotifyAuthConfigurationError(
@@ -571,9 +569,7 @@ def _require_scopes(granted_scopes: Sequence[str], required_scopes: Sequence[str
     granted = set(granted_scopes)
     missing = [scope for scope in required_scopes if scope not in granted]
     if missing:
-        raise SpotifyTokenError(
-            "Spotify did not grant all required scopes: " + ", ".join(missing)
-        )
+        raise SpotifyTokenError("Spotify did not grant all required scopes: " + ", ".join(missing))
 
 
 def _parse_callback_query(query: str) -> dict[str, list[str]]:
@@ -583,14 +579,10 @@ def _parse_callback_query(query: str) -> dict[str, list[str]]:
         raise SpotifyOAuthCallbackError("Spotify callback query is malformed") from exc
 
 
-def _single_parameter(
-    params: dict[str, list[str]], name: str, *, required: bool
-) -> str | None:
+def _single_parameter(params: dict[str, list[str]], name: str, *, required: bool) -> str | None:
     values = params.get(name, [])
     if len(values) > 1:
-        raise SpotifyOAuthCallbackError(
-            f"Spotify callback contained duplicate {name} parameters"
-        )
+        raise SpotifyOAuthCallbackError(f"Spotify callback contained duplicate {name} parameters")
     if not values:
         if required:
             raise SpotifyOAuthCallbackError(f"Spotify callback did not contain {name}")
@@ -615,8 +607,10 @@ def _parse_credential_record(payload: object) -> SpotifyCredentialRecord:
     refresh_token = payload.get("refresh_token")
     raw_scopes = payload.get("granted_scopes")
     raw_authorized_at = payload.get("authorized_at")
-    if not isinstance(raw_scopes, list) or not raw_scopes or not all(
-        isinstance(scope, str) and scope for scope in raw_scopes
+    if (
+        not isinstance(raw_scopes, list)
+        or not raw_scopes
+        or not all(isinstance(scope, str) and scope for scope in raw_scopes)
     ):
         raise SpotifyCredentialStoreError("Spotify authorization state has invalid scopes")
     if not isinstance(raw_authorized_at, str):
@@ -647,7 +641,7 @@ def _parse_credential_record(payload: object) -> SpotifyCredentialRecord:
 def _oauth_error_code(payload: bytes) -> str | None:
     try:
         decoded = json.loads(payload)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except UnicodeDecodeError, json.JSONDecodeError:
         return None
     if not isinstance(decoded, dict):
         return None
