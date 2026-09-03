@@ -32,14 +32,28 @@ The normal playlist scopes remain the required runtime scopes. `ugc-image-upload
 an optional capability so an installation authorized before cover support can continue collecting
 and reconciling bulletins without interruption.
 
-After upgrading an existing installation:
+For an existing installation, use **Apply Spotify metadata & cover** to reapply the managed
+playlist name/base description and bundled cover. Do **not** reconnect Spotify merely because cover
+support exists or because the application was upgraded. Reconnect only after an actual Spotify
+authorization/permission failure indicates that the current grant is insufficient.
 
-1. use **Reconnect Spotify** once to grant the image-upload permission;
-2. use **Apply Spotify metadata & cover** on the managed playlist.
+The explicit action is separate from **Save playlist**, so changing source membership or pause
+state does not depend on Spotify metadata availability.
 
-That explicit action reapplies the canonical Spotify name/description (including the project link)
-and then attempts the bundled cover. It is separate from **Save playlist**, so changing source
-membership or pause state does not depend on Spotify metadata availability.
+### Playlist description behavior
+
+The Spotify Web API receives only the editable, provider-agnostic base description. The application
+does not append the repository URL to that provider field.
+
+This choice is based on live differential validation of the current Web API path: name-only updates,
+base-description updates and cover uploads succeeded, while otherwise equivalent descriptions that
+contained the external project URL returned HTTP 400. Spotify's published Change Playlist Details
+contract documents `description` as a string but does not document that observed URL-content
+restriction, so the project treats it as provider behavior rather than a portable API guarantee.
+
+Historical managed state that contains the old terminal `Proyecto: <repository URL>` footer is
+cleaned when it is next validated/edited. The project/repository link remains available in project
+documentation rather than being injected into Spotify metadata.
 
 ## When covers are uploaded
 
@@ -56,7 +70,7 @@ each engine cycle.
 Cover upload is best-effort. A missing/invalid local image, a missing optional Spotify scope, rate
 limiting, a Spotify API failure, or a transport failure must not roll back managed state and must
 never block bulletin synchronization. The playlist remains usable with Spotify's current/automatic
-cover and the operator can reconnect/retry later.
+cover and the operator can reconnect/retry later when an actual authorization failure warrants it.
 
 The metadata part of the explicit apply action is not best-effort: if Spotify cannot update the
 playlist name/description, the action reports that failure and does not pretend the remote metadata

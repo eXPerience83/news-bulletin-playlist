@@ -26,12 +26,7 @@ MAX_PLAYLIST_NAME_LENGTH = 100
 SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT = 300
 PROJECT_REPOSITORY_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
 PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {PROJECT_REPOSITORY_URL}"
-_DESCRIPTION_SEPARATOR = "\n\n"
-MAX_PLAYLIST_DESCRIPTION_LENGTH = (
-    SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
-    - len(_DESCRIPTION_SEPARATOR)
-    - len(PROJECT_DESCRIPTION_FOOTER)
-)
+MAX_PLAYLIST_DESCRIPTION_LENGTH = SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
 
 
 class ManagedAdminError(RuntimeError):
@@ -128,7 +123,9 @@ class ManagedAdminService:
         state = self.store.load()
         managed_templates = {playlist.template_id for playlist in state.playlists}
         available = tuple(
-            template for template in self.catalog.playlists if template.id not in managed_templates
+            template
+            for template in self.catalog.playlists
+            if template.id not in managed_templates
         )
         return ManagedAdminSnapshot(managed=state.playlists, available_templates=available)
 
@@ -231,7 +228,9 @@ class ManagedAdminService:
             self.store.save(next_state)
         except (ManagedStateError, OSError) as exc:
             if spotify_metadata_updated:
-                raise SpotifyPlaylistPersistenceError(current.destination.external_id) from exc
+                raise SpotifyPlaylistPersistenceError(
+                    current.destination.external_id
+                ) from exc
             raise
         return updated
 
@@ -264,7 +263,7 @@ class ManagedAdminService:
             )
         except (SpotifyApiError, SpotifyTransportError) as exc:
             cover_error = _safe_spotify_operation_error(exc)
-        except OSError, ValueError:
+        except (OSError, ValueError):
             cover_error = "local cover error"
 
         if metadata_error is not None or cover_error is not None:
@@ -287,7 +286,9 @@ class ManagedAdminService:
         state = self.store.load()
         current = self._managed(state, playlist_id)
         remaining = tuple(playlist for playlist in state.playlists if playlist.id != current.id)
-        self._save_validated(ManagedState(schema_version=state.schema_version, playlists=remaining))
+        self._save_validated(
+            ManagedState(schema_version=state.schema_version, playlists=remaining)
+        )
         return current.destination.external_id
 
     def _best_effort_cover_upload(
@@ -295,10 +296,10 @@ class ManagedAdminService:
         client: PlaylistProvisioningClient,
         playlist_id: str,
         cover_id: str,
-    ) -> None:
+     ) -> None:
         try:
             self._upload_cover_explicit(client, playlist_id, cover_id)
-        except OSError, ValueError, SpotifyApiError, SpotifyTransportError:
+        except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
             # Cover art is product metadata. It must never block playlist state or bulletin sync.
             return
 
@@ -325,7 +326,8 @@ class ManagedAdminService:
         updated: ManagedPlaylist,
     ) -> ManagedState:
         playlists = tuple(
-            updated if playlist.id == updated.id else playlist for playlist in state.playlists
+            updated if playlist.id == updated.id else playlist
+            for playlist in state.playlists
         )
         return ManagedState(schema_version=state.schema_version, playlists=playlists)
 
@@ -386,11 +388,8 @@ def _safe_spotify_operation_error(
 
 
 def render_spotify_description(base_description: str) -> str:
-    """Render the product-owned Spotify description without mutating managed state."""
-    base = _playlist_description(base_description)
-    if not base:
-        return PROJECT_DESCRIPTION_FOOTER
-    return f"{base}{_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}"
+    """Render the Web-API-safe Spotify description from editable managed state."""
+    return _playlist_description(base_description)
 
 
 def _required_text(value: str, label: str) -> str:
@@ -410,15 +409,15 @@ def _playlist_name(value: str) -> str:
 
 
 def _playlist_description(value: str) -> str:
+    # Historical builds persisted/appended a project footer. Strip it when encountered so
+    # existing managed state migrates cleanly, but do not send external project URLs through
+    # Spotify's Web API.
     result = _strip_terminal_project_footer(value)
     if len(result) > MAX_PLAYLIST_DESCRIPTION_LENGTH:
         raise ManagedAdminError(
             "playlist description must be at most "
-            f"{MAX_PLAYLIST_DESCRIPTION_LENGTH} characters so the project link fits"
+            f"{MAX_PLAYLIST_DESCRIPTION_LENGTH} characters"
         )
-    rendered_length = len(result) + len(_DESCRIPTION_SEPARATOR) + len(PROJECT_DESCRIPTION_FOOTER)
-    if result and rendered_length > SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT:
-        raise ManagedAdminError("rendered Spotify playlist description is too long")
     return result
 
 
