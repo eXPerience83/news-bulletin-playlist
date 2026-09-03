@@ -222,7 +222,7 @@ def test_explicit_admin_sync_uses_token_and_does_not_restart_scheduler(tmp_path:
 
     assert handler.response is not None
     assert handler.response.status == HTTPStatus.SEE_OTHER
-    assert handler.response.extra_headers["Location"] == "/admin/"
+    assert handler.response.extra_headers["Location"] == "/admin/?notice=spotify-sync-applied"
     assert provider.calls == 1
     assert client.update_calls == [
         (
@@ -353,3 +353,48 @@ def test_explicit_admin_sync_reports_cover_network_failure_without_raw_error(
     assert "refresh-token-sentinel" not in captured.out
     assert "refresh-token-sentinel" not in captured.err
     assert lifecycle.reconcile_calls == []
+
+
+def test_admin_dashboard_shows_sync_success_notice(tmp_path: Path) -> None:
+    service, _, _ = _managed_service(tmp_path)
+    lifecycle = _Lifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=_Provider(),
+        security=security,
+        path="/admin/?notice=spotify-sync-applied",
+    )
+
+    handler.do_GET()
+
+    assert handler.response is not None
+    body = handler.response.payload.decode()
+    assert handler.response.status == HTTPStatus.OK
+    assert "Spotify metadata and cover applied successfully." in body
+    assert 'class="notice"' in body
+
+
+def test_admin_dashboard_ignores_unknown_notice_text(tmp_path: Path) -> None:
+    service, _, _ = _managed_service(tmp_path)
+    lifecycle = _Lifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    sentinel = "script-alert-sentinel"
+    handler = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=_Provider(),
+        security=security,
+        path=f"/admin/?notice={sentinel}",
+    )
+
+    handler.do_GET()
+
+    assert handler.response is not None
+    body = handler.response.payload.decode()
+    assert handler.response.status == HTTPStatus.OK
+    assert sentinel not in body
+    assert "Spotify metadata and cover applied successfully." not in body
