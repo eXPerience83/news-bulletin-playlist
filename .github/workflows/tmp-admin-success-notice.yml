@@ -1,0 +1,91 @@
+name: Temporary Admin Success Notice
+
+on:
+  push:
+    branches:
+      - fix/116-admin-sync-success-notice
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/116-admin-sync-success-notice
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e '.[dev]'
+      - name: Apply bounded success-notice patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime = Path('src/news_bulletin_playlist/engine_runtime.py')
+          text = runtime.read_text()
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one runtime match, found {count}: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''_MANAGED_POST_PATHS = {\n    "/admin/playlists/activate",\n    "/admin/playlists/update",\n    "/admin/playlists/sync",\n    "/admin/playlists/stop",\n}\n''',
+              '''_MANAGED_POST_PATHS = {\n    "/admin/playlists/activate",\n    "/admin/playlists/update",\n    "/admin/playlists/sync",\n    "/admin/playlists/stop",\n}\n_ADMIN_NOTICE_MESSAGES = {\n    "spotify-sync-applied": "Spotify metadata and cover applied successfully.",\n}\n''',
+          )
+          replace_once(
+              '''        if parsed.path == "/admin/" and self.managed_admin_service is not None:\n            self._serve_managed_admin()\n            return\n''',
+              '''        if parsed.path == "/admin/" and self.managed_admin_service is not None:\n            self._serve_managed_admin(parsed.query)\n            return\n''',
+          )
+          replace_once(
+              '''    def _serve_managed_admin(self) -> None:\n''',
+              '''    def _serve_managed_admin(self, query: str = "") -> None:\n''',
+          )
+          replace_once(
+              '''        status = self.operational_status\n        last_cycle = None if status is None else status.snapshot().last_cycle\n        payload = render_managed_admin_page(\n''',
+              '''        status = self.operational_status\n        last_cycle = None if status is None else status.snapshot().last_cycle\n        notice_values = urllib.parse.parse_qs(query, keep_blank_values=True).get("notice", [])\n        notice = (\n            _ADMIN_NOTICE_MESSAGES.get(notice_values[0]) if len(notice_values) == 1 else None\n        )\n        payload = render_managed_admin_page(\n''',
+          )
+          replace_once(
+              '''            last_cycle=last_cycle,\n            lan_mode=self._is_lan_admin_mode(),\n        )\n''',
+              '''            last_cycle=last_cycle,\n            lan_mode=self._is_lan_admin_mode(),\n            notice=notice,\n        )\n''',
+          )
+          replace_once(
+              '''        self._reply(\n            HTTPStatus.SEE_OTHER,\n            b"",\n            extra_headers={"Location": "/admin/"},\n        )\n''',
+              '''        location = (\n            "/admin/?notice=spotify-sync-applied"\n            if path == "/admin/playlists/sync"\n            else "/admin/"\n        )\n        self._reply(\n            HTTPStatus.SEE_OTHER,\n            b"",\n            extra_headers={"Location": location},\n        )\n''',
+          )
+          runtime.write_text(text)
+
+          tests = Path('tests/test_playlist_cover_admin_route.py')
+          test_text = tests.read_text()
+          old = '    assert handler.response.extra_headers["Location"] == "/admin/"\n'
+          new = (\n              '    assert handler.response.extra_headers["Location"] '
+              '== "/admin/?notice=spotify-sync-applied"\n'
+          )
+          if test_text.count(old) != 1:
+              raise SystemExit('expected exactly one success redirect assertion')
+          test_text = test_text.replace(old, new, 1)
+
+          marker = 'def test_admin_dashboard_shows_sync_success_notice'
+          if marker in test_text:
+              raise SystemExit('success-notice tests already exist')
+          test_text += '''\n\ndef test_admin_dashboard_shows_sync_success_notice(tmp_path: Path) -> None:\n    service, _, _ = _managed_service(tmp_path)\n    lifecycle = _Lifecycle()\n    security = LanAdminSecurity(_PASSWORD)\n    handler = _Handler(\n        tmp_path=tmp_path,\n        service=service,\n        lifecycle=lifecycle,\n        provider=_Provider(),\n        security=security,\n        path="/admin/?notice=spotify-sync-applied",\n    )\n\n    handler.do_GET()\n\n    assert handler.response is not None\n    body = handler.response.payload.decode()\n    assert handler.response.status == HTTPStatus.OK\n    assert "Spotify metadata and cover applied successfully." in body\n    assert 'class="notice"' in body\n\n\ndef test_admin_dashboard_ignores_unknown_notice_text(tmp_path: Path) -> None:\n    service, _, _ = _managed_service(tmp_path)\n    lifecycle = _Lifecycle()\n    security = LanAdminSecurity(_PASSWORD)\n    sentinel = "script-alert-sentinel"\n    handler = _Handler(\n        tmp_path=tmp_path,\n        service=service,\n        lifecycle=lifecycle,\n        provider=_Provider(),\n        security=security,\n        path=f"/admin/?notice={sentinel}",\n    )\n\n    handler.do_GET()\n\n    assert handler.response is not None\n    body = handler.response.payload.decode()\n    assert handler.response.status == HTTPStatus.OK\n    assert sentinel not in body\n    assert "Spotify metadata and cover applied successfully." not in body\n'''
+          tests.write_text(test_text)
+          PY
+      - name: Normalize Ruff lint and format
+        run: python scripts/ruff_fix.py
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/news_bulletin_playlist/engine_runtime.py tests/test_playlist_cover_admin_route.py
+          git commit -m 'ux(admin): show Spotify sync success notice'
+          git push origin HEAD:fix/116-admin-sync-success-notice
