@@ -1,0 +1,67 @@
+name: Temporary duration policy integration final
+
+on:
+  push:
+    branches:
+      - feat/54-duration-policy
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/54-duration-policy
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - run: pip install -e '.[dev]'
+      - name: Reapply hardened integration and update legacy valid-match fixtures
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/tmp-54-policy-integration-retry.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(workflow) if line.strip() == "python - <<'PY'") + 1
+          end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end])
+          exec(compile(script, 'tmp-54-policy-integration-retry.yml', 'exec'))
+
+          desired = Path('tests/test_desired_state.py')
+          text = desired.read_text()
+          old = '''        spotify_episode_uri=spotify_uri,\n        diagnostics=None,\n        updated_at=NOW,\n    )\n'''
+          new = '''        spotify_episode_uri=spotify_uri,\n        diagnostics=None,\n        updated_at=NOW,\n        spotify_duration_seconds=60 if status is MatchStatus.MATCHED else None,\n    )\n'''
+          if text.count(old) != 1:
+              raise SystemExit('desired-state match fixture mismatch')
+          desired.write_text(text.replace(old, new, 1))
+
+          reconciliation = Path('tests/test_reconciliation.py')
+          text = reconciliation.read_text()
+          old = '''        spotify_episode_uri="spotify:episode:edition-1",\n        diagnostics="matched",\n        updated_at=NOW - timedelta(hours=2),\n'''
+          new = '''        spotify_episode_uri="spotify:episode:edition-1",\n        spotify_duration_seconds=60,\n        diagnostics="matched",\n        updated_at=NOW - timedelta(hours=2),\n'''
+          if text.count(old) != 1:
+              raise SystemExit('reconciliation last-known-good fixture mismatch')
+          reconciliation.write_text(text.replace(old, new, 1))
+          PY
+      - name: Validate focused policy surface
+        run: |
+          python scripts/ruff_fix.py
+          ruff check .
+          ruff format --check .
+          mypy src
+          pytest -q tests/test_duration_policy.py tests/test_config.py tests/test_managed_state.py tests/test_desired_state.py tests/test_reconciliation.py tests/test_runtime_diagnostics.py
+      - name: Commit functional integration
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests docs/ARCHITECTURE.md
+          git commit -m 'feat(policy): enforce bounded bulletin duration eligibility'
+          git push origin HEAD:feat/54-duration-policy
+      - name: Run full test suite on committed integration
+        run: pytest -q
