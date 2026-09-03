@@ -1,0 +1,61 @@
+name: Temporary Admin Audit Patch Retry
+
+on:
+  push:
+    branches:
+      - feat/118-admin-audit-diagnostics
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/118-admin-audit-diagnostics
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - run: pip install -e '.[dev]'
+      - name: Reuse patch and wrap long line
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/tmp-118-admin-audit.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(workflow) if line.strip() == "python - <<'PY'") + 1
+          end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end])
+          exec(compile(script, 'tmp-118-admin-audit.yml', 'exec'))
+
+          runtime = Path('src/news_bulletin_playlist/engine_runtime.py')
+          text = runtime.read_text()
+          old = '                        playlist_id_for_event, enabled = self._update_managed_playlist(service, form)\n'
+          new = (
+              '                        playlist_id_for_event, enabled = self._update_managed_playlist(\n'
+              '                            service, form\n'
+              '                        )\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f'long-line wrap expected one match, found {text.count(old)}')
+          runtime.write_text(text.replace(old, new, 1))
+          PY
+      - name: Format and validate
+        run: |
+          python scripts/ruff_fix.py
+          ruff check .
+          ruff format --check .
+          mypy src
+          pytest -q tests/test_playlist_cover_admin_route.py tests/test_diagnostics.py tests/test_runtime_diagnostics.py
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/news_bulletin_playlist/diagnostics.py src/news_bulletin_playlist/managed_admin.py src/news_bulletin_playlist/engine_runtime.py tests/test_playlist_cover_admin_route.py
+          git commit -m 'obs(admin): persist sanitized admin action outcomes'
+          git push origin HEAD:feat/118-admin-audit-diagnostics
