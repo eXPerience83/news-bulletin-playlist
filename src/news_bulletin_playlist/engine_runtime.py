@@ -75,6 +75,9 @@ _MANAGED_POST_PATHS = {
     "/admin/playlists/sync",
     "/admin/playlists/stop",
 }
+_ADMIN_NOTICE_MESSAGES = {
+    "spotify-sync-applied": "Spotify metadata and cover applied successfully.",
+}
 
 
 class AuthSynchronization:
@@ -433,7 +436,7 @@ class OperationalHealthHandler(LanAdminHandler):
             return
 
         if parsed.path == "/admin/" and self.managed_admin_service is not None:
-            self._serve_managed_admin()
+            self._serve_managed_admin(parsed.query)
             return
 
         if parsed.path == "/admin/spotify/callback":
@@ -452,7 +455,7 @@ class OperationalHealthHandler(LanAdminHandler):
 
         super().do_GET()
 
-    def _serve_managed_admin(self) -> None:
+    def _serve_managed_admin(self, query: str = "") -> None:
         security = self._require_admin()
         if security is None:
             return
@@ -480,6 +483,8 @@ class OperationalHealthHandler(LanAdminHandler):
             return
         status = self.operational_status
         last_cycle = None if status is None else status.snapshot().last_cycle
+        notice_values = urllib.parse.parse_qs(query, keep_blank_values=True).get("notice", [])
+        notice = _ADMIN_NOTICE_MESSAGES.get(notice_values[0]) if len(notice_values) == 1 else None
         payload = render_managed_admin_page(
             snapshot=snapshot,
             catalog=service.catalog,
@@ -487,6 +492,7 @@ class OperationalHealthHandler(LanAdminHandler):
             csrf_token=security.issue_csrf_token(),
             last_cycle=last_cycle,
             lan_mode=self._is_lan_admin_mode(),
+            notice=notice,
         )
         self._reply(HTTPStatus.OK, payload)
 
@@ -619,10 +625,13 @@ class OperationalHealthHandler(LanAdminHandler):
             )
             return
 
+        location = (
+            "/admin/?notice=spotify-sync-applied" if path == "/admin/playlists/sync" else "/admin/"
+        )
         self._reply(
             HTTPStatus.SEE_OTHER,
             b"",
-            extra_headers={"Location": "/admin/"},
+            extra_headers={"Location": location},
         )
 
     def _activate_managed_playlist(
