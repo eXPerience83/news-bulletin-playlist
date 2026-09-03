@@ -9,6 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from news_bulletin_playlist.desired_state import (
+    DURATION_EXCEEDS_DEFAULT_MAX,
+    DURATION_EXCEPTION,
+    DurationEligibilityDecision,
+)
 from news_bulletin_playlist.diagnostics import (
     DiagnosticEventStore,
     DiagnosticSeverity,
@@ -238,3 +243,78 @@ def test_serve_persists_runtime_lifecycle_events(tmp_path: Path) -> None:
         "runtime_stopped",
     ]
     assert all(event.component == "runtime" for event in events)
+
+
+def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: Path) -> None:
+    diagnostics, store, output = _diagnostics(tmp_path)
+    result = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=1),
+        ok=True,
+        sources=(),
+        playlists=(
+            PlaylistCycleOutcome(
+                playlist_id=PlaylistId("spain_spanish_news"),
+                ok=True,
+                desired_count=1,
+                applied_count=1,
+                wrote=False,
+                last_success_at=NOW,
+                duration_decisions=(
+                    DurationEligibilityDecision(
+                        source_id=SourceId("ser"),
+                        source_native_id="must-not-be-persisted",
+                        duration_seconds=1200,
+                        accepted=True,
+                        reason=DURATION_EXCEPTION,
+                        max_seconds=1800,
+                        exception_id="ser_morning_0800",
+                    ),
+                    DurationEligibilityDecision(
+                        source_id=SourceId("rne"),
+                        source_native_id="also-not-persisted",
+                        duration_seconds=481,
+                        accepted=False,
+                        reason=DURATION_EXCEEDS_DEFAULT_MAX,
+                        max_seconds=480,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    InstrumentedEngineCycleRunner(
+        _Runner(result),
+        diagnostics,
+        clock=lambda: NOW,
+    ).run_cycle()
+
+    policy_events = tuple(
+        event for event in store.list_events(limit=20) if event.component == "playlist.eligibility"
+    )
+    assert {event.event_name for event in policy_events} == {
+        "duration_exception_applied",
+        "duration_episode_excluded",
+    }
+    exception = next(
+        event for event in policy_events if event.event_name == "duration_exception_applied"
+    )
+    assert exception.source_id == "ser"
+    assert exception.details == {
+        "duration_seconds": 1200,
+        "eligibility_reason": "duration_exception",
+        "max_seconds": 1800,
+        "policy_exception": "ser_morning_0800",
+    }
+    excluded = next(
+        event for event in policy_events if event.event_name == "duration_episode_excluded"
+    )
+    assert excluded.source_id == "rne"
+    assert excluded.details == {
+        "duration_seconds": 481,
+        "eligibility_reason": "duration_exceeds_default_max",
+        "max_seconds": 480,
+    }
+    rendered = output.getvalue()
+    assert "must-not-be-persisted" not in rendered
+    assert "also-not-persisted" not in rendered
