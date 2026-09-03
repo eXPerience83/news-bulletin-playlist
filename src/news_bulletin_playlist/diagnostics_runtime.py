@@ -13,6 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist import __version__, engine_runtime
+from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
 from news_bulletin_playlist.diagnostics import DiagnosticEvent
 from news_bulletin_playlist.diagnostics_web import (
     DiagnosticFilters,
@@ -36,6 +37,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
 
     diagnostic_timezone: tzinfo = UTC
     diagnostic_timezone_label = "UTC"
+    build_revision = "dev"
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         try:
@@ -61,6 +63,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             ready=ready,
             spotify_state=self._spotify_state(),
             status=self.operational_status,
+            build_revision=self.build_revision,
         )
         self._reply(
             HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
@@ -113,6 +116,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             last_cycle=last_cycle,
             retention_days=store.retention_days,
             max_events=store.max_events,
+            build_revision=self.build_revision,
         )
         self._reply(
             HTTPStatus.OK,
@@ -173,9 +177,11 @@ def serve(
     handler = DiagnosticOperationalHealthHandler
     previous_timezone = handler.diagnostic_timezone
     previous_timezone_label = handler.diagnostic_timezone_label
+    previous_build_revision = handler.build_revision
     display_timezone, timezone_label = _diagnostic_display_timezone(environ)
     handler.diagnostic_timezone = display_timezone
     handler.diagnostic_timezone_label = timezone_label
+    handler.build_revision = resolve_build_revision(environ)
     runtime_namespace["OperationalHealthHandler"] = handler
     try:
         return engine_runtime.serve(
@@ -189,6 +195,7 @@ def serve(
     finally:
         handler.diagnostic_timezone = previous_timezone
         handler.diagnostic_timezone_label = previous_timezone_label
+        handler.build_revision = previous_build_revision
         runtime_namespace["OperationalHealthHandler"] = original_handler
 
 
@@ -210,6 +217,7 @@ def _safe_operational_status_page(
     ready: bool,
     spotify_state: AuthorizationState | None,
     status: OperationalStatus | None,
+    build_revision: str = "dev",
 ) -> bytes:
     snapshot = (
         OperationalStatus(configured=False).snapshot() if status is None else status.snapshot()
@@ -259,6 +267,7 @@ def _safe_operational_status_page(
     <dt>Cycle end</dt><dd>{cycle_finished}</dd>
     <dt>Next run</dt><dd>{next_run}</dd>
     <dt>Version</dt><dd><code>{html.escape(__version__)}</code></dd>
+    <dt>Build</dt><dd><code>{html.escape(build_revision)}</code></dd>
   </dl>
   <h2>Sources</h2>
   <table>
