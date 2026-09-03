@@ -1,0 +1,170 @@
+name: Temporary Admin Audit Patch
+
+on:
+  push:
+    branches:
+      - feat/118-admin-audit-diagnostics
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/118-admin-audit-diagnostics
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e '.[dev]'
+      - name: Apply admin audit diagnostics patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          diagnostics = Path('src/news_bulletin_playlist/diagnostics.py')
+          text = diagnostics.read_text()
+          text = replace_once(
+              text,
+              '        "operation",\n        "phase",\n',
+              '        "operation",\n        "outcome",\n        "phase",\n',
+              'diagnostic outcome key',
+          )
+          text = replace_once(
+              text,
+              '''    "operation": frozenset(\n        {\n            "playlist_items",\n            "replace_items",\n            "snapshot",\n        }\n    ),\n''',
+              '''    "operation": frozenset(\n        {\n            "playlist_configuration",\n            "playlist_cover_upload",\n            "playlist_items",\n            "playlist_metadata",\n            "replace_items",\n            "snapshot",\n        }\n    ),\n    "outcome": frozenset({"applied", "failed"}),\n''',
+              'diagnostic admin operations',
+          )
+          diagnostics.write_text(text)
+
+          managed_admin = Path('src/news_bulletin_playlist/managed_admin.py')
+          text = managed_admin.read_text()
+          text = replace_once(
+              text,
+              '''        metadata = "applied" if metadata_error is None else f"failed ({metadata_error})"\n        cover = "applied" if cover_error is None else f"failed ({cover_error})"\n        super().__init__(f"Spotify explicit sync result: metadata {metadata}; cover {cover}")\n''',
+              '''        self.metadata_error = metadata_error\n        self.cover_error = cover_error\n        metadata = "applied" if metadata_error is None else f"failed ({metadata_error})"\n        cover = "applied" if cover_error is None else f"failed ({cover_error})"\n        super().__init__(f"Spotify explicit sync result: metadata {metadata}; cover {cover}")\n''',
+              'sync error structured attributes',
+          )
+          managed_admin.write_text(text)
+
+          runtime = Path('src/news_bulletin_playlist/engine_runtime.py')
+          text = runtime.read_text()
+          text = replace_once(
+              text,
+              '''        try:\n            if path == "/admin/playlists/sync":\n''',
+              '''        playlist_id_for_event: str | None = None\n        try:\n            if path == "/admin/playlists/sync":\n''',
+              'admin event playlist id',
+          )
+          text = replace_once(
+              text,
+              '''                # HTTPServer serves admin requests serially. Validate immutable managed state\n                # under the configuration lock, then keep Spotify I/O outside that lock so a\n                # slow metadata/cover request cannot delay an engine cycle.\n                self._sync_managed_playlist(service, form)\n''',
+              '''                playlist_id_for_event = str(playlist_id)\n                # HTTPServer serves admin requests serially. Validate immutable managed state\n                # under the configuration lock, then keep Spotify I/O outside that lock so a\n                # slow metadata/cover request cannot delay an engine cycle.\n                self._sync_managed_playlist(service, form)\n                self._emit_admin_spotify_sync_events(\n                    playlist_id=playlist_id_for_event,\n                    metadata_error=None,\n                    cover_error=None,\n                )\n''',
+              'successful explicit sync events',
+          )
+          text = replace_once(
+              text,
+              '''            else:\n                with synchronization.hold():\n                    if path == "/admin/playlists/activate":\n                        self._activate_managed_playlist(service, form)\n                    elif path == "/admin/playlists/update":\n                        self._update_managed_playlist(service, form)\n                    else:\n                        service.stop_managing(playlist_id_from_form(form))\n                    configured = any(playlist.enabled for playlist in service.snapshot().managed)\n                lifecycle.reconcile(configured=configured)\n                self.__class__.engine_scheduler = lifecycle.scheduler\n''',
+              '''            else:\n                with synchronization.hold():\n                    if path == "/admin/playlists/activate":\n                        playlist_id_for_event = self._activate_managed_playlist(service, form)\n                        event_name = "admin_playlist_activated"\n                        next_state = "enabled"\n                    elif path == "/admin/playlists/update":\n                        playlist_id_for_event, enabled = self._update_managed_playlist(service, form)\n                        event_name = "admin_playlist_updated"\n                        next_state = "enabled" if enabled else "disabled"\n                    else:\n                        playlist_id_for_event = str(playlist_id_from_form(form))\n                        service.stop_managing(playlist_id_for_event)\n                        event_name = "admin_playlist_stopped"\n                        next_state = "stopped"\n                    configured = any(playlist.enabled for playlist in service.snapshot().managed)\n                lifecycle.reconcile(configured=configured)\n                self.__class__.engine_scheduler = lifecycle.scheduler\n                self._emit_admin_configuration_event(\n                    event_name=event_name,\n                    playlist_id=playlist_id_for_event,\n                    next_state=next_state,\n                )\n''',
+              'managed configuration success events',
+          )
+          text = replace_once(
+              text,
+              '''        except SpotifyPlaylistSyncError as exc:\n            self._managed_error(HTTPStatus.BAD_GATEWAY, str(exc))\n            return\n''',
+              '''        except SpotifyPlaylistSyncError as exc:\n            if playlist_id_for_event is not None:\n                self._emit_admin_spotify_sync_events(\n                    playlist_id=playlist_id_for_event,\n                    metadata_error=exc.metadata_error,\n                    cover_error=exc.cover_error,\n                )\n            self._managed_error(HTTPStatus.BAD_GATEWAY, str(exc))\n            return\n''',
+              'partial explicit sync events',
+          )
+          text = replace_once(
+              text,
+              '''    def _activate_managed_playlist(\n        self,\n        service: ManagedAdminService,\n        form: Mapping[str, list[str]],\n    ) -> None:\n''',
+              '''    def _activate_managed_playlist(\n        self,\n        service: ManagedAdminService,\n        form: Mapping[str, list[str]],\n    ) -> str:\n''',
+              'activate return annotation',
+          )
+          text = replace_once(
+              text,
+              '''        service.activate(\n            template_id=single_form_value(form, "template_id"),\n            display_name=single_form_value(form, "display_name"),\n            description=single_form_value(form, "description", required=False),\n            cover_id=single_form_value(form, "cover_id"),\n            source_ids=form.get("source_id", []),\n            access_token=access_token,\n        )\n\n    def _update_managed_playlist(\n''',
+              '''        managed = service.activate(\n            template_id=single_form_value(form, "template_id"),\n            display_name=single_form_value(form, "display_name"),\n            description=single_form_value(form, "description", required=False),\n            cover_id=single_form_value(form, "cover_id"),\n            source_ids=form.get("source_id", []),\n            access_token=access_token,\n        )\n        return str(managed.id)\n\n    def _update_managed_playlist(\n''',
+              'activate return value',
+          )
+          text = replace_once(
+              text,
+              '''    def _update_managed_playlist(\n        self,\n        service: ManagedAdminService,\n        form: Mapping[str, list[str]],\n    ) -> None:\n''',
+              '''    def _update_managed_playlist(\n        self,\n        service: ManagedAdminService,\n        form: Mapping[str, list[str]],\n    ) -> tuple[str, bool]:\n''',
+              'update return annotation',
+          )
+          text = replace_once(
+              text,
+              '''        service.update(\n            playlist_id,\n            display_name=name,\n            description=description,\n            cover_id=cover_id,\n            source_ids=form.get("source_id", []),\n            enabled=enabled,\n            access_token=access_token,\n        )\n\n    def _sync_managed_playlist(\n''',
+              '''        updated = service.update(\n            playlist_id,\n            display_name=name,\n            description=description,\n            cover_id=cover_id,\n            source_ids=form.get("source_id", []),\n            enabled=enabled,\n            access_token=access_token,\n        )\n        return str(updated.id), updated.enabled\n\n    def _sync_managed_playlist(\n''',
+              'update return value',
+          )
+          text = replace_once(
+              text,
+              '''        service.sync_spotify_metadata_and_cover(\n            playlist_id_from_form(form),\n            access_token=auth.get_access_token(),\n        )\n\n    def _managed_error(self, status: HTTPStatus, message: str) -> None:\n''',
+              '''        service.sync_spotify_metadata_and_cover(\n            playlist_id_from_form(form),\n            access_token=auth.get_access_token(),\n        )\n\n    def _emit_admin_configuration_event(\n        self,\n        *,\n        event_name: str,\n        playlist_id: str,\n        next_state: str,\n    ) -> None:\n        OperationalDiagnostics(self.diagnostic_store).emit(\n            occurred_at=datetime.now(UTC),\n            severity=DiagnosticSeverity.INFO,\n            component="admin",\n            event_name=event_name,\n            playlist_id=playlist_id,\n            details={\n                "operation": "playlist_configuration",\n                "outcome": "applied",\n                "next_state": next_state,\n            },\n        )\n\n    def _emit_admin_spotify_sync_events(\n        self,\n        *,\n        playlist_id: str,\n        metadata_error: str | None,\n        cover_error: str | None,\n    ) -> None:\n        diagnostics = OperationalDiagnostics(self.diagnostic_store)\n        for operation, error in (\n            ("playlist_metadata", metadata_error),\n            ("playlist_cover_upload", cover_error),\n        ):\n            details: dict[str, str | int] = {\n                "operation": operation,\n                "outcome": "applied" if error is None else "failed",\n            }\n            if error is not None:\n                if error.startswith("HTTP ") and error[5:].isdigit():\n                    details["failure_class"] = "api_error"\n                    details["http_status"] = int(error[5:])\n                elif error == "network error":\n                    details["failure_class"] = "transport_error"\n                else:\n                    details["failure_class"] = "configuration_error"\n            diagnostics.emit(\n                occurred_at=datetime.now(UTC),\n                severity=(\n                    DiagnosticSeverity.INFO\n                    if error is None\n                    else DiagnosticSeverity.WARNING\n                ),\n                component="admin",\n                event_name="admin_spotify_operation_completed",\n                playlist_id=playlist_id,\n                details=details,\n            )\n\n    def _managed_error(self, status: HTTPStatus, message: str) -> None:\n''',
+              'admin diagnostic emitters',
+          )
+          runtime.write_text(text)
+
+          tests = Path('tests/test_playlist_cover_admin_route.py')
+          text = tests.read_text()
+          text = replace_once(
+              text,
+              'from news_bulletin_playlist.catalog import BUILTIN_CATALOG\n',
+              'from news_bulletin_playlist.catalog import BUILTIN_CATALOG\nfrom news_bulletin_playlist.diagnostics import DiagnosticEventStore\n',
+              'diagnostic test import',
+          )
+          text = replace_once(
+              text,
+              '''        self.managed_admin_service = service\n        self.managed_admin_auth = provider\n        self.path = path\n''',
+              '''        self.managed_admin_service = service\n        self.managed_admin_auth = provider\n        diagnostic_store = DiagnosticEventStore(tmp_path / "diagnostics.sqlite")\n        diagnostic_store.initialize()\n        self.diagnostic_store = diagnostic_store\n        self.path = path\n''',
+              'handler diagnostic store',
+          )
+          text = replace_once(
+              text,
+              '''    assert client.cover_calls == [("destination", b"\\xff\\xd8cover\\xff\\xd9")]\n    assert lifecycle.reconcile_calls == []\n\n\ndef test_explicit_admin_sync_releases_configuration_lock_during_spotify_io(\n''',
+              '''    assert client.cover_calls == [("destination", b"\\xff\\xd8cover\\xff\\xd9")]\n    assert lifecycle.reconcile_calls == []\n    assert handler.diagnostic_store is not None\n    events = handler.diagnostic_store.list_events(limit=10)\n    admin_events = [event for event in events if event.component == "admin"]\n    by_operation = {event.details["operation"]: event for event in admin_events}\n    assert by_operation["playlist_metadata"].playlist_id == str(managed.id)\n    assert by_operation["playlist_metadata"].details == {\n        "operation": "playlist_metadata",\n        "outcome": "applied",\n    }\n    assert by_operation["playlist_cover_upload"].details == {\n        "operation": "playlist_cover_upload",\n        "outcome": "applied",\n    }\n\n\ndef test_explicit_admin_sync_releases_configuration_lock_during_spotify_io(\n''',
+              'successful sync diagnostic assertions',
+          )
+          text = replace_once(
+              text,
+              '''    captured = capsys.readouterr()\n    assert "access-token-sentinel" not in captured.out\n    assert "access-token-sentinel" not in captured.err\n    assert lifecycle.reconcile_calls == []\n\n\ndef test_explicit_admin_sync_reports_cover_network_failure_without_raw_error(\n''',
+              '''    captured = capsys.readouterr()\n    assert "access-token-sentinel" not in captured.out\n    assert "access-token-sentinel" not in captured.err\n    assert "event=admin_spotify_operation_completed" in captured.out\n    assert lifecycle.reconcile_calls == []\n    assert handler.diagnostic_store is not None\n    events = handler.diagnostic_store.list_events(limit=10)\n    by_operation = {\n        event.details["operation"]: event\n        for event in events\n        if event.component == "admin"\n    }\n    assert by_operation["playlist_metadata"].details == {\n        "failure_class": "api_error",\n        "http_status": 403,\n        "operation": "playlist_metadata",\n        "outcome": "failed",\n    }\n    assert by_operation["playlist_cover_upload"].details == {\n        "operation": "playlist_cover_upload",\n        "outcome": "applied",\n    }\n\n\ndef test_explicit_admin_sync_reports_cover_network_failure_without_raw_error(\n''',
+              'metadata failure diagnostic assertions',
+          )
+          text = replace_once(
+              text,
+              '''    captured = capsys.readouterr()\n    assert "refresh-token-sentinel" not in captured.out\n    assert "refresh-token-sentinel" not in captured.err\n    assert lifecycle.reconcile_calls == []\n\n\ndef test_admin_dashboard_shows_sync_success_notice(tmp_path: Path) -> None:\n''',
+              '''    captured = capsys.readouterr()\n    assert "refresh-token-sentinel" not in captured.out\n    assert "refresh-token-sentinel" not in captured.err\n    assert "event=admin_spotify_operation_completed" in captured.out\n    assert lifecycle.reconcile_calls == []\n    assert handler.diagnostic_store is not None\n    events = handler.diagnostic_store.list_events(limit=10)\n    by_operation = {\n        event.details["operation"]: event\n        for event in events\n        if event.component == "admin"\n    }\n    assert by_operation["playlist_metadata"].details == {\n        "operation": "playlist_metadata",\n        "outcome": "applied",\n    }\n    assert by_operation["playlist_cover_upload"].details == {\n        "failure_class": "transport_error",\n        "operation": "playlist_cover_upload",\n        "outcome": "failed",\n    }\n\n\ndef test_admin_update_and_stop_leave_sanitized_audit_events(tmp_path: Path) -> None:\n    service, _, managed = _managed_service(tmp_path)\n    lifecycle = _Lifecycle()\n    provider = _Provider()\n    security = LanAdminSecurity(_PASSWORD)\n    update_handler = _Handler(\n        tmp_path=tmp_path,\n        service=service,\n        lifecycle=lifecycle,\n        provider=provider,\n        security=security,\n        path="/admin/playlists/update",\n        form={\n            "csrf_token": [security.issue_csrf_token()],\n            "playlist_id": [str(managed.id)],\n            "display_name": [managed.display_name],\n            "description": [managed.description],\n            "cover_id": [managed.cover_id],\n            "source_id": [str(source_id) for source_id in managed.source_ids],\n            "enabled": ["1"],\n        },\n    )\n\n    update_handler.do_POST()\n\n    assert update_handler.response is not None\n    assert update_handler.response.status == HTTPStatus.SEE_OTHER\n    assert update_handler.diagnostic_store is not None\n    update_event = update_handler.diagnostic_store.list_events(limit=1)[0]\n    assert update_event.event_name == "admin_playlist_updated"\n    assert update_event.playlist_id == str(managed.id)\n    assert update_event.details == {\n        "next_state": "enabled",\n        "operation": "playlist_configuration",\n        "outcome": "applied",\n    }\n\n    stop_handler = _Handler(\n        tmp_path=tmp_path,\n        service=service,\n        lifecycle=lifecycle,\n        provider=provider,\n        security=security,\n        path="/admin/playlists/stop",\n        form={\n            "csrf_token": [security.issue_csrf_token()],\n            "playlist_id": [str(managed.id)],\n        },\n    )\n\n    stop_handler.do_POST()\n\n    assert stop_handler.response is not None\n    assert stop_handler.response.status == HTTPStatus.SEE_OTHER\n    assert stop_handler.diagnostic_store is not None\n    stop_event = stop_handler.diagnostic_store.list_events(limit=1)[0]\n    assert stop_event.event_name == "admin_playlist_stopped"\n    assert stop_event.playlist_id == str(managed.id)\n    assert stop_event.details == {\n        "next_state": "stopped",\n        "operation": "playlist_configuration",\n        "outcome": "applied",\n    }\n\n\ndef test_admin_dashboard_shows_sync_success_notice(tmp_path: Path) -> None:\n''',
+              'configuration audit tests',
+          )
+          tests.write_text(text)
+          PY
+      - name: Format and lint
+        run: |
+          python scripts/ruff_fix.py
+          ruff check .
+          ruff format --check .
+      - name: Type check
+        run: mypy src
+      - name: Targeted tests
+        run: pytest -q tests/test_playlist_cover_admin_route.py tests/test_diagnostics.py tests/test_runtime_diagnostics.py
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/news_bulletin_playlist/diagnostics.py src/news_bulletin_playlist/managed_admin.py src/news_bulletin_playlist/engine_runtime.py tests/test_playlist_cover_admin_route.py
+          git commit -m 'obs(admin): persist sanitized admin action outcomes'
+          git push origin HEAD:feat/118-admin-audit-diagnostics
