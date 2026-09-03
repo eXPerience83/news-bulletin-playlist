@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.collection import (
     FeedFetcher,
@@ -13,7 +14,10 @@ from news_bulletin_playlist.collection import (
     fetch_feed,
     required_sources,
 )
-from news_bulletin_playlist.desired_state import DesiredStateError
+from news_bulletin_playlist.desired_state import (
+    DesiredStateError,
+    DurationEligibilityDecision,
+)
 from news_bulletin_playlist.models import EngineConfig, PlaylistId, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
@@ -98,6 +102,7 @@ class PlaylistCycleOutcome:
     wrote: bool | None
     last_success_at: datetime | None
     error: str | None = None
+    duration_decisions: tuple[DurationEligibilityDecision, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,12 +311,16 @@ class EngineRunner:
             )
             if unsafe_for_playlist:
                 try:
-                    desired = build_desired_state_from_store(
-                        self.store,
-                        playlist,
-                        now=playlist_started_at,
-                    )
-                    desired_count = len(desired.items)
+                    try:
+                        desired = build_desired_state_from_store(
+                            self.store,
+                            playlist,
+                            now=playlist_started_at,
+                            source_timezones=self._source_timezones(),
+                        )
+                        desired_count = len(desired.items)
+                    except DesiredStateError:
+                        desired_count = 0
                     reason = (
                         "destination preserved because no last-known-good state is available "
                         "for source(s): "
@@ -355,6 +364,7 @@ class EngineRunner:
                     self.store,
                     playlist,
                     now=playlist_started_at,
+                    source_timezones=self._source_timezones(),
                 )
                 desired_count = len(desired.items)
                 reconciled = reconcile_spotify_playlist(
@@ -384,6 +394,7 @@ class EngineRunner:
                             None if playlist_state is None else playlist_state.last_success_at
                         ),
                         error=reconciled.warning,
+                        duration_decisions=desired.duration_decisions,
                     )
                 )
             except (
@@ -474,8 +485,16 @@ class EngineRunner:
             attempt_at = _as_utc(self.clock())
             desired_count = 0
             try:
-                desired = build_desired_state_from_store(self.store, playlist, now=attempt_at)
-                desired_count = len(desired.items)
+                try:
+                    desired = build_desired_state_from_store(
+                        self.store,
+                        playlist,
+                        now=attempt_at,
+                        source_timezones=self._source_timezones(),
+                    )
+                    desired_count = len(desired.items)
+                except DesiredStateError:
+                    desired_count = 0
                 self.store.record_playlist_run(
                     playlist.id,
                     started_at=attempt_at,
@@ -530,6 +549,9 @@ class EngineRunner:
             playlists=tuple(playlist_outcomes),
             error=str(error),
         )
+
+    def _source_timezones(self) -> Mapping[SourceId, ZoneInfo]:
+        return {source.id: source.timezone for source in self.config.sources}
 
     def _matching_cutoff(self, now: datetime) -> datetime:
         enabled = [

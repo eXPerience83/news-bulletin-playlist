@@ -182,6 +182,7 @@ def test_next_day_rne_release_matches_and_enters_semantic_chronology(tmp_path: P
         ser_20.source_native_id,
         status=MatchStatus.MATCHED,
         spotify_episode_uri="spotify:episode:ser-2000",
+        spotify_duration_seconds=60,
         diagnostics="matched",
         updated_at=now,
     )

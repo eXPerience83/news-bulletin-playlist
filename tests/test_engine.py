@@ -467,3 +467,45 @@ def test_scheduler_stop_event_interrupts_wait_without_explicit_wake() -> None:
     assert calls == 1
     assert not thread.is_alive()
     assert status.snapshot().next_run_at is None
+
+
+def test_missing_spotify_duration_preserves_existing_destination_without_write(
+    tmp_path: Path,
+) -> None:
+    existing_uri = "spotify:episode:preexisting"
+
+    class MissingDurationSpotify(_Spotify):
+        def show_episodes(
+            self,
+            show_id: str,
+            *,
+            limit: int = 50,
+            offset: int = 0,
+        ) -> dict[str, Any]:
+            page = super().show_episodes(show_id, limit=limit, offset=offset)
+            item = page["items"][0]
+            assert isinstance(item, dict)
+            item.pop("duration_ms")
+            return page
+
+    spotify = MissingDurationSpotify()
+    spotify.items["destination-first"] = [existing_uri]
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+
+    assert not result.ok
+    assert result.sources[0].matching_ok is True
+    assert not result.playlists[0].ok
+    assert result.playlists[0].wrote is None
+    assert "Spotify duration unavailable" in (result.playlists[0].error or "")
+    assert spotify.items["destination-first"] == [existing_uri]
+    assert spotify.playlist_reads == []
+    assert spotify.replacements == []

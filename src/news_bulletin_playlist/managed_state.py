@@ -168,6 +168,7 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
                 retention_hours=managed.retention_hours,
                 max_episodes=managed.max_episodes,
                 ordering=template.ordering,
+                duration_policy=template.duration_policy,
             )
         )
 

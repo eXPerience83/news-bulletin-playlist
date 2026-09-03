@@ -25,17 +25,21 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "catalogue_calls",
         "desired_count",
         "duration_ms",
+        "duration_seconds",
+        "eligibility_reason",
         "edition_count",
         "failure_class",
         "http_status",
         "limit",
         "match_reason",
         "matched_count",
+        "max_seconds",
         "next_state",
         "offset",
         "operation",
         "outcome",
         "phase",
+        "policy_exception",
         "returned_count",
         "total",
         "unavailable_count",
@@ -58,6 +62,15 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "verification_mismatch",
         }
     ),
+    "eligibility_reason": frozenset(
+        {
+            "duration_exception",
+            "duration_exceeds_default_max",
+            "duration_exceeds_exception_max",
+            "duration_metadata_unavailable",
+        }
+    ),
+    "policy_exception": frozenset({"ser_morning_0800"}),
     "match_reason": frozenset(
         {
             "ambiguous",

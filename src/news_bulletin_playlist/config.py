@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from datetime import time
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
@@ -14,6 +15,8 @@ from news_bulletin_playlist.models import (
     AdapterId,
     CountryCode,
     DestinationReference,
+    DurationPolicy,
+    DurationPolicyException,
     EngineConfig,
     ExternalReference,
     LanguageTag,
@@ -30,6 +33,7 @@ from news_bulletin_playlist.registry import has_title_parser
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _LANGUAGE_RE = re.compile(r"^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 _YAML_BOOLEAN_RE = re.compile(r"^(?:true|false)$", re.IGNORECASE)
+_CLOCK_TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
 class ConfigError(ValueError):
@@ -195,6 +199,7 @@ def _parse_playlist(value: object, path: str) -> PlaylistDefinition:
             "retention_hours",
             "max_episodes",
             "ordering",
+            "duration_policy",
         },
         path,
     )
@@ -237,7 +242,65 @@ def _parse_playlist(value: object, path: str) -> PlaylistDefinition:
         retention_hours=retention_hours,
         max_episodes=max_episodes,
         ordering=ordering,
+        duration_policy=_parse_duration_policy(
+            data.get("duration_policy"), f"{path}.duration_policy"
+        ),
     )
+
+
+def _parse_duration_policy(value: object, path: str) -> DurationPolicy:
+    if value is None:
+        return DurationPolicy()
+    data = _mapping(value, path)
+    _known_keys(data, {"default_max_seconds", "exceptions"}, path)
+    default_max = _positive_integer(
+        data.get("default_max_seconds", 480), f"{path}.default_max_seconds"
+    )
+    raw_exceptions = _sequence(data.get("exceptions", ()), f"{path}.exceptions")
+    exceptions: list[DurationPolicyException] = []
+    for index, raw in enumerate(raw_exceptions):
+        exception_path = f"{path}.exceptions[{index}]"
+        item = _mapping(raw, exception_path)
+        _known_keys(
+            item,
+            {"id", "source_id", "edition_local_time", "max_seconds"},
+            exception_path,
+        )
+        clock_text = _string(
+            _required(item, "edition_local_time", exception_path),
+            f"{exception_path}.edition_local_time",
+        )
+        if _CLOCK_TIME_RE.fullmatch(clock_text) is None:
+            raise ConfigError(
+                f"{exception_path}.edition_local_time: expected HH:MM in 24-hour time"
+            )
+        hour, minute = (int(part) for part in clock_text.split(":", 1))
+        max_seconds = _positive_integer(
+            _required(item, "max_seconds", exception_path),
+            f"{exception_path}.max_seconds",
+        )
+        if max_seconds <= default_max:
+            raise ConfigError(f"{exception_path}.max_seconds: must exceed duration policy default")
+        exceptions.append(
+            DurationPolicyException(
+                id=_identifier(_required(item, "id", exception_path), f"{exception_path}.id"),
+                source_id=SourceId(
+                    _identifier(
+                        _required(item, "source_id", exception_path),
+                        f"{exception_path}.source_id",
+                    )
+                ),
+                edition_local_time=time(hour, minute),
+                max_seconds=max_seconds,
+            )
+        )
+    try:
+        return DurationPolicy(
+            default_max_seconds=default_max,
+            exceptions=tuple(exceptions),
+        )
+    except ValueError as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
 
 
 def _parse_destination(value: object, path: str) -> DestinationReference:
@@ -276,6 +339,13 @@ def _validate_playlist_sources(
                 raise ConfigError(
                     f"{path}: enabled playlist references disabled source {source_id!r}"
                 )
+        for exception_index, exception in enumerate(playlist.duration_policy.exceptions):
+            exception_path = (
+                f"{origin}.playlists[{playlist_index}].duration_policy."
+                f"exceptions[{exception_index}].source_id"
+            )
+            if exception.source_id not in by_id:
+                raise ConfigError(f"{exception_path}: unknown source {exception.source_id!r}")
 
 
 def _validate_unique_enabled_destinations(

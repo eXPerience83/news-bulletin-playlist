@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, time
 from enum import StrEnum
 from typing import NewType
 from zoneinfo import ZoneInfo
@@ -12,6 +12,8 @@ ParserId = NewType("ParserId", str)
 AdapterId = NewType("AdapterId", str)
 CountryCode = NewType("CountryCode", str)
 LanguageTag = NewType("LanguageTag", str)
+
+DEFAULT_DURATION_MAX_SECONDS = 480
 
 
 class OrderingPolicy(StrEnum):
@@ -89,6 +91,47 @@ class SourceSelection:
 
 
 @dataclass(frozen=True, slots=True)
+class DurationPolicyException:
+    """One narrow, bounded recurring exception to the default duration ceiling."""
+
+    id: str
+    source_id: SourceId
+    edition_local_time: time
+    max_seconds: int
+
+    def __post_init__(self) -> None:
+        if not self.id.strip():
+            raise ValueError("duration exception id must not be empty")
+        if self.edition_local_time.tzinfo is not None:
+            raise ValueError("duration exception edition_local_time must be timezone-naive")
+        if self.max_seconds <= 0:
+            raise ValueError("duration exception max_seconds must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class DurationPolicy:
+    """Common destination-side bulletin duration eligibility contract."""
+
+    default_max_seconds: int = DEFAULT_DURATION_MAX_SECONDS
+    exceptions: tuple[DurationPolicyException, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.default_max_seconds <= 0:
+            raise ValueError("duration policy default_max_seconds must be positive")
+        ids = [exception.id for exception in self.exceptions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duration policy exception ids must be unique")
+        selectors = [
+            (exception.source_id, exception.edition_local_time) for exception in self.exceptions
+        ]
+        if len(selectors) != len(set(selectors)):
+            raise ValueError("duration policy exception selectors must be unique")
+        for exception in self.exceptions:
+            if exception.max_seconds <= self.default_max_seconds:
+                raise ValueError("duration exception max_seconds must exceed default_max_seconds")
+
+
+@dataclass(frozen=True, slots=True)
 class PlaylistDefinition:
     id: PlaylistId
     display_name: str
@@ -101,6 +144,7 @@ class PlaylistDefinition:
     retention_hours: int = 48
     max_episodes: int = 100
     ordering: OrderingPolicy = OrderingPolicy.EDITION_AT_DESC
+    duration_policy: DurationPolicy = field(default_factory=DurationPolicy)
 
 
 @dataclass(frozen=True, slots=True)
