@@ -1,0 +1,88 @@
+name: Temporary duration policy integration retry
+
+on:
+  push:
+    branches:
+      - feat/54-duration-policy
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/54-duration-policy
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - run: pip install -e '.[dev]'
+      - name: Reapply integration and harden fail-safe paths
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/tmp-54-policy-integration.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(workflow) if line.strip() == "python - <<'PY'") + 1
+          end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end])
+          exec(compile(script, 'tmp-54-policy-integration.yml', 'exec'))
+
+          engine_path = Path('src/news_bulletin_playlist/engine.py')
+          engine = engine_path.read_text()
+          if 'from collections.abc import Callable\n' not in engine:
+              raise SystemExit('engine Callable import marker missing')
+          engine = engine.replace(
+              'from collections.abc import Callable\n',
+              'from collections.abc import Callable, Mapping\n',
+              1,
+          )
+          if 'from typing import Any, Protocol\n' not in engine:
+              raise SystemExit('engine typing import marker missing')
+          engine = engine.replace(
+              'from typing import Any, Protocol\n',
+              'from typing import Any, Protocol\nfrom zoneinfo import ZoneInfo\n',
+              1,
+          )
+          old_helper = '''    def _source_timezones(self):  # type: ignore[no-untyped-def]\n        return {source.id: source.timezone for source in self.config.sources}\n'''
+          new_helper = '''    def _source_timezones(self) -> Mapping[SourceId, ZoneInfo]:\n        return {source.id: source.timezone for source in self.config.sources}\n'''
+          if engine.count(old_helper) != 1:
+              raise SystemExit('engine source timezone helper mismatch')
+          engine = engine.replace(old_helper, new_helper, 1)
+
+          # Keep PersistenceError inside the outer persistence guard instead of raising
+          # it from an except handler that sibling except clauses cannot catch.
+          old_unsafe = '''            if unsafe_for_playlist:\n                try:\n                    desired = build_desired_state_from_store(\n                        self.store,\n                        playlist,\n                        now=playlist_started_at,\n                        source_timezones=self._source_timezones(),\n                    )\n                    desired_count = len(desired.items)\n                    reason = (\n                        "destination preserved because no last-known-good state is available "\n                        "for source(s): "\n                        + ", ".join(str(source_id) for source_id in unsafe_for_playlist)\n                    )\n                    playlist_finished_at = _as_utc(self.clock())\n                    self.store.record_playlist_run(\n                        playlist.id,\n                        started_at=playlist_started_at,\n                        finished_at=playlist_finished_at,\n                        ok=False,\n                        desired_count=desired_count,\n                        applied_count=0,\n                        error=reason,\n                    )\n                    playlist_state = self.store.get_playlist_state(playlist.id)\n                except DesiredStateError:\n                    desired_count = 0\n                    reason = (\n                        "destination preserved because no last-known-good state is available "\n                        "for source(s): "\n                        + ", ".join(str(source_id) for source_id in unsafe_for_playlist)\n                    )\n                    playlist_finished_at = _as_utc(self.clock())\n                    self.store.record_playlist_run(\n                        playlist.id,\n                        started_at=playlist_started_at,\n                        finished_at=playlist_finished_at,\n                        ok=False,\n                        desired_count=0,\n                        applied_count=0,\n                        error=reason,\n                    )\n                    playlist_state = self.store.get_playlist_state(playlist.id)\n                except PersistenceError as exc:\n'''
+          new_unsafe = '''            if unsafe_for_playlist:\n                try:\n                    try:\n                        desired = build_desired_state_from_store(\n                            self.store,\n                            playlist,\n                            now=playlist_started_at,\n                            source_timezones=self._source_timezones(),\n                        )\n                        desired_count = len(desired.items)\n                    except DesiredStateError:\n                        desired_count = 0\n                    reason = (\n                        "destination preserved because no last-known-good state is available "\n                        "for source(s): "\n                        + ", ".join(str(source_id) for source_id in unsafe_for_playlist)\n                    )\n                    playlist_finished_at = _as_utc(self.clock())\n                    self.store.record_playlist_run(\n                        playlist.id,\n                        started_at=playlist_started_at,\n                        finished_at=playlist_finished_at,\n                        ok=False,\n                        desired_count=desired_count,\n                        applied_count=0,\n                        error=reason,\n                    )\n                    playlist_state = self.store.get_playlist_state(playlist.id)\n                except PersistenceError as exc:\n'''
+          if engine.count(old_unsafe) != 1:
+              raise SystemExit('unsafe preservation block mismatch')
+          engine = engine.replace(old_unsafe, new_unsafe, 1)
+
+          old_auth = '''            try:\n                desired = build_desired_state_from_store(\n                    self.store,\n                    playlist,\n                    now=attempt_at,\n                    source_timezones=self._source_timezones(),\n                )\n                desired_count = len(desired.items)\n                self.store.record_playlist_run(\n                    playlist.id,\n                    started_at=attempt_at,\n                    finished_at=attempt_at,\n                    ok=False,\n                    desired_count=desired_count,\n                    applied_count=0,\n                    error=message,\n                )\n                playlist_state = self.store.get_playlist_state(playlist.id)\n            except DesiredStateError:\n                desired_count = 0\n                self.store.record_playlist_run(\n                    playlist.id,\n                    started_at=attempt_at,\n                    finished_at=attempt_at,\n                    ok=False,\n                    desired_count=0,\n                    applied_count=0,\n                    error=message,\n                )\n                playlist_state = self.store.get_playlist_state(playlist.id)\n            except PersistenceError as exc:\n'''
+          new_auth = '''            try:\n                try:\n                    desired = build_desired_state_from_store(\n                        self.store,\n                        playlist,\n                        now=attempt_at,\n                        source_timezones=self._source_timezones(),\n                    )\n                    desired_count = len(desired.items)\n                except DesiredStateError:\n                    desired_count = 0\n                self.store.record_playlist_run(\n                    playlist.id,\n                    started_at=attempt_at,\n                    finished_at=attempt_at,\n                    ok=False,\n                    desired_count=desired_count,\n                    applied_count=0,\n                    error=message,\n                )\n                playlist_state = self.store.get_playlist_state(playlist.id)\n            except PersistenceError as exc:\n'''
+          if engine.count(old_auth) != 1:
+              raise SystemExit('authorization desired-state block mismatch')
+          engine = engine.replace(old_auth, new_auth, 1)
+          engine_path.write_text(engine)
+          PY
+      - name: Format and validate focused policy surface
+        run: |
+          python scripts/ruff_fix.py
+          ruff check .
+          ruff format --check .
+          mypy src
+          pytest -q tests/test_duration_policy.py tests/test_config.py tests/test_managed_state.py tests/test_desired_state.py tests/test_reconciliation.py tests/test_runtime_diagnostics.py
+      - name: Commit integration
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests/test_duration_policy.py docs/ARCHITECTURE.md
+          git commit -m 'feat(policy): enforce bounded bulletin duration eligibility'
+          git push origin HEAD:feat/54-duration-policy
+      - name: Run full test suite after persisted commit
+        run: pytest -q
