@@ -66,9 +66,7 @@ jobs:
           tests = Path('tests/test_playlist_cover_admin_route.py')
           test_text = tests.read_text()
           old = '    assert handler.response.extra_headers["Location"] == "/admin/"\n'
-          new = (\n              '    assert handler.response.extra_headers["Location"] '
-              '== "/admin/?notice=spotify-sync-applied"\n'
-          )
+          new = '    assert handler.response.extra_headers["Location"] == "/admin/?notice=spotify-sync-applied"\n'
           if test_text.count(old) != 1:
               raise SystemExit('expected exactly one success redirect assertion')
           test_text = test_text.replace(old, new, 1)
