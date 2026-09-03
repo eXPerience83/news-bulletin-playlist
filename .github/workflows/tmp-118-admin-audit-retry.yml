@@ -50,7 +50,9 @@ jobs:
           )
           text = replace_once(
               text,
+              '    managed_admin_auth: SpotifyAuthProvider | None = None\n'
               '    diagnostic_store: DiagnosticEventStore | None = None\n',
+              '    managed_admin_auth: SpotifyAuthProvider | None = None\n'
               '    diagnostic_store: DiagnosticEventStore | None = None\n'
               '    operational_diagnostics: OperationalDiagnostics | None = None\n',
               'handler shared diagnostics attribute',
