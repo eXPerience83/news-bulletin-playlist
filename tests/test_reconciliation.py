@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from news_bulletin_playlist.reconciliation import (
     build_desired_state_from_store,
     reconcile_playlist_items,
     reconcile_spotify_destinations,
+    reconcile_spotify_playlist,
 )
 from news_bulletin_playlist.spotify.client import SpotifyTransportError
 
@@ -560,3 +562,46 @@ def test_failed_source_keeps_last_known_good_until_retention_expires(tmp_path: P
 
     assert during_failure.uris == ("spotify:episode:edition-1",)
     assert after_expiry.uris == ()
+
+
+def test_mutation_guard_covers_replace_only_and_not_spotify_reads() -> None:
+    guard_depth = 0
+
+    class GuardAwareSpotify(_FakeSpotify):
+        def playlist_items(
+            self,
+            playlist_id: str,
+            *,
+            limit: int = 50,
+            offset: int = 0,
+        ) -> dict[str, Any]:
+            assert guard_depth == 0
+            return super().playlist_items(playlist_id, limit=limit, offset=offset)
+
+        def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+            assert guard_depth == 1
+            return super().replace_playlist_items(playlist_id, uris)
+
+    @contextmanager
+    def mutation_guard():  # type: ignore[no-untyped-def]
+        nonlocal guard_depth
+        guard_depth += 1
+        try:
+            yield
+        finally:
+            guard_depth -= 1
+
+    playlist = _playlist("playlist")
+    client = GuardAwareSpotify({"playlist": []})
+
+    result = reconcile_spotify_playlist(
+        client,
+        playlist,
+        _desired(playlist, "spotify:episode:new"),
+        mutation_guard=mutation_guard,
+    )
+
+    assert result.ok
+    assert result.wrote is True
+    assert guard_depth == 0
+    assert client.writes == [("playlist", ["spotify:episode:new"])]

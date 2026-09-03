@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -42,6 +43,9 @@ class SpotifyPlaylistClient(Protocol):
 
 class SpotifyReconciliationError(RuntimeError):
     """Raised when Spotify playlist state cannot be read or verified safely."""
+
+
+PlaylistMutationGuard = Callable[[], AbstractContextManager[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +148,7 @@ def reconcile_playlist_items(
         store=None,
         logical_playlist_id=None,
         attestation_updated_at=None,
+        mutation_guard=None,
     ).wrote
 
 
@@ -155,6 +160,7 @@ def _reconcile_playlist_items(
     store: SQLiteStore | None,
     logical_playlist_id: PlaylistId | None,
     attestation_updated_at: datetime | None,
+    mutation_guard: PlaylistMutationGuard | None,
 ) -> _PlaylistItemsReconciliationResult:
     desired = tuple(desired_uris)
     if len(desired) > _MANAGED_PLAYLIST_MAX_ITEMS:
@@ -213,16 +219,18 @@ def _reconcile_playlist_items(
                     warning=warning,
                 )
 
-    try:
-        write_response = client.replace_playlist_items(playlist_id, list(desired))
-    except SpotifyApiError as exc:
-        raise SpotifyReconciliationError(
-            f"Spotify playlist write replace_items API failure (http_status={exc.status})"
-        ) from exc
-    except SpotifyTransportError as exc:
-        raise SpotifyReconciliationError(
-            "Spotify playlist write replace_items transport failure"
-        ) from exc
+    mutation_context = nullcontext() if mutation_guard is None else mutation_guard()
+    with mutation_context:
+        try:
+            write_response = client.replace_playlist_items(playlist_id, list(desired))
+        except SpotifyApiError as exc:
+            raise SpotifyReconciliationError(
+                f"Spotify playlist write replace_items API failure (http_status={exc.status})"
+            ) from exc
+        except SpotifyTransportError as exc:
+            raise SpotifyReconciliationError(
+                "Spotify playlist write replace_items transport failure"
+            ) from exc
 
     allow_degraded_readback = store is not None and logical_playlist_id is not None
     readback = _read_spotify_playlist(
@@ -344,6 +352,7 @@ def reconcile_spotify_playlist(
     desired: DesiredPlaylistState,
     *,
     store: SQLiteStore | None = None,
+    mutation_guard: PlaylistMutationGuard | None = None,
 ) -> PlaylistReconciliationResult:
     """Reconcile one Spotify destination; errors are left to the batch isolator."""
     if not playlist.enabled:
@@ -362,6 +371,7 @@ def reconcile_spotify_playlist(
         store=store,
         logical_playlist_id=playlist.id if store is not None else None,
         attestation_updated_at=desired.generated_at if store is not None else None,
+        mutation_guard=mutation_guard,
     )
     return PlaylistReconciliationResult(
         playlist_id=playlist.id,
