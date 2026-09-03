@@ -1,0 +1,165 @@
+name: Temporary Spotify duration state patch
+
+on:
+  push:
+    branches:
+      - feat/54-spotify-duration-state
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/54-spotify-duration-state
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - run: pip install -e '.[dev]'
+      - name: Apply durable Spotify duration patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              path.write_text(text.replace(old, new, 1))
+
+          persistence = Path('src/news_bulletin_playlist/persistence.py')
+          replace_once(
+              persistence,
+              'LATEST_SCHEMA_VERSION = 2\n',
+              'LATEST_SCHEMA_VERSION = 3\n',
+              'schema version',
+          )
+          replace_once(
+              persistence,
+              '''class EditionMatch:\n    source_id: SourceId\n    source_native_id: str\n    status: MatchStatus\n    spotify_episode_uri: str | None\n    diagnostics: str | None\n    updated_at: datetime\n''',
+              '''class EditionMatch:\n    source_id: SourceId\n    source_native_id: str\n    status: MatchStatus\n    spotify_episode_uri: str | None\n    spotify_duration_seconds: int | None\n    diagnostics: str | None\n    updated_at: datetime\n''',
+              'edition match duration',
+          )
+          replace_once(
+              persistence,
+              '''    (\n        2,\n        (\n            """\n            CREATE TABLE spotify_playlist_attestations (\n                playlist_id TEXT PRIMARY KEY,\n                destination_id TEXT NOT NULL,\n                snapshot_id TEXT NOT NULL,\n                desired_fingerprint TEXT NOT NULL,\n                updated_at TEXT NOT NULL\n            )\n            """,\n        ),\n    ),\n)\n''',
+              '''    (\n        2,\n        (\n            """\n            CREATE TABLE spotify_playlist_attestations (\n                playlist_id TEXT PRIMARY KEY,\n                destination_id TEXT NOT NULL,\n                snapshot_id TEXT NOT NULL,\n                desired_fingerprint TEXT NOT NULL,\n                updated_at TEXT NOT NULL\n            )\n            """,\n        ),\n    ),\n    (\n        3,\n        (\n            """\n            ALTER TABLE spotify_matches\n            ADD COLUMN spotify_duration_seconds INTEGER\n                CHECK (spotify_duration_seconds IS NULL OR spotify_duration_seconds >= 0)\n            """,\n        ),\n    ),\n)\n''',
+              'migration 3',
+          )
+          replace_once(
+              persistence,
+              '''        spotify_episode_uri: str | None = None,\n        diagnostics: str | None = None,\n    ) -> None:\n''',
+              '''        spotify_episode_uri: str | None = None,\n        spotify_duration_seconds: int | None = None,\n        diagnostics: str | None = None,\n    ) -> None:\n''',
+              'set match duration argument',
+          )
+          replace_once(
+              persistence,
+              '''        elif spotify_episode_uri is not None:\n            raise ValueError("non-matched state must not store spotify_episode_uri")\n\n        with self._connection("set Spotify match state") as connection:\n''',
+              '''        elif spotify_episode_uri is not None:\n            raise ValueError("non-matched state must not store spotify_episode_uri")\n        if spotify_duration_seconds is not None and spotify_duration_seconds < 0:\n            raise ValueError("spotify_duration_seconds must be non-negative")\n        if status is not MatchStatus.MATCHED and spotify_duration_seconds is not None:\n            raise ValueError("non-matched state must not store spotify_duration_seconds")\n\n        with self._connection("set Spotify match state") as connection:\n''',
+              'match duration validation',
+          )
+          replace_once(
+              persistence,
+              '''                    spotify_episode_uri,\n                    diagnostics,\n                    updated_at\n                ) VALUES (?, ?, ?, ?, ?, ?)\n''',
+              '''                    spotify_episode_uri,\n                    spotify_duration_seconds,\n                    diagnostics,\n                    updated_at\n                ) VALUES (?, ?, ?, ?, ?, ?, ?)\n''',
+              'match duration insert columns',
+          )
+          replace_once(
+              persistence,
+              '''                    spotify_episode_uri = excluded.spotify_episode_uri,\n                    diagnostics = excluded.diagnostics,\n''',
+              '''                    spotify_episode_uri = excluded.spotify_episode_uri,\n                    spotify_duration_seconds = excluded.spotify_duration_seconds,\n                    diagnostics = excluded.diagnostics,\n''',
+              'match duration update',
+          )
+          replace_once(
+              persistence,
+              '''                    status.value,\n                    spotify_episode_uri,\n                    diagnostics,\n                    _format_timestamp(updated_at),\n''',
+              '''                    status.value,\n                    spotify_episode_uri,\n                    spotify_duration_seconds,\n                    diagnostics,\n                    _format_timestamp(updated_at),\n''',
+              'match duration values',
+          )
+          replace_once(
+              persistence,
+              '''                SELECT source_id, source_native_id, status, spotify_episode_uri,\n                       diagnostics, updated_at\n''',
+              '''                SELECT source_id, source_native_id, status, spotify_episode_uri,\n                       spotify_duration_seconds, diagnostics, updated_at\n''',
+              'match duration select',
+          )
+          replace_once(
+              persistence,
+              '''            spotify_episode_uri=_optional_str(row["spotify_episode_uri"]),\n            diagnostics=_optional_str(row["diagnostics"]),\n''',
+              '''            spotify_episode_uri=_optional_str(row["spotify_episode_uri"]),\n            spotify_duration_seconds=_optional_int(row["spotify_duration_seconds"]),\n            diagnostics=_optional_str(row["diagnostics"]),\n''',
+              'match duration row mapping',
+          )
+          persistence.write_text(persistence.read_text().replace(
+              '''def _optional_str(value: object) -> str | None:\n    if value is None:\n        return None\n    if not isinstance(value, str):\n        raise PersistenceError("database returned a non-string optional value")\n    return value\n''',
+              '''def _optional_int(value: object) -> int | None:\n    if value is None:\n        return None\n    if not isinstance(value, int) or isinstance(value, bool):\n        raise PersistenceError("database returned a non-integer optional value")\n    return value\n\n\ndef _optional_str(value: object) -> str | None:\n    if value is None:\n        return None\n    if not isinstance(value, str):\n        raise PersistenceError("database returned a non-string optional value")\n    return value\n''',
+              1,
+          ))
+
+          matcher = Path('src/news_bulletin_playlist/spotify/matcher.py')
+          replace_once(
+              matcher,
+              '''class MatchOutcome:\n    edition: CanonicalEdition\n    status: MatchStatus\n    spotify_episode_uri: str | None\n    diagnostics: str\n    from_cache: bool = False\n''',
+              '''class MatchOutcome:\n    edition: CanonicalEdition\n    status: MatchStatus\n    spotify_episode_uri: str | None\n    diagnostics: str\n    spotify_duration_seconds: int | None = None\n    from_cache: bool = False\n''',
+              'match outcome duration',
+          )
+          replace_once(
+              matcher,
+              '''            spotify_episode_uri=outcome.spotify_episode_uri,\n            diagnostics=outcome.diagnostics,\n''',
+              '''            spotify_episode_uri=outcome.spotify_episode_uri,\n            spotify_duration_seconds=outcome.spotify_duration_seconds,\n            diagnostics=outcome.diagnostics,\n''',
+              'persist match duration',
+          )
+          replace_once(
+              matcher,
+              '''    if state.status is MatchStatus.MATCHED and state.spotify_episode_uri:\n        return MatchOutcome(\n            edition=edition,\n            status=state.status,\n            spotify_episode_uri=state.spotify_episode_uri,\n            diagnostics=state.diagnostics or "reused persisted Spotify mapping",\n            from_cache=True,\n        )\n''',
+              '''    if state.status is MatchStatus.MATCHED and state.spotify_episode_uri:\n        # Schema-v2 matches predate durable destination duration. Refresh those\n        # mappings once instead of treating unknown duration as eligibility proof.\n        if state.spotify_duration_seconds is None:\n            return None\n        return MatchOutcome(\n            edition=edition,\n            status=state.status,\n            spotify_episode_uri=state.spotify_episode_uri,\n            diagnostics=state.diagnostics or "reused persisted Spotify mapping",\n            spotify_duration_seconds=state.spotify_duration_seconds,\n            from_cache=True,\n        )\n''',
+              'cached duration backfill',
+          )
+          replace_once(
+              matcher,
+              '''            spotify_episode_uri=candidate.uri,\n            diagnostics=(\n''',
+              '''            spotify_episode_uri=candidate.uri,\n            spotify_duration_seconds=candidate.duration_seconds,\n            diagnostics=(\n''',
+              'matched candidate duration',
+          )
+
+          tests = Path('tests/test_spotify_matcher.py')
+          replace_once(
+              tests,
+              '''    assert outcome.spotify_episode_uri == "spotify:episode:match"\n    assert "duration delta=5s" in outcome.diagnostics\n''',
+              '''    assert outcome.spotify_episode_uri == "spotify:episode:match"\n    assert outcome.spotify_duration_seconds == 65\n    assert "duration delta=5s" in outcome.diagnostics\n''',
+              'live duration assertion',
+          )
+          replace_once(
+              tests,
+              '''        status=MatchStatus.MATCHED,\n        spotify_episode_uri="spotify:episode:persisted",\n        diagnostics="known durable mapping",\n''',
+              '''        status=MatchStatus.MATCHED,\n        spotify_episode_uri="spotify:episode:persisted",\n        spotify_duration_seconds=60,\n        diagnostics="known durable mapping",\n''',
+              'cached duration fixture',
+          )
+          replace_once(
+              tests,
+              '''    assert result.outcomes[0].from_cache\n    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:persisted"\n\n\ndef test_multiple_viable_candidates_are_persisted_as_ambiguous''',
+              '''    assert result.outcomes[0].from_cache\n    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:persisted"\n    assert result.outcomes[0].spotify_duration_seconds == 60\n\n\ndef test_legacy_persisted_mapping_without_duration_is_refreshed(tmp_path: Path) -> None:\n    source = _source("ser", "ser", "Europe/Madrid", "show-ser")\n    edition = _edition(source, "legacy-native", "Las noticias de la SER, 11:00 (30/08/2026)")\n    store = _store(tmp_path)\n    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)\n    store.upsert_editions((edition,), observed_at=now)\n    store.set_match_state(\n        edition.source_id,\n        edition.source_native_id,\n        status=MatchStatus.MATCHED,\n        spotify_episode_uri="spotify:episode:legacy",\n        diagnostics="schema-v2 durable mapping",\n        updated_at=now - timedelta(days=1),\n    )\n    client = FakeCatalogClient(\n        pages=[\n            {\n                "items": [\n                    _candidate(\n                        edition,\n                        source,\n                        uri="spotify:episode:legacy",\n                        duration_ms=66_000,\n                    )\n                ],\n                "next": None,\n            }\n        ]\n    )\n\n    result = match_source_editions(client, store, source, (edition,), now=now)\n\n    assert result.catalogue_calls == 1\n    assert not result.outcomes[0].from_cache\n    assert result.outcomes[0].spotify_duration_seconds == 66\n    state = store.get_match_state(edition.source_id, edition.source_native_id)\n    assert state is not None\n    assert state.spotify_duration_seconds == 66\n\n\ndef test_multiple_viable_candidates_are_persisted_as_ambiguous''',
+              'legacy duration refresh test',
+          )
+
+          Path('tests/test_spotify_duration_persistence.py').write_text('''from __future__ import annotations\n\nimport sqlite3\nfrom datetime import UTC, datetime\nfrom pathlib import Path\n\nfrom news_bulletin_playlist.models import CanonicalEdition, SourceId\nfrom news_bulletin_playlist.persistence import LATEST_SCHEMA_VERSION, MatchStatus, SQLiteStore\n\nNOW = datetime(2026, 9, 3, 9, 0, tzinfo=UTC)\n\n\ndef _edition() -> CanonicalEdition:\n    return CanonicalEdition(\n        source_id=SourceId("ser"),\n        source_native_id="duration-state",\n        title="Las noticias de la SER, 11:00 (03/09/2026)",\n        published_at=NOW,\n        edition_at=NOW,\n        duration_seconds=300,\n    )\n\n\ndef test_spotify_duration_round_trips_with_match_state(tmp_path: Path) -> None:\n    store = SQLiteStore(tmp_path / "state.sqlite3")\n    store.initialize()\n    edition = _edition()\n    store.upsert_editions((edition,), observed_at=NOW)\n    store.set_match_state(\n        edition.source_id,\n        edition.source_native_id,\n        status=MatchStatus.MATCHED,\n        spotify_episode_uri="spotify:episode:duration",\n        spotify_duration_seconds=305,\n        updated_at=NOW,\n    )\n\n    state = store.get_match_state(edition.source_id, edition.source_native_id)\n    assert state is not None\n    assert state.spotify_duration_seconds == 305\n\n\ndef test_schema_v2_database_migrates_duration_column_without_inventing_value(\n    tmp_path: Path,\n) -> None:\n    path = tmp_path / "legacy.sqlite3"\n    connection = sqlite3.connect(path)\n    connection.executescript(\n        """\n        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);\n        INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-09-01T00:00:00Z');\n        INSERT INTO schema_migrations(version, applied_at) VALUES (2, '2026-09-01T00:00:01Z');\n        CREATE TABLE spotify_matches (\n            source_id TEXT NOT NULL,\n            source_native_id TEXT NOT NULL,\n            status TEXT NOT NULL,\n            spotify_episode_uri TEXT,\n            diagnostics TEXT,\n            updated_at TEXT NOT NULL,\n            PRIMARY KEY (source_id, source_native_id)\n        );\n        INSERT INTO spotify_matches VALUES (\n            'ser', 'old', 'matched', 'spotify:episode:old', 'legacy', '2026-09-01T00:00:00Z'\n        );\n        """\n    )\n    connection.commit()\n    connection.close()\n\n    store = SQLiteStore(path)\n    store.initialize()\n\n    assert store.schema_version() == LATEST_SCHEMA_VERSION == 3\n    connection = sqlite3.connect(path)\n    row = connection.execute(\n        "SELECT spotify_duration_seconds FROM spotify_matches WHERE source_native_id='old'"\n    ).fetchone()\n    connection.close()\n    assert row == (None,)\n''')
+          PY
+      - name: Format and validate
+        run: |
+          python scripts/ruff_fix.py
+          ruff check .
+          ruff format --check .
+          mypy src
+          pytest -q tests/test_spotify_duration_persistence.py tests/test_spotify_matcher.py tests/test_persistence.py
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/news_bulletin_playlist/persistence.py src/news_bulletin_playlist/spotify/matcher.py tests/test_spotify_matcher.py tests/test_spotify_duration_persistence.py
+          git commit -m 'feat(policy): persist Spotify episode duration'
+          git push origin HEAD:feat/54-spotify-duration-state
