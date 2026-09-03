@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import (
     CanonicalEdition,
+    DurationPolicyException,
     OrderingPolicy,
     PlaylistDefinition,
     PlaylistId,
@@ -14,6 +16,10 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.persistence import EditionMatch, MatchStatus
 
 SPOTIFY_PLAYLIST_ITEM_LIMIT = 100
+DURATION_WITHIN_DEFAULT_MAX = "duration_within_default_max"
+DURATION_EXCEPTION = "duration_exception"
+DURATION_EXCEEDS_DEFAULT_MAX = "duration_exceeds_default_max"
+DURATION_EXCEEDS_EXCEPTION_MAX = "duration_exceeds_exception_max"
 
 
 class DesiredStateError(RuntimeError):
@@ -33,6 +39,17 @@ class DesiredPlaylistItem:
         return (self.source_id, self.source_native_id)
 
 
+@dataclass(frozen=True, slots=True)
+class DurationEligibilityDecision:
+    source_id: SourceId
+    source_native_id: str
+    duration_seconds: int
+    accepted: bool
+    reason: str
+    max_seconds: int
+    exception_id: str | None = None
+
+
 def authoritative_playlist_time(
     edition: CanonicalEdition | DesiredPlaylistItem,
     ordering: OrderingPolicy,
@@ -50,6 +67,7 @@ class DesiredPlaylistState:
     playlist_id: PlaylistId
     generated_at: datetime
     items: tuple[DesiredPlaylistItem, ...]
+    duration_decisions: tuple[DurationEligibilityDecision, ...] = ()
 
     @property
     def uris(self) -> tuple[str, ...]:
@@ -62,6 +80,7 @@ def build_playlist_desired_state(
     matches: Mapping[tuple[SourceId, str], EditionMatch],
     *,
     now: datetime,
+    source_timezones: Mapping[SourceId, ZoneInfo] | None = None,
 ) -> DesiredPlaylistState:
     """Build one deterministic playlist state from canonical editions and match state.
 
@@ -100,6 +119,7 @@ def build_playlist_desired_state(
         canonical_by_identity[edition.identity] = edition
 
     items: list[DesiredPlaylistItem] = []
+    decisions: list[DurationEligibilityDecision] = []
     for identity, edition in canonical_by_identity.items():
         match = matches.get(identity)
         if match is None or match.status is not MatchStatus.MATCHED:
@@ -110,6 +130,21 @@ def build_playlist_desired_state(
                 "matched edition is missing its Spotify episode URI for "
                 f"{edition.source_id!s}/{edition.source_native_id}"
             )
+        duration = match.spotify_duration_seconds
+        if duration is None:
+            raise DesiredStateError(
+                "desired state Spotify duration unavailable for matched edition "
+                f"{edition.source_id!s}/{edition.source_native_id}"
+            )
+        decision = _duration_decision(
+            playlist,
+            edition,
+            duration,
+            source_timezones=source_timezones or {},
+        )
+        decisions.append(decision)
+        if not decision.accepted:
+            continue
         items.append(
             DesiredPlaylistItem(
                 source_id=edition.source_id,
@@ -145,6 +180,7 @@ def build_playlist_desired_state(
         playlist_id=playlist.id,
         generated_at=generated_at,
         items=tuple(unique_items[:limit]),
+        duration_decisions=tuple(decisions),
     )
 
 
@@ -154,13 +190,89 @@ def build_multi_playlist_desired_states(
     matches: Mapping[tuple[SourceId, str], EditionMatch],
     *,
     now: datetime,
+    source_timezones: Mapping[SourceId, ZoneInfo] | None = None,
 ) -> tuple[DesiredPlaylistState, ...]:
     """Build every enabled playlist independently from the same canonical input set."""
     return tuple(
-        build_playlist_desired_state(playlist, editions, matches, now=now)
+        build_playlist_desired_state(
+            playlist,
+            editions,
+            matches,
+            now=now,
+            source_timezones=source_timezones,
+        )
         for playlist in playlists
         if playlist.enabled
     )
+
+
+def _duration_decision(
+    playlist: PlaylistDefinition,
+    edition: CanonicalEdition,
+    duration_seconds: int,
+    *,
+    source_timezones: Mapping[SourceId, ZoneInfo],
+) -> DurationEligibilityDecision:
+    policy = playlist.duration_policy
+    if duration_seconds <= policy.default_max_seconds:
+        return DurationEligibilityDecision(
+            source_id=edition.source_id,
+            source_native_id=edition.source_native_id,
+            duration_seconds=duration_seconds,
+            accepted=True,
+            reason=DURATION_WITHIN_DEFAULT_MAX,
+            max_seconds=policy.default_max_seconds,
+        )
+
+    exceptions = tuple(
+        exception for exception in policy.exceptions if exception.source_id == edition.source_id
+    )
+    matching_exception = _matching_duration_exception(
+        edition,
+        exceptions,
+        source_timezones=source_timezones,
+    )
+    if matching_exception is None:
+        return DurationEligibilityDecision(
+            source_id=edition.source_id,
+            source_native_id=edition.source_native_id,
+            duration_seconds=duration_seconds,
+            accepted=False,
+            reason=DURATION_EXCEEDS_DEFAULT_MAX,
+            max_seconds=policy.default_max_seconds,
+        )
+
+    accepted = duration_seconds <= matching_exception.max_seconds
+    return DurationEligibilityDecision(
+        source_id=edition.source_id,
+        source_native_id=edition.source_native_id,
+        duration_seconds=duration_seconds,
+        accepted=accepted,
+        reason=(DURATION_EXCEPTION if accepted else DURATION_EXCEEDS_EXCEPTION_MAX),
+        max_seconds=matching_exception.max_seconds,
+        exception_id=matching_exception.id,
+    )
+
+
+def _matching_duration_exception(
+    edition: CanonicalEdition,
+    exceptions: Sequence[DurationPolicyException],
+    *,
+    source_timezones: Mapping[SourceId, ZoneInfo],
+) -> DurationPolicyException | None:
+    if not exceptions or edition.edition_at is None:
+        return None
+    timezone = source_timezones.get(edition.source_id)
+    if timezone is None:
+        raise DesiredStateError(
+            "desired state source timezone unavailable for duration exception evaluation"
+        )
+    local = edition.edition_at.astimezone(timezone)
+    for exception in exceptions:
+        target = exception.edition_local_time
+        if (local.hour, local.minute) == (target.hour, target.minute):
+            return exception
+    return None
 
 
 def _as_utc(value: datetime) -> datetime:
