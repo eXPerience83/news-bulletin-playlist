@@ -34,6 +34,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "next_state",
         "offset",
         "operation",
+        "outcome",
         "phase",
         "returned_count",
         "total",
@@ -88,11 +89,15 @@ _ALLOWED_DETAIL_STRING_VALUES = {
     ),
     "operation": frozenset(
         {
+            "playlist_configuration",
+            "playlist_cover_upload",
             "playlist_items",
+            "playlist_metadata",
             "replace_items",
             "snapshot",
         }
     ),
+    "outcome": frozenset({"applied", "failed"}),
     "phase": frozenset(
         {
             "authorization",

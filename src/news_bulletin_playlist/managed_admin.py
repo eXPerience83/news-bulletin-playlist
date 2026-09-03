@@ -74,6 +74,8 @@ class SpotifyPlaylistSyncError(ManagedAdminError):
         metadata_error: str | None,
         cover_error: str | None,
     ) -> None:
+        self.metadata_error = metadata_error
+        self.cover_error = cover_error
         metadata = "applied" if metadata_error is None else f"failed ({metadata_error})"
         cover = "applied" if cover_error is None else f"failed ({cover_error})"
         super().__init__(f"Spotify explicit sync result: metadata {metadata}; cover {cover}")

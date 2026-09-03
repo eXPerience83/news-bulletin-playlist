@@ -347,6 +347,7 @@ class OperationalHealthHandler(LanAdminHandler):
     managed_admin_service: ManagedAdminService | None = None
     managed_admin_auth: SpotifyAuthProvider | None = None
     diagnostic_store: DiagnosticEventStore | None = None
+    operational_diagnostics: OperationalDiagnostics | None = None
 
     def _send_headers(
         self,
@@ -568,6 +569,7 @@ class OperationalHealthHandler(LanAdminHandler):
             )
             return
 
+        playlist_id_for_event: str | None = None
         try:
             if path == "/admin/playlists/sync":
                 with synchronization.hold():
@@ -576,21 +578,41 @@ class OperationalHealthHandler(LanAdminHandler):
                         playlist.id == playlist_id for playlist in service.snapshot().managed
                     ):
                         raise ManagedAdminError(f"unknown managed playlist: {playlist_id}")
+                playlist_id_for_event = str(playlist_id)
                 # HTTPServer serves admin requests serially. Validate immutable managed state
                 # under the configuration lock, then keep Spotify I/O outside that lock so a
                 # slow metadata/cover request cannot delay an engine cycle.
                 self._sync_managed_playlist(service, form)
+                self._emit_admin_spotify_sync_events(
+                    playlist_id=playlist_id_for_event,
+                    metadata_error=None,
+                    cover_error=None,
+                )
             else:
                 with synchronization.hold():
                     if path == "/admin/playlists/activate":
-                        self._activate_managed_playlist(service, form)
+                        playlist_id_for_event = self._activate_managed_playlist(service, form)
+                        event_name = "admin_playlist_activated"
+                        next_state = "enabled"
                     elif path == "/admin/playlists/update":
-                        self._update_managed_playlist(service, form)
+                        playlist_id_for_event, enabled = self._update_managed_playlist(
+                            service, form
+                        )
+                        event_name = "admin_playlist_updated"
+                        next_state = "enabled" if enabled else "disabled"
                     else:
-                        service.stop_managing(playlist_id_from_form(form))
+                        playlist_id_for_event = str(playlist_id_from_form(form))
+                        service.stop_managing(playlist_id_for_event)
+                        event_name = "admin_playlist_stopped"
+                        next_state = "stopped"
                     configured = any(playlist.enabled for playlist in service.snapshot().managed)
                 lifecycle.reconcile(configured=configured)
                 self.__class__.engine_scheduler = lifecycle.scheduler
+                self._emit_admin_configuration_event(
+                    event_name=event_name,
+                    playlist_id=playlist_id_for_event,
+                    next_state=next_state,
+                )
         except ManagedStateError:
             self._managed_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -601,6 +623,12 @@ class OperationalHealthHandler(LanAdminHandler):
             self._managed_error(HTTPStatus.BAD_REQUEST, str(exc))
             return
         except SpotifyPlaylistSyncError as exc:
+            if playlist_id_for_event is not None:
+                self._emit_admin_spotify_sync_events(
+                    playlist_id=playlist_id_for_event,
+                    metadata_error=exc.metadata_error,
+                    cover_error=exc.cover_error,
+                )
             self._managed_error(HTTPStatus.BAD_GATEWAY, str(exc))
             return
         except ManagedAdminError as exc:
@@ -638,12 +666,12 @@ class OperationalHealthHandler(LanAdminHandler):
         self,
         service: ManagedAdminService,
         form: Mapping[str, list[str]],
-    ) -> None:
+    ) -> str:
         auth = self.managed_admin_auth
         if auth is None:
             raise ManagedAdminError("Spotify authorization is required to create a playlist")
         access_token = auth.get_access_token()
-        service.activate(
+        managed = service.activate(
             template_id=single_form_value(form, "template_id"),
             display_name=single_form_value(form, "display_name"),
             description=single_form_value(form, "description", required=False),
@@ -651,12 +679,13 @@ class OperationalHealthHandler(LanAdminHandler):
             source_ids=form.get("source_id", []),
             access_token=access_token,
         )
+        return str(managed.id)
 
     def _update_managed_playlist(
         self,
         service: ManagedAdminService,
         form: Mapping[str, list[str]],
-    ) -> None:
+    ) -> tuple[str, bool]:
         playlist_id = playlist_id_from_form(form)
         name = single_form_value(form, "display_name")
         description = single_form_value(form, "description", required=False)
@@ -684,7 +713,7 @@ class OperationalHealthHandler(LanAdminHandler):
                     "Spotify must be connected to change playlist name or description"
                 )
             access_token = auth.get_access_token()
-        service.update(
+        updated = service.update(
             playlist_id,
             display_name=name,
             description=description,
@@ -693,6 +722,7 @@ class OperationalHealthHandler(LanAdminHandler):
             enabled=enabled,
             access_token=access_token,
         )
+        return str(updated.id), updated.enabled
 
     def _sync_managed_playlist(
         self,
@@ -706,6 +736,65 @@ class OperationalHealthHandler(LanAdminHandler):
             playlist_id_from_form(form),
             access_token=auth.get_access_token(),
         )
+
+    def _emit_admin_configuration_event(
+        self,
+        *,
+        event_name: str,
+        playlist_id: str,
+        next_state: str,
+    ) -> None:
+        self._admin_diagnostics().emit(
+            occurred_at=datetime.now(UTC),
+            severity=DiagnosticSeverity.INFO,
+            component="admin",
+            event_name=event_name,
+            playlist_id=playlist_id,
+            details={
+                "operation": "playlist_configuration",
+                "outcome": "applied",
+                "next_state": next_state,
+            },
+        )
+
+    def _emit_admin_spotify_sync_events(
+        self,
+        *,
+        playlist_id: str,
+        metadata_error: str | None,
+        cover_error: str | None,
+    ) -> None:
+        diagnostics = self._admin_diagnostics()
+        for operation, error in (
+            ("playlist_metadata", metadata_error),
+            ("playlist_cover_upload", cover_error),
+        ):
+            details: dict[str, str | int] = {
+                "operation": operation,
+                "outcome": "applied" if error is None else "failed",
+            }
+            if error is not None:
+                if error.startswith("HTTP ") and error[5:].isdigit():
+                    details["failure_class"] = "api_error"
+                    details["http_status"] = int(error[5:])
+                elif error == "network error":
+                    details["failure_class"] = "transport_error"
+                else:
+                    details["failure_class"] = "configuration_error"
+            diagnostics.emit(
+                occurred_at=datetime.now(UTC),
+                severity=(DiagnosticSeverity.INFO if error is None else DiagnosticSeverity.WARNING),
+                component="admin",
+                event_name="admin_spotify_operation_completed",
+                playlist_id=playlist_id,
+                details=details,
+            )
+
+    def _admin_diagnostics(self) -> OperationalDiagnostics:
+        diagnostics = self.operational_diagnostics
+        if diagnostics is not None:
+            return diagnostics
+        return OperationalDiagnostics(self.diagnostic_store)
 
     def _managed_error(self, status: HTTPStatus, message: str) -> None:
         payload = (
@@ -798,6 +887,7 @@ def serve(
     OperationalHealthHandler.managed_admin_service = managed_admin_service
     OperationalHealthHandler.managed_admin_auth = auth_provider
     OperationalHealthHandler.diagnostic_store = diagnostic_store
+    OperationalHealthHandler.operational_diagnostics = diagnostics
     server = HTTPServer((host, port), OperationalHealthHandler)
     server.timeout = 0.5
     stopped = stop_event if stop_event is not None else threading.Event()
