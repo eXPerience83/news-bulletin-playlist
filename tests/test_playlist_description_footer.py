@@ -51,10 +51,7 @@ def test_renderer_sends_only_editable_base_description() -> None:
     [
         f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}",
         f"Descripción\r\n\r\n{PROJECT_DESCRIPTION_FOOTER}\r\n",
-        (
-            f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}"
-            f"\n\n{PROJECT_DESCRIPTION_FOOTER}"
-        ),
+        (f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}\n\n{PROJECT_DESCRIPTION_FOOTER}"),
     ],
 )
 def test_renderer_strips_legacy_terminal_project_footer(contaminated: str) -> None:
