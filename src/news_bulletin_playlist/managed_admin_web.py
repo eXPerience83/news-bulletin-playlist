@@ -10,6 +10,7 @@ from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.engine import EngineCycleResult
 from news_bulletin_playlist.managed_admin import (
     MAX_PLAYLIST_DESCRIPTION_LENGTH,
+    MAX_PLAYLIST_DURATION_MINUTES,
     MAX_PLAYLIST_NAME_LENGTH,
     ManagedAdminSnapshot,
 )
@@ -83,8 +84,8 @@ def render_managed_admin_page(
     .cover {{ width: 5rem; height: 5rem; object-fit: cover; border-radius: .45rem;
               border: 1px solid #8888; flex: 0 0 auto; }}
     label {{ display: block; font-weight: 650; margin-top: .65rem; }}
-    input[type=text], textarea {{ box-sizing: border-box; width: 100%; font: inherit;
-                                 padding: .45rem; }}
+    input[type=text], input[type=number], textarea {{ box-sizing: border-box; width: 100%;
+                                                      font: inherit; padding: .45rem; }}
     textarea {{ min-height: 5.5rem; resize: vertical; }}
     fieldset {{ margin: .8rem 0; border: 1px solid #8888; }}
     fieldset label {{ font-weight: 400; margin: .25rem 0; }}
@@ -118,8 +119,8 @@ def render_managed_admin_page(
 
   <section>
     <h2>Active playlists</h2>
-    <p class="muted">Each playlist keeps its own source selection. A source shared by several
-       active playlists is still fetched only once per engine cycle.</p>
+    <p class="muted">Each playlist keeps its own source selection and duration ceiling. A source
+       shared by several active playlists is still fetched only once per engine cycle.</p>
     <div class="grid">{managed}</div>
   </section>
 
@@ -171,6 +172,13 @@ def _managed_card(
         f'<textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">'
         f"{html.escape(playlist.description)}</textarea>"
     )
+    template = catalog.playlist(playlist.template_id)
+    effective_duration_seconds = (
+        template.duration_policy.default_max_seconds
+        if playlist.max_duration_seconds is None
+        else playlist.max_duration_seconds
+    )
+    duration_minutes = _seconds_to_whole_minutes(effective_duration_seconds)
     return f"""
 <article class="card">
   <div class="card-head">
@@ -181,9 +189,7 @@ def _managed_card(
       <p><a href="{html.escape(spotify_url, quote=True)}" target="_blank"
             rel="noopener noreferrer">Open in Spotify</a></p>
       <p class="muted">Last result: {html.escape(result)}</p>
-      <p class="muted">Do not reconnect Spotify just to upload the cover.
-        Reconnect Spotify once for image permission only if Spotify reports an authorization
-        or permission failure; otherwise apply Spotify metadata and cover directly.</p>
+      <p class="muted">Spotify metadata/cover sync is independent from bulletin policy changes.</p>
     </div>
   </div>
   <form method="post" action="/admin/playlists/update">
@@ -197,6 +203,12 @@ def _managed_card(
     <label>Description
       {description_control}
     </label>
+    <label>Maximum episode duration (minutes)
+      <input type="number" name="max_duration_minutes" required min="1"
+             max="{MAX_PLAYLIST_DURATION_MINUTES}" step="1" value="{duration_minutes}">
+    </label>
+    <p class="muted">Episodes longer than this are omitted from this playlist only. Change this
+       setting without reconnecting Spotify.</p>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     <label><input type="checkbox" name="enabled" value="1"{checked}> Active</label>
     <button type="submit">Save playlist</button>
@@ -233,6 +245,7 @@ def _template_card(
         f'<textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">'
         f"{html.escape(template.description)}</textarea>"
     )
+    duration_minutes = _seconds_to_whole_minutes(template.duration_policy.default_max_seconds)
     return f"""
 <article class="card">
   <div class="card-head">
@@ -253,6 +266,10 @@ def _template_card(
     </label>
     <label>Description
       {description_control}
+    </label>
+    <label>Maximum episode duration (minutes)
+      <input type="number" name="max_duration_minutes" required min="1"
+             max="{MAX_PLAYLIST_DURATION_MINUTES}" step="1" value="{duration_minutes}">
     </label>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     {hint}
@@ -364,9 +381,34 @@ def single_form_value(
     return values[0]
 
 
+def max_duration_seconds_from_form(form: Mapping[str, list[str]]) -> int | None:
+    """Parse an optional bounded integer minute value into seconds."""
+    values = form.get("max_duration_minutes", [])
+    if not values:
+        return None
+    if len(values) != 1:
+        raise ValueError("Exactly one max_duration_minutes value is required")
+    raw = values[0].strip()
+    try:
+        minutes = int(raw)
+    except ValueError as exc:
+        raise ValueError("max_duration_minutes must be an integer") from exc
+    if minutes <= 0 or minutes > MAX_PLAYLIST_DURATION_MINUTES:
+        raise ValueError(
+            f"max_duration_minutes must be between 1 and {MAX_PLAYLIST_DURATION_MINUTES}"
+        )
+    return minutes * 60
+
+
 def playlist_id_from_form(form: Mapping[str, list[str]]) -> PlaylistId:
     """Parse one managed playlist ID from a form."""
     value = single_form_value(form, "playlist_id").strip()
     if not value:
         raise ValueError("playlist_id must not be empty")
     return PlaylistId(value)
+
+
+def _seconds_to_whole_minutes(seconds: int) -> int:
+    if seconds <= 0 or seconds % 60 != 0:
+        raise ValueError("managed duration ceiling must be a positive whole number of minutes")
+    return seconds // 60
