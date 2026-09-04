@@ -294,7 +294,7 @@ class ManagedAdminService:
     ) -> None:
         try:
             self._apply_metadata_with_attribution_fallback(client, playlist)
-        except (SpotifyApiError, SpotifyTransportError):
+        except SpotifyApiError, SpotifyTransportError:
             return
 
     def _apply_metadata_with_attribution_fallback(
@@ -328,7 +328,7 @@ class ManagedAdminService:
     ) -> None:
         try:
             self._upload_cover_explicit(client, playlist_id, cover_id)
-        except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
+        except OSError, ValueError, SpotifyApiError, SpotifyTransportError:
             # Cover art is product metadata. It must never block playlist state or bulletin sync.
             return
 
