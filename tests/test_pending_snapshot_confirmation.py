@@ -63,9 +63,7 @@ def _store(tmp_path: Path) -> SQLiteStore:
 
 class _LaggingSpotify:
     def __init__(self) -> None:
-        self.slots: list[str | None] = [
-            f"spotify:episode:old-{index:03d}" for index in range(51)
-        ]
+        self.slots: list[str | None] = [f"spotify:episode:old-{index:03d}" for index in range(51)]
         self.visible_snapshot = "snapshot-A"
         self.write_snapshot = "snapshot-B"
         self.writes: list[list[str]] = []
