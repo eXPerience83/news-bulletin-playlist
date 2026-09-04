@@ -227,10 +227,11 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
 BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
     PlaylistTemplate(
         id=PlaylistId("spain_spanish_news"),
-        display_name="Noticias España",
+        display_name="Noticias en Español",
         description=(
-            "Últimos boletines de actualidad de las fuentes seleccionadas, actualizados "
-            "automáticamente y ordenados de más reciente a más antigua."
+            "Últimos boletines y resúmenes informativos en español, con fuentes de España "
+            "y una selección internacional, actualizados automáticamente y ordenados "
+            "del más reciente al más antiguo."
         ),
         countries=(CountryCode("ES"),),
         languages=(LanguageTag("es"),),
