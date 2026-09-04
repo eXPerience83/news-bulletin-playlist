@@ -72,28 +72,34 @@ exact-400 fallback without attribution succeeded, and cover upload succeeded ind
 The current diagnostics do not distinguish ordinary attributed success from successful fallback without
 attribution. That observability gap remains tracked in #133.
 
-## Playlist visibility / privacy behavior
+## Playlist visibility / access privacy behavior
 
 The application called `create_private_playlist()` and sent `public=false`, but Spotify initially
 reported `public=true`. A Web API update intended to set `public=false` was accepted while the observed
 value remained `public=true`.
 
-Using Spotify's client-side **Make private** action changed the playlist to actual invite-only privacy.
+Using Spotify's client-side **Make private** action changed the playlist to actual invite-only access.
 That manual action also advanced `snapshot_id` without changing the item/order fingerprint.
 
-A final bounded inverse test was then run while the playlist was genuinely private. The Web API accepted
+A final bounded inverse test was then run while the playlist had invite-only access. The Web API accepted
 one `public=true` update with an empty success response, but the observed API value remained
 `public=false` immediately and after 1 and 3 seconds. Snapshot `AAAADGB/9uXNfl9PzOIBWXHLTdWALd1D`, the
 68-item count and ordered-item fingerprint all remained unchanged. This demonstrates that an accepted
 `public=true` request did not make an observable visibility or content transition in this state.
 
-Spotify's current platform documentation distinguishes the Web API `public` flag (profile/search
-publication) from actual access control; actual private/invite-only access cannot currently be changed
-through the Web API. Production playlists are ultimately intended to be public, but the application must
-not promise that `public=false` provides stronger access privacy than Spotify actually exposes through
-the API. Code/UI terminology should therefore avoid using `private`/`public` as if they were reliable
-access-control states; provider-facing names should describe the requested API visibility separately from
-real access restriction.
+Terminology for this project must keep the two dimensions separate:
+
+- **Spotify API visibility**: the provider's `public` field/request. When discussed in the UI/docs use
+  wording such as **visible in profile/search** vs **not listed in profile/search**, and treat it as a
+  provider request/observation rather than an access-control guarantee.
+- **Access privacy**: Spotify-client state such as **invite-only / restricted access**. The application
+  must not claim that it can change this state through the Web API.
+
+Accordingly, provider methods such as `create_private_playlist()` are misleading because they imply
+access privacy. A neutral creation verb plus an explicit API-visibility request is preferable. Production
+news playlists are intended to be visible/public-facing; future LAB tooling may request non-listed API
+visibility and separately instruct the operator to enable invite-only access in Spotify when true access
+restriction is required.
 
 Follow-up is tracked separately in #135 so this provider semantic does not obscure the item
 reconciliation fix.
