@@ -3,13 +3,13 @@
 Open-source service for dynamic news bulletin playlists across countries and languages,
 with Spotify as the first destination.
 
-> Pre-release. The P1 production multi-playlist engine is complete; provisioning and operating the first public Spain / Spanish-language playlist is the next release step. This project is not affiliated with or endorsed by Spotify or any news provider.
+> Pre-release. The P1 production multi-playlist engine is complete; the current release step is validating the managed multi-playlist catalog in production. This project is not affiliated with or endorsed by Spotify or any news provider.
 
 ## Goal
 
 Run **one engine that can maintain multiple news-bulletin playlists** from shared provider data.
 
-Spain / Spanish-language news is the first implementation and validation target. The architecture is intentionally multi-playlist, multi-country and multi-language so the same runtime can later power English, French, German, Polish and other European playlists without duplicating the application.
+Spanish-language news is the first implementation and validation target. The architecture is intentionally multi-playlist, multi-country and multi-language so the same runtime can power English, French, German, Polish and additional playlists without duplicating the application.
 
 Core architectural invariant:
 
@@ -25,14 +25,15 @@ Initial product defaults:
 - cap a playlist at **100 episodes**;
 - order by source publication timestamp (`published_at`), newest first;
 - make the maximum episode duration a **per-managed-playlist setting** editable from `/admin/`;
-- use **30 minutes** for `Noticias España` during the current long-bulletin viability study, rather than silently omitting useful 8–30 minute editions;
+- use **30 minutes / 1800 seconds as the current general default for every playlist**;
+- prefer bulletin sources whose normal publishing format is concise; a source that is predominantly long-form is not promoted merely because individual episodes might fit under 30 minutes;
 - retain operational metadata locally for **30 days**;
 - run the production engine approximately every **10 minutes**;
 - never download or store podcast audio;
 - treat RSS/provider metadata as the timing source and Spotify as the playlist destination;
 - allow playlist-specific policies to override defaults when required.
 
-The 30-minute Spain value is an experiment, not a permanent global editorial rule. Sanitized diagnostics record accepted episodes of at least 20 minutes so the project can decide from real provider behavior whether a future concise-bulletin playlist and a separate longer-news playlist are justified.
+The 30-minute ceiling is deliberately conservative while the catalog is being observed in production. Sanitized diagnostics record accepted episodes of at least 20 minutes and duration exclusions. That evidence will determine whether the product later needs a tighter concise-news ceiling, a separate long-edition playlist, or both. Occasional long editions from an otherwise concise bulletin source are acceptable; sources whose usual product is long-form are not.
 
 ## Editorial independence
 
@@ -50,19 +51,25 @@ Spotify's Developer Policy permits certain limited commercial uses for qualifyin
 
 See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the current Spotify platform constraints and the authenticated probes still required.
 
-## P0 providers
+## Initial providers
 
-The initial provider research focuses on the first Spain / Spanish-language playlist.
+The runtime catalog is intentionally stricter than the research list: a source needs a stable feed, a deterministic Spotify-show identity/matching contract and a bulletin-like publishing format suitable for the playlist.
 
-| Provider | Parser | Spotify show identified | Status |
+| Provider | Language | Role | Typical format |
 | --- | --- | --- | --- |
-| Cadena SER | ✅ | ✅ | core |
-| RNE | ✅ | ✅ | core |
-| Onda Cero | ✅ | ✅ | core |
-| CNN 5 Cosas | ✅ | ✅ | core international |
-| COPE | ✅ national title contract | ⚠️ authenticated lookup pending | candidate |
+| Cadena SER | es | Spain / general Spanish | hourly bulletins, with a longer morning edition |
+| RNE | es | Spain / general Spanish | recurring radio bulletins |
+| Onda Cero | es | Spain / general Spanish | recurring radio bulletins |
+| ABC — Las Noticias de ABC | es | Spain / general Spanish | concise daily news editions |
+| CNN 5 Cosas | es | global Spanish | concise international briefing |
+| UN News Today | en | international English | daily concise global bulletin |
+| RFI — Journal Monde | fr | international French | mostly 10-minute world bulletins; longer tranches are duration-filtered |
+| Deutschlandfunk — Die Nachrichten | de | German | recurring ~5-minute news bulletins |
+| RMF FM — Fakty | pl | Polish | recurring short news bulletins, with occasional longer editions |
 
-See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the source research and the remaining authenticated Spotify probe.
+Regional Spanish products such as **RFI Español — Noticias de América** remain research candidates rather than default runtime sources because the Spanish playlists are intended to cover Spain plus genuinely global/international news, not one non-Spanish geographic region. Predominantly long-form products such as **BBC Global News Podcast** are likewise not promoted to the runtime catalog under the current concise-source rule.
+
+See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) and issue #53 for continuing source research.
 
 ## Container runtime
 
@@ -79,7 +86,7 @@ docker compose ps
 
 The local status page is available only on `http://127.0.0.1:8788/`.
 
-The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in **Noticias España** template, edit its metadata/cover/source selection and maximum episode duration if needed, and activate it. The application creates the private Spotify destination, persists installation-owned choices in `/data/managed-state.json`, and wakes the scheduler immediately. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the production PKCE/HTTPS and first-run flow.
+The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in playlist templates, edit metadata/cover/source selection and maximum episode duration if needed, and activate the desired playlists. The application creates each private Spotify destination, persists installation-owned choices in `/data/managed-state.json`, and wakes the scheduler immediately. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the production PKCE/HTTPS and first-run flow.
 
 For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and contains no Spotify credentials.
 
@@ -117,11 +124,13 @@ The managed state is compiled with the built-in catalog into the same `EngineCon
 
 The schema-v1 full-YAML loader remains an **advanced/manual compatibility path**, not the default first-run workflow. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is retained for that compatibility path. An explicit `NEWS_PLAYLIST_CONFIG` selects a legacy YAML file; otherwise the runtime prefers `/data/managed-state.json` when present and only falls back to the default legacy `/data/news-bulletin-playlist.yaml`. If managed state and that default legacy YAML both exist, startup fails closed rather than guessing which configuration should win.
 
-The supported runtime catalog currently uses the verified source IDs `ser`, `rne`, `ondacero` and `cnn`. Research candidates such as COPE remain outside ordinary selectable production configuration until their deterministic destination contract is verified. Playlist source membership is explicit, so a Spain-oriented playlist can intentionally include the US source CNN 5 Cosas.
+The current built-in runtime source IDs are `ser`, `rne`, `ondacero`, `abc`, `cnn`, `un_news_en`, `rfi_fr`, `dlf_news` and `rmf_fakty`. Research candidates remain outside ordinary selectable production configuration until their feed, Spotify identity, matching contract, geographic/editorial scope and typical episode duration have been checked.
 
 Canonical editions are identified only by `(source_id, source_native_id)`. Titles and timestamps are metadata, never identity. Canonical timestamps are timezone-aware UTC values. Spotify show references are source catalogue metadata and are intentionally distinct from writable playlist destinations.
 
 A cycle uses durable canonical/match state when building desired playlists. Therefore a transient source failure does not erase still-valid recent episodes; they age out naturally at the playlist retention boundary. Destination failures are isolated so one Spotify playlist cannot block another. If a source or Spotify catalogue lookup fails before enough last-known-good state exists to establish a safe desired state, the affected destination is preserved with zero reconciliation writes rather than treating an empty desired state as authoritative.
+
+Spotify playlist descriptions are plain text from the Web API contract. Managed descriptions stay attribution-free locally; when metadata is created or explicitly synchronized, the runtime appends one bounded project line containing `https://github.com/eXPerience83/news-bulletin-playlist`. Whether a Spotify client renders that URL as clickable is client behavior and is not assumed by the application.
 
 ## License
 
@@ -137,7 +146,7 @@ The production administration surface must sit behind HTTPS. Configure `NEWS_PLA
 
 The completed production-engine roadmap is recorded in the [P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13).
 
-1. **P0 — validated foundation** — provider contracts and watchdog, hardened container/TrueNAS runtime, plus Spotify catalogue/write probes for the first Spain / Spanish-language playlist.
+1. **P0 — validated foundation** — provider contracts and watchdog, hardened container/TrueNAS runtime, plus Spotify catalogue/write probes.
 2. **P1 — production multi-playlist engine — complete**:
    - [x] **P1.1 / #14** — source, canonical edition and playlist configuration/domain model; completed via #21.
    - [x] **P1.2 / #15** — shared RSS collection and canonical normalization; completed via #22.
@@ -146,7 +155,7 @@ The completed production-engine roadmap is recorded in the [P1 umbrella issue #1
    - [x] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation; completed via #29.
    - [x] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI; completed via #30.
    - [x] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime; completed via #31.
-3. **First release — next** — provision and operate the first public Spain / Spanish-language playlist through the managed Web UI using the completed P1 engine.
-4. **Expansion** — add source and playlist definitions for additional languages and European countries without duplicating the engine.
+3. **Managed catalog validation — current** — operate Spanish plus initial EN/FR/DE/PL playlists from the same TrueNAS instance, export sanitized diagnostics and adjust source/policy choices from real operation.
+4. **Expansion** — add more concise, deterministic sources and playlist definitions without duplicating the engine.
 
 Parallel/non-blocking product work such as the playlist cover-art system in #12 may land when its configuration hook is stable, but it must never block bulletin synchronization.
