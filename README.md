@@ -75,7 +75,7 @@ docker compose ps
 
 The local status page is available only on `http://127.0.0.1:8788/`.
 
-The base container remains healthy with no production engine configuration. To enable automatic cycles, copy [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) to `/data/news-bulletin-playlist.yaml`, replace the placeholder destination with the already provisioned Spotify playlist ID, and configure the production Spotify PKCE/HTTPS settings described in [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md). The scheduler starts immediately and then runs every 600 seconds by default.
+The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in **Noticias España** template, edit its metadata/cover/source selection if needed, and activate it. The application creates the private Spotify destination, persists installation-owned choices in `/data/managed-state.json`, and wakes the scheduler immediately. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the production PKCE/HTTPS and first-run flow.
 
 For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and contains no Spotify credentials.
 
@@ -107,9 +107,13 @@ CI runs `ruff check .`, `ruff format --check .`, mypy and pytest on Python 3.14.
 
 ## Domain and configuration contract
 
-P1 configuration is YAML and separates global source definitions from playlist policies and destination references. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is a non-production example: copy it to the persistent runtime and replace its Spotify destination with an already provisioned playlist ID before enabling automatic cycles.
+Normal operation separates immutable application knowledge from installation-owned choices. The image ships a built-in catalog of supported sources and managed playlist templates; `/data/managed-state.json` stores only the playlists activated by this installation, their Spotify destination IDs, enabled/paused state, metadata/cover choices and explicit many-to-many source membership. Updating the image can therefore add supported sources/templates without overwriting existing local selections.
 
-The example uses the verified feeds and existing source IDs `ser`, `rne`, `ondacero` and `cnn`. COPE remains a disabled candidate without an invented endpoint or Spotify catalogue reference. Playlist `source_selection.explicit` is authoritative in schema version 1; playlist countries and languages describe editorial scope and do not implicitly filter that list. This is why a Spain-oriented playlist can explicitly include the US source CNN 5 Cosas.
+The managed state is compiled with the built-in catalog into the same `EngineConfig` used by the production engine. Ordinary administration happens through `/admin/`: built-in source definitions can be assigned or unassigned from playlists but are not deleted from the catalog, and a source selected by several active playlists is still fetched only once per engine cycle.
+
+The schema-v1 full-YAML loader remains an **advanced/manual compatibility path**, not the default first-run workflow. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is retained for that compatibility path. An explicit `NEWS_PLAYLIST_CONFIG` selects a legacy YAML file; otherwise the runtime prefers `/data/managed-state.json` when present and only falls back to the default legacy `/data/news-bulletin-playlist.yaml`. If managed state and that default legacy YAML both exist, startup fails closed rather than guessing which configuration should win.
+
+The supported runtime catalog currently uses the verified source IDs `ser`, `rne`, `ondacero` and `cnn`. Research candidates such as COPE remain outside ordinary selectable production configuration until their deterministic destination contract is verified. Playlist source membership is explicit, so a Spain-oriented playlist can intentionally include the US source CNN 5 Cosas.
 
 Canonical editions are identified only by `(source_id, source_native_id)`. Titles and timestamps are metadata, never identity. Canonical timestamps are timezone-aware UTC values. Spotify show references are source catalogue metadata and are intentionally distinct from writable playlist destinations.
 
@@ -138,7 +142,7 @@ The completed production-engine roadmap is recorded in the [P1 umbrella issue #1
    - [x] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation; completed via #29.
    - [x] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI; completed via #30.
    - [x] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime; completed via #31.
-3. **First release — next** — provision and operate the first public Spain / Spanish-language playlist using the completed P1 engine.
+3. **First release — next** — provision and operate the first public Spain / Spanish-language playlist through the managed Web UI using the completed P1 engine.
 4. **Expansion** — add source and playlist definitions for additional languages and European countries without duplicating the engine.
 
 Parallel/non-blocking product work such as the playlist cover-art system in #12 may land when its configuration hook is stable, but it must never block bulletin synchronization.
