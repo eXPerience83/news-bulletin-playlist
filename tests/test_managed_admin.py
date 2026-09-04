@@ -105,9 +105,14 @@ def test_snapshot_exposes_unmanaged_builtin_template(tmp_path: Path) -> None:
     snapshot = service.snapshot()
 
     assert snapshot.managed == ()
-    assert [template.display_name for template in snapshot.available_templates] == [
-        "Noticias España"
-    ]
+    assert tuple(template.display_name for template in snapshot.available_templates) == (
+        "Noticias en Español",
+        "Noticias Internacional · ES",
+        "International News · EN",
+        "Actualités internationales · FR",
+        "Internationale Nachrichten · DE",
+        "Wiadomości międzynarodowe · PL",
+    )
 
 
 def test_activate_creates_one_private_destination_and_persists_explicit_choices(
@@ -132,7 +137,11 @@ def test_activate_creates_one_private_destination_and_persists_explicit_choices(
     assert managed.source_ids == (SourceId("ser"), SourceId("cnn"))
     snapshot = service.snapshot()
     assert snapshot.managed == (managed,)
-    assert snapshot.available_templates == ()
+    assert tuple(template.id for template in snapshot.available_templates) == tuple(
+        template.id
+        for template in BUILTIN_CATALOG.playlists
+        if template.id != PlaylistId("spain_spanish_news")
+    )
 
 
 def test_activate_rejects_unknown_source_before_spotify_write(tmp_path: Path) -> None:
@@ -506,7 +515,7 @@ def test_stop_managing_removes_local_instance_without_spotify_delete(tmp_path: P
 
     assert destination == "destination-to-keep"
     assert service.snapshot().managed == ()
-    assert service.snapshot().available_templates == (template,)
+    assert service.snapshot().available_templates == BUILTIN_CATALOG.playlists
     assert factory.client.create_calls == [
         (template.display_name, render_spotify_description(template.description))
     ]
