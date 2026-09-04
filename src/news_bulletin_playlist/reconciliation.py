@@ -255,7 +255,7 @@ def _reconcile_playlist_items(
                     playlist_id,
                     phase="prewrite",
                 )
-            except (SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError):
+            except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
                 # With no matching attestation this read is only a baseline for recognizing
                 # propagation after a subsequent write. The post-write path remains strict when
                 # the optional baseline is unavailable.
@@ -273,7 +273,7 @@ def _reconcile_playlist_items(
                 playlist_id,
                 phase="prewrite",
             )
-        except (SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError):
+        except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
             # This read is only a baseline for recognizing later snapshot propagation. A failed
             # baseline must not block the write; the post-write path simply remains strict.
             prewrite_snapshot = None
