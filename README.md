@@ -55,21 +55,23 @@ See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the current Spotify platfor
 
 The runtime catalog is intentionally stricter than the research list: a source needs a stable feed, a deterministic Spotify-show identity/matching contract and a bulletin-like publishing format suitable for the playlist.
 
-| Provider | Language | Role | Typical format |
+Source research uses a compact **`SCOPE · LANGUAGE`** label so national, international and language/locale fit stay visible independently. Examples include `INT · ES`, `ES · ES`, `INT · FR`, `FR · FR` and `MX · LA`. See [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md) for the classification and promotion rules.
+
+| Provider | Primary fit | Duration profile | Typical format |
 | --- | --- | --- | --- |
-| Cadena SER | es | Spain / general Spanish | hourly bulletins, with a longer morning edition |
-| RNE | es | Spain / general Spanish | recurring radio bulletins |
-| Onda Cero | es | Spain / general Spanish | recurring radio bulletins |
-| ABC — Las Noticias de ABC | es | Spain / general Spanish | concise daily news editions |
-| CNN 5 Cosas | es | global Spanish | concise international briefing |
-| UN News Today | en | international English | daily concise global bulletin |
-| RFI — Journal Monde | fr | international French | mostly 10-minute world bulletins; longer tranches are duration-filtered |
-| Deutschlandfunk — Die Nachrichten | de | German | recurring ~5-minute news bulletins |
-| RMF FM — Fakty | pl | Polish | recurring short news bulletins, with occasional longer editions |
+| Cadena SER | `ES · ES` | Mixed | hourly bulletins, with a longer morning edition |
+| RNE | `ES · ES` | Concise | recurring radio bulletins |
+| Onda Cero | `ES · ES` | Concise | recurring radio bulletins |
+| ABC — Las Noticias de ABC | `ES · ES` | Concise | concise daily news editions |
+| CNN 5 Cosas | `INT · ES` | Concise | concise international briefing |
+| UN News Today | `INT · EN` | Concise | daily concise global bulletin |
+| RFI — Journal Monde | `INT · FR` | Mixed | mostly 10-minute world bulletins; longer tranches are duration-filtered |
+| Deutschlandfunk — Die Nachrichten | `INT · DE` | Concise | recurring ~5-minute news bulletins |
+| RMF FM — Fakty | `INT · PL` | Mixed | recurring short news bulletins, with occasional longer editions |
 
 Regional Spanish products such as **RFI Español — Noticias de América** remain research candidates rather than default runtime sources because the Spanish playlists are intended to cover Spain plus genuinely global/international news, not one non-Spanish geographic region. Predominantly long-form products such as **BBC Global News Podcast** are likewise not promoted to the runtime catalog under the current concise-source rule.
 
-See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) and issue #53 for continuing source research.
+See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md), [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md) and issue #53 for continuing source research.
 
 ## Container runtime
 
