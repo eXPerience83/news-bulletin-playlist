@@ -81,7 +81,8 @@ class ManagedStateStore:
                 self.save(state)
             except (OSError, ManagedStateError) as exc:
                 raise ManagedStateError(
-                    "managed-state migration could not be persisted atomically; original state preserved"
+                    "managed-state migration could not be persisted atomically; "
+                    "original state preserved"
                 ) from exc
         return state
 
