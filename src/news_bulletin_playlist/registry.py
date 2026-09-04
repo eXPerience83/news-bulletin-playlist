@@ -6,6 +6,7 @@ from news_bulletin_playlist.providers.base import TitleParser
 from news_bulletin_playlist.providers.cnn import CnnParser
 from news_bulletin_playlist.providers.cope import CopeParser
 from news_bulletin_playlist.providers.ondacero import OndaCeroParser
+from news_bulletin_playlist.providers.release_date_title import ReleaseDateTitleParser
 from news_bulletin_playlist.providers.rne import RneParser
 from news_bulletin_playlist.providers.ser import SerParser
 
@@ -59,6 +60,7 @@ TITLE_PARSERS: dict[str, TitleParser] = {
     "ondacero": OndaCeroParser(),
     "cnn": CnnParser(),
     "cope": CopeParser(),
+    "release_date_title": ReleaseDateTitleParser(),
 }
 
 
