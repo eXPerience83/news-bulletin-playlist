@@ -21,6 +21,16 @@ class OrderingPolicy(StrEnum):
     PUBLISHED_AT_DESC = "published_at_desc"
 
 
+class EditorialScope(StrEnum):
+    """Primary editorial/geographic coverage of one source product."""
+
+    LOCAL = "LOC"
+    REGIONAL = "REG"
+    NATIONAL = "NAT"
+    INTERNATIONAL = "INT"
+    MIXED = "MIX"
+
+
 @dataclass(frozen=True, slots=True)
 class ExternalReference:
     """A source's identity in an external catalogue, never a write destination."""
@@ -47,6 +57,7 @@ class SourceDefinition:
     timezone: ZoneInfo
     enabled: bool
     parser_id: ParserId
+    editorial_scope: EditorialScope = EditorialScope.MIXED
     endpoint_url: str | None = None
     external_references: tuple[ExternalReference, ...] = ()
     spotify_release_delay_days: int = 0
