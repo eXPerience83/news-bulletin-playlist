@@ -13,7 +13,7 @@ AdapterId = NewType("AdapterId", str)
 CountryCode = NewType("CountryCode", str)
 LanguageTag = NewType("LanguageTag", str)
 
-DEFAULT_DURATION_MAX_SECONDS = 480
+DEFAULT_DURATION_MAX_SECONDS = 1800
 
 
 class OrderingPolicy(StrEnum):
