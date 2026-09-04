@@ -23,23 +23,26 @@ def test_builtin_catalog_exposes_phase_one_playlist_templates() -> None:
         SourceId("cnn"),
     )
     assert by_id["international_spanish_news"].default_source_ids == (SourceId("cnn"),)
+    assert by_id["international_english_news"].default_source_ids == (
+        SourceId("un_news_en"),
+    )
 
 
 def test_expanded_sources_have_deterministic_spotify_show_references() -> None:
     source_ids = {str(source.id) for source in BUILTIN_CATALOG.sources}
     assert {
         "abc",
-        "rfi_es",
-        "bbc_world",
+        "un_news_en",
         "rfi_fr",
         "dlf_news",
         "rmf_fakty",
     } <= source_ids
+    assert "rfi_es" not in source_ids
+    assert "bbc_world" not in source_ids
 
     for source_id in (
         "abc",
-        "rfi_es",
-        "bbc_world",
+        "un_news_en",
         "rfi_fr",
         "dlf_news",
         "rmf_fakty",
