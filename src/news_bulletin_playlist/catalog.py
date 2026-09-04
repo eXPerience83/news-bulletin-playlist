@@ -185,7 +185,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         languages=(LanguageTag("fr"),),
         timezone=ZoneInfo("UTC"),
         enabled=True,
-        parser_id=ParserId("release_date_title"),
+        parser_id=ParserId("rfi_journal_monde"),
         editorial_scope=EditorialScope.INTERNATIONAL,
         endpoint_url=(
             "https://apis.rfi.fr/products/get_product/fov-rfi-fr-get-journaux-podcast-v2-monde?"
