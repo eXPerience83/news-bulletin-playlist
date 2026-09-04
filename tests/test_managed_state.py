@@ -233,7 +233,8 @@ def test_legacy_migration_failure_preserves_original_document(
 
 def test_schema_v2_requires_materialized_duration(tmp_path: Path) -> None:
     path = tmp_path / MANAGED_STATE_FILENAME
-    path.write_text(_legacy_document().replace('"schema_version": 1', '"schema_version": 2'), encoding="utf-8")
+    document = _legacy_document().replace('"schema_version": 1', '"schema_version": 2')
+    path.write_text(document, encoding="utf-8")
 
     with pytest.raises(ManagedStateError, match="max_duration_seconds.*required"):
         ManagedStateStore(path).load()
