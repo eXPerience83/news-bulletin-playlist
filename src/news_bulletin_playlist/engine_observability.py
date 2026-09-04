@@ -129,11 +129,15 @@ class InstrumentedEngineCycleRunner:
                     and decision.accepted
                     and decision.duration_seconds >= _LONG_DURATION_DIAGNOSTIC_SECONDS
                 )
-                if decision.reason not in {
-                    DURATION_EXCEPTION,
-                    DURATION_EXCEEDS_DEFAULT_MAX,
-                    DURATION_EXCEEDS_EXCEPTION_MAX,
-                } and not noteworthy_long_accept:
+                if (
+                    decision.reason
+                    not in {
+                        DURATION_EXCEPTION,
+                        DURATION_EXCEEDS_DEFAULT_MAX,
+                        DURATION_EXCEEDS_EXCEPTION_MAX,
+                    }
+                    and not noteworthy_long_accept
+                ):
                     continue
                 policy_details: dict[str, str | int | bool | None] = {
                     "duration_seconds": decision.duration_seconds,
