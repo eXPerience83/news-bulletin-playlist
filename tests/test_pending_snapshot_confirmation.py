@@ -96,6 +96,14 @@ class _LaggingSpotify:
         return {"snapshot_id": self.visible_snapshot}
 
 
+class _ExactLaggingSpotify(_LaggingSpotify):
+    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+        assert playlist_id == DESTINATION_ID
+        self.writes.append(list(uris))
+        self.slots = list(uris)
+        return {"snapshot_id": self.write_snapshot}
+
+
 def test_partial_stale_snapshot_is_persisted_and_next_cycle_does_not_rewrite(
     tmp_path: Path,
 ) -> None:
@@ -118,6 +126,37 @@ def test_partial_stale_snapshot_is_persisted_and_next_cycle_does_not_rewrite(
     assert pending.baseline_snapshot_id == "snapshot-A"
     assert pending.expected_snapshot_id == "snapshot-B"
     assert store.get_playlist_attestation(PLAYLIST_ID) is None
+
+
+def test_exact_stale_snapshot_survives_restart_then_partial_readback_without_rewrite(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    client = _ExactLaggingSpotify()
+
+    first = reconcile_spotify_playlist(client, _playlist(), _desired(), store=store)
+    pending = PendingSnapshotJournal(store).get(PLAYLIST_ID)
+    assert first.ok and first.wrote is True and first.degraded_verification
+    assert pending is not None
+    assert pending.baseline_snapshot_id == "snapshot-A"
+    assert pending.expected_snapshot_id == "snapshot-B"
+
+    restarted = SQLiteStore(store.path)
+    restarted.initialize()
+    client.slots[17] = None
+    second = reconcile_spotify_playlist(
+        client,
+        _playlist(),
+        _desired(generated_at=NOW + timedelta(minutes=10)),
+        store=restarted,
+    )
+
+    assert second.ok and second.wrote is False and second.degraded_verification
+    assert len(client.writes) == 1
+    persisted = PendingSnapshotJournal(restarted).get(PLAYLIST_ID)
+    assert persisted is not None
+    assert persisted.baseline_snapshot_id == "snapshot-A"
+    assert persisted.expected_snapshot_id == "snapshot-B"
 
 
 def test_pending_confirmation_survives_restart_and_promotes_when_expected_snapshot_appears(
