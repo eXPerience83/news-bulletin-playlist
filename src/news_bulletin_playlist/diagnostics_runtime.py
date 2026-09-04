@@ -263,7 +263,7 @@ def _diagnostic_display_timezone(
         return UTC, "UTC"
     try:
         return ZoneInfo(timezone_name), timezone_name
-    except (ZoneInfoNotFoundError, ValueError):
+    except ZoneInfoNotFoundError, ValueError:
         return UTC, "UTC"
 
 
