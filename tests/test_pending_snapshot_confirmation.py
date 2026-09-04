@@ -63,7 +63,9 @@ def _store(tmp_path: Path) -> SQLiteStore:
 
 class _LaggingSpotify:
     def __init__(self) -> None:
-        self.slots: list[str | None] = [f"spotify:episode:old-{index:03d}" for index in range(51)]
+        self.slots: list[str | None] = [
+            f"spotify:episode:old-{index:03d}" for index in range(51)
+        ]
         self.visible_snapshot = "snapshot-A"
         self.write_snapshot = "snapshot-B"
         self.writes: list[list[str]] = []
@@ -88,7 +90,7 @@ class _LaggingSpotify:
         self.writes.append(list(uris))
         self.slots = list(uris)
         self.slots[17] = None
-        # Spotify accepted the write and returned B, while GET snapshot is intentionally kept on A.
+        # Spotify accepted the write and returned B while GET snapshot intentionally stays on A.
         return {"snapshot_id": self.write_snapshot}
 
     def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
@@ -96,7 +98,9 @@ class _LaggingSpotify:
         return {"snapshot_id": self.visible_snapshot}
 
 
-def test_partial_stale_snapshot_is_persisted_and_next_cycle_does_not_rewrite(tmp_path: Path) -> None:
+def test_partial_stale_snapshot_is_persisted_and_next_cycle_does_not_rewrite(
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
     client = _LaggingSpotify()
 
@@ -143,7 +147,9 @@ def test_pending_confirmation_survives_restart_and_promotes_when_expected_snapsh
     assert attestation.snapshot_id == "snapshot-B"
 
 
-def test_incompatible_snapshot_during_fresh_pending_transition_fails_closed(tmp_path: Path) -> None:
+def test_incompatible_snapshot_during_fresh_pending_transition_fails_closed(
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
     client = _LaggingSpotify()
     reconcile_spotify_playlist(client, _playlist(), _desired(), store=store)
