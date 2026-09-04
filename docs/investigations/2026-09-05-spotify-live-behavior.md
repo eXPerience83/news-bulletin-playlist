@@ -89,17 +89,18 @@ one `public=true` update with an empty success response, but the observed API va
 
 Terminology for this project must keep the two dimensions separate:
 
-- **Spotify API visibility**: the provider's `public` field/request. When discussed in the UI/docs use
+- **Spotify profile/search visibility**: the provider's `public` field/request. UI/docs should use
   wording such as **visible in profile/search** vs **not listed in profile/search**, and treat it as a
   provider request/observation rather than an access-control guarantee.
-- **Access privacy**: Spotify-client state such as **invite-only / restricted access**. The application
+- **Access privacy**: Spotify-client state such as **restricted access / invite-only**. The application
   must not claim that it can change this state through the Web API.
 
 Accordingly, provider methods such as `create_private_playlist()` are misleading because they imply
-access privacy. A neutral creation verb plus an explicit API-visibility request is preferable. Production
-news playlists are intended to be visible/public-facing; future LAB tooling may request non-listed API
-visibility and separately instruct the operator to enable invite-only access in Spotify when true access
-restriction is required.
+access privacy. A neutral creation verb plus an explicit requested API visibility is preferable, for
+example `create_playlist(..., requested_profile_visibility=...)`. Production news playlists are intended
+to be visible/public-facing; future LAB tooling may request non-listed API visibility and separately
+instruct the operator to enable restricted/invite-only access in Spotify when true access restriction is
+required.
 
 Follow-up is tracked separately in #135 so this provider semantic does not obscure the item
 reconciliation fix.
