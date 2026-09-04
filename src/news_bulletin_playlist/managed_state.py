@@ -256,9 +256,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
             seen_destinations.add(destination_key)
 
     migrated_from = (
-        source_schema_version
-        if source_schema_version != _MANAGED_STATE_SCHEMA_VERSION
-        else None
+        source_schema_version if source_schema_version != _MANAGED_STATE_SCHEMA_VERSION else None
     )
     return (
         ManagedState(schema_version=_MANAGED_STATE_SCHEMA_VERSION, playlists=playlists),
