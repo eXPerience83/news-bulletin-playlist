@@ -49,6 +49,7 @@ def _playlist() -> PlaylistDefinition:
         source_selection=SourceSelection(explicit=(SourceId("ser"),)),
         destination=DestinationReference(AdapterId("spotify"), "playlist"),
         duration_policy=DurationPolicy(
+            default_max_seconds=480,
             exceptions=(
                 DurationPolicyException(
                     id="ser_morning_0800",
@@ -56,7 +57,7 @@ def _playlist() -> PlaylistDefinition:
                     edition_local_time=time(8, 0),
                     max_seconds=1800,
                 ),
-            )
+            ),
         ),
     )
 
@@ -141,11 +142,12 @@ def test_unknown_spotify_duration_fails_closed() -> None:
         _build(edition, None)
 
 
-def test_builtin_catalog_and_managed_compile_use_current_spain_30_minute_default() -> None:
-    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
-    assert template.duration_policy.default_max_seconds == 1800
-    assert template.duration_policy.exceptions == ()
+def test_builtin_catalog_and_managed_compile_use_current_global_30_minute_default() -> None:
+    for template in BUILTIN_CATALOG.playlists:
+        assert template.duration_policy.default_max_seconds == 1800
+        assert template.duration_policy.exceptions == ()
 
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
     managed = activate_template(template, "destination")
     assert managed.max_duration_seconds == 1800
     state = ManagedState(playlists=(managed,))
