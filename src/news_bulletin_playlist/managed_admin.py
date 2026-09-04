@@ -282,7 +282,7 @@ class ManagedAdminService:
             )
         except (SpotifyApiError, SpotifyTransportError) as exc:
             cover_error = _safe_spotify_operation_error(exc)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             cover_error = "local cover error"
 
         if metadata_error is not None or cover_error is not None:
@@ -316,7 +316,7 @@ class ManagedAdminService:
     ) -> None:
         try:
             self._upload_cover_explicit(client, playlist_id, cover_id)
-        except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
+        except OSError, ValueError, SpotifyApiError, SpotifyTransportError:
             # Cover art is product metadata. It must never block playlist state or bulletin sync.
             return
 
