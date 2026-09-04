@@ -40,14 +40,19 @@ The ordinary first-run flow is:
 1. Install or update the container image.
 2. Configure the protected production administration surface and Spotify settings described below.
 3. Connect Spotify from `/admin/`.
-4. Open the available **Noticias España** template.
-5. Review/edit the playlist name, provider-agnostic description, bundled cover and selected supported sources.
-6. Activate the template. The application creates a **private** Spotify playlist destination and persists the managed instance under `/data/managed-state.json`.
+4. Review the available built-in playlist templates. The primary Spanish template is **Noticias en Español**; the current catalog also exposes initial `INT · ES`, `INT · EN`, `INT · FR`, `INT · DE` and `INT · PL` experiments.
+5. Review/edit each playlist name, provider-agnostic description, bundled cover, selected supported sources and maximum episode duration. The current general default is **30 minutes**, but every managed playlist stores its own configurable ceiling.
+6. Activate a template. The application creates a **private** Spotify playlist destination and persists the managed instance under `/data/managed-state.json`.
 7. The scheduler is woken immediately; the read-only status page moves from **Not configured** to running/scheduled once an enabled managed playlist exists.
+8. Repeat activation only for the additional playlists you actually want this installation to manage.
 
-Subsequent playlist/source choices are also installation-owned state. Updating the image can add new supported sources/templates without overwriting selections already stored under `/data`.
+Subsequent playlist/source choices are installation-owned state. Updating the image can add supported sources/templates without overwriting selections already stored under `/data`. In particular, an existing managed playlist keeps its saved display name and explicit source selection when a newer image changes catalog defaults; review and save those changes deliberately from `/admin/`.
 
 Stopping management of a playlist does not delete its Spotify destination by default. Paused/disabled managed playlists remain durable installation state but do not cause their sources to be fetched solely for that playlist.
+
+### Source labels in admin
+
+The source table and selectors distinguish **provider country**, **editorial scope** and **language**. Scope values are `LOC`, `REG`, `NAT`, `INT` and `MIX`. This prevents origin from being mistaken for coverage: for example, CNN 5 Cosas is `US · INT · es`, so its US origin does not mean US-only news and it can intentionally feed both `Noticias en Español` and `INT · ES`.
 
 ## Legacy/manual YAML compatibility
 
@@ -68,7 +73,7 @@ When `NEWS_PLAYLIST_CONFIG` is explicitly set, that file must exist and validate
 
 Without an explicit override, the runtime uses `/data/managed-state.json` when managed state exists and only falls back to the default legacy YAML when no managed state exists. If **both** `/data/managed-state.json` and `/data/news-bulletin-playlist.yaml` are present, startup fails closed rather than guessing which configuration source should win. Remove the unintended one before restarting.
 
-[`config/news-bulletin-playlist.example.yaml`](../config/news-bulletin-playlist.example.yaml) is retained for this compatibility path. Legacy YAML destinations must contain real already-provisioned Spotify playlist IDs; never invent an ID or use a Spotify show ID as a writable playlist destination.
+[`config/news-bulletin-playlist.example.yaml`](../config/news-bulletin-playlist.example.yaml) is retained for this compatibility path. Legacy YAML destinations must contain real already-provisioned Spotify playlist IDs; never invent an ID or use a Spotify show ID as a writable playlist destination. If a legacy `duration_policy` omits `default_max_seconds`, it inherits the same current **1800-second** shared default as managed playlists; an explicit YAML value remains authoritative.
 
 ### Scheduler
 
@@ -92,7 +97,7 @@ Each cycle performs the architecture-defined sequence:
 5. record source outcomes;
 6. reuse/persist deterministic Spotify episode matching;
 7. build each playlist from durable still-valid state;
-8. apply the common episode-eligibility policy, including bounded explicit exceptions;
+8. apply the common per-playlist episode-eligibility policy;
 9. reconcile destinations independently with exact readback verification;
 10. record playlist outcomes and prune operational history safely.
 
@@ -145,11 +150,11 @@ register exactly:
 
 The external URL must be an HTTPS origin without path, query string or embedded credentials. HTTP is accepted only for an explicit loopback IP (`127.0.0.1` or `::1`) used by local/P0 diagnostics; private-LAN HTTP and `localhost` are intentionally rejected.
 
-### 5. Connect Spotify and activate the first playlist
+### 5. Connect Spotify and activate playlists
 
 Open the HTTPS external origin, authenticate to `/admin/` with username `admin` and the configured administration password, then choose **Connect Spotify**. The application uses one-time CSRF, strong OAuth state and PKCE S256; Spotify returns directly to the server callback. Normal production operation requires no shell and no callback URL paste.
 
-After Spotify reports connected, review and activate **Noticias España** from the available playlist templates. The activation creates the private Spotify destination, persists the managed state and wakes the scheduler. There is no need to pre-create a Spotify playlist or paste its ID into YAML for the ordinary managed path.
+After Spotify reports connected, review **Noticias en Español** and any additional built-in templates you want to operate. Each activation creates a private Spotify destination, persists its managed state and wakes the scheduler. There is no need to pre-create Spotify playlists or paste their IDs into YAML for the ordinary managed path.
 
 Only the long-lived refresh credential is persisted under `/data`, owner-only and atomically replaced. Access tokens remain memory-only. Scheduler token refresh and Web UI reconnect/callback operations are serialized against the same credential store so they cannot race.
 
@@ -169,6 +174,10 @@ The `/` page reports, without token material:
 - playlist result, last success, desired/verified count, whether Spotify changed, and current error summary.
 
 Operational cycle status is in memory; authoritative source/playlist history, canonical data, match state, managed installation choices and Spotify refresh authorization remain under `/data` and survive container restart. After restart the scheduler immediately runs a new cycle when at least one playlist is enabled and reconstructs the current status from the durable engine state.
+
+### Duration evidence
+
+Sanitized diagnostics deliberately record duration exclusions, accepted editions of at least 20 minutes and bounded per-source/per-playlist duration histograms. The current buckets are `<5`, `5–8`, `8–10`, `10–15`, `15–20`, `20–30` and `>30` minutes. These logs are intended for multi-day review under issue #132 before the project chooses a long-term default hard limit. Do not infer source quality solely from the hard ceiling: predominantly long-form products remain a source-selection concern.
 
 A source, playlist or authorization failure does **not** make `/healthz` unhealthy by itself. Container health is reserved for failures that make the runtime/storage itself unusable; otherwise an upstream outage could create an unhelpful restart loop. Operational failures are shown on `/` instead.
 
