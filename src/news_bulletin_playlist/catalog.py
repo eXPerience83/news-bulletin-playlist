@@ -241,7 +241,6 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
             SourceId("ondacero"),
             SourceId("abc"),
             SourceId("cnn"),
-            SourceId("rfi_es"),
         ),
         cover_id="spain_spanish_news",
     ),
@@ -252,9 +251,9 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
             "Últimos boletines y resúmenes de actualidad internacional en español, "
             "actualizados automáticamente y ordenados del más reciente al más antiguo."
         ),
-        countries=(CountryCode("US"), CountryCode("FR")),
+        countries=(CountryCode("US"),),
         languages=(LanguageTag("es"),),
-        default_source_ids=(SourceId("cnn"), SourceId("rfi_es")),
+        default_source_ids=(SourceId("cnn"),),
         cover_id="international_spanish_news",
     ),
     PlaylistTemplate(
