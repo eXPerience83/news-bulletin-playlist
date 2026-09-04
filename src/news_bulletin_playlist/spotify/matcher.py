@@ -23,6 +23,7 @@ _REJECTION_REASON_ORDER = (
     "title_parse_failed",
     "semantic_time_mismatch",
     "release_date_skew_rejected",
+    "release_date_precision_insufficient",
     "release_date_mismatch",
     "title_mismatch",
 )
@@ -331,6 +332,14 @@ def _evaluate_candidate(
     candidate: _SpotifyEpisodeCandidate,
 ) -> _CandidateEvaluation:
     if edition.edition_at is None:
+        # A release-date/title strategy identifies a specific daily edition. Month/year
+        # precision cannot establish that day even when the recurring title is identical.
+        if candidate.release_date_precision != "day":
+            return _CandidateEvaluation(
+                candidate,
+                False,
+                "release_date_precision_insufficient",
+            )
         if not _release_date_compatible(source, edition, candidate):
             return _CandidateEvaluation(candidate, False, "release_date_mismatch")
         if _normalize_title(candidate.name) != _normalize_title(edition.title):

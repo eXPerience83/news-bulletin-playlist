@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -198,6 +199,109 @@ def test_incompatible_snapshot_during_fresh_pending_transition_fails_closed(
             _playlist(),
             _desired(generated_at=NOW + timedelta(minutes=10)),
             store=store,
+        )
+
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize("operation", ["metadata", "cover"])
+def test_stable_cosmetic_snapshot_after_restart_promotes_exact_content(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    store = _store(tmp_path)
+    client = _ExactLaggingSpotify()
+    reconcile_spotify_playlist(client, _playlist(), _desired(), store=store)
+
+    restarted = SQLiteStore(store.path)
+    restarted.initialize()
+    client.visible_snapshot = f"snapshot-C-{operation}"
+    result = reconcile_spotify_playlist(
+        client,
+        _playlist(),
+        _desired(generated_at=NOW + timedelta(minutes=10)),
+        store=restarted,
+    )
+
+    assert result.ok and result.wrote is False and not result.degraded_verification
+    assert len(client.writes) == 1
+    assert PendingSnapshotJournal(restarted).get(PLAYLIST_ID) is None
+    attestation = restarted.get_playlist_attestation(PLAYLIST_ID)
+    assert attestation is not None
+    assert attestation.snapshot_id == f"snapshot-C-{operation}"
+    again = reconcile_spotify_playlist(client, _playlist(), _desired(), store=restarted)
+    assert again.wrote is False
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize("change", ["uri", "order", "count", "partial", "snapshot"])
+def test_third_snapshot_recheck_rejects_ambiguity(tmp_path: Path, change: str) -> None:
+    class RacingSpotify(_ExactLaggingSpotify):
+        armed = False
+        reads = 0
+
+        def playlist_items(
+            self, playlist_id: str, *, limit: int = 50, offset: int = 0
+        ) -> dict[str, Any]:
+            if self.armed and offset == 0:
+                self.reads += 1
+                if self.reads == 2:
+                    if change == "uri":
+                        self.slots[0] = "spotify:episode:unexpected"
+                    elif change == "order":
+                        self.slots[0], self.slots[1] = self.slots[1], self.slots[0]
+                    elif change == "count":
+                        self.slots.pop()
+                    elif change == "partial":
+                        self.slots[17] = None
+                    else:
+                        self.visible_snapshot = "snapshot-D"
+            return super().playlist_items(playlist_id, limit=limit, offset=offset)
+
+    store = _store(tmp_path)
+    client = RacingSpotify()
+    reconcile_spotify_playlist(client, _playlist(), _desired(), store=store)
+    client.visible_snapshot = "snapshot-C"
+    client.armed = True
+    with pytest.raises(SpotifyReconciliationError):
+        reconcile_spotify_playlist(client, _playlist(), _desired(), store=SQLiteStore(store.path))
+    assert client.reads == 2
+    assert len(client.writes) == 1
+    assert PendingSnapshotJournal(store).get(PLAYLIST_ID) is not None
+    assert store.get_playlist_attestation(PLAYLIST_ID) is None
+
+
+@pytest.mark.parametrize("field", ["destination_id", "desired_fingerprint"])
+def test_third_snapshot_cannot_inherit_other_evidence(tmp_path: Path, field: str) -> None:
+    store = _store(tmp_path)
+    client = _ExactLaggingSpotify()
+    reconcile_spotify_playlist(client, _playlist(), _desired(), store=store)
+    journal = PendingSnapshotJournal(store)
+    pending = journal.get(PLAYLIST_ID)
+    assert pending is not None
+    if field == "destination_id":
+        journal.set(replace(pending, destination_id="other-destination"))
+    else:
+        journal.set(replace(pending, desired_fingerprint="0" * 64))
+    client.visible_snapshot = "snapshot-C"
+    result = reconcile_spotify_playlist(client, _playlist(), _desired(), store=store)
+    assert result.wrote is False  # Independently exact state needs no repair.
+    assert journal.get(PLAYLIST_ID) is None
+    assert store.get_playlist_attestation(PLAYLIST_ID) is None
+
+
+def test_cosmetic_snapshot_with_partial_read_still_fails_closed(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    client = _LaggingSpotify()
+    reconcile_spotify_playlist(client, _playlist(), _desired(), store=store)
+    client.visible_snapshot = "snapshot-C"
+
+    with pytest.raises(SpotifyReconciliationError, match="outside the pending confirmation"):
+        reconcile_spotify_playlist(
+            client,
+            _playlist(),
+            _desired(generated_at=NOW + timedelta(minutes=10)),
+            store=SQLiteStore(store.path),
         )
 
     assert len(client.writes) == 1

@@ -506,6 +506,29 @@ def _resolve_pending_confirmation(
             warning=warning,
         )
 
+    # Playlist metadata, cover and privacy changes can advance Spotify's playlist-wide
+    # snapshot id without changing any item.  Accept that third snapshot only when a second
+    # complete read proves the ordered URI state is still exact and the snapshot remains stable
+    # across the recheck.  Partial reads intentionally retain the strict A/B boundary.
+    if not current.had_unavailable_item and current.slots == tuple(desired):
+        stable_current = _read_spotify_playlist(
+            client,
+            playlist_id,
+            allow_unavailable=False,
+            phase="prewrite",
+        )
+        stable_snapshot = _read_current_snapshot(client, playlist_id, phase="prewrite")
+        if stable_current.slots == tuple(desired) and stable_snapshot == current_snapshot:
+            store.set_playlist_attestation(
+                logical_playlist_id,
+                destination_id=playlist_id,
+                snapshot_id=stable_snapshot,
+                desired_fingerprint=desired_fingerprint,
+                updated_at=now,
+            )
+            journal.clear(logical_playlist_id)
+            return _PlaylistItemsReconciliationResult(wrote=False)
+
     raise SpotifyReconciliationError(
         "Spotify playlist snapshot advanced outside the pending confirmation transition"
     )
