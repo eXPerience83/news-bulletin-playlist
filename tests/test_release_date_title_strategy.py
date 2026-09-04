@@ -22,14 +22,14 @@ def test_release_date_title_source_keeps_semantic_edition_time_unset() -> None:
         parser_id=ParserId("release_date_title"),
         endpoint_url="https://example.test/abc.rss",
     )
-    payload = b"""<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel>
+    payload = """<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel>
       <item>
         <guid>abc-2026-09-04</guid>
         <title>Resumen de las principales noticias del día</title>
         <pubDate>Fri, 04 Sep 2026 05:15:00 +0000</pubDate>
         <itunes:duration>05:12</itunes:duration>
       </item>
-    </channel></rss>"""
+    </channel></rss>""".encode()
 
     editions = normalize_rss_source(source, payload)
 
