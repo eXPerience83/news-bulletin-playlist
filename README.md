@@ -24,11 +24,15 @@ Initial product defaults:
 - keep episodes published within the last **48 hours**;
 - cap a playlist at **100 episodes**;
 - order by source publication timestamp (`published_at`), newest first;
+- make the maximum episode duration a **per-managed-playlist setting** editable from `/admin/`;
+- use **30 minutes** for `Noticias España` during the current long-bulletin viability study, rather than silently omitting useful 8–30 minute editions;
 - retain operational metadata locally for **30 days**;
 - run the production engine approximately every **10 minutes**;
 - never download or store podcast audio;
 - treat RSS/provider metadata as the timing source and Spotify as the playlist destination;
 - allow playlist-specific policies to override defaults when required.
+
+The 30-minute Spain value is an experiment, not a permanent global editorial rule. Sanitized diagnostics record accepted episodes of at least 20 minutes so the project can decide from real provider behavior whether a future concise-bulletin playlist and a separate longer-news playlist are justified.
 
 ## Editorial independence
 
@@ -75,7 +79,7 @@ docker compose ps
 
 The local status page is available only on `http://127.0.0.1:8788/`.
 
-The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in **Noticias España** template, edit its metadata/cover/source selection if needed, and activate it. The application creates the private Spotify destination, persists installation-owned choices in `/data/managed-state.json`, and wakes the scheduler immediately. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the production PKCE/HTTPS and first-run flow.
+The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in **Noticias España** template, edit its metadata/cover/source selection and maximum episode duration if needed, and activate it. The application creates the private Spotify destination, persists installation-owned choices in `/data/managed-state.json`, and wakes the scheduler immediately. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the production PKCE/HTTPS and first-run flow.
 
 For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and contains no Spotify credentials.
 
@@ -107,9 +111,9 @@ CI runs `ruff check .`, `ruff format --check .`, mypy and pytest on Python 3.14.
 
 ## Domain and configuration contract
 
-Normal operation separates immutable application knowledge from installation-owned choices. The image ships a built-in catalog of supported sources and managed playlist templates; `/data/managed-state.json` stores only the playlists activated by this installation, their Spotify destination IDs, enabled/paused state, metadata/cover choices and explicit many-to-many source membership. Updating the image can therefore add supported sources/templates without overwriting existing local selections.
+Normal operation separates immutable application knowledge from installation-owned choices. The image ships a built-in catalog of supported sources and managed playlist templates; `/data/managed-state.json` stores only the playlists activated by this installation, their Spotify destination IDs, enabled/paused state, metadata/cover choices, explicit many-to-many source membership and per-playlist duration ceiling. Updating the image can therefore add supported sources/templates without overwriting existing local selections.
 
-The managed state is compiled with the built-in catalog into the same `EngineConfig` used by the production engine. Ordinary administration happens through `/admin/`: built-in source definitions can be assigned or unassigned from playlists but are not deleted from the catalog, and a source selected by several active playlists is still fetched only once per engine cycle.
+The managed state is compiled with the built-in catalog into the same `EngineConfig` used by the production engine. Ordinary administration happens through `/admin/`: built-in source definitions can be assigned or unassigned from playlists but are not deleted from the catalog, and a source selected by several active playlists is still fetched only once per engine cycle. Duration-only changes are local playlist policy and do not require a Spotify reconnect or metadata write.
 
 The schema-v1 full-YAML loader remains an **advanced/manual compatibility path**, not the default first-run workflow. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is retained for that compatibility path. An explicit `NEWS_PLAYLIST_CONFIG` selects a legacy YAML file; otherwise the runtime prefers `/data/managed-state.json` when present and only falls back to the default legacy `/data/news-bulletin-playlist.yaml`. If managed state and that default legacy YAML both exist, startup fails closed rather than guessing which configuration should win.
 
