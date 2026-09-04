@@ -22,6 +22,12 @@ from news_bulletin_playlist.diagnostics_web import (
     render_diagnostics_page,
 )
 from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
+from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
+from news_bulletin_playlist.managed_admin_web import (
+    max_duration_seconds_from_form,
+    playlist_id_from_form,
+    single_form_value,
+)
 from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
@@ -56,6 +62,70 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._serve_diagnostics_export(parsed.query)
             return
         super().do_GET()
+
+    def _activate_managed_playlist(
+        self,
+        service: ManagedAdminService,
+        form: Mapping[str, list[str]],
+    ) -> str:
+        auth = self.managed_admin_auth
+        if auth is None:
+            raise ManagedAdminError("Spotify authorization is required to create a playlist")
+        access_token = auth.get_access_token()
+        managed = service.activate(
+            template_id=single_form_value(form, "template_id"),
+            display_name=single_form_value(form, "display_name"),
+            description=single_form_value(form, "description", required=False),
+            cover_id=single_form_value(form, "cover_id"),
+            source_ids=form.get("source_id", []),
+            access_token=access_token,
+            max_duration_seconds=max_duration_seconds_from_form(form),
+        )
+        return str(managed.id)
+
+    def _update_managed_playlist(
+        self,
+        service: ManagedAdminService,
+        form: Mapping[str, list[str]],
+    ) -> tuple[str, bool]:
+        playlist_id = playlist_id_from_form(form)
+        name = single_form_value(form, "display_name")
+        description = single_form_value(form, "description", required=False)
+        cover_id = single_form_value(form, "cover_id")
+        enabled_values = form.get("enabled", [])
+        if enabled_values not in ([], ["1"]):
+            raise ValueError("enabled must be omitted or set exactly once")
+        enabled = bool(enabled_values)
+
+        snapshot = service.snapshot()
+        current = next(
+            (playlist for playlist in snapshot.managed if playlist.id == playlist_id),
+            None,
+        )
+        if current is None:
+            raise ManagedAdminError(f"unknown managed playlist: {playlist_id}")
+        metadata_changed = (
+            name.strip() != current.display_name or description != current.description
+        )
+        access_token: str | None = None
+        if metadata_changed:
+            auth = self.managed_admin_auth
+            if auth is None:
+                raise ManagedAdminError(
+                    "Spotify must be connected to change playlist name or description"
+                )
+            access_token = auth.get_access_token()
+        updated = service.update(
+            playlist_id,
+            display_name=name,
+            description=description,
+            cover_id=cover_id,
+            source_ids=form.get("source_id", []),
+            enabled=enabled,
+            access_token=access_token,
+            max_duration_seconds=max_duration_seconds_from_form(form),
+        )
+        return str(updated.id), updated.enabled
 
     def _serve_safe_public_status(self) -> None:
         ready = _data_dir_ready(self.data_dir)
