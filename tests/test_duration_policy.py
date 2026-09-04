@@ -141,17 +141,17 @@ def test_unknown_spotify_duration_fails_closed() -> None:
         _build(edition, None)
 
 
-def test_builtin_catalog_and_managed_compile_inherit_ser_exception_without_local_copy() -> None:
+def test_builtin_catalog_and_managed_compile_use_current_spain_30_minute_default() -> None:
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
-    exception = template.duration_policy.exceptions[0]
-    assert template.duration_policy.default_max_seconds == 480
-    assert exception.id == "ser_morning_0800"
-    assert exception.max_seconds == 1800
+    assert template.duration_policy.default_max_seconds == 1800
+    assert template.duration_policy.exceptions == ()
 
     managed = activate_template(template, "destination")
+    assert managed.max_duration_seconds == 1800
     state = ManagedState(playlists=(managed,))
     compiled = compile_engine_config(BUILTIN_CATALOG, state)
-    assert compiled.playlists[0].duration_policy == template.duration_policy
+    assert compiled.playlists[0].duration_policy.default_max_seconds == 1800
+    assert compiled.playlists[0].duration_policy.exceptions == ()
 
 
 def _config_payload(exception_source: str = "ser", exception_max: int = 1800):
