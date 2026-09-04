@@ -161,30 +161,15 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         external_references=(ExternalReference("spotify", "show", "0vDgnorbpBr65YZzFVVouE"),),
     ),
     SourceDefinition(
-        id=SourceId("rfi_es"),
-        display_name="RFI Español — Noticias de América",
-        countries=(CountryCode("FR"),),
-        languages=(LanguageTag("es"),),
+        id=SourceId("un_news_en"),
+        display_name="United Nations — UN News Today",
+        countries=(CountryCode("US"),),
+        languages=(LanguageTag("en"),),
         timezone=ZoneInfo("UTC"),
         enabled=True,
         parser_id=ParserId("release_date_title"),
-        endpoint_url=(
-            "https://apis.rfi.fr/products/get_product/rfi_getpodcast_by_nid?"
-            "token_application=975d23b8-7a07-11e8-9f62-005056a90194&"
-            "program.entrepriseId=WB82694-RFI-ES-20110404"
-        ),
-        external_references=(ExternalReference("spotify", "show", "05TcT18Dh30a0O7oxRZ3e3"),),
-    ),
-    SourceDefinition(
-        id=SourceId("bbc_world"),
-        display_name="BBC World Service — Global News Podcast",
-        countries=(CountryCode("GB"),),
-        languages=(LanguageTag("en"),),
-        timezone=ZoneInfo("Europe/London"),
-        enabled=True,
-        parser_id=ParserId("release_date_title"),
-        endpoint_url="https://podcasts.files.bbci.co.uk/p02nq0gn.rss",
-        external_references=(ExternalReference("spotify", "show", "3wBfqov60qDZbEVjPHo0a8"),),
+        endpoint_url="https://news.un.org/feed/subscribe/en/audio-product/all/audio-rss.xml",
+        external_references=(ExternalReference("spotify", "show", "3bCQUj5TafN5ichR8gXpFI"),),
     ),
     SourceDefinition(
         id=SourceId("rfi_fr"),
@@ -230,8 +215,8 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         display_name="Noticias en Español",
         description=(
             "Últimos boletines y resúmenes informativos en español, con fuentes de España "
-            "y una selección internacional, actualizados automáticamente y ordenados "
-            "del más reciente al más antiguo."
+            "y una selección internacional de alcance global, actualizados automáticamente "
+            "y ordenados del más reciente al más antiguo."
         ),
         countries=(CountryCode("ES"),),
         languages=(LanguageTag("es"),),
@@ -248,7 +233,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         id=PlaylistId("international_spanish_news"),
         display_name="Noticias Internacional · ES",
         description=(
-            "Últimos boletines y resúmenes de actualidad internacional en español, "
+            "Boletines breves de actualidad internacional y alcance global en español, "
             "actualizados automáticamente y ordenados del más reciente al más antiguo."
         ),
         countries=(CountryCode("US"),),
@@ -260,19 +245,19 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         id=PlaylistId("international_english_news"),
         display_name="International News · EN",
         description=(
-            "Latest international news bulletins and briefings, updated automatically "
+            "Concise international news bulletins with global scope, updated automatically "
             "and ordered newest first."
         ),
-        countries=(CountryCode("GB"),),
+        countries=(CountryCode("US"),),
         languages=(LanguageTag("en"),),
-        default_source_ids=(SourceId("bbc_world"),),
+        default_source_ids=(SourceId("un_news_en"),),
         cover_id="international_english_news",
     ),
     PlaylistTemplate(
         id=PlaylistId("international_french_news"),
         display_name="Actualités internationales · FR",
         description=(
-            "Derniers journaux et bulletins d’actualité internationale, mis à jour "
+            "Journaux et bulletins concis d’actualité internationale, mis à jour "
             "automatiquement et classés du plus récent au plus ancien."
         ),
         countries=(CountryCode("FR"),),
@@ -284,7 +269,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         id=PlaylistId("international_german_news"),
         display_name="Internationale Nachrichten · DE",
         description=(
-            "Aktuelle internationale Nachrichten und Bulletins, automatisch aktualisiert "
+            "Kompakte internationale Nachrichten und Bulletins, automatisch aktualisiert "
             "und nach Aktualität sortiert."
         ),
         countries=(CountryCode("DE"),),
@@ -296,7 +281,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         id=PlaylistId("international_polish_news"),
         display_name="Wiadomości międzynarodowe · PL",
         description=(
-            "Najnowsze serwisy informacyjne i wiadomości międzynarodowe, automatycznie "
+            "Krótkie serwisy informacyjne z wiadomościami z kraju i ze świata, automatycznie "
             "aktualizowane i uporządkowane od najnowszych."
         ),
         countries=(CountryCode("PL"),),
