@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import time
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import (
     CountryCode,
     DurationPolicy,
-    DurationPolicyException,
     ExternalReference,
     LanguageTag,
     OrderingPolicy,
@@ -170,16 +168,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
             SourceId("cnn"),
         ),
         cover_id="spain_spanish_news",
-        duration_policy=DurationPolicy(
-            exceptions=(
-                DurationPolicyException(
-                    id="ser_morning_0800",
-                    source_id=SourceId("ser"),
-                    edition_local_time=time(8, 0),
-                    max_seconds=1800,
-                ),
-            )
-        ),
+        duration_policy=DurationPolicy(default_max_seconds=1800),
     ),
 )
 
