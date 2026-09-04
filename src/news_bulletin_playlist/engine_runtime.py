@@ -43,6 +43,7 @@ from news_bulletin_playlist.managed_admin import (
     SpotifyPlaylistSyncError,
 )
 from news_bulletin_playlist.managed_admin_web import (
+    max_duration_seconds_from_form,
     playlist_id_from_form,
     render_managed_admin_page,
     single_form_value,
@@ -749,6 +750,7 @@ class OperationalHealthHandler(LanAdminHandler):
             cover_id=single_form_value(form, "cover_id"),
             source_ids=form.get("source_id", []),
             access_token=access_token,
+            max_duration_seconds=max_duration_seconds_from_form(form),
         )
         return str(managed.id)
 
@@ -792,6 +794,7 @@ class OperationalHealthHandler(LanAdminHandler):
             source_ids=form.get("source_id", []),
             enabled=enabled,
             access_token=access_token,
+            max_duration_seconds=max_duration_seconds_from_form(form),
         )
         return str(updated.id), updated.enabled
 
