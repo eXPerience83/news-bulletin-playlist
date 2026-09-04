@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from news_bulletin_playlist.models import (
     CountryCode,
     DurationPolicy,
+    EditorialScope,
     ExternalReference,
     LanguageTag,
     OrderingPolicy,
@@ -105,10 +106,11 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         id=SourceId("ser"),
         display_name="Cadena SER",
         countries=(CountryCode("ES"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,
         parser_id=ParserId("ser"),
+        editorial_scope=EditorialScope.NATIONAL,
         endpoint_url="https://fapi-top.prisasd.com/podcast/playser/boletines.xml",
         external_references=(ExternalReference("spotify", "show", "4EwwdoHHYmbt49UXODQMpi"),),
     ),
@@ -116,10 +118,11 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         id=SourceId("rne"),
         display_name="Radio Nacional de España",
         countries=(CountryCode("ES"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,
         parser_id=ParserId("rne"),
+        editorial_scope=EditorialScope.NATIONAL,
         endpoint_url="https://api.rtve.es/api/adapter/programas/1750/audios.rss",
         external_references=(ExternalReference("spotify", "show", "0UgidTKsoaHiHDARuPQNW1"),),
         spotify_release_delay_days=1,
@@ -128,10 +131,11 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         id=SourceId("ondacero"),
         display_name="Onda Cero",
         countries=(CountryCode("ES"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,
         parser_id=ParserId("ondacero"),
+        editorial_scope=EditorialScope.NATIONAL,
         endpoint_url=(
             "https://www.ondacero.es/rss/podcast/mount/"
             "ATRESMEDIA_LAS_NOTICIAS_EN_ONDA_CERO_P/fastly"
@@ -142,10 +146,11 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         id=SourceId("abc"),
         display_name="ABC — Las Noticias de ABC",
         countries=(CountryCode("ES"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,
         parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.NATIONAL,
         endpoint_url="https://omny.fm/shows/las-noticias-de-abc-1/playlists/podcast.rss",
         external_references=(ExternalReference("spotify", "show", "0cLJl7pvrr1bkUaKiVRggf"),),
     ),
@@ -157,6 +162,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         timezone=ZoneInfo("America/New_York"),
         enabled=True,
         parser_id=ParserId("cnn"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
         endpoint_url="https://feeds.megaphone.fm/WMHY5696831164",
         external_references=(ExternalReference("spotify", "show", "0vDgnorbpBr65YZzFVVouE"),),
     ),
@@ -168,6 +174,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         timezone=ZoneInfo("UTC"),
         enabled=True,
         parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
         endpoint_url="https://news.un.org/feed/subscribe/en/audio-product/all/audio-rss.xml",
         external_references=(ExternalReference("spotify", "show", "3bCQUj5TafN5ichR8gXpFI"),),
     ),
@@ -179,6 +186,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         timezone=ZoneInfo("UTC"),
         enabled=True,
         parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
         endpoint_url=(
             "https://apis.rfi.fr/products/get_product/fov-rfi-fr-get-journaux-podcast-v2-monde?"
             "token_application=975d23b8-7a07-11e8-9f62-005056a90194"
@@ -193,6 +201,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         timezone=ZoneInfo("Europe/Berlin"),
         enabled=True,
         parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.MIXED,
         endpoint_url="https://www.deutschlandfunk.de/nachrichten-108.xml",
         external_references=(ExternalReference("spotify", "show", "4eYPgoQH9VLTfgAxIbwHqs"),),
     ),
@@ -204,6 +213,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         timezone=ZoneInfo("Europe/Warsaw"),
         enabled=True,
         parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.MIXED,
         endpoint_url="https://www.rmf24.pl/podcast/fakty/feed",
         external_references=(ExternalReference("spotify", "show", "2BeZqsvzZUSldlZWvjeGe3"),),
     ),
@@ -269,7 +279,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         id=PlaylistId("international_german_news"),
         display_name="Internationale Nachrichten · DE",
         description=(
-            "Kompakte internationale Nachrichten und Bulletins, automatisch aktualisiert "
+            "Kompakte Nachrichten aus Deutschland und der Welt, automatisch aktualisiert "
             "und nach Aktualität sortiert."
         ),
         countries=(CountryCode("DE"),),
