@@ -80,6 +80,14 @@ jobs:
       - name: Build container image
         run: docker build --platform linux/amd64 --tag news-bulletin-playlist:ci .
 
+      - name: Validate live provider contracts
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --entrypoint python \
+            news-bulletin-playlist:ci \
+            -m news_bulletin_playlist.provider_watch
+
       - name: Verify hardened runtime health and web portal
         run: |
           set -euo pipefail
