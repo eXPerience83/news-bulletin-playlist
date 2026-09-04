@@ -241,6 +241,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
             SourceId("ondacero"),
             SourceId("abc"),
             SourceId("cnn"),
+            SourceId("rfi_es"),
         ),
         cover_id="spain_spanish_news",
     ),
