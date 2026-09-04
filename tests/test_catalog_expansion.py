@@ -14,12 +14,14 @@ def test_builtin_catalog_exposes_phase_one_playlist_templates() -> None:
         "international_polish_news",
     }
     assert all(template.duration_policy.default_max_seconds == 1800 for template in by_id.values())
+    assert by_id["spain_spanish_news"].display_name == "Noticias en Español"
     assert by_id["spain_spanish_news"].default_source_ids == (
         SourceId("ser"),
         SourceId("rne"),
         SourceId("ondacero"),
         SourceId("abc"),
         SourceId("cnn"),
+        SourceId("rfi_es"),
     )
     assert by_id["international_spanish_news"].default_source_ids == (
         SourceId("cnn"),
