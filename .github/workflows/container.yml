@@ -88,36 +88,51 @@ jobs:
             news-bulletin-playlist:ci \
             -m news_bulletin_playlist.provider_watch
 
-      - name: Verify hardened runtime health and web portal
+      - name: Verify hardened runtime health, web portal, and durable restart
         run: |
           set -euo pipefail
+
+          start_container() {
+            docker run --detach --rm \
+              --name news-bulletin-playlist-ci \
+              --read-only \
+              --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+              --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --publish 127.0.0.1:18788:8080 \
+              --mount source=news-bulletin-ci-data,target=/data \
+              news-bulletin-playlist:ci
+          }
+
+          wait_healthy() {
+            remaining=20
+            while [ "$remaining" -gt 0 ]; do
+              status="$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)"
+              if [ "$status" = healthy ]; then
+                return 0
+              fi
+              if [ "$status" = unhealthy ]; then
+                docker logs news-bulletin-playlist-ci
+                return 1
+              fi
+              remaining=$((remaining - 1))
+              sleep 1
+            done
+            docker logs news-bulletin-playlist-ci
+            return 1
+          }
+
           docker volume create news-bulletin-ci-data
-          docker run --detach --rm \
-            --name news-bulletin-playlist-ci \
-            --read-only \
-            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
-            --cap-drop ALL \
-            --security-opt no-new-privileges:true \
-            --publish 127.0.0.1:18788:8080 \
-            --mount source=news-bulletin-ci-data,target=/data \
-            news-bulletin-playlist:ci
-
-          remaining=20
-          while [ "$remaining" -gt 0 ]; do
-            status="$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)"
-            if [ "$status" = healthy ]; then
-              break
-            fi
-            if [ "$status" = unhealthy ]; then
-              docker logs news-bulletin-playlist-ci
-              exit 1
-            fi
-            remaining=$((remaining - 1))
-            sleep 1
-          done
-
-          test "$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-ci)" = healthy
+          start_container
+          wait_healthy
           curl --fail --silent --show-error http://127.0.0.1:18788/ | grep -q 'News Bulletin Playlists'
+          curl --fail --silent --show-error http://127.0.0.1:18788/healthz | grep -q '"status":"ok"'
+
+          # Regression guard: the exact candidate must restart cleanly against the durable
+          # database/schema it created on first boot. Keep the volume; replace only the process.
+          docker stop news-bulletin-playlist-ci
+          start_container
+          wait_healthy
           curl --fail --silent --show-error http://127.0.0.1:18788/healthz | grep -q '"status":"ok"'
 
       - name: Stop validation container
