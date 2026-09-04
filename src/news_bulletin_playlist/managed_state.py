@@ -15,6 +15,7 @@ from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.models import (
     AdapterId,
     DestinationReference,
+    DurationPolicy,
     EngineConfig,
     PlaylistDefinition,
     PlaylistId,
@@ -42,6 +43,7 @@ class ManagedPlaylist:
     destination: DestinationReference
     retention_hours: int
     max_episodes: int
+    max_duration_seconds: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +117,7 @@ def activate_template(
         destination=DestinationReference(AdapterId("spotify"), external_id),
         retention_hours=template.retention_hours,
         max_episodes=template.max_episodes,
+        max_duration_seconds=template.duration_policy.default_max_seconds,
     )
 
 
@@ -155,6 +158,24 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
         if managed.enabled:
             seen_destinations.add(destination_key)
 
+        max_duration_seconds = (
+            template.duration_policy.default_max_seconds
+            if managed.max_duration_seconds is None
+            else managed.max_duration_seconds
+        )
+        if max_duration_seconds <= 0:
+            raise ManagedStateError(
+                f"managed playlist {managed.id} max_duration_seconds must be positive"
+            )
+        duration_policy = DurationPolicy(
+            default_max_seconds=max_duration_seconds,
+            exceptions=tuple(
+                exception
+                for exception in template.duration_policy.exceptions
+                if exception.max_seconds > max_duration_seconds
+            ),
+        )
+
         playlists.append(
             PlaylistDefinition(
                 id=managed.id,
@@ -168,7 +189,7 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
                 retention_hours=managed.retention_hours,
                 max_episodes=managed.max_episodes,
                 ordering=template.ordering,
-                duration_policy=template.duration_policy,
+                duration_policy=duration_policy,
             )
         )
 
@@ -214,26 +235,29 @@ def parse_managed_state(payload: object) -> ManagedState:
 def serialize_managed_state(state: ManagedState) -> dict[str, object]:
     if state.schema_version != _MANAGED_STATE_SCHEMA_VERSION:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
+    serialized_playlists: list[dict[str, object]] = []
+    for playlist in state.playlists:
+        item: dict[str, object] = {
+            "id": str(playlist.id),
+            "template_id": str(playlist.template_id),
+            "enabled": playlist.enabled,
+            "display_name": playlist.display_name,
+            "description": playlist.description,
+            "cover_id": playlist.cover_id,
+            "source_ids": [str(source_id) for source_id in playlist.source_ids],
+            "destination": {
+                "adapter_id": str(playlist.destination.adapter_id),
+                "external_id": playlist.destination.external_id,
+            },
+            "retention_hours": playlist.retention_hours,
+            "max_episodes": playlist.max_episodes,
+        }
+        if playlist.max_duration_seconds is not None:
+            item["max_duration_seconds"] = playlist.max_duration_seconds
+        serialized_playlists.append(item)
     payload: dict[str, object] = {
         "schema_version": state.schema_version,
-        "playlists": [
-            {
-                "id": str(playlist.id),
-                "template_id": str(playlist.template_id),
-                "enabled": playlist.enabled,
-                "display_name": playlist.display_name,
-                "description": playlist.description,
-                "cover_id": playlist.cover_id,
-                "source_ids": [str(source_id) for source_id in playlist.source_ids],
-                "destination": {
-                    "adapter_id": str(playlist.destination.adapter_id),
-                    "external_id": playlist.destination.external_id,
-                },
-                "retention_hours": playlist.retention_hours,
-                "max_episodes": playlist.max_episodes,
-            }
-            for playlist in state.playlists
-        ],
+        "playlists": serialized_playlists,
     }
     canonical = parse_managed_state(payload)
     if canonical != state:
@@ -256,6 +280,7 @@ def _parse_playlist(value: object, path: str) -> ManagedPlaylist:
             "destination",
             "retention_hours",
             "max_episodes",
+            "max_duration_seconds",
         },
         path,
     )
@@ -272,6 +297,12 @@ def _parse_playlist(value: object, path: str) -> ManagedPlaylist:
         _required(data, "retention_hours", path), f"{path}.retention_hours"
     )
     max_episodes = _positive_integer(_required(data, "max_episodes", path), f"{path}.max_episodes")
+    raw_max_duration = data.get("max_duration_seconds")
+    max_duration_seconds = (
+        None
+        if raw_max_duration is None
+        else _positive_integer(raw_max_duration, f"{path}.max_duration_seconds")
+    )
     return ManagedPlaylist(
         id=PlaylistId(_nonempty_string(_required(data, "id", path), f"{path}.id")),
         template_id=PlaylistId(
@@ -298,6 +329,7 @@ def _parse_playlist(value: object, path: str) -> ManagedPlaylist:
         ),
         retention_hours=retention_hours,
         max_episodes=max_episodes,
+        max_duration_seconds=max_duration_seconds,
     )
 
 
