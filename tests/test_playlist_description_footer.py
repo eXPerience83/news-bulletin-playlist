@@ -43,9 +43,7 @@ class _Spotify:
 def test_renderer_appends_plain_text_repository_footer() -> None:
     rendered = render_spotify_description("Descripción")
 
-    assert rendered == (
-        f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}"
-    )
+    assert rendered == (f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}")
     assert PROJECT_REPOSITORY_URL in rendered
 
 
@@ -55,18 +53,13 @@ def test_renderer_appends_plain_text_repository_footer() -> None:
         f"Descripción\n\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}",
         f"Descripción\r\n\r\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}\r\n",
         f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}",
-        (
-            f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}"
-            f"\n\n{PROJECT_DESCRIPTION_FOOTER}"
-        ),
+        (f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}\n\n{PROJECT_DESCRIPTION_FOOTER}"),
     ],
 )
 def test_renderer_strips_existing_terminal_footer_before_readding_one(contaminated: str) -> None:
     rendered = render_spotify_description(contaminated)
 
-    assert rendered == (
-        f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}"
-    )
+    assert rendered == (f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}")
     assert rendered.count(PROJECT_REPOSITORY_URL) == 1
 
 
