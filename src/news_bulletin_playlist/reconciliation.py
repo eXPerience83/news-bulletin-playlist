@@ -207,7 +207,7 @@ def _reconcile_playlist_items(
                 playlist_id,
                 phase="prewrite",
             )
-        except (SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError):
+        except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
             prewrite_snapshot = None
         attestation = store.get_playlist_attestation(logical_playlist_id)
         if (
@@ -223,14 +223,19 @@ def _reconcile_playlist_items(
                 warning=warning,
             )
 
-    if store is not None and logical_playlist_id is not None and prewrite_snapshot is None:
+    if (
+        store is not None
+        and logical_playlist_id is not None
+        and prewrite_snapshot is None
+        and max(len(current.slots), len(desired)) > _SPOTIFY_PLAYLIST_PAGE_SIZE
+    ):
         try:
             prewrite_snapshot = _read_current_snapshot(
                 client,
                 playlist_id,
                 phase="prewrite",
             )
-        except (SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError):
+        except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
             # This read is only a baseline for recognizing later snapshot propagation. A failed
             # baseline must not block the write; the post-write path simply remains strict.
             prewrite_snapshot = None
