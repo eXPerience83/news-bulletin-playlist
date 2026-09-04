@@ -27,30 +27,52 @@ For another TrueNAS system, edit the host path in `deploy/truenas.yaml` before i
 
 The application listens on container port `8080`. The base deployment publishes `0.0.0.0:8788:8080`; `x-portals` is only TrueNAS UI metadata. `/` is read-only and `/healthz` performs the Docker health check.
 
-The checked-in base YAML deliberately contains **no Spotify credentials and no production engine configuration**. It therefore starts as a healthy status/runtime host with the engine shown as **Not configured**. This keeps initial installation and upgrades recoverable even before Spotify authorization is ready.
+The checked-in base YAML deliberately contains **no Spotify credentials and no active managed playlist**. It therefore starts as a healthy status/runtime host with the engine shown as **Not configured**. This keeps initial installation and upgrades recoverable even before Spotify authorization or playlist provisioning is ready.
 
 Do not forward backend port `8788` from the router or expose it directly to the public Internet. If `8788` is occupied, change both the published host port and the `x-portals` port; keep container port `8080`.
 
-## Enable the production engine
+## Managed first-run configuration
 
-The production engine is enabled by placing a valid configuration file at:
+The normal production path uses the built-in catalog plus installation-owned managed state under `/data`. Do **not** copy the legacy example YAML merely to make a new installation start running.
+
+The ordinary first-run flow is:
+
+1. Install or update the container image.
+2. Configure the protected production administration surface and Spotify settings described below.
+3. Connect Spotify from `/admin/`.
+4. Open the available **Noticias España** template.
+5. Review/edit the playlist name, provider-agnostic description, bundled cover and selected supported sources.
+6. Activate the template. The application creates a **private** Spotify playlist destination and persists the managed instance under `/data/managed-state.json`.
+7. The scheduler is woken immediately; the read-only status page moves from **Not configured** to running/scheduled once an enabled managed playlist exists.
+
+Subsequent playlist/source choices are also installation-owned state. Updating the image can add new supported sources/templates without overwriting selections already stored under `/data`.
+
+Stopping management of a playlist does not delete its Spotify destination by default. Paused/disabled managed playlists remain durable installation state but do not cause their sources to be fetched solely for that playlist.
+
+## Legacy/manual YAML compatibility
+
+The original schema-v1 full-YAML loader remains available as an advanced/manual compatibility path. It is not the preferred first-run configuration for a managed installation.
+
+The default legacy path is:
 
 `/data/news-bulletin-playlist.yaml`
 
-Start from `config/news-bulletin-playlist.example.yaml`. Replace every placeholder destination `external_id` with the **already provisioned Spotify playlist ID** before copying the file into `/data`. Do not invent IDs and do not use a Spotify show ID as a writable playlist destination.
-
-An alternative persistent path can be selected with:
+A different legacy file can be selected explicitly with:
 
 ```yaml
 environment:
   NEWS_PLAYLIST_CONFIG: "/data/my-playlists.yaml"
 ```
 
-If `NEWS_PLAYLIST_CONFIG` explicitly names a missing file, startup fails closed instead of silently running a different configuration.
+When `NEWS_PLAYLIST_CONFIG` is explicitly set, that file must exist and validate or startup fails closed.
+
+Without an explicit override, the runtime uses `/data/managed-state.json` when managed state exists and only falls back to the default legacy YAML when no managed state exists. If **both** `/data/managed-state.json` and `/data/news-bulletin-playlist.yaml` are present, startup fails closed rather than guessing which configuration source should win. Remove the unintended one before restarting.
+
+[`config/news-bulletin-playlist.example.yaml`](../config/news-bulletin-playlist.example.yaml) is retained for this compatibility path. Legacy YAML destinations must contain real already-provisioned Spotify playlist IDs; never invent an ID or use a Spotify show ID as a writable playlist destination.
 
 ### Scheduler
 
-One scheduler inside the existing process runs the complete engine cycle immediately after startup and then approximately every 10 minutes. The default is 600 seconds:
+One scheduler inside the existing process runs the complete engine cycle immediately after a playlist becomes active/startup configuration is available and then approximately every 10 minutes. The default is 600 seconds:
 
 ```yaml
 environment:
@@ -59,19 +81,20 @@ environment:
 
 The runtime rejects values below 60 seconds so a configuration mistake cannot create a tight retry loop. The normal production recommendation remains **600 seconds**.
 
-There is no cron job, one-container-per-playlist model or overlapping worker pool. A cycle must finish before the next begins. A successful Spotify authorization callback wakes the scheduler so the engine can retry promptly rather than waiting for the full interval.
+There is no cron job, one-container-per-playlist model or overlapping worker pool. A cycle must finish before the next begins. A successful Spotify authorization callback or managed configuration change wakes the scheduler so the engine can retry promptly rather than waiting for the full interval.
 
 Each cycle performs the architecture-defined sequence:
 
-1. load the validated shared configuration;
+1. load the validated effective configuration from managed state plus the built-in catalog, or from the deliberately selected legacy compatibility path;
 2. determine the union of sources required by enabled playlists;
 3. fetch each required source once;
 4. normalize and persist canonical editions;
 5. record source outcomes;
 6. reuse/persist deterministic Spotify episode matching;
 7. build each playlist from durable still-valid state;
-8. reconcile destinations independently with exact readback verification;
-9. record playlist outcomes and prune operational history safely.
+8. apply the common episode-eligibility policy, including bounded explicit exceptions;
+9. reconcile destinations independently with exact readback verification;
+10. record playlist outcomes and prune operational history safely.
 
 A failed RSS source does not become an empty successful source. Recent previously matched canonical editions remain eligible until their playlist retention boundary, so one transient feed outage does not wipe valid recent items. One Spotify destination failure also does not block another playlist.
 
@@ -102,7 +125,7 @@ environment:
 
 `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS` is the source IP/CIDR of the **immediate reverse proxy as seen by the application**, not the browser subnet, LAN subnet or a broad Tailscale range. Multiple explicit entries may be comma-separated only when genuinely required.
 
-If a production engine YAML exists but the Spotify Web UI authorization service is not configured, startup fails closed. It is valid for the service to be configured but not yet connected: the scheduler records authorization-required failures while the Web UI remains available for **Connect Spotify**.
+It is valid for the service to be configured but not yet connected: `/admin/` remains available for **Connect Spotify** and the engine remains **Not configured** until at least one managed playlist is activated. If a deliberately selected legacy engine configuration exists before authorization is available, scheduler attempts surface authorization-required failures rather than clearing a destination.
 
 ### 3. Configure the reverse proxy
 
@@ -122,9 +145,11 @@ register exactly:
 
 The external URL must be an HTTPS origin without path, query string or embedded credentials. HTTP is accepted only for an explicit loopback IP (`127.0.0.1` or `::1`) used by local/P0 diagnostics; private-LAN HTTP and `localhost` are intentionally rejected.
 
-### 5. Connect Spotify
+### 5. Connect Spotify and activate the first playlist
 
 Open the HTTPS external origin, authenticate to `/admin/` with username `admin` and the configured administration password, then choose **Connect Spotify**. The application uses one-time CSRF, strong OAuth state and PKCE S256; Spotify returns directly to the server callback. Normal production operation requires no shell and no callback URL paste.
+
+After Spotify reports connected, review and activate **Noticias España** from the available playlist templates. The activation creates the private Spotify destination, persists the managed state and wakes the scheduler. There is no need to pre-create a Spotify playlist or paste its ID into YAML for the ordinary managed path.
 
 Only the long-lived refresh credential is persisted under `/data`, owner-only and atomically replaced. Access tokens remain memory-only. Scheduler token refresh and Web UI reconnect/callback operations are serialized against the same credential store so they cannot race.
 
@@ -139,10 +164,11 @@ The `/` page reports, without token material:
 - whether the engine is configured/running/scheduled;
 - last cycle result, start and finish;
 - next scheduled run;
+- application version and safe short source-build revision;
 - source result, last success, fetched/matched count and current error summary;
 - playlist result, last success, desired/verified count, whether Spotify changed, and current error summary.
 
-Operational cycle status is in memory; authoritative source/playlist history, canonical data, match state and Spotify refresh authorization remain under `/data` and survive container restart. After restart the scheduler immediately runs a new cycle and reconstructs the current status from the durable engine state.
+Operational cycle status is in memory; authoritative source/playlist history, canonical data, match state, managed installation choices and Spotify refresh authorization remain under `/data` and survive container restart. After restart the scheduler immediately runs a new cycle when at least one playlist is enabled and reconstructs the current status from the durable engine state.
 
 A source, playlist or authorization failure does **not** make `/healthz` unhealthy by itself. Container health is reserved for failures that make the runtime/storage itself unusable; otherwise an upstream outage could create an unhelpful restart loop. Operational failures are shown on `/` instead.
 
@@ -154,8 +180,16 @@ SIGTERM/SIGINT asks the HTTP host and scheduler to stop. The scheduler does not 
 
 **Engine says Not configured**
 
-- confirm `/data/news-bulletin-playlist.yaml` exists, or set `NEWS_PLAYLIST_CONFIG` to the correct persistent path;
-- validate that the file is based on the current schema and contains real playlist destination IDs.
+- on a normal managed installation, open `/admin/` and confirm at least one managed playlist is activated/enabled;
+- after activation, confirm `/data/managed-state.json` exists and remains writable by the runtime user;
+- if intentionally using the legacy compatibility path, confirm the selected YAML exists and validates;
+- do not leave both `/data/managed-state.json` and the default `/data/news-bulletin-playlist.yaml` in place.
+
+**Startup reports ambiguous managed/legacy configuration**
+
+- decide which path the installation should use;
+- for normal operation, retain `/data/managed-state.json` and remove/relocate the obsolete default legacy YAML;
+- for an intentional legacy deployment, remove managed state or explicitly select the intended legacy file with `NEWS_PLAYLIST_CONFIG`.
 
 **Spotify says Not connected / Reauthorization required**
 
