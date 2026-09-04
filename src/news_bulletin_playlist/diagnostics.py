@@ -20,6 +20,7 @@ MAX_DIAGNOSTIC_QUERY_LIMIT = 500
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _ALLOWED_DETAIL_KEYS = frozenset(
     {
+        "accepted_count",
         "applied_count",
         "candidate_count",
         "catalogue_calls",
@@ -28,9 +29,17 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "duration_seconds",
         "eligibility_reason",
         "edition_count",
+        "excluded_count",
         "failure_class",
+        "gt_30m",
         "http_status",
         "limit",
+        "lt_5m",
+        "m10_lt15",
+        "m15_lt20",
+        "m20_le30",
+        "m5_lt8",
+        "m8_lt10",
         "match_reason",
         "matched_count",
         "max_seconds",
@@ -41,6 +50,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "phase",
         "policy_exception",
         "returned_count",
+        "sample_count",
         "total",
         "unavailable_count",
         "verification_outcome",
@@ -68,6 +78,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "duration_exceeds_default_max",
             "duration_exceeds_exception_max",
             "duration_metadata_unavailable",
+            "duration_within_default_max",
         }
     ),
     "policy_exception": frozenset({"ser_morning_0800"}),
