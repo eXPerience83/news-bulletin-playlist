@@ -27,6 +27,7 @@ SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT = 300
 PROJECT_REPOSITORY_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
 PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {PROJECT_REPOSITORY_URL}"
 MAX_PLAYLIST_DESCRIPTION_LENGTH = SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
+MAX_PLAYLIST_DURATION_MINUTES = 24 * 60
 
 
 class ManagedAdminError(RuntimeError):
@@ -39,7 +40,7 @@ class SpotifyPlaylistProvisioningError(ManagedAdminError):
     def __init__(self, playlist_id: str) -> None:
         super().__init__(
             "Spotify playlist was created but local managed state could not be saved; "
-            f"preserve destination id {playlist_id!r} and link it manually before retrying"
+            f"destination id {playlist_id!r} now requires operator reconciliation"
         )
         self.playlist_id = playlist_id
 
@@ -138,6 +139,7 @@ class ManagedAdminService:
         cover_id: str,
         source_ids: Sequence[SourceId | str],
         access_token: str,
+        max_duration_seconds: int | None = None,
     ) -> ManagedPlaylist:
         state = self.store.load()
         template = self._template(template_id)
@@ -147,6 +149,11 @@ class ManagedAdminService:
         name = _playlist_name(display_name)
         safe_description = _playlist_description(description)
         cover = self._cover_id(cover_id)
+        duration_max = (
+            template.duration_policy.default_max_seconds
+            if max_duration_seconds is None
+            else _duration_max_seconds(max_duration_seconds)
+        )
 
         client = self.client_factory(access_token)
         try:
@@ -170,6 +177,7 @@ class ManagedAdminService:
             description=safe_description,
             cover_id=cover,
             source_ids=selected_sources,
+            max_duration_seconds=duration_max,
         )
         next_state = ManagedState(
             schema_version=state.schema_version,
@@ -192,11 +200,17 @@ class ManagedAdminService:
         source_ids: Sequence[SourceId | str],
         enabled: bool,
         access_token: str | None,
+        max_duration_seconds: int | None = None,
     ) -> ManagedPlaylist:
         state = self.store.load()
         current = self._managed(state, playlist_id)
         current_description = _playlist_description(current.description)
         selected_sources = self._source_ids(source_ids, allow_empty=not enabled)
+        duration_max = (
+            current.max_duration_seconds
+            if max_duration_seconds is None
+            else _duration_max_seconds(max_duration_seconds)
+        )
         updated = replace(
             current,
             enabled=enabled,
@@ -204,6 +218,7 @@ class ManagedAdminService:
             description=_playlist_description(description),
             cover_id=self._cover_id(cover_id),
             source_ids=selected_sources,
+            max_duration_seconds=duration_max,
         )
         next_state = self._state_with_replacement(state, updated)
         self._validate_state(next_state)
@@ -261,7 +276,7 @@ class ManagedAdminService:
             )
         except (SpotifyApiError, SpotifyTransportError) as exc:
             cover_error = _safe_spotify_operation_error(exc)
-        except OSError, ValueError:
+        except (OSError, ValueError):
             cover_error = "local cover error"
 
         if metadata_error is not None or cover_error is not None:
@@ -295,7 +310,7 @@ class ManagedAdminService:
     ) -> None:
         try:
             self._upload_cover_explicit(client, playlist_id, cover_id)
-        except OSError, ValueError, SpotifyApiError, SpotifyTransportError:
+        except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
             # Cover art is product metadata. It must never block playlist state or bulletin sync.
             return
 
@@ -413,6 +428,18 @@ def _playlist_description(value: str) -> str:
             f"playlist description must be at most {MAX_PLAYLIST_DESCRIPTION_LENGTH} characters"
         )
     return result
+
+
+def _duration_max_seconds(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ManagedAdminError("maximum duration must be an integer number of seconds")
+    if value <= 0:
+        raise ManagedAdminError("maximum duration must be positive")
+    if value > MAX_PLAYLIST_DURATION_MINUTES * 60:
+        raise ManagedAdminError(
+            f"maximum duration must be at most {MAX_PLAYLIST_DURATION_MINUTES} minutes"
+        )
+    return value
 
 
 def _strip_terminal_project_footer(value: str) -> str:
