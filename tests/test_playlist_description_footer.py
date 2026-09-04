@@ -8,8 +8,10 @@ import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_admin import (
+    LEGACY_PROJECT_DESCRIPTION_FOOTER,
     MAX_PLAYLIST_DESCRIPTION_LENGTH,
     PROJECT_DESCRIPTION_FOOTER,
+    PROJECT_DESCRIPTION_SEPARATOR,
     PROJECT_REPOSITORY_URL,
     ManagedAdminError,
     ManagedAdminService,
@@ -38,24 +40,34 @@ class _Spotify:
         return {}
 
 
-def test_renderer_sends_only_editable_base_description() -> None:
+def test_renderer_appends_plain_text_repository_footer() -> None:
     rendered = render_spotify_description("Descripción")
 
-    assert rendered == "Descripción"
-    assert PROJECT_REPOSITORY_URL not in rendered
-    assert PROJECT_DESCRIPTION_FOOTER not in rendered
+    assert rendered == (
+        f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}"
+    )
+    assert PROJECT_REPOSITORY_URL in rendered
 
 
 @pytest.mark.parametrize(
     "contaminated",
     [
+        f"Descripción\n\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}",
+        f"Descripción\r\n\r\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}\r\n",
         f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}",
-        f"Descripción\r\n\r\n{PROJECT_DESCRIPTION_FOOTER}\r\n",
-        (f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}\n\n{PROJECT_DESCRIPTION_FOOTER}"),
+        (
+            f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}"
+            f"\n\n{PROJECT_DESCRIPTION_FOOTER}"
+        ),
     ],
 )
-def test_renderer_strips_legacy_terminal_project_footer(contaminated: str) -> None:
-    assert render_spotify_description(contaminated) == "Descripción"
+def test_renderer_strips_existing_terminal_footer_before_readding_one(contaminated: str) -> None:
+    rendered = render_spotify_description(contaminated)
+
+    assert rendered == (
+        f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}"
+    )
+    assert rendered.count(PROJECT_REPOSITORY_URL) == 1
 
 
 def test_managed_state_keeps_only_editable_base_description(tmp_path: Path) -> None:
@@ -77,10 +89,12 @@ def test_managed_state_keeps_only_editable_base_description(tmp_path: Path) -> N
 
     assert managed.description == "Base editable"
     assert service.snapshot().managed[0].description == "Base editable"
-    assert spotify.create_calls == [(template.display_name, "Base editable")]
+    assert spotify.create_calls == [
+        (template.display_name, render_spotify_description("Base editable"))
+    ]
 
 
-def test_repeated_metadata_edits_send_base_description_only(tmp_path: Path) -> None:
+def test_repeated_metadata_edits_keep_exactly_one_project_footer(tmp_path: Path) -> None:
     spotify = _Spotify()
     service = ManagedAdminService(
         ManagedStateStore(tmp_path / "managed-state.json"),
@@ -116,13 +130,12 @@ def test_repeated_metadata_edits_send_base_description_only(tmp_path: Path) -> N
     )
 
     descriptions = [call[2] for call in spotify.update_calls]
-    assert descriptions == ["Segunda", "Segunda"]
-    assert all(PROJECT_REPOSITORY_URL not in value for value in descriptions)
+    expected = render_spotify_description("Segunda")
+    assert descriptions == [expected, expected]
+    assert all(value.count(PROJECT_REPOSITORY_URL) == 1 for value in descriptions)
 
 
-def test_metadata_update_strips_terminal_footer_from_editable_state(
-    tmp_path: Path,
-) -> None:
+def test_metadata_update_strips_terminal_footer_from_editable_state(tmp_path: Path) -> None:
     spotify = _Spotify()
     service = ManagedAdminService(
         ManagedStateStore(tmp_path / "managed-state.json"),
@@ -150,7 +163,7 @@ def test_metadata_update_strips_terminal_footer_from_editable_state(
 
     assert updated.description == "Editada"
     assert service.snapshot().managed[0].description == "Editada"
-    assert spotify.update_calls[-1][2] == "Editada"
+    assert spotify.update_calls[-1][2] == render_spotify_description("Editada")
 
 
 def test_source_only_update_cleans_legacy_footer_without_spotify_metadata_write(
@@ -171,7 +184,7 @@ def test_source_only_update_cleans_legacy_footer_without_spotify_metadata_write(
     state = store.load()
     contaminated = replace(
         managed,
-        description=f"Base editable\n\n{PROJECT_DESCRIPTION_FOOTER}",
+        description=f"Base editable\n\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}",
     )
     store.save(replace(state, playlists=(contaminated,)))
 
@@ -191,7 +204,7 @@ def test_source_only_update_cleans_legacy_footer_without_spotify_metadata_write(
     assert spotify.update_calls == []
 
 
-def test_legacy_footer_is_removed_before_description_limit_validation(tmp_path: Path) -> None:
+def test_maximum_editable_description_fits_spotify_limit_with_footer(tmp_path: Path) -> None:
     spotify = _Spotify()
     service = ManagedAdminService(
         ManagedStateStore(tmp_path / "managed-state.json"),
@@ -203,46 +216,35 @@ def test_legacy_footer_is_removed_before_description_limit_validation(tmp_path: 
     managed = service.activate(
         template_id=template.id,
         display_name=template.display_name,
-        description=f"{maximum}\n\n{PROJECT_DESCRIPTION_FOOTER}",
-        cover_id=template.cover_id,
-        source_ids=template.default_source_ids,
-        access_token="token",
-    )
-
-    assert managed.description == maximum
-    assert spotify.create_calls[-1][1] == maximum
-    assert len(spotify.create_calls[-1][1]) == 300
-
-
-def test_description_can_use_full_spotify_limit_but_not_exceed_it(tmp_path: Path) -> None:
-    spotify = _Spotify()
-    service = ManagedAdminService(
-        ManagedStateStore(tmp_path / "managed-state.json"),
-        client_factory=lambda _token: spotify,
-    )
-    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
-    maximum = "x" * MAX_PLAYLIST_DESCRIPTION_LENGTH
-
-    service.activate(
-        template_id=template.id,
-        display_name=template.display_name,
         description=maximum,
         cover_id=template.cover_id,
         source_ids=template.default_source_ids,
         access_token="token",
     )
 
-    assert len(spotify.create_calls[0][1]) == 300
+    assert managed.description == maximum
+    rendered = spotify.create_calls[-1][1]
+    assert len(rendered) == 300
+    assert rendered.endswith(PROJECT_DESCRIPTION_FOOTER)
 
-    other_service = ManagedAdminService(
-        ManagedStateStore(tmp_path / "other-managed-state.json"),
-        client_factory=lambda _token: _Spotify(),
+
+def test_description_cannot_exceed_space_reserved_for_project_footer(tmp_path: Path) -> None:
+    spotify = _Spotify()
+    service = ManagedAdminService(
+        ManagedStateStore(tmp_path / "managed-state.json"),
+        client_factory=lambda _token: spotify,
     )
-    with pytest.raises(ManagedAdminError, match="at most 300 characters"):
-        other_service.activate(
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    too_long = "x" * (MAX_PLAYLIST_DESCRIPTION_LENGTH + 1)
+
+    with pytest.raises(
+        ManagedAdminError,
+        match=f"at most {MAX_PLAYLIST_DESCRIPTION_LENGTH} characters",
+    ):
+        service.activate(
             template_id=template.id,
             display_name=template.display_name,
-            description=maximum + "x",
+            description=too_long,
             cover_id=template.cover_id,
             source_ids=template.default_source_ids,
             access_token="token",
