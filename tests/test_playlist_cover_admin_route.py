@@ -210,7 +210,7 @@ def test_admin_dashboard_exposes_explicit_metadata_and_cover_action(tmp_path: Pa
     assert handler.response.status == HTTPStatus.OK
     assert 'action="/admin/playlists/sync"' in body
     assert "Apply Spotify metadata &amp; cover" in body
-    assert "Reconnect Spotify once for image permission" in body
+    assert "Spotify metadata/cover sync is independent from bulletin policy changes." in body
 
 
 def test_explicit_admin_sync_uses_token_and_does_not_restart_scheduler(tmp_path: Path) -> None:
