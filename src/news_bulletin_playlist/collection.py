@@ -216,7 +216,7 @@ def _source_native_id(item: ET.Element) -> str | None:
 def _parse_published_at(value: str, source_timezone: ZoneInfo) -> datetime:
     try:
         parsed = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         try:
             parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
         except ValueError as exc:
