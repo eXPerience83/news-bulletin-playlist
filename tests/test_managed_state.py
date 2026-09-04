@@ -41,7 +41,6 @@ def test_builtin_catalog_has_stable_first_template_and_supported_sources() -> No
         SourceId("ondacero"),
         SourceId("abc"),
         SourceId("cnn"),
-        SourceId("rfi_es"),
     )
     assert template.duration_policy.default_max_seconds == 1800
     assert template.duration_policy.exceptions == ()
