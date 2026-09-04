@@ -6,9 +6,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from news_bulletin_playlist.desired_state import (
-    DURATION_EXCEPTION,
     DURATION_EXCEEDS_DEFAULT_MAX,
     DURATION_EXCEEDS_EXCEPTION_MAX,
+    DURATION_EXCEPTION,
     DURATION_WITHIN_DEFAULT_MAX,
 )
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
