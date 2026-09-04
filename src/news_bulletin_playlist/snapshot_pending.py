@@ -13,7 +13,6 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
-from typing import Self
 
 from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
