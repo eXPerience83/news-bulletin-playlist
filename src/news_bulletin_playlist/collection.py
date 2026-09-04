@@ -121,9 +121,7 @@ def normalize_rss_source(
         raise ValueError("feed contained no RSS items")
 
     parser_id = str(source.parser_id)
-    parser = (
-        None if parser_id == RELEASE_DATE_TITLE_PARSER_ID else get_title_parser(parser_id)
-    )
+    parser = None if parser_id == RELEASE_DATE_TITLE_PARSER_ID else get_title_parser(parser_id)
     editions: list[CanonicalEdition] = []
     seen_native_ids: set[str] = set()
 
@@ -188,7 +186,7 @@ def _source_native_id(item: ET.Element) -> str | None:
 def _parse_published_at(value: str, source_timezone: ZoneInfo) -> datetime:
     try:
         parsed = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         try:
             parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
         except ValueError as exc:
