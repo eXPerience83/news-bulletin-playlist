@@ -367,23 +367,28 @@ def test_missing_or_invalid_write_snapshot_fails_closed(
     assert store.get_playlist_attestation(PLAYLIST_ID) is None
 
 
-def test_malformed_prewrite_snapshot_cannot_skip_and_is_healed_by_write(tmp_path: Path) -> None:
+def test_malformed_snapshot_check_on_existing_attestation_preserves_destination(
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
     client = _AttestedSpotify(["spotify:episode:old"])
     client.opaque_after_write = {1}
     uris = ("spotify:episode:one", "spotify:episode:two")
     _apply(store, client, *uris)
+    attestation_before = store.get_playlist_attestation(PLAYLIST_ID)
+    assert attestation_before is not None
     client.snapshot_responses = [{}]
 
-    result = _apply(
-        store,
-        client,
-        *uris,
-        generated_at=NOW + timedelta(minutes=10),
-    )
+    with pytest.raises(SpotifyReconciliationError, match="valid snapshot_id"):
+        _apply(
+            store,
+            client,
+            *uris,
+            generated_at=NOW + timedelta(minutes=10),
+        )
 
-    assert result.wrote is True
-    assert len(client.writes) == 2
+    assert len(client.writes) == 1
+    assert store.get_playlist_attestation(PLAYLIST_ID) == attestation_before
 
 
 def test_snapshot_change_between_write_and_degraded_readback_fails_closed(tmp_path: Path) -> None:
