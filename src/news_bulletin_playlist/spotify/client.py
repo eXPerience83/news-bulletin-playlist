@@ -50,11 +50,10 @@ class SpotifyClient:
         return self._request("GET", "/search", query=params)
 
     def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
-        return self._request(
-            "POST",
-            "/me/playlists",
-            json_body={"name": name, "description": description, "public": False},
-        )
+        body: dict[str, Any] = {"name": name, "public": False}
+        if description:
+            body["description"] = description
+        return self._request("POST", "/me/playlists", json_body=body)
 
     def change_playlist_details(
         self,
