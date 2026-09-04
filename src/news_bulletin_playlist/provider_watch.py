@@ -5,17 +5,17 @@ import re
 import sys
 import time
 import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from math import ceil
 
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.collection import fetch_feed as fetch_runtime_feed
+from news_bulletin_playlist.collection import normalize_rss_source
+from news_bulletin_playlist.models import SourceDefinition
 from news_bulletin_playlist.providers.base import TitleParser
 from news_bulletin_playlist.registry import CORE_PROVIDERS, ProviderConfig
 
-_USER_AGENT = (
-    "news-bulletin-playlist/0.0.1 (+https://github.com/eXPerience83/news-bulletin-playlist)"
-)
 _SAMPLE_SIZE = 6
 _MIN_PARSE_RATIO = 0.5
 _RETRYABLE_HTTP = frozenset({429, 500, 502, 503, 504})
@@ -75,9 +75,9 @@ def evaluate_titles(provider_id: str, parser: TitleParser, titles: list[str]) ->
 
 
 def fetch_feed_once(url: str, timeout: float = 20.0) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return bytes(response.read())
+    # Use the exact bounded/decompression path used by the runtime so the watchdog catches
+    # operational incompatibilities such as gzip RSS responses before deployment.
+    return fetch_runtime_feed(url, timeout=timeout)
 
 
 def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
@@ -102,7 +102,7 @@ def check_provider(provider: ProviderConfig) -> ContractResult:
     try:
         payload = fetch_feed(provider.feed_url)
         titles = extract_rss_titles(payload)
-    except (urllib.error.URLError, TimeoutError, ET.ParseError, OSError) as feed_error:
+    except (urllib.error.URLError, TimeoutError, ET.ParseError, OSError, ValueError) as feed_error:
         if provider.contract_fallback_url is None:
             return ContractResult(
                 provider.provider_id,
@@ -114,7 +114,7 @@ def check_provider(provider: ProviderConfig) -> ContractResult:
         try:
             fallback_payload = fetch_feed(provider.contract_fallback_url)
             titles = extract_fallback_titles(provider.provider_id, fallback_payload)
-        except (urllib.error.URLError, TimeoutError, OSError) as fallback_error:
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as fallback_error:
             return ContractResult(
                 provider.provider_id,
                 False,
@@ -133,6 +133,40 @@ def check_provider(provider: ProviderConfig) -> ContractResult:
     return evaluate_titles(provider.provider_id, provider.parser, titles)
 
 
+def check_catalog_source(source: SourceDefinition) -> ContractResult:
+    provider_id = f"catalog:{source.id}"
+    endpoint = source.endpoint_url
+    if endpoint is None:
+        return ContractResult(provider_id, False, 0, 0, "built-in source has no endpoint")
+    try:
+        payload = fetch_feed(endpoint)
+        editions = normalize_rss_source(source, payload)
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        ET.ParseError,
+        OSError,
+        ValueError,
+        KeyError,
+    ) as exc:
+        return ContractResult(
+            provider_id,
+            False,
+            0,
+            0,
+            f"runtime collection contract failed: {exc}",
+        )
+
+    sampled = min(len(editions), _SAMPLE_SIZE)
+    return ContractResult(
+        provider_id,
+        True,
+        sampled,
+        sampled,
+        f"runtime normalized {len(editions)} canonical editions",
+    )
+
+
 def format_report(results: list[ContractResult]) -> str:
     lines = ["# Provider contract watch", ""]
     for result in results:
@@ -146,7 +180,10 @@ def _local_name(tag: str) -> str:
 
 
 def main() -> int:
+    # Keep the historical parser-shape checks and also run the actual runtime normalization
+    # contract for every selectable built-in source, including newly added international feeds.
     results = [check_provider(provider) for provider in CORE_PROVIDERS]
+    results.extend(check_catalog_source(source) for source in BUILTIN_CATALOG.sources)
     print(format_report(results))
     return 0 if all(result.ok for result in results) else 1
 
