@@ -1,8 +1,8 @@
 """Durable journal for Spotify snapshot transitions that are not yet confirmed.
 
-The journal is intentionally distinct from confirmed playlist attestations.  It lives in the same
+The journal is intentionally distinct from confirmed playlist attestations. It lives in the same
 SQLite database but self-initializes an auxiliary table so it can be introduced without changing
-the canonical data-schema contract.  Losing this table is safe: the engine falls back to strict
+the canonical data-schema contract. Losing this table is safe: the engine falls back to strict
 reconciliation; keeping it across restarts prevents duplicate writes while Spotify propagates a
 new snapshot id after a partially observable readback.
 """
@@ -12,6 +12,8 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import TracebackType
+from typing import Self
 
 from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
@@ -51,13 +53,50 @@ class PendingSnapshotConfirmation:
         try:
             int(self.desired_fingerprint, 16)
         except ValueError as exc:
-            raise ValueError("pending snapshot desired_fingerprint must be a sha256 hex digest") from exc
+            raise ValueError(
+                "pending snapshot desired_fingerprint must be a sha256 hex digest"
+            ) from exc
         created = _as_utc(self.created_at)
         expires = _as_utc(self.expires_at)
         if expires <= created:
             raise ValueError("pending snapshot expires_at must be after created_at")
         object.__setattr__(self, "created_at", created)
         object.__setattr__(self, "expires_at", expires)
+
+
+class _ConnectionContext:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        operation: str,
+        path: str,
+    ) -> None:
+        self.connection = connection
+        self.operation = operation
+        self.path = path
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self.connection
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_value, traceback
+        try:
+            if exc_type is None:
+                self.connection.commit()
+            else:
+                self.connection.rollback()
+        except sqlite3.Error as db_exc:
+            raise PersistenceError(
+                f"{self.operation} failed for {self.path}: {db_exc}"
+            ) from db_exc
+        finally:
+            self.connection.close()
 
 
 class PendingSnapshotJournal:
@@ -91,7 +130,6 @@ class PendingSnapshotJournal:
         )
 
     def set(self, confirmation: PendingSnapshotConfirmation) -> None:
-        # Constructing the dataclass performs all value validation before SQLite is touched.
         with self._connection("persist pending Spotify snapshot") as connection:
             self._ensure_table(connection)
             connection.execute(
@@ -131,30 +169,18 @@ class PendingSnapshotJournal:
     def _ensure_table(connection: sqlite3.Connection) -> None:
         connection.execute(_TABLE_SQL)
 
-    def _connection(self, operation: str):  # type: ignore[no-untyped-def]
+    def _connection(self, operation: str) -> _ConnectionContext:
         try:
             connection = sqlite3.connect(self.path, timeout=10.0)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
         except sqlite3.Error as exc:
             raise PersistenceError(f"{operation} failed for {self.path}: {exc}") from exc
-
-        class _ConnectionContext:
-            def __enter__(inner_self) -> sqlite3.Connection:
-                return connection
-
-            def __exit__(inner_self, exc_type, exc_value, traceback) -> None:  # type: ignore[no-untyped-def]
-                try:
-                    if exc_type is None:
-                        connection.commit()
-                    else:
-                        connection.rollback()
-                except sqlite3.Error as db_exc:
-                    raise PersistenceError(f"{operation} failed for {self.path}: {db_exc}") from db_exc
-                finally:
-                    connection.close()
-
-        return _ConnectionContext()
+        return _ConnectionContext(
+            connection,
+            operation=operation,
+            path=str(self.path),
+        )
 
 
 def _format_timestamp(value: datetime) -> str:
