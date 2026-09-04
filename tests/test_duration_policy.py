@@ -197,6 +197,16 @@ def _config_payload(exception_source: str = "ser", exception_max: int = 1800):
     }
 
 
+def test_yaml_duration_policy_without_explicit_ceiling_uses_shared_30_minute_default() -> None:
+    payload = _config_payload()
+    payload["playlists"][0]["duration_policy"] = {}
+
+    parsed = parse_config(payload)
+
+    assert parsed.playlists[0].duration_policy.default_max_seconds == 1800
+    assert parsed.playlists[0].duration_policy.exceptions == ()
+
+
 def test_yaml_duration_policy_validates_bounded_exception_and_known_source() -> None:
     parsed = parse_config(_config_payload())
     assert parsed.playlists[0].duration_policy.exceptions[0].edition_local_time == time(8, 0)
