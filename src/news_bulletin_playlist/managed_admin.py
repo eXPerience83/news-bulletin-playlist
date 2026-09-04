@@ -245,7 +245,7 @@ class ManagedAdminService:
 
         try:
             self._apply_metadata_with_attribution_fallback(client, current)
-        except SpotifyApiError, SpotifyTransportError as exc:
+        except (SpotifyApiError, SpotifyTransportError) as exc:
             metadata_error = _safe_spotify_operation_error(exc)
 
         try:
@@ -254,7 +254,7 @@ class ManagedAdminService:
                 current.destination.external_id,
                 current.cover_id,
             )
-        except SpotifyApiError, SpotifyTransportError as exc:
+        except (SpotifyApiError, SpotifyTransportError) as exc:
             cover_error = _safe_spotify_operation_error(exc)
         except OSError, ValueError:
             cover_error = "local cover error"
