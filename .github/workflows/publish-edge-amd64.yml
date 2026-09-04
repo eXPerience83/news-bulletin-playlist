@@ -71,6 +71,7 @@ jobs:
           set -euo pipefail
           docker build \
             --platform linux/amd64 \
+            --build-arg "SOURCE_REVISION=${GITHUB_SHA}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
             --label "org.opencontainers.image.version=edge" \
             --tag news-bulletin-playlist:edge-candidate \

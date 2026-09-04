@@ -187,6 +187,7 @@ def build_diagnostic_bundle(
     last_cycle: EngineCycleResult | None,
     retention_days: int,
     max_events: int,
+    build_revision: str = "dev",
 ) -> bytes:
     """Build an in-memory ZIP from sanitized models; never copy the SQLite file."""
     observed = _as_utc(generated_at)
@@ -199,6 +200,7 @@ def build_diagnostic_bundle(
     runtime = {
         "generated_at": _timestamp(observed),
         "version": __version__,
+        "build_revision": build_revision,
         "diagnostic_retention_days": retention_days,
         "diagnostic_store_max_events": max_events,
         "exported_event_count": len(events),
