@@ -23,7 +23,7 @@ Initial product defaults:
 
 - keep episodes published within the last **48 hours**;
 - cap a playlist at **100 episodes**;
-- order by source publication timestamp (`published_at`), newest first;
+- order by semantic edition timestamp (`edition_at`) when available, falling back to source publication timestamp (`published_at`), newest first;
 - make the maximum episode duration a **per-managed-playlist setting** editable from `/admin/`;
 - use **30 minutes / 1800 seconds as the current general default for every playlist**;
 - prefer bulletin sources whose normal publishing format is concise; a source that is predominantly long-form is not promoted merely because individual episodes might fit under 30 minutes;
@@ -69,7 +69,7 @@ Source research and the admin UI classify each product on three independent axes
 | ABC — Las Noticias de ABC | `ES · NAT · es-ES` | Concise | concise daily news editions |
 | CNN 5 Cosas | `US · INT · es` | Concise | concise international briefing |
 | UN News Today | `US · INT · en` | Concise | daily concise global bulletin |
-| RFI — Journal Monde | `FR · INT · fr` | Mixed | mostly 10-minute world bulletins; longer tranches are duration-filtered |
+| RFI — Journal Monde | `FR · INT · fr` | Concise selected product | dedicated parser admits only Journal Monde editions from the mixed provider feed |
 | Deutschlandfunk — Die Nachrichten | `DE · MIX · de` | Concise | recurring short Germany/world bulletins |
 | RMF FM — Fakty | `PL · MIX · pl` | Mixed | recurring short Poland/world bulletins, with occasional longer editions |
 
