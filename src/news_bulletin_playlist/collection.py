@@ -16,6 +16,7 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
 )
+from news_bulletin_playlist.providers.release_date_title import RELEASE_DATE_TITLE_PARSER_ID
 from news_bulletin_playlist.registry import get_title_parser
 
 FeedFetcher = Callable[[str], bytes]
@@ -119,7 +120,10 @@ def normalize_rss_source(
     if not items:
         raise ValueError("feed contained no RSS items")
 
-    parser = get_title_parser(str(source.parser_id))
+    parser_id = str(source.parser_id)
+    parser = (
+        None if parser_id == RELEASE_DATE_TITLE_PARSER_ID else get_title_parser(parser_id)
+    )
     editions: list[CanonicalEdition] = []
     seen_native_ids: set[str] = set()
 
@@ -132,13 +136,17 @@ def normalize_rss_source(
         if source_native_id in seen_native_ids:
             continue
 
-        parsed = parser.parse(title)
-        if parsed is None:
-            continue
         try:
             published_at = _parse_published_at(published_text, source.timezone)
         except ValueError:
             continue
+
+        edition_at = None
+        if parser is not None:
+            parsed = parser.parse(title)
+            if parsed is None:
+                continue
+            edition_at = _apply_source_timezone(parsed, source.timezone)
 
         editions.append(
             CanonicalEdition(
@@ -146,7 +154,7 @@ def normalize_rss_source(
                 source_native_id=source_native_id,
                 title=title,
                 published_at=published_at,
-                edition_at=_apply_source_timezone(parsed, source.timezone),
+                edition_at=edition_at,
                 duration_seconds=_duration_seconds(item),
             )
         )
@@ -180,7 +188,7 @@ def _source_native_id(item: ET.Element) -> str | None:
 def _parse_published_at(value: str, source_timezone: ZoneInfo) -> datetime:
     try:
         parsed = parsedate_to_datetime(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         try:
             parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
         except ValueError as exc:
