@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+import io
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -25,6 +27,7 @@ _USER_AGENT = (
     "news-bulletin-playlist/0.0.1 (+https://github.com/eXPerience83/news-bulletin-playlist)"
 )
 _MAX_FEED_BYTES = 10 * 1024 * 1024
+_GZIP_MAGIC = b"\x1f\x8b"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,14 +69,41 @@ def required_sources(config: EngineConfig) -> tuple[SourceDefinition, ...]:
 
 
 def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
-    """Fetch a bounded RSS payload without applying provider or playlist policy."""
+    """Fetch a bounded RSS payload and safely decode gzip when providers use it."""
 
-    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept-Encoding": "gzip",
+        },
+    )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = response.read(_MAX_FEED_BYTES + 1)
+        headers = getattr(response, "headers", None)
+        content_encoding = ""
+        if headers is not None:
+            header_value = headers.get("Content-Encoding")
+            if isinstance(header_value, str):
+                content_encoding = header_value.strip().casefold()
     if len(payload) > _MAX_FEED_BYTES:
         raise ValueError("feed payload exceeds 10 MiB limit")
-    return bytes(payload)
+    return _decode_feed_payload(bytes(payload), content_encoding=content_encoding)
+
+
+def _decode_feed_payload(payload: bytes, *, content_encoding: str = "") -> bytes:
+    encoded_as_gzip = content_encoding == "gzip" or payload.startswith(_GZIP_MAGIC)
+    if not encoded_as_gzip:
+        return payload
+
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(payload), mode="rb") as compressed:
+            decoded = compressed.read(_MAX_FEED_BYTES + 1)
+    except OSError as exc:
+        raise ValueError("feed payload contained invalid gzip data") from exc
+    if len(decoded) > _MAX_FEED_BYTES:
+        raise ValueError("decoded feed payload exceeds 10 MiB limit")
+    return bytes(decoded)
 
 
 def collect_required_sources(
@@ -186,7 +216,7 @@ def _source_native_id(item: ET.Element) -> str | None:
 def _parse_published_at(value: str, source_timezone: ZoneInfo) -> datetime:
     try:
         parsed = parsedate_to_datetime(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         try:
             parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
         except ValueError as exc:
