@@ -376,12 +376,13 @@ def test_source_only_edit_works_offline_and_does_not_write_spotify_metadata(
     assert lifecycle.reconcile_calls == [True]
 
 
-def test_metadata_edit_without_spotify_token_fails_without_changing_local_state(
+def test_metadata_edit_works_offline_and_does_not_write_spotify_metadata(
     tmp_path: Path,
 ) -> None:
     service, factory = _service(tmp_path)
     _activate_direct(service)
     current = service.snapshot().managed[0]
+    factory.client.update_calls.clear()
     lifecycle = _FakeLifecycle()
     security = LanAdminSecurity(_PASSWORD)
     handler = _HandlerHarness(
@@ -405,16 +406,16 @@ def test_metadata_edit_without_spotify_token_fails_without_changing_local_state(
     handler.do_POST()
 
     response = _response(handler)
-    assert response.status == HTTPStatus.CONFLICT
-    assert "Spotify must be connected" in response.payload.decode()
-    assert service.snapshot().managed[0] == current
+    assert response.status == HTTPStatus.SEE_OTHER
+    updated = service.snapshot().managed[0]
+    assert updated.display_name == "Nuevo nombre"
+    assert updated.description == current.description
     assert factory.client.update_calls == []
-    assert lifecycle.reconcile_calls == []
+    assert lifecycle.reconcile_calls == [True]
 
 
-def test_metadata_transport_failure_is_502_fail_closed_and_redacted(
+def test_metadata_save_does_not_call_spotify_even_if_remote_metadata_would_fail(
     tmp_path: Path,
-    capsys: Any,
 ) -> None:
     client = _FailingUpdateSpotifyClient()
     factory = _Factory(client)
@@ -423,6 +424,7 @@ def test_metadata_transport_failure_is_502_fail_closed_and_redacted(
         client_factory=factory,
     )
     _activate_direct(service)
+    client.update_calls.clear()
     current = service.snapshot().managed[0]
     lifecycle = _FakeLifecycle()
     security = LanAdminSecurity(_PASSWORD)
@@ -448,16 +450,12 @@ def test_metadata_transport_failure_is_502_fail_closed_and_redacted(
     handler.do_POST()
 
     response = _response(handler)
-    assert response.status == HTTPStatus.BAD_GATEWAY
-    body = response.payload.decode()
-    assert "Spotify could not apply the playlist change; local state was preserved" in body
-    assert "simulated transport failure" not in body
-    assert "update-token-sentinel" not in body
-    assert service.snapshot().managed[0] == current
-    assert lifecycle.reconcile_calls == []
-    captured = capsys.readouterr()
-    assert "update-token-sentinel" not in captured.out
-    assert "update-token-sentinel" not in captured.err
+    assert response.status == HTTPStatus.SEE_OTHER
+    updated = service.snapshot().managed[0]
+    assert updated.display_name == "Nuevo nombre"
+    assert client.update_calls == []
+    assert provider.calls == 0
+    assert lifecycle.reconcile_calls == [True]
 
 
 def test_managed_state_error_is_500_and_does_not_expose_storage_path(tmp_path: Path) -> None:
