@@ -23,9 +23,7 @@ def test_builtin_catalog_exposes_phase_one_playlist_templates() -> None:
         SourceId("cnn"),
     )
     assert by_id["international_spanish_news"].default_source_ids == (SourceId("cnn"),)
-    assert by_id["international_english_news"].default_source_ids == (
-        SourceId("un_news_en"),
-    )
+    assert by_id["international_english_news"].default_source_ids == (SourceId("un_news_en"),)
 
 
 def test_expanded_sources_have_deterministic_spotify_show_references() -> None:
