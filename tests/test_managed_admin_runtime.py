@@ -282,10 +282,13 @@ def test_dashboard_requires_auth_and_exposes_available_template(tmp_path: Path) 
     assert _response(authorized).status == HTTPStatus.OK
     assert "Active playlists" in body
     assert "Available playlists" in body
-    assert "Noticias España" in body
+    assert "Noticias en Español" in body
+    assert "Noticias Internacional · ES" in body
+    assert "International News · EN" in body
     assert "Cadena SER" in body
     assert "Radio Nacional de España" in body
     assert "Onda Cero" in body
+    assert "ABC — Las Noticias de ABC" in body
     assert "CNN 5 Cosas" in body
     assert "/admin/covers/spain_spanish_news.jpg" in body
 
