@@ -766,24 +766,6 @@ class OperationalHealthHandler(LanAdminHandler):
             raise ValueError("enabled must be omitted or set exactly once")
         enabled = bool(enabled_values)
 
-        snapshot = service.snapshot()
-        current = next(
-            (playlist for playlist in snapshot.managed if playlist.id == playlist_id),
-            None,
-        )
-        if current is None:
-            raise ManagedAdminError(f"unknown managed playlist: {playlist_id}")
-        metadata_changed = (
-            name.strip() != current.display_name or description != current.description
-        )
-        access_token: str | None = None
-        if metadata_changed:
-            auth = self.managed_admin_auth
-            if auth is None:
-                raise ManagedAdminError(
-                    "Spotify must be connected to change playlist name or description"
-                )
-            access_token = auth.get_access_token()
         updated = service.update(
             playlist_id,
             display_name=name,
@@ -791,7 +773,7 @@ class OperationalHealthHandler(LanAdminHandler):
             cover_id=cover_id,
             source_ids=form.get("source_id", []),
             enabled=enabled,
-            access_token=access_token,
+            access_token=None,
         )
         return str(updated.id), updated.enabled
 
