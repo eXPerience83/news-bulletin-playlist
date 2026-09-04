@@ -6,9 +6,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from news_bulletin_playlist.desired_state import (
+    DURATION_EXCEPTION,
     DURATION_EXCEEDS_DEFAULT_MAX,
     DURATION_EXCEEDS_EXCEPTION_MAX,
-    DURATION_EXCEPTION,
+    DURATION_WITHIN_DEFAULT_MAX,
 )
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
 from news_bulletin_playlist.engine import EngineCycleResult, EngineCycleRunner
@@ -16,6 +17,7 @@ from news_bulletin_playlist.reconciliation_diagnostics import classify_reconcili
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics, cycle_id_for
 
 Clock = Callable[[], datetime]
+_LONG_DURATION_DIAGNOSTIC_SECONDS = 20 * 60
 
 
 class InstrumentedEngineCycleRunner:
@@ -122,11 +124,16 @@ class InstrumentedEngineCycleRunner:
                 details=details,
             )
             for decision in playlist.duration_decisions:
+                noteworthy_long_accept = (
+                    decision.reason == DURATION_WITHIN_DEFAULT_MAX
+                    and decision.accepted
+                    and decision.duration_seconds >= _LONG_DURATION_DIAGNOSTIC_SECONDS
+                )
                 if decision.reason not in {
                     DURATION_EXCEPTION,
                     DURATION_EXCEEDS_DEFAULT_MAX,
                     DURATION_EXCEEDS_EXCEPTION_MAX,
-                }:
+                } and not noteworthy_long_accept:
                     continue
                 policy_details: dict[str, str | int | bool | None] = {
                     "duration_seconds": decision.duration_seconds,
@@ -135,15 +142,17 @@ class InstrumentedEngineCycleRunner:
                 }
                 if decision.exception_id is not None:
                     policy_details["policy_exception"] = decision.exception_id
+                if noteworthy_long_accept:
+                    duration_event = "duration_long_episode_accepted"
+                elif decision.accepted:
+                    duration_event = "duration_exception_applied"
+                else:
+                    duration_event = "duration_episode_excluded"
                 self.diagnostics.emit(
                     occurred_at=result.finished_at,
                     severity=DiagnosticSeverity.INFO,
                     component="playlist.eligibility",
-                    event_name=(
-                        "duration_exception_applied"
-                        if decision.accepted
-                        else "duration_episode_excluded"
-                    ),
+                    event_name=duration_event,
                     cycle_id=cycle_id,
                     source_id=str(decision.source_id),
                     playlist_id=str(playlist.playlist_id),
