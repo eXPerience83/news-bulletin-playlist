@@ -107,6 +107,14 @@ jobs:
             --tag news-bulletin-playlist:candidate \
             .
 
+      - name: Validate live provider contracts in exact candidate
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --entrypoint python \
+            news-bulletin-playlist:candidate \
+            -m news_bulletin_playlist.provider_watch
+
       - name: Smoke test the exact candidate
         run: |
           set -euo pipefail
@@ -316,5 +324,5 @@ jobs:
         run: |
           set -euo pipefail
           image="${CANDIDATE_REF%:*}"
-          body="Published the reviewed AMD64 candidate after exact-head validation, hardened runtime smoke tests, artifact hash verification, and immediate pre-promotion PR revalidation passed.\n\n- Candidate: \`${CANDIDATE_REF}\`\n- Dev channel: \`${DEV_REF}\`\n- Immutable: \`${image}@${IMAGE_DIGEST}\`\n- Source revision: \`${SOURCE_REVISION}\`\n\nThe mutable \`dev\` channel may contain unmerged code. It is not \`edge\`, \`stable\`, or \`latest\`."
+          body="Published the reviewed AMD64 candidate after exact-head validation, live provider contract validation, hardened runtime smoke tests, artifact hash verification, and immediate pre-promotion PR revalidation passed.\n\n- Candidate: \`${CANDIDATE_REF}\`\n- Dev channel: \`${DEV_REF}\`\n- Immutable: \`${image}@${IMAGE_DIGEST}\`\n- Source revision: \`${SOURCE_REVISION}\`\n\nThe mutable \`dev\` channel may contain unmerged code. It is not \`edge\`, \`stable\`, or \`latest\`."
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$body"
