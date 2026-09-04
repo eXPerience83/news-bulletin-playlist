@@ -15,7 +15,7 @@ from news_bulletin_playlist.managed_admin import (
     ManagedAdminSnapshot,
 )
 from news_bulletin_playlist.managed_state import ManagedPlaylist
-from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 
 
@@ -30,7 +30,6 @@ def render_managed_admin_page(
     notice: str | None = None,
     error: str | None = None,
 ) -> bytes:
-    """Render one authenticated dashboard for playlists, templates and sources."""
     spotify_connected = spotify_state is AuthorizationState.CONNECTED
     spotify_label = _spotify_label(spotify_state)
     warning = _lan_warning() if lan_mode else ""
@@ -132,6 +131,8 @@ def render_managed_admin_page(
 
   <section>
     <h2>Sources</h2>
+    <p class="muted">Source labels separate provider country, editorial scope and language so a
+       foreign provider can still be a useful global source for another playlist.</p>
     {sources}
   </section>
 
@@ -293,9 +294,15 @@ def _source_checkboxes(
             f'<label for="{html.escape(control_id, quote=True)}">'
             f'<input id="{html.escape(control_id, quote=True)}" type="checkbox" '
             f'name="source_id" value="{html.escape(str(source.id), quote=True)}"{checked}> '
-            f"{html.escape(source.display_name)}</label>"
+            f"{html.escape(_source_label(source))}</label>"
         )
     return "".join(rows)
+
+
+def _source_label(source: SourceDefinition) -> str:
+    origin = ",".join(str(value) for value in source.countries)
+    language = ",".join(str(value) for value in source.languages)
+    return f"{source.display_name} ({origin} · {source.editorial_scope.value} · {language})"
 
 
 def _sources_table(
@@ -319,6 +326,7 @@ def _sources_table(
             "<tr>"
             f"<td>{html.escape(source.display_name)}</td>"
             f"<td>{html.escape(', '.join(str(value) for value in source.countries))}</td>"
+            f"<td><code>{html.escape(source.editorial_scope.value)}</code></td>"
             f"<td>{html.escape(', '.join(str(value) for value in source.languages))}</td>"
             f"<td>{html.escape(health)}</td>"
             f"<td>{html.escape(playlists)}</td>"
@@ -326,8 +334,8 @@ def _sources_table(
             "</tr>"
         )
     return (
-        "<table><thead><tr><th>Source</th><th>Country</th><th>Language</th>"
-        "<th>Health</th><th>Used by</th><th>Origin</th></tr></thead><tbody>"
+        "<table><thead><tr><th>Source</th><th>Country</th><th>Scope</th><th>Language</th>"
+        "<th>Health</th><th>Used by</th><th>Catalog</th></tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
     )
@@ -372,7 +380,6 @@ def single_form_value(
     *,
     required: bool = True,
 ) -> str:
-    """Return exactly one form value and reject duplicates or missing required fields."""
     values = form.get(name, [])
     if not values and not required:
         return ""
@@ -382,7 +389,6 @@ def single_form_value(
 
 
 def max_duration_seconds_from_form(form: Mapping[str, list[str]]) -> int | None:
-    """Parse an optional bounded integer minute value into seconds."""
     values = form.get("max_duration_minutes", [])
     if not values:
         return None
@@ -401,7 +407,6 @@ def max_duration_seconds_from_form(form: Mapping[str, list[str]]) -> int | None:
 
 
 def playlist_id_from_form(form: Mapping[str, list[str]]) -> PlaylistId:
-    """Parse one managed playlist ID from a form."""
     value = single_form_value(form, "playlist_id").strip()
     if not value:
         raise ValueError("playlist_id must not be empty")
