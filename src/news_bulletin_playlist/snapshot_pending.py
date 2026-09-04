@@ -91,9 +91,7 @@ class _ConnectionContext:
             else:
                 self.connection.rollback()
         except sqlite3.Error as db_exc:
-            raise PersistenceError(
-                f"{self.operation} failed for {self.path}: {db_exc}"
-            ) from db_exc
+            raise PersistenceError(f"{self.operation} failed for {self.path}: {db_exc}") from db_exc
         finally:
             self.connection.close()
 
