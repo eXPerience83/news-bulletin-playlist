@@ -48,6 +48,8 @@ def test_builtin_catalog_has_stable_first_template_and_supported_sources() -> No
         SourceId("ondacero"),
         SourceId("cnn"),
     )
+    assert template.duration_policy.default_max_seconds == 1800
+    assert template.duration_policy.exceptions == ()
 
 
 def test_catalog_rejects_template_that_references_unknown_source() -> None:
@@ -77,6 +79,7 @@ def test_activation_snapshots_defaults_instead_of_copying_the_catalog() -> None:
     assert managed.source_ids == template.default_source_ids
     assert managed.cover_id == template.cover_id
     assert managed.destination == DestinationReference(AdapterId("spotify"), "spotify-playlist-id")
+    assert managed.max_duration_seconds == 1800
 
 
 def test_managed_state_store_round_trip_is_owner_only(tmp_path: Path) -> None:
@@ -91,6 +94,7 @@ def test_managed_state_store_round_trip_is_owner_only(tmp_path: Path) -> None:
     assert os.stat(path).st_mode & 0o777 == 0o600
     raw = path.read_text(encoding="utf-8")
     assert "Noticias España" in raw
+    assert '"max_duration_seconds": 1800' in raw
     assert "endpoint_url" not in raw
     assert "spotify_show_id" not in raw
 
@@ -126,7 +130,7 @@ def test_managed_state_repeated_save_is_idempotent(tmp_path: Path) -> None:
     assert store.load() == state
 
 
-@pytest.mark.parametrize("field", ["retention_hours", "max_episodes"])
+@pytest.mark.parametrize("field", ["retention_hours", "max_episodes", "max_duration_seconds"])
 @pytest.mark.parametrize("value", [0, -1])
 def test_managed_state_store_rejects_non_positive_policy_before_write(
     tmp_path: Path,
@@ -143,6 +147,46 @@ def test_managed_state_store_rejects_non_positive_policy_before_write(
         store.save(ManagedState(playlists=(invalid,)))
 
     assert not path.exists()
+
+
+def test_legacy_managed_state_without_duration_field_loads_and_inherits_template_default(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / MANAGED_STATE_FILENAME
+    path.write_text(
+        """{
+  "schema_version": 1,
+  "playlists": [{
+    "id": "spain_spanish_news",
+    "template_id": "spain_spanish_news",
+    "enabled": true,
+    "display_name": "Noticias España",
+    "description": "legacy",
+    "cover_id": "spain_spanish_news",
+    "source_ids": ["ser"],
+    "destination": {"adapter_id": "spotify", "external_id": "legacy-destination"},
+    "retention_hours": 48,
+    "max_episodes": 100
+  }]
+}
+""",
+        encoding="utf-8",
+    )
+
+    state = ManagedStateStore(path).load()
+    assert state.playlists[0].max_duration_seconds is None
+    compiled = compile_engine_config(BUILTIN_CATALOG, state)
+    assert compiled.playlists[0].duration_policy.default_max_seconds == 1800
+
+
+def test_explicit_managed_duration_override_wins_over_template_default() -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = replace(
+        activate_template(template, "spotify-playlist-id"),
+        max_duration_seconds=600,
+    )
+    compiled = compile_engine_config(BUILTIN_CATALOG, ManagedState(playlists=(managed,)))
+    assert compiled.playlists[0].duration_policy.default_max_seconds == 600
 
 
 def test_managed_state_store_rejects_duplicate_sources_before_write(tmp_path: Path) -> None:
@@ -259,6 +303,7 @@ def test_compiler_fails_closed_for_unknown_catalog_references() -> None:
         destination=managed.destination,
         retention_hours=managed.retention_hours,
         max_episodes=managed.max_episodes,
+        max_duration_seconds=managed.max_duration_seconds,
     )
     with pytest.raises(ManagedStateError, match="unknown source"):
         compile_engine_config(BUILTIN_CATALOG, ManagedState(playlists=(broken,)))
@@ -278,6 +323,7 @@ def test_disabled_playlist_may_keep_zero_selected_sources() -> None:
         destination=managed.destination,
         retention_hours=managed.retention_hours,
         max_episodes=managed.max_episodes,
+        max_duration_seconds=managed.max_duration_seconds,
     )
     config = compile_engine_config(BUILTIN_CATALOG, ManagedState(playlists=(paused,)))
     assert config.playlists[0].enabled is False
