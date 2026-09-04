@@ -1,5 +1,5 @@
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.models import EditorialScope, SourceId
 
 
 def test_builtin_catalog_exposes_phase_one_playlist_templates() -> None:
@@ -24,6 +24,24 @@ def test_builtin_catalog_exposes_phase_one_playlist_templates() -> None:
     )
     assert by_id["international_spanish_news"].default_source_ids == (SourceId("cnn"),)
     assert by_id["international_english_news"].default_source_ids == (SourceId("un_news_en"),)
+
+
+def test_builtin_sources_expose_origin_scope_and_language() -> None:
+    ser = BUILTIN_CATALOG.source("ser")
+    cnn = BUILTIN_CATALOG.source("cnn")
+    dlf = BUILTIN_CATALOG.source("dlf_news")
+
+    assert tuple(map(str, ser.countries)) == ("ES",)
+    assert ser.editorial_scope is EditorialScope.NATIONAL
+    assert tuple(map(str, ser.languages)) == ("es-ES",)
+
+    assert tuple(map(str, cnn.countries)) == ("US",)
+    assert cnn.editorial_scope is EditorialScope.INTERNATIONAL
+    assert tuple(map(str, cnn.languages)) == ("es",)
+
+    assert tuple(map(str, dlf.countries)) == ("DE",)
+    assert dlf.editorial_scope is EditorialScope.MIXED
+    assert tuple(map(str, dlf.languages)) == ("de",)
 
 
 def test_expanded_sources_have_deterministic_spotify_show_references() -> None:
