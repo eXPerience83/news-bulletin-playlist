@@ -25,8 +25,14 @@ from news_bulletin_playlist.spotify.client import (
 MAX_PLAYLIST_NAME_LENGTH = 100
 SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT = 300
 PROJECT_REPOSITORY_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
-PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {PROJECT_REPOSITORY_URL}"
-MAX_PLAYLIST_DESCRIPTION_LENGTH = SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
+LEGACY_PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {PROJECT_REPOSITORY_URL}"
+PROJECT_DESCRIPTION_FOOTER = f"Proyecto / Project: {PROJECT_REPOSITORY_URL}"
+PROJECT_DESCRIPTION_SEPARATOR = "\n\n"
+MAX_PLAYLIST_DESCRIPTION_LENGTH = (
+    SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
+    - len(PROJECT_DESCRIPTION_SEPARATOR)
+    - len(PROJECT_DESCRIPTION_FOOTER)
+)
 MAX_PLAYLIST_DURATION_MINUTES = 24 * 60
 
 
@@ -276,7 +282,7 @@ class ManagedAdminService:
             )
         except (SpotifyApiError, SpotifyTransportError) as exc:
             cover_error = _safe_spotify_operation_error(exc)
-        except OSError, ValueError:
+        except (OSError, ValueError):
             cover_error = "local cover error"
 
         if metadata_error is not None or cover_error is not None:
@@ -310,7 +316,7 @@ class ManagedAdminService:
     ) -> None:
         try:
             self._upload_cover_explicit(client, playlist_id, cover_id)
-        except OSError, ValueError, SpotifyApiError, SpotifyTransportError:
+        except (OSError, ValueError, SpotifyApiError, SpotifyTransportError):
             # Cover art is product metadata. It must never block playlist state or bulletin sync.
             return
 
@@ -398,8 +404,11 @@ def _safe_spotify_operation_error(
 
 
 def render_spotify_description(base_description: str) -> str:
-    """Render the Web-API-safe Spotify description from editable managed state."""
-    return _playlist_description(base_description)
+    """Append a plain-text project URL while keeping managed state footer-free."""
+    base = _playlist_description(base_description)
+    if not base:
+        return PROJECT_DESCRIPTION_FOOTER
+    return f"{base}{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}"
 
 
 def _required_text(value: str, label: str) -> str:
@@ -419,9 +428,8 @@ def _playlist_name(value: str) -> str:
 
 
 def _playlist_description(value: str) -> str:
-    # Historical builds persisted/appended a project footer. Strip it when encountered so
-    # existing managed state migrates cleanly, but do not send external project URLs through
-    # Spotify's Web API.
+    # Keep attribution out of editable managed state. It is appended only when metadata is
+    # rendered for Spotify so repeated edits/syncs cannot duplicate the project URL.
     result = _strip_terminal_project_footer(value)
     if len(result) > MAX_PLAYLIST_DESCRIPTION_LENGTH:
         raise ManagedAdminError(
@@ -444,14 +452,19 @@ def _duration_max_seconds(value: int) -> int:
 
 def _strip_terminal_project_footer(value: str) -> str:
     result = value
+    footers = (PROJECT_DESCRIPTION_FOOTER, LEGACY_PROJECT_DESCRIPTION_FOOTER)
     while True:
         candidate = result.rstrip()
-        if candidate == PROJECT_DESCRIPTION_FOOTER:
+        matched_footer = next(
+            (footer for footer in footers if candidate == footer or candidate.endswith(footer)),
+            None,
+        )
+        if matched_footer is None:
+            return result
+        if candidate == matched_footer:
             result = ""
             continue
-        if not candidate.endswith(PROJECT_DESCRIPTION_FOOTER):
-            return result
-        prefix = candidate[: -len(PROJECT_DESCRIPTION_FOOTER)]
+        prefix = candidate[: -len(matched_footer)]
         if not prefix.endswith(("\n", "\r")):
             return result
         result = prefix.rstrip()
