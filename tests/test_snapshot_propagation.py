@@ -22,6 +22,7 @@ from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
     reconcile_spotify_playlist,
 )
+from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
 
 NOW = datetime(2026, 9, 2, 20, 37, tzinfo=UTC)
 
@@ -124,7 +125,7 @@ class _LateSnapshotContentRaceSpotify(_SnapshotPropagationSpotify):
         return super().playlist_items(playlist_id, limit=limit, offset=offset)
 
 
-def test_stable_stale_snapshot_becomes_degraded_without_attestation(tmp_path: Path) -> None:
+def test_stable_stale_snapshot_becomes_durable_pending_without_attestation(tmp_path: Path) -> None:
     playlist = _playlist()
     desired = _desired(playlist)
     store = _store(tmp_path)
@@ -140,26 +141,24 @@ def test_stable_stale_snapshot_becomes_degraded_without_attestation(tmp_path: Pa
     )
     assert client.writes == 1
     assert store.get_playlist_attestation(playlist.id) is None
+    pending = PendingSnapshotJournal(store).get(playlist.id)
+    assert pending is not None
+    assert pending.baseline_snapshot_id == "snapshot-stale"
+    assert pending.expected_snapshot_id == "snapshot-write"
 
 
-def test_advancing_stale_snapshot_becomes_degraded_after_final_exact_readback(
-    tmp_path: Path,
-) -> None:
+def test_unexpected_advancing_snapshot_fails_closed(tmp_path: Path) -> None:
     playlist = _playlist()
     desired = _desired(playlist)
     store = _store(tmp_path)
     client = _SnapshotPropagationSpotify(["snapshot-a", "snapshot-b"])
 
-    result = reconcile_spotify_playlist(client, playlist, desired, store=store)
+    with pytest.raises(SpotifyReconciliationError, match="known prewrite baseline"):
+        reconcile_spotify_playlist(client, playlist, desired, store=store)
 
-    assert result.ok is True
-    assert result.wrote is True
-    assert result.degraded_verification is True
-    assert result.warning == (
-        "Spotify verification degraded: snapshot propagation pending after exact readback"
-    )
     assert client.writes == 1
     assert store.get_playlist_attestation(playlist.id) is None
+    assert PendingSnapshotJournal(store).get(playlist.id) is None
 
 
 def test_snapshot_that_converges_on_recheck_is_fully_verified_and_attested(
