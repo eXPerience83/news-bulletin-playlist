@@ -52,7 +52,7 @@ class SpotifyPlaylistProvisioningError(ManagedAdminError):
 
 
 class SpotifyPlaylistPersistenceError(ManagedAdminError):
-    """Report remote metadata success followed by a local persistence failure."""
+    """Compatibility error retained for callers from pre-local-only metadata updates."""
 
     def __init__(self, playlist_id: str) -> None:
         super().__init__(
@@ -163,10 +163,9 @@ class ManagedAdminService:
 
         client = self.client_factory(access_token)
         try:
-            response = client.create_private_playlist(
-                name,
-                description=render_spotify_description(safe_description),
-            )
+            # Provision the destination with the minimum stable payload. Cosmetic metadata must
+            # never prevent a playlist destination from being created and persisted.
+            response = client.create_private_playlist(name)
         except SpotifyApiError as exc:
             if exc.status < 500:
                 raise
@@ -193,6 +192,10 @@ class ManagedAdminService:
             self._save_validated(next_state)
         except (ManagedStateError, OSError) as exc:
             raise SpotifyPlaylistProvisioningError(destination_id) from exc
+
+        # Metadata and cover are best-effort after durable local state exists. The explicit sync
+        # action remains available to retry either operation without risking playlist policy.
+        self._best_effort_metadata(client, managed)
         self._best_effort_cover_upload(client, destination_id, cover)
         return managed
 
@@ -208,9 +211,9 @@ class ManagedAdminService:
         access_token: str | None,
         max_duration_seconds: int | None = None,
     ) -> ManagedPlaylist:
+        del access_token
         state = self.store.load()
         current = self._managed(state, playlist_id)
-        current_description = _playlist_description(current.description)
         selected_sources = self._source_ids(source_ids, allow_empty=not enabled)
         duration_max = (
             current.max_duration_seconds
@@ -227,30 +230,7 @@ class ManagedAdminService:
             max_duration_seconds=duration_max,
         )
         next_state = self._state_with_replacement(state, updated)
-        self._validate_state(next_state)
-
-        metadata_changed = (
-            updated.display_name != current.display_name
-            or updated.description != current_description
-        )
-        spotify_metadata_updated = False
-        if metadata_changed:
-            if access_token is None:
-                raise ManagedAdminError(
-                    "Spotify must be connected to change playlist name or description"
-                )
-            self.client_factory(access_token).change_playlist_details(
-                current.destination.external_id,
-                name=updated.display_name,
-                description=render_spotify_description(updated.description),
-            )
-            spotify_metadata_updated = True
-        try:
-            self.store.save(next_state)
-        except (ManagedStateError, OSError) as exc:
-            if spotify_metadata_updated:
-                raise SpotifyPlaylistPersistenceError(current.destination.external_id) from exc
-            raise
+        self._save_validated(next_state)
         return updated
 
     def sync_spotify_metadata_and_cover(
@@ -266,11 +246,7 @@ class ManagedAdminService:
         cover_error: str | None = None
 
         try:
-            client.change_playlist_details(
-                current.destination.external_id,
-                name=current.display_name,
-                description=render_spotify_description(current.description),
-            )
+            self._apply_metadata_with_attribution_fallback(client, current)
         except (SpotifyApiError, SpotifyTransportError) as exc:
             metadata_error = _safe_spotify_operation_error(exc)
 
@@ -307,6 +283,38 @@ class ManagedAdminService:
         remaining = tuple(playlist for playlist in state.playlists if playlist.id != current.id)
         self._save_validated(ManagedState(schema_version=state.schema_version, playlists=remaining))
         return current.destination.external_id
+
+    def _best_effort_metadata(
+        self,
+        client: PlaylistProvisioningClient,
+        playlist: ManagedPlaylist,
+    ) -> None:
+        try:
+            self._apply_metadata_with_attribution_fallback(client, playlist)
+        except SpotifyApiError, SpotifyTransportError:
+            return
+
+    def _apply_metadata_with_attribution_fallback(
+        self,
+        client: PlaylistProvisioningClient,
+        playlist: ManagedPlaylist,
+    ) -> None:
+        try:
+            client.change_playlist_details(
+                playlist.destination.external_id,
+                name=playlist.display_name,
+                description=render_spotify_description(playlist.description),
+            )
+        except SpotifyApiError as exc:
+            if exc.status != 400:
+                raise
+            # Some Spotify accounts/clients currently reject otherwise-valid attributed
+            # descriptions. Preserve functional metadata by retrying once without the footer.
+            client.change_playlist_details(
+                playlist.destination.external_id,
+                name=playlist.display_name,
+                description=_playlist_description(playlist.description),
+            )
 
     def _best_effort_cover_upload(
         self,
