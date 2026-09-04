@@ -40,6 +40,7 @@ Observed behavior:
 | Cover only | advanced immediately | none |
 | Combined admin metadata + cover | advanced | none |
 | Manual Spotify-client privacy toggle | advanced | none |
+| Web API `public=true` after client privacy | no observable change | none |
 | Identical settled reconciliation | no write | exact 68-item read |
 | Restart with an unexpected pending `C` | repeated `snapshot_error` | content remained exact |
 
@@ -80,11 +81,19 @@ value remained `public=true`.
 Using Spotify's client-side **Make private** action changed the playlist to actual invite-only privacy.
 That manual action also advanced `snapshot_id` without changing the item/order fingerprint.
 
+A final bounded inverse test was then run while the playlist was genuinely private. The Web API accepted
+one `public=true` update with an empty success response, but the observed API value remained
+`public=false` immediately and after 1 and 3 seconds. Snapshot `AAAADGB/9uXNfl9PzOIBWXHLTdWALd1D`, the
+68-item count and ordered-item fingerprint all remained unchanged. This demonstrates that an accepted
+`public=true` request did not make an observable visibility or content transition in this state.
+
 Spotify's current platform documentation distinguishes the Web API `public` flag (profile/search
 publication) from actual access control; actual private/invite-only access cannot currently be changed
 through the Web API. Production playlists are ultimately intended to be public, but the application must
 not promise that `public=false` provides stronger access privacy than Spotify actually exposes through
-the API.
+the API. Code/UI terminology should therefore avoid using `private`/`public` as if they were reliable
+access-control states; provider-facing names should describe the requested API visibility separately from
+real access restriction.
 
 Follow-up is tracked separately in #135 so this provider semantic does not obscure the item
 reconciliation fix.
