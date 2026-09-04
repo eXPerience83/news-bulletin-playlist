@@ -189,6 +189,7 @@ def _reconcile_playlist_items(
 
     if (
         pending_journal is not None
+        and store is not None
         and logical_playlist_id is not None
         and attestation_updated_at is not None
     ):
