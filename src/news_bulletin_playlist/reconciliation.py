@@ -23,6 +23,9 @@ _MANAGED_PLAYLIST_MAX_ITEMS = 100
 _SNAPSHOT_PROPAGATION_WARNING = (
     "Spotify verification degraded: snapshot propagation pending after exact readback"
 )
+_PARTIAL_SNAPSHOT_PROPAGATION_WARNING = (
+    "Spotify verification degraded: snapshot propagation pending after partial readback"
+)
 
 
 class SpotifyPlaylistClient(Protocol):
@@ -191,33 +194,46 @@ def _reconcile_playlist_items(
             return _PlaylistItemsReconciliationResult(wrote=False)
 
     desired_fingerprint = _desired_fingerprint(desired)
+    prewrite_snapshot: str | None = None
     if (
         store is not None
         and logical_playlist_id is not None
         and current.had_unavailable_item
         and _visible_positions_match(current.slots, desired)
     ):
+        try:
+            prewrite_snapshot = _read_current_snapshot(
+                client,
+                playlist_id,
+                phase="prewrite",
+            )
+        except (SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError):
+            prewrite_snapshot = None
         attestation = store.get_playlist_attestation(logical_playlist_id)
         if (
             attestation is not None
             and attestation.destination_id == playlist_id
             and attestation.desired_fingerprint == desired_fingerprint
+            and prewrite_snapshot == attestation.snapshot_id
         ):
-            try:
-                current_snapshot = _read_current_snapshot(
-                    client,
-                    playlist_id,
-                    phase="prewrite",
-                )
-            except SpotifyReconciliationError:
-                current_snapshot = None
-            if current_snapshot == attestation.snapshot_id:
-                warning = _degraded_warning(current.unavailable_indices)
-                return _PlaylistItemsReconciliationResult(
-                    wrote=False,
-                    degraded_verification=True,
-                    warning=warning,
-                )
+            warning = _degraded_warning(current.unavailable_indices)
+            return _PlaylistItemsReconciliationResult(
+                wrote=False,
+                degraded_verification=True,
+                warning=warning,
+            )
+
+    if store is not None and logical_playlist_id is not None and prewrite_snapshot is None:
+        try:
+            prewrite_snapshot = _read_current_snapshot(
+                client,
+                playlist_id,
+                phase="prewrite",
+            )
+        except (SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError):
+            # This read is only a baseline for recognizing later snapshot propagation. A failed
+            # baseline must not block the write; the post-write path simply remains strict.
+            prewrite_snapshot = None
 
     mutation_context = nullcontext() if mutation_guard is None else mutation_guard()
     with mutation_context:
@@ -328,6 +344,16 @@ def _reconcile_playlist_items(
         phase="readback",
     )
     if current_snapshot != write_snapshot:
+        if prewrite_snapshot is not None and current_snapshot == prewrite_snapshot:
+            # The visible positions already match the requested content, while Spotify still
+            # exposes exactly the snapshot that was visible immediately before our write. This
+            # is evidence of snapshot propagation lag, not confirmation of the hidden slots.
+            # Return degraded success without updating durable attestation.
+            return _PlaylistItemsReconciliationResult(
+                wrote=True,
+                degraded_verification=True,
+                warning=_partial_snapshot_warning(readback.unavailable_indices),
+            )
         raise SpotifyReconciliationError(
             "Spotify playlist snapshot changed during degraded readback verification"
         )
@@ -704,6 +730,14 @@ def _degraded_warning(indices: Sequence[int]) -> str:
     return (
         "Spotify verification degraded: unavailable media item(s) at index/indices "
         f"[{index_text}]; snapshot attestation matched"
+    )
+
+
+def _partial_snapshot_warning(indices: Sequence[int]) -> str:
+    index_text = ",".join(str(index) for index in indices)
+    return (
+        f"{_PARTIAL_SNAPSHOT_PROPAGATION_WARNING}; unavailable media item(s) at "
+        f"index/indices [{index_text}]"
     )
 
 
