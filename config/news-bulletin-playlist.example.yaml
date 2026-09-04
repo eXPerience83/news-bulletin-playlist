@@ -1,6 +1,10 @@
-# Example only: copy this file to /data/news-bulletin-playlist.yaml (or point
+# Advanced/manual compatibility example only.
+#
+# Normal installations should use the built-in catalog plus /admin/ and
+# /data/managed-state.json instead of copying this file. If you intentionally use
+# schema-v1 YAML, copy it to /data/news-bulletin-playlist.yaml (or point
 # NEWS_PLAYLIST_CONFIG at another persistent path) and replace each destination
-# external_id with the already provisioned Spotify playlist ID before enabling
+# external_id with an already provisioned Spotify playlist ID before enabling
 # production engine cycles.
 schema_version: 1
 
@@ -8,7 +12,7 @@ sources:
   - id: ser
     display_name: Cadena SER
     countries: [ES]
-    languages: [es]
+    languages: [es-ES]
     timezone: Europe/Madrid
     enabled: true
     parser_id: ser
@@ -21,7 +25,7 @@ sources:
   - id: rne
     display_name: Radio Nacional de España
     countries: [ES]
-    languages: [es]
+    languages: [es-ES]
     timezone: Europe/Madrid
     enabled: true
     parser_id: rne
@@ -34,7 +38,7 @@ sources:
   - id: ondacero
     display_name: Onda Cero
     countries: [ES]
-    languages: [es]
+    languages: [es-ES]
     timezone: Europe/Madrid
     enabled: true
     parser_id: ondacero
@@ -43,6 +47,19 @@ sources:
       - system: spotify
         resource_type: show
         external_id: 0tjEexypyczHXW9vE3SU3P
+
+  - id: abc
+    display_name: ABC — Las Noticias de ABC
+    countries: [ES]
+    languages: [es-ES]
+    timezone: Europe/Madrid
+    enabled: true
+    parser_id: release_date_title
+    endpoint_url: https://omny.fm/shows/las-noticias-de-abc-1/playlists/podcast.rss
+    external_references:
+      - system: spotify
+        resource_type: show
+        external_id: 0cLJl7pvrr1bkUaKiVRggf
 
   - id: cnn
     display_name: CNN 5 Cosas
@@ -57,23 +74,28 @@ sources:
         resource_type: show
         external_id: 0vDgnorbpBr65YZzFVVouE
 
+  # Research-only example: no deterministic Spotify show/feed contract is configured.
   - id: cope
     display_name: COPE
     countries: [ES]
-    languages: [es]
+    languages: [es-ES]
     timezone: Europe/Madrid
     enabled: false
     parser_id: cope
 
 playlists:
   - id: spain_spanish_news
-    display_name: "Noticias 48h · España"
-    description: "Boletines en español de SER, RNE, Onda Cero y CNN 5 Cosas. Actualización automática con las últimas 48 horas, ordenadas de más reciente a más antigua."
+    display_name: "Noticias en Español"
+    description: "Boletines y resúmenes informativos en español de fuentes de España y una selección internacional de alcance global, ordenados del más reciente al más antiguo."
     countries: [ES]
     languages: [es]
     enabled: true
     source_selection:
-      explicit: [ser, rne, ondacero, cnn]
+      explicit: [ser, rne, ondacero, abc, cnn]
     destination:
       adapter_id: spotify
       external_id: replace-with-provisioned-playlist-id
+    retention_hours: 48
+    max_episodes: 100
+    duration_policy:
+      default_max_seconds: 1800
