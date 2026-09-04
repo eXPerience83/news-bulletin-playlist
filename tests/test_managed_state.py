@@ -6,29 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from news_bulletin_playlist.catalog import (
-    BUILTIN_CATALOG,
-    BuiltInCatalog,
-    PlaylistTemplate,
-)
-from news_bulletin_playlist.collection import required_sources
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
-    ManagedPlaylist,
     ManagedState,
     ManagedStateError,
     ManagedStateStore,
     activate_template,
     compile_engine_config,
 )
-from news_bulletin_playlist.models import (
-    AdapterId,
-    CountryCode,
-    DestinationReference,
-    LanguageTag,
-    PlaylistId,
-    SourceId,
-)
+from news_bulletin_playlist.models import AdapterId, DestinationReference, SourceId
 
 
 def test_builtin_catalog_has_stable_first_template_and_supported_sources() -> None:
