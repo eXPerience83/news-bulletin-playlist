@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -15,7 +16,12 @@ from news_bulletin_playlist.managed_state import (
     activate_template,
     compile_engine_config,
 )
-from news_bulletin_playlist.models import AdapterId, DestinationReference, SourceId
+from news_bulletin_playlist.models import (
+    AdapterId,
+    DestinationReference,
+    DurationPolicy,
+    SourceId,
+)
 
 
 def test_builtin_catalog_has_stable_first_template_and_supported_sources() -> None:
@@ -87,6 +93,7 @@ def test_managed_state_store_round_trip_is_owner_only(tmp_path: Path) -> None:
     assert os.stat(path).st_mode & 0o777 == 0o600
     raw = path.read_text(encoding="utf-8")
     assert "Noticias en Español" in raw
+    assert '"schema_version": 2' in raw
     assert '"max_duration_seconds": 1800' in raw
     assert "endpoint_url" not in raw
     assert "spotify_show_id" not in raw
@@ -142,14 +149,10 @@ def test_managed_state_store_rejects_non_positive_policy_before_write(
     assert not path.exists()
 
 
-def test_legacy_managed_state_without_duration_field_loads_and_inherits_template_default(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / MANAGED_STATE_FILENAME
-    path.write_text(
-        """{
+def _legacy_document(*, max_duration_line: str = "") -> str:
+    return f"""{{
   "schema_version": 1,
-  "playlists": [{
+  "playlists": [{{
     "id": "spain_spanish_news",
     "template_id": "spain_spanish_news",
     "enabled": true,
@@ -157,16 +160,80 @@ def test_legacy_managed_state_without_duration_field_loads_and_inherits_template
     "description": "legacy",
     "cover_id": "spain_spanish_news",
     "source_ids": ["ser"],
-    "destination": {"adapter_id": "spotify", "external_id": "legacy-destination"},
+    "destination": {{"adapter_id": "spotify", "external_id": "legacy-destination"}},
     "retention_hours": 48,
-    "max_episodes": 100
-  }]
-}
-""",
+    "max_episodes": 100{max_duration_line}
+  }}]
+}}
+"""
+
+
+def test_legacy_managed_state_without_duration_is_migrated_and_pinned(tmp_path: Path) -> None:
+    path = tmp_path / MANAGED_STATE_FILENAME
+    path.write_text(_legacy_document(), encoding="utf-8")
+
+    state = ManagedStateStore(path).load()
+
+    assert state.schema_version == 2
+    assert state.playlists[0].max_duration_seconds == 1800
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == 2
+    assert persisted["playlists"][0]["max_duration_seconds"] == 1800
+
+    old_template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    changed_template = replace(
+        old_template,
+        duration_policy=DurationPolicy(default_max_seconds=900),
+    )
+    changed_catalog = BuiltInCatalog(
+        sources=BUILTIN_CATALOG.sources,
+        playlists=tuple(
+            changed_template if template.id == old_template.id else template
+            for template in BUILTIN_CATALOG.playlists
+        ),
+    )
+    compiled = compile_engine_config(changed_catalog, state)
+    assert compiled.playlists[0].duration_policy.default_max_seconds == 1800
+
+
+def test_legacy_managed_state_preserves_explicit_duration_during_migration(tmp_path: Path) -> None:
+    path = tmp_path / MANAGED_STATE_FILENAME
+    path.write_text(
+        _legacy_document(max_duration_line=',\n    "max_duration_seconds": 1234'),
         encoding="utf-8",
     )
 
     state = ManagedStateStore(path).load()
-    assert state.playlists[0].max_duration_seconds is None
-    compiled = compile_engine_config(BUILTIN_CATALOG, state)
-    assert compiled.playlists[0].duration_policy.default_max_seconds == 1800
+
+    assert state.schema_version == 2
+    assert state.playlists[0].max_duration_seconds == 1234
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["playlists"][0]["max_duration_seconds"] == 1234
+
+
+def test_legacy_migration_failure_preserves_original_document(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / MANAGED_STATE_FILENAME
+    original = _legacy_document().encode()
+    path.write_bytes(original)
+
+    def fail_replace(source: object, destination: object) -> None:
+        del source, destination
+        raise OSError("simulated atomic replace failure")
+
+    monkeypatch.setattr("news_bulletin_playlist.managed_state.os.replace", fail_replace)
+
+    with pytest.raises(ManagedStateError, match="migration could not be persisted"):
+        ManagedStateStore(path).load()
+
+    assert path.read_bytes() == original
+
+
+def test_schema_v2_requires_materialized_duration(tmp_path: Path) -> None:
+    path = tmp_path / MANAGED_STATE_FILENAME
+    path.write_text(_legacy_document().replace('"schema_version": 1', '"schema_version": 2'), encoding="utf-8")
+
+    with pytest.raises(ManagedStateError, match="max_duration_seconds.*required"):
+        ManagedStateStore(path).load()
