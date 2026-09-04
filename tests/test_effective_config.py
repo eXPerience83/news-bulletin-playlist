@@ -78,7 +78,6 @@ def test_managed_state_is_normal_configuration_source(tmp_path: Path) -> None:
         SourceId("ondacero"),
         SourceId("abc"),
         SourceId("cnn"),
-        SourceId("rfi_es"),
     )
 
 
