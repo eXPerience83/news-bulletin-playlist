@@ -17,7 +17,7 @@ Core architectural invariant:
 
 A provider/source is independent from a playlist and may feed several playlists. A single engine run fetches each required source once, normalizes and persists it once, then evaluates and reconciles every configured destination playlist independently.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contract and invariants.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contract and invariants. Notable product/runtime changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
 Initial product defaults:
 
@@ -33,7 +33,7 @@ Initial product defaults:
 - treat RSS/provider metadata as the timing source and Spotify as the playlist destination;
 - allow playlist-specific policies to override defaults when required.
 
-The 30-minute ceiling is deliberately conservative while the catalog is being observed in production. Sanitized diagnostics record accepted episodes of at least 20 minutes and duration exclusions. That evidence will determine whether the product later needs a tighter concise-news ceiling, a separate long-edition playlist, or both. Occasional long editions from an otherwise concise bulletin source are acceptable; sources whose usual product is long-form are not.
+The 30-minute ceiling is deliberately provisional while the catalog is being observed in production. Sanitized diagnostics record duration exclusions, accepted editions of at least 20 minutes and per-source/per-playlist duration histograms. Issue #132 uses that evidence to decide the eventual default hard ceiling. Occasional long editions from an otherwise concise bulletin source are acceptable; sources whose usual product is long-form are not.
 
 ## Editorial independence
 
@@ -55,23 +55,27 @@ See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the current Spotify platfor
 
 The runtime catalog is intentionally stricter than the research list: a source needs a stable feed, a deterministic Spotify-show identity/matching contract and a bulletin-like publishing format suitable for the playlist.
 
-Source research uses a compact **`SCOPE · LANGUAGE`** label so national, international and language/locale fit stay visible independently. Examples include `INT · ES`, `ES · ES`, `INT · FR`, `FR · FR` and `MX · LA`. See [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md) for the classification and promotion rules.
+Source research and the admin UI classify each product on three independent axes:
 
-| Provider | Primary fit | Duration profile | Typical format |
+> **`ORIGIN · SCOPE · LANGUAGE`**
+
+`SCOPE` is `LOC`, `REG`, `NAT`, `INT` or `MIX`. This prevents provider country from being confused with editorial coverage: **CNN 5 Cosas is `US · INT · es`**, so it remains useful in the general Spanish playlist despite its US origin. Spain broadcasters use `es-ES` where that locale is known. See [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md).
+
+| Provider | Classification | Duration profile | Typical format |
 | --- | --- | --- | --- |
-| Cadena SER | `ES · ES` | Mixed | hourly bulletins, with a longer morning edition |
-| RNE | `ES · ES` | Concise | recurring radio bulletins |
-| Onda Cero | `ES · ES` | Concise | recurring radio bulletins |
-| ABC — Las Noticias de ABC | `ES · ES` | Concise | concise daily news editions |
-| CNN 5 Cosas | `INT · ES` | Concise | concise international briefing |
-| UN News Today | `INT · EN` | Concise | daily concise global bulletin |
-| RFI — Journal Monde | `INT · FR` | Mixed | mostly 10-minute world bulletins; longer tranches are duration-filtered |
-| Deutschlandfunk — Die Nachrichten | `INT · DE` | Concise | recurring ~5-minute news bulletins |
-| RMF FM — Fakty | `INT · PL` | Mixed | recurring short news bulletins, with occasional longer editions |
+| Cadena SER | `ES · NAT · es-ES` | Mixed | hourly bulletins, with a longer morning edition |
+| RNE | `ES · NAT · es-ES` | Concise | recurring radio bulletins |
+| Onda Cero | `ES · NAT · es-ES` | Concise | recurring radio bulletins |
+| ABC — Las Noticias de ABC | `ES · NAT · es-ES` | Concise | concise daily news editions |
+| CNN 5 Cosas | `US · INT · es` | Concise | concise international briefing |
+| UN News Today | `US · INT · en` | Concise | daily concise global bulletin |
+| RFI — Journal Monde | `FR · INT · fr` | Mixed | mostly 10-minute world bulletins; longer tranches are duration-filtered |
+| Deutschlandfunk — Die Nachrichten | `DE · MIX · de` | Concise | recurring short Germany/world bulletins |
+| RMF FM — Fakty | `PL · MIX · pl` | Mixed | recurring short Poland/world bulletins, with occasional longer editions |
 
-Regional Spanish products such as **RFI Español — Noticias de América** remain research candidates rather than default runtime sources because the Spanish playlists are intended to cover Spain plus genuinely global/international news, not one non-Spanish geographic region. Predominantly long-form products such as **BBC Global News Podcast** are likewise not promoted to the runtime catalog under the current concise-source rule.
+Regional Spanish products such as **RFI Español — Noticias de América** remain research candidates rather than default runtime sources because the Spanish international playlist is intended to cover genuinely global news, not one non-Spanish region. Predominantly long-form products such as **BBC Global News Podcast** are likewise not promoted to the runtime catalog under the current concise-source rule.
 
-See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md), [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md) and issue #53 for continuing source research.
+See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md), [`docs/SOURCE_CATALOG.md`](docs/SOURCE_CATALOG.md), [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md) and issue #53 for continuing source research.
 
 ## Container runtime
 
@@ -126,7 +130,7 @@ The managed state is compiled with the built-in catalog into the same `EngineCon
 
 The schema-v1 full-YAML loader remains an **advanced/manual compatibility path**, not the default first-run workflow. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is retained for that compatibility path. An explicit `NEWS_PLAYLIST_CONFIG` selects a legacy YAML file; otherwise the runtime prefers `/data/managed-state.json` when present and only falls back to the default legacy `/data/news-bulletin-playlist.yaml`. If managed state and that default legacy YAML both exist, startup fails closed rather than guessing which configuration should win.
 
-The current built-in runtime source IDs are `ser`, `rne`, `ondacero`, `abc`, `cnn`, `un_news_en`, `rfi_fr`, `dlf_news` and `rmf_fakty`. Research candidates remain outside ordinary selectable production configuration until their feed, Spotify identity, matching contract, geographic/editorial scope and typical episode duration have been checked.
+The current built-in runtime source IDs are `ser`, `rne`, `ondacero`, `abc`, `cnn`, `un_news_en`, `rfi_fr`, `dlf_news` and `rmf_fakty`. Research candidates remain outside ordinary selectable production configuration until their feed, Spotify identity, matching contract, editorial scope and typical episode duration have been checked.
 
 Canonical editions are identified only by `(source_id, source_native_id)`. Titles and timestamps are metadata, never identity. Canonical timestamps are timezone-aware UTC values. Spotify show references are source catalogue metadata and are intentionally distinct from writable playlist destinations.
 
