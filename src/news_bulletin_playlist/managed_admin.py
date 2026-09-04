@@ -163,8 +163,8 @@ class ManagedAdminService:
 
         client = self.client_factory(access_token)
         try:
-            # Provision the destination with the minimum stable payload. Cosmetic metadata must
-            # never prevent a playlist destination from being created and persisted.
+            # Provision only the durable destination identity. Metadata and cover are explicit
+            # follow-up operations so their provider behavior can never block activation.
             response = client.create_private_playlist(name)
         except SpotifyApiError as exc:
             if exc.status < 500:
@@ -193,11 +193,6 @@ class ManagedAdminService:
             self._save_validated(next_state)
         except (ManagedStateError, OSError) as exc:
             raise SpotifyPlaylistProvisioningError(destination_id) from exc
-
-        # Metadata and cover are optional follow-up operations after durable local state exists.
-        # The explicit sync action can retry them without risking playlist policy/configuration.
-        self._best_effort_metadata(client, managed)
-        self._best_effort_cover_upload(client, destination_id, cover)
         return managed
 
     def update(
@@ -250,7 +245,7 @@ class ManagedAdminService:
 
         try:
             self._apply_metadata_with_attribution_fallback(client, current)
-        except (SpotifyApiError, SpotifyTransportError) as exc:
+        except SpotifyApiError, SpotifyTransportError as exc:
             metadata_error = _safe_spotify_operation_error(exc)
 
         try:
@@ -259,7 +254,7 @@ class ManagedAdminService:
                 current.destination.external_id,
                 current.cover_id,
             )
-        except (SpotifyApiError, SpotifyTransportError) as exc:
+        except SpotifyApiError, SpotifyTransportError as exc:
             cover_error = _safe_spotify_operation_error(exc)
         except OSError, ValueError:
             cover_error = "local cover error"
@@ -287,16 +282,6 @@ class ManagedAdminService:
         self._save_validated(ManagedState(schema_version=state.schema_version, playlists=remaining))
         return current.destination.external_id
 
-    def _best_effort_metadata(
-        self,
-        client: PlaylistProvisioningClient,
-        playlist: ManagedPlaylist,
-    ) -> None:
-        try:
-            self._apply_metadata_with_attribution_fallback(client, playlist)
-        except SpotifyApiError, SpotifyTransportError:
-            return
-
     def _apply_metadata_with_attribution_fallback(
         self,
         client: PlaylistProvisioningClient,
@@ -311,26 +296,13 @@ class ManagedAdminService:
         except SpotifyApiError as exc:
             if exc.status != 400:
                 raise
-            # The attribution footer is optional. A definitive 400 is the only case where we
-            # retry with the base description; auth/rate-limit/server/transport failures are not
-            # hidden behind a fallback request.
+            # Attribution is optional. Retry only a definitive validation failure; auth,
+            # rate-limit, server and transport failures must remain visible to the operator.
             client.change_playlist_details(
                 playlist.destination.external_id,
                 name=playlist.display_name,
                 description=_playlist_description(playlist.description),
             )
-
-    def _best_effort_cover_upload(
-        self,
-        client: PlaylistProvisioningClient,
-        playlist_id: str,
-        cover_id: str,
-    ) -> None:
-        try:
-            self._upload_cover_explicit(client, playlist_id, cover_id)
-        except OSError, ValueError, SpotifyApiError, SpotifyTransportError:
-            # Cover art is product metadata. It must never block playlist state or bulletin sync.
-            return
 
     def _upload_cover_explicit(
         self,
