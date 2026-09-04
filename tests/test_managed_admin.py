@@ -10,9 +10,7 @@ from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
     ManagedAdminService,
     SpotifyPlaylistCreationUncertainError,
-    SpotifyPlaylistPersistenceError,
     SpotifyPlaylistProvisioningError,
-    render_spotify_description,
 )
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
@@ -130,9 +128,8 @@ def test_activate_creates_one_private_destination_and_persists_explicit_choices(
     )
 
     assert factory.tokens == ["access-token-sentinel"]
-    assert factory.client.create_calls == [
-        ("Noticias España", render_spotify_description("Descripción personalizada"))
-    ]
+    assert factory.client.create_calls == [("Noticias España", "")]
+    assert factory.client.update_calls == []
     assert managed.destination.external_id == "spotify-destination"
     assert managed.source_ids == (SourceId("ser"), SourceId("cnn"))
     snapshot = service.snapshot()
@@ -185,9 +182,7 @@ def test_activate_same_template_twice_does_not_create_duplicate_spotify_playlist
             access_token="token",
         )
 
-    assert factory.client.create_calls == [
-        (template.display_name, render_spotify_description(template.description))
-    ]
+    assert factory.client.create_calls == [(template.display_name, "")]
 
 
 def test_spotify_creation_transport_failure_blocks_blind_retry_and_redacts_token(
@@ -285,12 +280,11 @@ def test_spotify_creation_persistence_failure_surfaces_recoverable_destination_i
 
     assert raised.value.playlist_id == "created-but-not-saved"
     assert "created-but-not-saved" in str(raised.value)
-    assert factory.client.create_calls == [
-        (template.display_name, render_spotify_description(template.description))
-    ]
+    assert factory.client.create_calls == [(template.display_name, "")]
+    assert factory.client.update_calls == []
 
 
-def test_update_synchronizes_name_and_description_to_spotify(tmp_path: Path) -> None:
+def test_update_persists_name_and_description_locally_without_spotify_io(tmp_path: Path) -> None:
     service, factory = _service(tmp_path, [{"id": "destination"}])
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
     managed = service.activate(
@@ -309,17 +303,17 @@ def test_update_synchronizes_name_and_description_to_spotify(tmp_path: Path) -> 
         cover_id=managed.cover_id,
         source_ids=("ser", "cnn"),
         enabled=True,
-        access_token="update-token",
+        access_token="unused-update-token",
     )
 
     assert updated.display_name == "Noticias España Ahora"
-    assert factory.tokens == ["create-token", "update-token"]
-    assert factory.client.update_calls == [
-        ("destination", "Noticias España Ahora", render_spotify_description("Descripción nueva"))
-    ]
+    assert updated.description == "Descripción nueva"
+    assert service.snapshot().managed == (updated,)
+    assert factory.tokens == ["create-token"]
+    assert factory.client.update_calls == []
 
 
-def test_metadata_transport_failure_keeps_local_state_and_redacts_token(
+def test_metadata_save_succeeds_locally_even_if_spotify_metadata_would_fail(
     tmp_path: Path,
     capsys: Any,
 ) -> None:
@@ -334,21 +328,21 @@ def test_metadata_transport_failure_keeps_local_state_and_redacts_token(
         access_token="create-token",
     )
     factory.client = _FailingUpdateSpotifyClient([])
-    before = service.snapshot().managed[0]
 
-    with pytest.raises(SpotifyTransportError) as raised:
-        service.update(
-            managed.id,
-            display_name="Noticias España Ahora",
-            description=managed.description,
-            cover_id=managed.cover_id,
-            source_ids=managed.source_ids,
-            enabled=True,
-            access_token="update-token-sentinel",
-        )
+    updated = service.update(
+        managed.id,
+        display_name="Noticias España Ahora",
+        description=managed.description,
+        cover_id=managed.cover_id,
+        source_ids=managed.source_ids,
+        enabled=True,
+        access_token="update-token-sentinel",
+    )
 
-    assert service.snapshot().managed[0] == before
-    assert "update-token-sentinel" not in str(raised.value)
+    assert updated.display_name == "Noticias España Ahora"
+    assert service.snapshot().managed == (updated,)
+    assert factory.tokens == ["create-token"]
+    assert factory.client.update_calls == []
     captured = capsys.readouterr()
     assert "update-token-sentinel" not in captured.out
     assert "update-token-sentinel" not in captured.err
@@ -380,9 +374,7 @@ def test_source_only_update_does_not_write_spotify_metadata(tmp_path: Path) -> N
     assert factory.tokens == ["create-token"]
 
 
-def test_metadata_persistence_failure_surfaces_destination_for_reconciliation(
-    tmp_path: Path,
-) -> None:
+def test_local_update_persistence_failure_does_not_touch_spotify(tmp_path: Path) -> None:
     factory = _Factory([{"id": "destination"}])
     store = _FailingSaveStore(tmp_path / "managed-state.json", fail_after=1)
     service = ManagedAdminService(store, client_factory=factory)
@@ -396,7 +388,7 @@ def test_metadata_persistence_failure_surfaces_destination_for_reconciliation(
         access_token="create-token",
     )
 
-    with pytest.raises(SpotifyPlaylistPersistenceError) as raised:
+    with pytest.raises(OSError, match="disk unavailable"):
         service.update(
             managed.id,
             display_name="Nuevo nombre",
@@ -404,13 +396,12 @@ def test_metadata_persistence_failure_surfaces_destination_for_reconciliation(
             cover_id=managed.cover_id,
             source_ids=managed.source_ids,
             enabled=True,
-            access_token="update-token",
+            access_token="unused-update-token",
         )
 
-    assert raised.value.playlist_id == "destination"
-    assert factory.client.update_calls == [
-        ("destination", "Nuevo nombre", render_spotify_description(managed.description))
-    ]
+    assert service.snapshot().managed == (managed,)
+    assert factory.tokens == ["create-token"]
+    assert factory.client.update_calls == []
 
 
 def test_paused_playlist_may_have_no_sources_but_cannot_resume_until_sources_selected(
@@ -516,7 +507,5 @@ def test_stop_managing_removes_local_instance_without_spotify_delete(tmp_path: P
     assert destination == "destination-to-keep"
     assert service.snapshot().managed == ()
     assert service.snapshot().available_templates == BUILTIN_CATALOG.playlists
-    assert factory.client.create_calls == [
-        (template.display_name, render_spotify_description(template.description))
-    ]
+    assert factory.client.create_calls == [(template.display_name, "")]
     assert factory.client.update_calls == []
