@@ -2,6 +2,8 @@
 
 This document stages the post-#130 source-catalog follow-up. It does **not** change runtime behavior by itself.
 
+PR #130 was squash-merged on 2026-09-05. This branch is based directly on the resulting `main` tree so the source-expansion work does not carry the PR's intermediate commit history.
+
 ## Product decision
 
 Spanish-language products must separate **editorial market** and **spoken locale**.
@@ -28,12 +30,12 @@ For user-facing naming, prefer unambiguous concepts such as:
 
 The compact internal/product notation can evolve separately from cover wording, but it must preserve the same distinction.
 
-## Consequence for PR #130 sources
+## Consequence for sources merged through PR #130
 
-PR #130 remains unchanged while its TrueNAS candidate is under acceptance. The follow-up PR after #130 merges should apply these source-placement rules:
+The post-merge follow-up should apply these source-placement rules:
 
 - `ser`, `rne`, `ondacero`, `abc` remain strong defaults for `ES · es-ES`.
-- `cnn` must no longer be shared with the Spain playlist merely because it is in Spanish. Its spoken locale should be verified explicitly; until then, treat its current `es` tag as unresolved for Spain/LAT placement.
+- `cnn` / **CNN 5 Cosas** is confirmed by listening as spoken `es-ES`. Its editorial scope remains genuinely international, so classify it as `US · INT · es-ES`: it belongs in the Spain-Spanish world product (`INT · es-ES`), **not** automatically in the Spain-national playlist and not in LAT.
 - `RFI Español — Noticias de América` is regional-Americas content and belongs only in the LAT research bucket; it is not a default world-Spanish or Spain source.
 - sources such as ONU, DW, France 24, Univision, SBS and VOA require both editorial-scope and spoken-locale verification before assignment.
 
@@ -65,6 +67,7 @@ No source should be promoted merely because the publisher is European. Spoken lo
 
 | Source | Status | Note |
 | --- | --- | --- |
+| CNN — 5 Cosas | implemented / locale confirmed | `US · INT · es-ES`; current strongest implemented world-news source for this spoken locale. |
 | ONU en minutos | high-priority candidate | Excellent global bulletin; verify spoken locale, exact RSS product boundary and Spotify identity. |
 | DW — Actualidad en análisis | candidate | ~20–25 minute international analysis; verify spoken locale before assigning to ES vs LAT world product. |
 | France 24 Spanish products | research | Find a discrete world-news bulletin; do not use LAT-focused or long-form products by mistake. |
@@ -73,7 +76,6 @@ No source should be promoted merely because the publisher is European. Spoken lo
 
 | Source | Status | Note |
 | --- | --- | --- |
-| CNN — 5 Cosas | implemented source / placement pending | Global scope; verify spoken locale before moving it out of generic `es`. |
 | ONU en minutos | high-priority candidate | May be neutral enough for broader use, but locale must be evidenced rather than assumed. |
 | N+ Univision 24-7 | candidate | International + US agenda; useful optional world/LAT source if overlap remains acceptable. |
 | DW — Actualidad en análisis | candidate | Global content; assign only after spoken-locale verification. |
@@ -134,11 +136,11 @@ For each selected source, verify:
 9. deterministic RSS→Spotify matching;
 10. provider-watch and matcher tests.
 
-## Planned follow-up after #130 merges
+## Planned follow-up after #130 merge
 
-1. Rebase this branch onto the merged `main`.
+1. ✅ Rebase this branch onto the squash-merged `main` without carrying #130's intermediate history.
 2. Update the canonical `SOURCE_SELECTION.md`, `SOURCE_CATALOG.md`, #44 and #53 with this product split.
-3. Stop default-sharing generic/Latin-American Spanish sources into the Spain playlist.
+3. Stop default-sharing non-national sources into the Spain playlist purely because they are Spanish-language; CNN stays available to `INT · es-ES` as a confirmed world source.
 4. Promote only technically verified new sources.
 5. Add Spain/LAT/world templates only when each has a defensible default source set and matching cover assets.
 6. Open a focused PR; do not mix unrelated #130 follow-ups into it.
