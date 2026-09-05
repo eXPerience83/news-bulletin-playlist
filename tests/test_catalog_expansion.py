@@ -20,9 +20,10 @@ def test_builtin_catalog_exposes_phase_one_playlist_templates() -> None:
         SourceId("rne"),
         SourceId("ondacero"),
         SourceId("abc"),
-        SourceId("cnn"),
     )
+    assert tuple(map(str, by_id["spain_spanish_news"].languages)) == ("es-ES",)
     assert by_id["international_spanish_news"].default_source_ids == (SourceId("cnn"),)
+    assert tuple(map(str, by_id["international_spanish_news"].languages)) == ("es-ES",)
     assert by_id["international_english_news"].default_source_ids == (SourceId("un_news_en"),)
 
 
@@ -37,7 +38,7 @@ def test_builtin_sources_expose_origin_scope_and_language() -> None:
 
     assert tuple(map(str, cnn.countries)) == ("US",)
     assert cnn.editorial_scope is EditorialScope.INTERNATIONAL
-    assert tuple(map(str, cnn.languages)) == ("es",)
+    assert tuple(map(str, cnn.languages)) == ("es-ES",)
 
     assert tuple(map(str, dlf.countries)) == ("DE",)
     assert dlf.editorial_scope is EditorialScope.MIXED
