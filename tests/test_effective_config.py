@@ -72,12 +72,12 @@ def test_managed_state_is_normal_configuration_source(tmp_path: Path) -> None:
     assert config is not None
     assert [playlist.id for playlist in config.playlists] == [PlaylistId("spain_spanish_news")]
     assert config.playlists[0].display_name == "Noticias en Español"
+    assert tuple(map(str, config.playlists[0].languages)) == ("es-ES",)
     assert config.playlists[0].source_selection.explicit == (
         SourceId("ser"),
         SourceId("rne"),
         SourceId("ondacero"),
         SourceId("abc"),
-        SourceId("cnn"),
     )
 
 

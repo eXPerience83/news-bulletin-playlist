@@ -25,13 +25,17 @@ current work remains under **Unreleased** until a stable release is cut.
 - Source editorial-scope metadata and three-axis source classification:
   **`ORIGIN · SCOPE · LANGUAGE`**, separating provider country from actual news coverage and language.
 - Admin source labels/table now expose country, scope and language. For example, CNN 5 Cosas is
-  represented as `US · INT · es`, so its US origin is not confused with US-only editorial coverage.
+  represented as `US · INT · es-ES`, so its US origin is not confused with US-only editorial coverage.
 - Plain-text project attribution appended to Spotify playlist descriptions on metadata creation/sync:
   `Proyecto / Project: https://github.com/eXPerience83/news-bulletin-playlist`.
 - Sanitized per-source/per-playlist duration histograms in diagnostics, plus explicit events for
   accepted editions >=20 minutes and duration exclusions, to support the evidence review in #132.
 - Source-selection documentation that rejects predominantly long-form products even when individual
   episodes fit below a playlist hard limit.
+- Runtime support for Reuters World News, ONU en minutos, N+ Univision 24-7 and DW Actualidad en
+  análisis. ONU's broad UN Spanish audio feed is filtered fail-closed to dated ONU-en-minutos
+  editions. CBC World Report remains verified research but is withheld from the runtime catalogue
+  because its official RSS did not meet the production provider-watch fetch contract.
 
 ### Changed
 
@@ -42,15 +46,15 @@ current work remains under **Unreleased** until a stable release is cut.
   object omits `default_max_seconds`; an explicit YAML value still overrides it.
 - `Noticias España` product naming becomes **Noticias en Español**, matching its existing cover and
   reflecting that the playlist combines Spain sources with selected genuinely global Spanish news.
-- `Noticias en Español` defaults to SER, RNE, Onda Cero, ABC and CNN 5 Cosas.
+- `Noticias en Español` defaults to SER, RNE, Onda Cero and ABC.
 - `INT · ES` starts with **CNN 5 Cosas** as a genuinely global Spanish source. Region-specific
   products such as RFI Noticias de América remain research candidates rather than global defaults.
-- `INT · EN` uses concise **UN News Today** instead of the predominantly long-form BBC Global News
-  Podcast candidate.
+- `INT · EN` uses concise **UN News Today** and **Reuters World News** instead of the predominantly
+  long-form BBC Global News Podcast candidate.
 - RFI Journal Monde, Deutschlandfunk and RMF Fakty seed the first FR/DE/PL playlist experiments while
   source classification remains honest about `INT` versus `MIX` editorial scope.
-- Spain-origin sources now carry `es-ES` language metadata where the Spain variant is known; CNN
-  remains general `es` metadata rather than being mislabeled as Spain-origin Spanish.
+- Spain-origin sources carry `es-ES` language metadata where the Spain variant is known; CNN is also
+  explicitly `es-ES` by listening confirmation while remaining `US · INT` in origin/scope.
 
 ### Fixed
 

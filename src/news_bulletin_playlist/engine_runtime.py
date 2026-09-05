@@ -418,6 +418,7 @@ def _playlist_write_contract(
                 source.enabled,
                 str(source.timezone),
                 str(source.parser_id),
+                source.collection_filter_id,
                 source.endpoint_url,
                 tuple(
                     sorted(

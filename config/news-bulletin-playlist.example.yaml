@@ -64,7 +64,7 @@ sources:
   - id: cnn
     display_name: CNN 5 Cosas
     countries: [US]
-    languages: [es]
+    languages: [es-ES]
     timezone: America/New_York
     enabled: true
     parser_id: cnn
@@ -86,12 +86,12 @@ sources:
 playlists:
   - id: spain_spanish_news
     display_name: "Noticias en Español"
-    description: "Boletines y resúmenes informativos en español de fuentes de España y una selección internacional de alcance global, ordenados del más reciente al más antiguo."
+    description: "Boletines y resúmenes informativos de España en español, ordenados del más reciente al más antiguo."
     countries: [ES]
-    languages: [es]
+    languages: [es-ES]
     enabled: true
     source_selection:
-      explicit: [ser, rne, ondacero, abc, cnn]
+      explicit: [ser, rne, ondacero, abc]
     destination:
       adapter_id: spotify
       external_id: replace-with-provisioned-playlist-id

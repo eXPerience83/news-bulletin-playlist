@@ -32,6 +32,10 @@ def test_builtin_catalog_has_stable_first_template_and_supported_sources() -> No
         "abc",
         "cnn",
         "un_news_en",
+        "reuters_world",
+        "nplus_univision",
+        "dw_actualidad",
+        "un_news_es",
         "rfi_fr",
         "dlf_news",
         "rmf_fakty",
@@ -40,12 +44,12 @@ def test_builtin_catalog_has_stable_first_template_and_supported_sources() -> No
     assert template.display_name == "Noticias en Español"
     assert "48h" not in template.display_name
     assert template.cover_id == "spain_spanish_news"
+    assert tuple(map(str, template.languages)) == ("es-ES",)
     assert template.default_source_ids == (
         SourceId("ser"),
         SourceId("rne"),
         SourceId("ondacero"),
         SourceId("abc"),
-        SourceId("cnn"),
     )
     assert template.duration_policy.default_max_seconds == 1800
     assert template.duration_policy.exceptions == ()

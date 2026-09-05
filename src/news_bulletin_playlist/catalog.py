@@ -17,6 +17,7 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
 )
+from news_bulletin_playlist.registry import has_collection_filter
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,10 @@ class BuiltInCatalog:
                 raise ValueError(
                     f"built-in source {source.id} requires exactly one Spotify show reference"
                 )
+            if source.collection_filter_id is not None and not has_collection_filter(
+                source.collection_filter_id
+            ):
+                raise ValueError(f"built-in source {source.id} has an unknown collection filter")
         for template in self.playlists:
             if not template.display_name.strip() or not template.cover_id.strip():
                 raise ValueError(f"playlist template {template.id} has incomplete metadata")
@@ -158,7 +163,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         id=SourceId("cnn"),
         display_name="CNN 5 Cosas",
         countries=(CountryCode("US"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("America/New_York"),
         enabled=True,
         parser_id=ParserId("cnn"),
@@ -177,6 +182,55 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         editorial_scope=EditorialScope.INTERNATIONAL,
         endpoint_url="https://news.un.org/feed/subscribe/en/audio-product/all/audio-rss.xml",
         external_references=(ExternalReference("spotify", "show", "3bCQUj5TafN5ichR8gXpFI"),),
+    ),
+    SourceDefinition(
+        id=SourceId("reuters_world"),
+        display_name="Reuters — World News",
+        countries=(CountryCode("GB"),),
+        languages=(LanguageTag("en"),),
+        timezone=ZoneInfo("UTC"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url="https://feeds.megaphone.fm/reutersworldnews",
+        external_references=(ExternalReference("spotify", "show", "1alpjXkCUjn3Y9fR5xl8fZ"),),
+    ),
+    SourceDefinition(
+        id=SourceId("nplus_univision"),
+        display_name="N+ Univision 24-7",
+        countries=(CountryCode("US"),),
+        languages=(LanguageTag("es"),),
+        timezone=ZoneInfo("UTC"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url="https://feeds.simplecast.com/CC3CSCi5",
+        external_references=(ExternalReference("spotify", "show", "7G8CEhjsTshZeGtPLcuW6T"),),
+    ),
+    SourceDefinition(
+        id=SourceId("dw_actualidad"),
+        display_name="DW — Actualidad en análisis",
+        countries=(CountryCode("DE"),),
+        languages=(LanguageTag("es"),),
+        timezone=ZoneInfo("Europe/Berlin"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url="https://rss.dw.com/xml/podcast_actualidad_en_analisis",
+        external_references=(ExternalReference("spotify", "show", "7CzHDusNXRICUXuefIXbxd"),),
+    ),
+    SourceDefinition(
+        id=SourceId("un_news_es"),
+        display_name="United Nations — ONU en minutos",
+        countries=(CountryCode("US"),),
+        languages=(LanguageTag("es"),),
+        timezone=ZoneInfo("America/New_York"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        collection_filter_id="un_news_es_minutes",
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url="https://news.un.org/feed/subscribe/es/audio-product/all/audio-rss.xml",
+        external_references=(ExternalReference("spotify", "show", "77hGWK2o0NYsdS8WuXiLo6"),),
     ),
     SourceDefinition(
         id=SourceId("rfi_fr"),
@@ -224,18 +278,16 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         id=PlaylistId("spain_spanish_news"),
         display_name="Noticias en Español",
         description=(
-            "Últimos boletines y resúmenes informativos en español, con fuentes de España "
-            "y una selección internacional de alcance global, actualizados automáticamente "
-            "y ordenados del más reciente al más antiguo."
+            "Últimos boletines y resúmenes informativos de España en español, "
+            "actualizados automáticamente y ordenados del más reciente al más antiguo."
         ),
         countries=(CountryCode("ES"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         default_source_ids=(
             SourceId("ser"),
             SourceId("rne"),
             SourceId("ondacero"),
             SourceId("abc"),
-            SourceId("cnn"),
         ),
         cover_id="spain_spanish_news",
     ),
@@ -247,7 +299,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
             "actualizados automáticamente y ordenados del más reciente al más antiguo."
         ),
         countries=(CountryCode("US"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         default_source_ids=(SourceId("cnn"),),
         cover_id="international_spanish_news",
     ),
@@ -260,7 +312,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         ),
         countries=(CountryCode("US"),),
         languages=(LanguageTag("en"),),
-        default_source_ids=(SourceId("un_news_en"),),
+        default_source_ids=(SourceId("un_news_en"), SourceId("reuters_world")),
         cover_id="international_english_news",
     ),
     PlaylistTemplate(
