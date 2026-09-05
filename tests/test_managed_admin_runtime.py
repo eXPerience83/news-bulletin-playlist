@@ -54,7 +54,7 @@ class _FakeSpotifyClient:
         return {"id": "owner"}
 
     def playlist_details(self, playlist_id: str) -> dict[str, Any]:
-        return {"id": playlist_id, "owner": {"id": "owner"}}
+        return {"id": playlist_id, "name": "Noticias en Español", "owner": {"id": "owner"}}
 
     def change_playlist_details(
         self,
@@ -371,6 +371,8 @@ def test_clear_uncertain_provisioning_route_is_csrf_protected_and_local_only(
             description=template.description,
             cover_id=template.cover_id,
             source_ids=template.default_source_ids,
+            retention_hours=template.retention_hours,
+            max_episodes=template.max_episodes,
             max_duration_seconds=1800,
         )
     )
@@ -403,6 +405,8 @@ def test_uncertain_provisioning_renders_only_recovery_actions(tmp_path: Path) ->
             description=template.description,
             cover_id=template.cover_id,
             source_ids=template.default_source_ids,
+            retention_hours=template.retention_hours,
+            max_episodes=template.max_episodes,
             max_duration_seconds=1800,
         )
     )
@@ -434,6 +438,8 @@ def test_adopt_uncertain_provisioning_route_verifies_owner_and_starts_scheduler(
             description=template.description,
             cover_id=template.cover_id,
             source_ids=template.default_source_ids,
+            retention_hours=template.retention_hours,
+            max_episodes=template.max_episodes,
             max_duration_seconds=1800,
         )
     )

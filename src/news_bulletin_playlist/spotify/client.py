@@ -68,7 +68,7 @@ class SpotifyClient:
         return self._request(
             "GET",
             f"/playlists/{playlist_id}",
-            query={"fields": "id,owner(id)"},
+            query={"fields": "id,name,owner(id)"},
         )
 
     def change_playlist_details(

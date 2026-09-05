@@ -154,7 +154,26 @@ def test_authorize_url_uses_pkce_state_exact_redirect_and_minimal_scopes(tmp_pat
     assert params["state"] == [state]
     assert tuple(params["scope"][0].split()) == PRODUCTION_REQUESTED_SCOPES
     assert "ugc-image-upload" in params["scope"][0].split()
+    assert "user-read-private" in params["scope"][0].split()
+    assert "user-read-private" not in PRODUCTION_SCOPES
     assert "client_secret" not in params
+
+
+def test_existing_runtime_credential_without_profile_scope_refreshes_normally(
+    tmp_path: Path,
+) -> None:
+    service, transport, store = _service(tmp_path)
+    store.save(
+        SpotifyCredentialRecord(
+            status=CredentialStatus.ACTIVE,
+            refresh_token="legacy-refresh",
+            granted_scopes=PRODUCTION_SCOPES,
+            authorized_at=NOW,
+        )
+    )
+
+    assert service.get_access_token(now=NOW) == "access-refreshed"
+    assert transport.refresh_calls[0]["refresh_token"] == "legacy-refresh"
 
 
 def test_state_mismatch_fails_without_consuming_legitimate_pending_flow(tmp_path: Path) -> None:

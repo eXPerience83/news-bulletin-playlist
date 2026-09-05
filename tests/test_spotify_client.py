@@ -123,7 +123,7 @@ def test_client_creates_public_playlist_and_reads_adoption_identity(
     assert json.loads(requests[0].data or b"{}") == {"name": "News", "public": True}
     assert urllib.parse.urlsplit(requests[1].full_url).path.endswith("/me")
     assert urllib.parse.parse_qs(urllib.parse.urlsplit(requests[2].full_url).query) == {
-        "fields": ["id,owner(id)"]
+        "fields": ["id,name,owner(id)"]
     }
 
 

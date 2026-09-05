@@ -34,6 +34,8 @@ class ProvisioningIntent:
     description: str
     cover_id: str
     source_ids: tuple[SourceId, ...]
+    retention_hours: int
+    max_episodes: int
     max_duration_seconds: int
     destination_id: str | None = None
 
@@ -42,6 +44,10 @@ class ProvisioningIntent:
             raise ValueError("provisioning intent is incomplete")
         if len(self.source_ids) != len(set(self.source_ids)):
             raise ValueError("provisioning intent source_ids contain duplicates")
+        if self.retention_hours <= 0 or self.max_episodes <= 0:
+            raise ValueError(
+                "provisioning intent retention and maximum episode values must be positive"
+            )
         validate_persisted_duration_seconds(self.max_duration_seconds)
         if self.state is ProvisioningState.REQUEST_STARTED and self.destination_id is not None:
             raise ValueError("request-started provisioning intent cannot have a destination")
@@ -61,6 +67,8 @@ class ProvisioningIntent:
             description=self.description,
             cover_id=self.cover_id,
             source_ids=self.source_ids,
+            retention_hours=self.retention_hours,
+            max_episodes=self.max_episodes,
             max_duration_seconds=self.max_duration_seconds,
             destination_id=value,
         )
@@ -94,6 +102,8 @@ class ProvisioningJournal:
             "description": intent.description,
             "cover_id": intent.cover_id,
             "source_ids": [str(source_id) for source_id in intent.source_ids],
+            "retention_hours": intent.retention_hours,
+            "max_episodes": intent.max_episodes,
             "max_duration_seconds": intent.max_duration_seconds,
             "destination_id": intent.destination_id,
         }
@@ -147,6 +157,8 @@ def _parse_intent(value: object) -> ProvisioningIntent:
         "description",
         "cover_id",
         "source_ids",
+        "retention_hours",
+        "max_episodes",
         "max_duration_seconds",
         "destination_id",
     }
@@ -164,6 +176,8 @@ def _parse_intent(value: object) -> ProvisioningIntent:
             description=_string(value["description"]),
             cover_id=_nonempty_string(value["cover_id"]),
             source_ids=tuple(SourceId(_nonempty_string(item)) for item in source_values),
+            retention_hours=_positive_integer(value["retention_hours"]),
+            max_episodes=_positive_integer(value["max_episodes"]),
             max_duration_seconds=validate_persisted_duration_seconds(value["max_duration_seconds"]),
             destination_id=(
                 None
@@ -186,6 +200,12 @@ def _nonempty_string(value: object) -> str:
     if not result:
         raise ValueError
     return result
+
+
+def _positive_integer(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError
+    return value
 
 
 def _fsync_directory(path: Path) -> None:

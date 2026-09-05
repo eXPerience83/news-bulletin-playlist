@@ -198,6 +198,8 @@ class ManagedAdminService:
             description=_playlist_description(description),
             cover_id=self._cover_id(cover_id),
             source_ids=self._source_ids(source_ids, allow_empty=False),
+            retention_hours=template.retention_hours,
+            max_episodes=template.max_episodes,
             max_duration_seconds=(
                 template.duration_policy.default_max_seconds
                 if max_duration_seconds is None
@@ -259,6 +261,8 @@ class ManagedAdminService:
             description=intent.description,
             cover_id=intent.cover_id,
             source_ids=self._source_ids(intent.source_ids, allow_empty=False),
+            retention_hours=intent.retention_hours,
+            max_episodes=intent.max_episodes,
             max_duration_seconds=intent.max_duration_seconds,
         )
         self._save_validated(
@@ -281,9 +285,21 @@ class ManagedAdminService:
             raise ManagedAdminError("there is no uncertain playlist activation to adopt")
         candidate = _spotify_playlist_id_text(destination_id)
         client = self.client_factory(access_token)
-        if _spotify_user_id(client.current_user()) != _spotify_playlist_owner_id(
-            client.playlist_details(candidate), expected_playlist_id=candidate
-        ):
+        try:
+            user_id = _spotify_user_id(client.current_user())
+        except SpotifyApiError as exc:
+            if exc.status in {401, 403}:
+                raise ManagedAdminError(
+                    "Spotify ownership verification requires reconnecting Spotify to grant "
+                    "the user-read-private permission"
+                ) from exc
+            raise
+        owner_id = _spotify_playlist_owner_id(
+            client.playlist_details(candidate),
+            expected_playlist_id=candidate,
+            expected_name=intent.display_name,
+        )
+        if user_id != owner_id:
             raise ManagedAdminError("Spotify playlist is not owned by the authorized user")
         self.provisioning_journal.save(intent.with_destination(candidate))
         result = self.finalize_known_provisioning()
@@ -585,7 +601,12 @@ def _spotify_user_id(response: object) -> str:
     return value.strip()
 
 
-def _spotify_playlist_owner_id(response: object, *, expected_playlist_id: str) -> str:
+def _spotify_playlist_owner_id(
+    response: object,
+    *,
+    expected_playlist_id: str,
+    expected_name: str,
+) -> str:
     if not isinstance(response, dict) or response.get("id") != expected_playlist_id:
         raise ManagedAdminError("Spotify playlist verification returned an unexpected destination")
     owner = response.get("owner")
@@ -594,4 +615,6 @@ def _spotify_playlist_owner_id(response: object, *, expected_playlist_id: str) -
     value = owner.get("id")
     if not isinstance(value, str) or not value.strip():
         raise ManagedAdminError("Spotify playlist verification did not return an owner")
+    if response.get("name") != expected_name:
+        raise ManagedAdminError("Spotify playlist name does not match the pending activation")
     return value.strip()

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
     ManagedAdminService,
@@ -66,7 +67,7 @@ class _Factory:
         self.client = client
 
     def __call__(self, token: str) -> _Client:
-        assert token == "token"
+        assert token
         return self.client
 
 
@@ -93,15 +94,22 @@ class _FailingJournal(ProvisioningJournal):
         super().clear()
 
 
+class _ForbiddenProfileClient(_Client):
+    def current_user(self) -> dict[str, Any]:
+        raise SpotifyApiError(403, "forbidden")
+
+
 def _service(
     tmp_path: Path,
     client: _Client,
     *,
     store: ManagedStateStore | None = None,
     journal: ProvisioningJournal | None = None,
+    catalog: BuiltInCatalog = BUILTIN_CATALOG,
 ) -> ManagedAdminService:
     return ManagedAdminService(
         store or ManagedStateStore(tmp_path / "managed-state.json"),
+        catalog=catalog,
         client_factory=_Factory(client),
         provisioning_journal=journal or ProvisioningJournal(tmp_path / "provisioning.json"),
     )
@@ -128,6 +136,8 @@ def _request_intent() -> ProvisioningIntent:
         description=template.description,
         cover_id=template.cover_id,
         source_ids=template.default_source_ids,
+        retention_hours=template.retention_hours,
+        max_episodes=template.max_episodes,
         max_duration_seconds=1800,
     )
 
@@ -173,6 +183,69 @@ def test_uncertain_create_survives_restart_and_blocks_second_create(
     assert len(client.create_calls) == 1
 
 
+@pytest.mark.parametrize(
+    "playlist",
+    [
+        {"id": "MATCH", "name": "Wrong name", "owner": {"id": "owner"}},
+        {"id": "MATCH", "name": "Noticias en Español", "owner": {}},
+    ],
+)
+def test_adoption_rejects_wrong_name_or_malformed_response_without_changing_intent(
+    tmp_path: Path, playlist: dict[str, Any]
+) -> None:
+    client = _Client()
+    client.playlist = playlist
+    journal = ProvisioningJournal(tmp_path / "provisioning.json")
+    journal.save(_request_intent())
+    with pytest.raises(ManagedAdminError):
+        _service(tmp_path, client, journal=journal).adopt_uncertain_provisioning(
+            "A" * 22, access_token="token"
+        )
+    assert journal.load().state is ProvisioningState.REQUEST_STARTED  # type: ignore[union-attr]
+
+
+def test_adoption_profile_scope_failure_is_actionable_and_preserves_intent(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    journal = ProvisioningJournal(tmp_path / "provisioning.json")
+    journal.save(_request_intent())
+    with pytest.raises(
+        ManagedAdminError,
+        match="reconnecting Spotify.*user-read-private",
+    ) as raised:
+        _service(tmp_path, _ForbiddenProfileClient(), journal=journal).adopt_uncertain_provisioning(
+            "A" * 22, access_token="token-sentinel"
+        )
+    assert journal.load().state is ProvisioningState.REQUEST_STARTED  # type: ignore[union-attr]
+    assert "token-sentinel" not in str(raised.value)
+    assert "token-sentinel" not in capsys.readouterr().out
+
+
+def test_known_destination_recovery_uses_journaled_template_snapshot(tmp_path: Path) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    intent = _request_intent().with_destination("created")
+    journal = ProvisioningJournal(tmp_path / "provisioning.json")
+    journal.save(intent)
+    changed_template = replace(template, retention_hours=12, max_episodes=7)
+    changed_catalog = BuiltInCatalog(
+        sources=BUILTIN_CATALOG.sources,
+        playlists=tuple(
+            changed_template if item.id == template.id else item
+            for item in BUILTIN_CATALOG.playlists
+        ),
+    )
+    recovered = _service(
+        tmp_path,
+        _Client(),
+        journal=journal,
+        catalog=changed_catalog,
+    ).finalize_known_provisioning()
+    assert recovered is not None
+    assert recovered.retention_hours == template.retention_hours
+    assert recovered.max_episodes == template.max_episodes
+
+
 def test_definite_create_rejection_clears_intent_and_allows_safe_retry(tmp_path: Path) -> None:
     client = _Client([SpotifyApiError(400, "bad"), {"id": "created"}])
     journal = ProvisioningJournal(tmp_path / "provisioning.json")
@@ -182,6 +255,13 @@ def test_definite_create_rejection_clears_intent_and_allows_safe_retry(tmp_path:
     assert journal.load() is None
     assert _activate(service).destination.external_id == "created"
     assert len(client.create_calls) == 2
+
+
+def test_normal_activation_snapshots_template_retention_and_max_episodes(tmp_path: Path) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = _activate(_service(tmp_path, _Client([{"id": "created"}])))
+    assert managed.retention_hours == template.retention_hours
+    assert managed.max_episodes == template.max_episodes
 
 
 def test_success_before_known_journal_persistence_blocks_retry(tmp_path: Path) -> None:
@@ -237,7 +317,11 @@ def test_stale_known_journal_after_state_save_self_heals_without_create(tmp_path
 
 def test_adoption_requires_existing_playlist_owned_by_authorized_user(tmp_path: Path) -> None:
     client = _Client()
-    client.playlist = {"id": "MATCH", "owner": {"id": "owner"}}
+    client.playlist = {
+        "id": "MATCH",
+        "name": BUILTIN_CATALOG.playlist("spain_spanish_news").display_name,
+        "owner": {"id": "owner"},
+    }
     journal = ProvisioningJournal(tmp_path / "provisioning.json")
     journal.save(_request_intent())
     playlist_id = "A" * 22
@@ -251,8 +335,8 @@ def test_adoption_requires_existing_playlist_owned_by_authorized_user(tmp_path: 
 @pytest.mark.parametrize(
     "playlist",
     [
-        {"id": "other", "owner": {"id": "owner"}},
-        {"id": "MATCH", "owner": {"id": "foreign"}},
+        {"id": "other", "name": "Noticias en Español", "owner": {"id": "owner"}},
+        {"id": "MATCH", "name": "Noticias en Español", "owner": {"id": "foreign"}},
     ],
 )
 def test_adoption_rejects_unexpected_or_foreign_playlist(
@@ -290,6 +374,8 @@ def test_journal_contains_no_credentials(tmp_path: Path) -> None:
         "description",
         "cover_id",
         "source_ids",
+        "retention_hours",
+        "max_episodes",
         "max_duration_seconds",
         "destination_id",
     }

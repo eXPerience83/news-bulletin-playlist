@@ -28,7 +28,7 @@ PRODUCTION_SCOPES = (
     "playlist-modify-private",
     "playlist-modify-public",
 )
-PRODUCTION_REQUESTED_SCOPES = (*PRODUCTION_SCOPES, "ugc-image-upload")
+PRODUCTION_REQUESTED_SCOPES = (*PRODUCTION_SCOPES, "ugc-image-upload", "user-read-private")
 _AUTHORIZATION_TTL = timedelta(minutes=10)
 _ACCESS_TOKEN_REFRESH_SKEW = timedelta(seconds=60)
 
