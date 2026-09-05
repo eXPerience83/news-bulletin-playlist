@@ -74,6 +74,10 @@ class SpotifyRateLimitBackoffActive(SpotifyAuthError):
     """Raised before engine authorization when durable Spotify backoff is still active."""
 
 
+class SpotifyRateLimitStateUnavailable(SpotifyAuthError):
+    """Raised when the durable backoff state cannot be read safely."""
+
+
 class SpotifyRateLimitSuppressed(SpotifyTransportError):
     """Raised locally when a later same-cycle Spotify request is suppressed."""
 
@@ -113,7 +117,8 @@ class _ConnectionContext:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        del exc_value, traceback
+        del traceback
+        body_db_exc = exc_value if isinstance(exc_value, sqlite3.Error) else None
         try:
             if exc_type is None:
                 self.connection.commit()
@@ -123,6 +128,10 @@ class _ConnectionContext:
             raise PersistenceError(f"{self.operation} failed for {self.path}: {db_exc}") from db_exc
         finally:
             self.connection.close()
+        if body_db_exc is not None:
+            raise PersistenceError(
+                f"{self.operation} failed for {self.path}: {body_db_exc}"
+            ) from body_db_exc
 
 
 class SpotifyRateLimitJournal:
@@ -256,7 +265,12 @@ class SpotifyRateLimitGuardAuth:
 
     def get_access_token(self, *, now: datetime | None = None) -> str:
         observed = _as_utc(self.clock() if now is None else now)
-        state = self.journal.active(now=observed)
+        try:
+            state = self.journal.active(now=observed)
+        except PersistenceError as exc:
+            raise SpotifyRateLimitStateUnavailable(
+                "Spotify rate-limit state is unavailable"
+            ) from exc
         if state is not None:
             _emit_backoff(self.diagnostics, state, backoff_state="active", occurred_at=observed)
             raise SpotifyRateLimitBackoffActive(_active_message(state))
@@ -321,8 +335,9 @@ class SpotifyRateLimitGuardClient:
         except SpotifyApiError as exc:
             if exc.status != 429:
                 raise
+            rate_limited_at = _as_utc(self.clock())
             state = self.journal.activate(
-                observed_at=observed,
+                observed_at=rate_limited_at,
                 retry_after_seconds=exc.retry_after,
             )
             self._cycle_limited = state
@@ -330,7 +345,7 @@ class SpotifyRateLimitGuardClient:
                 self.diagnostics,
                 state,
                 backoff_state="activated",
-                occurred_at=observed,
+                occurred_at=rate_limited_at,
             )
             raise
 
