@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Any, Protocol, TypeVar
 
-from news_bulletin_playlist.diagnostics import DiagnosticSeverity
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
@@ -118,6 +118,7 @@ class SpotifyRateLimitJournal:
 
     def __init__(self, store: SQLiteStore) -> None:
         self.path = store.path
+        self.diagnostics = self._build_diagnostics()
 
     def get(self) -> SpotifyRateLimitState | None:
         with self._connection("read Spotify rate-limit backoff") as connection:
@@ -221,6 +222,14 @@ class SpotifyRateLimitJournal:
             raise PersistenceError(f"{operation} failed for {self.path}: {exc}") from exc
         return _ConnectionContext(connection, operation=operation, path=str(self.path))
 
+    def _build_diagnostics(self) -> OperationalDiagnostics | None:
+        try:
+            diagnostic_store = DiagnosticEventStore(self.path)
+            diagnostic_store.initialize()
+        except PersistenceError, ValueError:
+            return None
+        return OperationalDiagnostics(diagnostic_store)
+
 
 class SpotifyRateLimitGuardAuth:
     """Skip token work after RSS collection while a durable Web API cooldown is active."""
@@ -236,7 +245,7 @@ class SpotifyRateLimitGuardAuth:
         self.provider = provider
         self.journal = journal
         self.clock = clock
-        self.diagnostics = diagnostics
+        self.diagnostics = journal.diagnostics if diagnostics is None else diagnostics
 
     def get_access_token(self, *, now: datetime | None = None) -> str:
         observed = _as_utc(self.clock() if now is None else now)
@@ -261,7 +270,7 @@ class SpotifyRateLimitGuardClient:
         self.client = client
         self.journal = journal
         self.clock = clock
-        self.diagnostics = diagnostics
+        self.diagnostics = journal.diagnostics if diagnostics is None else diagnostics
         self._cycle_limited: SpotifyRateLimitState | None = None
 
     def show_episodes(
