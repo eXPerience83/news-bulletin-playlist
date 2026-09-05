@@ -43,6 +43,7 @@ from news_bulletin_playlist.managed_admin import (
     SpotifyPlaylistSyncError,
 )
 from news_bulletin_playlist.managed_admin_web import (
+    max_duration_seconds_from_form,
     playlist_id_from_form,
     render_managed_admin_page,
     single_form_value,
@@ -79,6 +80,8 @@ _MANAGED_POST_PATHS = {
     "/admin/playlists/update",
     "/admin/playlists/sync",
     "/admin/playlists/stop",
+    "/admin/provisioning/adopt",
+    "/admin/provisioning/clear",
 }
 _ADMIN_NOTICE_MESSAGES = {
     "spotify-sync-applied": "Spotify metadata and cover applied successfully.",
@@ -393,18 +396,59 @@ class ReloadingEngineCycleRunner:
 def _playlist_write_contract(
     config: EngineConfig,
     playlist_id: PlaylistId,
-) -> tuple[PlaylistDefinition, tuple[object, ...]] | None:
+) -> tuple[object, ...] | None:
     playlist = next(
         (candidate for candidate in config.playlists if candidate.id == playlist_id),
         None,
     )
     if playlist is None or not playlist.enabled:
         return None
-    selected_source_ids = set(playlist.source_selection.explicit)
-    selected_sources = tuple(
-        source for source in config.sources if source.id in selected_source_ids
+    selected_source_ids = tuple(playlist.source_selection.explicit)
+    by_id = {source.id: source for source in config.sources}
+    selected_sources = []
+    for source_id in selected_source_ids:
+        source = by_id.get(source_id)
+        if source is None:
+            # This cannot describe a valid runtime configuration, but it must block a stale
+            # write rather than accidentally omitting a selected source from the contract.
+            return None
+        selected_sources.append(
+            (
+                str(source.id),
+                source.enabled,
+                str(source.timezone),
+                str(source.parser_id),
+                source.endpoint_url,
+                tuple(
+                    sorted(
+                        (reference.system, reference.resource_type, reference.external_id)
+                        for reference in source.external_references
+                    )
+                ),
+                source.spotify_release_delay_days,
+            )
+        )
+    return (
+        str(playlist.id),
+        playlist.enabled,
+        str(playlist.destination.adapter_id),
+        playlist.destination.external_id,
+        tuple(str(source_id) for source_id in selected_source_ids),
+        playlist.retention_hours,
+        playlist.max_episodes,
+        playlist.ordering.value,
+        playlist.duration_policy.default_max_seconds,
+        tuple(
+            (
+                exception.id,
+                str(exception.source_id),
+                exception.edition_local_time.isoformat(),
+                exception.max_seconds,
+            )
+            for exception in playlist.duration_policy.exceptions
+        ),
+        tuple(selected_sources),
     )
-    return playlist, selected_sources
 
 
 class OperationalHealthHandler(LanAdminHandler):
@@ -659,6 +703,33 @@ class OperationalHealthHandler(LanAdminHandler):
                     metadata_error=None,
                     cover_error=None,
                 )
+            elif path in {"/admin/provisioning/adopt", "/admin/provisioning/clear"}:
+                with synchronization.hold():
+                    if path == "/admin/provisioning/adopt":
+                        auth = self.managed_admin_auth
+                        if auth is None:
+                            raise ManagedAdminError("Spotify authorization is required to adopt")
+                        playlist_id_for_event = str(
+                            service.adopt_uncertain_provisioning(
+                                single_form_value(form, "destination_id"),
+                                access_token=auth.get_access_token(),
+                            ).id
+                        )
+                        event_name = "admin_playlist_adopted"
+                        next_state = "enabled"
+                    else:
+                        service.clear_uncertain_provisioning()
+                        playlist_id_for_event = "provisioning"
+                        event_name = "admin_playlist_provisioning_cleared"
+                        next_state = "cleared"
+                    configured = any(playlist.enabled for playlist in service.snapshot().managed)
+                lifecycle.reconcile(configured=configured)
+                self.__class__.engine_scheduler = lifecycle.scheduler
+                self._emit_admin_configuration_event(
+                    event_name=event_name,
+                    playlist_id=playlist_id_for_event,
+                    next_state=next_state,
+                )
             else:
                 with synchronization.hold():
                     if path == "/admin/playlists/activate":
@@ -749,6 +820,7 @@ class OperationalHealthHandler(LanAdminHandler):
             cover_id=single_form_value(form, "cover_id"),
             source_ids=form.get("source_id", []),
             access_token=access_token,
+            max_duration_seconds=max_duration_seconds_from_form(form),
         )
         return str(managed.id)
 
@@ -766,24 +838,6 @@ class OperationalHealthHandler(LanAdminHandler):
             raise ValueError("enabled must be omitted or set exactly once")
         enabled = bool(enabled_values)
 
-        snapshot = service.snapshot()
-        current = next(
-            (playlist for playlist in snapshot.managed if playlist.id == playlist_id),
-            None,
-        )
-        if current is None:
-            raise ManagedAdminError(f"unknown managed playlist: {playlist_id}")
-        metadata_changed = (
-            name.strip() != current.display_name or description != current.description
-        )
-        access_token: str | None = None
-        if metadata_changed:
-            auth = self.managed_admin_auth
-            if auth is None:
-                raise ManagedAdminError(
-                    "Spotify must be connected to change playlist name or description"
-                )
-            access_token = auth.get_access_token()
         updated = service.update(
             playlist_id,
             display_name=name,
@@ -791,7 +845,8 @@ class OperationalHealthHandler(LanAdminHandler):
             cover_id=cover_id,
             source_ids=form.get("source_id", []),
             enabled=enabled,
-            access_token=access_token,
+            access_token=None,
+            max_duration_seconds=max_duration_seconds_from_form(form),
         )
         return str(updated.id), updated.enabled
 
@@ -906,6 +961,13 @@ def serve(
         )
 
     admin_security, spotify_auth = build_engine_runtime_auth(data_dir, environ=env)
+    managed_admin_service = _build_managed_admin_service(
+        data_dir,
+        env,
+        spotify_auth=spotify_auth,
+    )
+    if managed_admin_service is not None:
+        managed_admin_service.finalize_known_provisioning()
     config = _load_runtime_config(data_dir, env)
     configured = config is not None
     if configured and spotify_auth is None:
@@ -940,12 +1002,6 @@ def serve(
         status: OperationalStatus = lifecycle.status
     else:
         status = _MutableOperationalStatus(configured=configured)
-
-    managed_admin_service = _build_managed_admin_service(
-        data_dir,
-        env,
-        spotify_auth=spotify_auth,
-    )
 
     OperationalHealthHandler.data_dir = data_dir
     OperationalHealthHandler.admin_security = admin_security

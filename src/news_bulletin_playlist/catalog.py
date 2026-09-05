@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import time
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import (
     CountryCode,
     DurationPolicy,
-    DurationPolicyException,
+    EditorialScope,
     ExternalReference,
     LanguageTag,
     OrderingPolicy,
@@ -107,10 +106,11 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         id=SourceId("ser"),
         display_name="Cadena SER",
         countries=(CountryCode("ES"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,
         parser_id=ParserId("ser"),
+        editorial_scope=EditorialScope.NATIONAL,
         endpoint_url="https://fapi-top.prisasd.com/podcast/playser/boletines.xml",
         external_references=(ExternalReference("spotify", "show", "4EwwdoHHYmbt49UXODQMpi"),),
     ),
@@ -118,10 +118,11 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         id=SourceId("rne"),
         display_name="Radio Nacional de España",
         countries=(CountryCode("ES"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,
         parser_id=ParserId("rne"),
+        editorial_scope=EditorialScope.NATIONAL,
         endpoint_url="https://api.rtve.es/api/adapter/programas/1750/audios.rss",
         external_references=(ExternalReference("spotify", "show", "0UgidTKsoaHiHDARuPQNW1"),),
         spotify_release_delay_days=1,
@@ -130,15 +131,28 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         id=SourceId("ondacero"),
         display_name="Onda Cero",
         countries=(CountryCode("ES"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,
         parser_id=ParserId("ondacero"),
+        editorial_scope=EditorialScope.NATIONAL,
         endpoint_url=(
             "https://www.ondacero.es/rss/podcast/mount/"
             "ATRESMEDIA_LAS_NOTICIAS_EN_ONDA_CERO_P/fastly"
         ),
         external_references=(ExternalReference("spotify", "show", "0tjEexypyczHXW9vE3SU3P"),),
+    ),
+    SourceDefinition(
+        id=SourceId("abc"),
+        display_name="ABC — Las Noticias de ABC",
+        countries=(CountryCode("ES"),),
+        languages=(LanguageTag("es-ES"),),
+        timezone=ZoneInfo("Europe/Madrid"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.NATIONAL,
+        endpoint_url="https://omny.fm/shows/las-noticias-de-abc-1/playlists/podcast.rss",
+        external_references=(ExternalReference("spotify", "show", "0cLJl7pvrr1bkUaKiVRggf"),),
     ),
     SourceDefinition(
         id=SourceId("cnn"),
@@ -148,18 +162,71 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         timezone=ZoneInfo("America/New_York"),
         enabled=True,
         parser_id=ParserId("cnn"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
         endpoint_url="https://feeds.megaphone.fm/WMHY5696831164",
         external_references=(ExternalReference("spotify", "show", "0vDgnorbpBr65YZzFVVouE"),),
+    ),
+    SourceDefinition(
+        id=SourceId("un_news_en"),
+        display_name="United Nations — UN News Today",
+        countries=(CountryCode("US"),),
+        languages=(LanguageTag("en"),),
+        timezone=ZoneInfo("UTC"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url="https://news.un.org/feed/subscribe/en/audio-product/all/audio-rss.xml",
+        external_references=(ExternalReference("spotify", "show", "3bCQUj5TafN5ichR8gXpFI"),),
+    ),
+    SourceDefinition(
+        id=SourceId("rfi_fr"),
+        display_name="RFI — Journal Monde",
+        countries=(CountryCode("FR"),),
+        languages=(LanguageTag("fr"),),
+        timezone=ZoneInfo("UTC"),
+        enabled=True,
+        parser_id=ParserId("rfi_journal_monde"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url=(
+            "https://apis.rfi.fr/products/get_product/fov-rfi-fr-get-journaux-podcast-v2-monde?"
+            "token_application=975d23b8-7a07-11e8-9f62-005056a90194"
+        ),
+        external_references=(ExternalReference("spotify", "show", "6y3v3GWUBwANr9hK9m1frF"),),
+    ),
+    SourceDefinition(
+        id=SourceId("dlf_news"),
+        display_name="Deutschlandfunk — Die Nachrichten",
+        countries=(CountryCode("DE"),),
+        languages=(LanguageTag("de"),),
+        timezone=ZoneInfo("Europe/Berlin"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.MIXED,
+        endpoint_url="https://www.deutschlandfunk.de/nachrichten-108.xml",
+        external_references=(ExternalReference("spotify", "show", "4eYPgoQH9VLTfgAxIbwHqs"),),
+    ),
+    SourceDefinition(
+        id=SourceId("rmf_fakty"),
+        display_name="RMF FM — Fakty",
+        countries=(CountryCode("PL"),),
+        languages=(LanguageTag("pl"),),
+        timezone=ZoneInfo("Europe/Warsaw"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.MIXED,
+        endpoint_url="https://www.rmf24.pl/podcast/fakty/feed",
+        external_references=(ExternalReference("spotify", "show", "2BeZqsvzZUSldlZWvjeGe3"),),
     ),
 )
 
 BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
     PlaylistTemplate(
         id=PlaylistId("spain_spanish_news"),
-        display_name="Noticias España",
+        display_name="Noticias en Español",
         description=(
-            "Últimos boletines de actualidad de las fuentes seleccionadas, actualizados "
-            "automáticamente y ordenados de más reciente a más antigua."
+            "Últimos boletines y resúmenes informativos en español, con fuentes de España "
+            "y una selección internacional de alcance global, actualizados automáticamente "
+            "y ordenados del más reciente al más antiguo."
         ),
         countries=(CountryCode("ES"),),
         languages=(LanguageTag("es"),),
@@ -167,19 +234,70 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
             SourceId("ser"),
             SourceId("rne"),
             SourceId("ondacero"),
+            SourceId("abc"),
             SourceId("cnn"),
         ),
         cover_id="spain_spanish_news",
-        duration_policy=DurationPolicy(
-            exceptions=(
-                DurationPolicyException(
-                    id="ser_morning_0800",
-                    source_id=SourceId("ser"),
-                    edition_local_time=time(8, 0),
-                    max_seconds=1800,
-                ),
-            )
+    ),
+    PlaylistTemplate(
+        id=PlaylistId("international_spanish_news"),
+        display_name="Noticias Internacional · ES",
+        description=(
+            "Boletines breves de actualidad internacional y alcance global en español, "
+            "actualizados automáticamente y ordenados del más reciente al más antiguo."
         ),
+        countries=(CountryCode("US"),),
+        languages=(LanguageTag("es"),),
+        default_source_ids=(SourceId("cnn"),),
+        cover_id="international_spanish_news",
+    ),
+    PlaylistTemplate(
+        id=PlaylistId("international_english_news"),
+        display_name="International News · EN",
+        description=(
+            "Concise international news bulletins with global scope, updated automatically "
+            "and ordered newest first."
+        ),
+        countries=(CountryCode("US"),),
+        languages=(LanguageTag("en"),),
+        default_source_ids=(SourceId("un_news_en"),),
+        cover_id="international_english_news",
+    ),
+    PlaylistTemplate(
+        id=PlaylistId("international_french_news"),
+        display_name="Actualités internationales · FR",
+        description=(
+            "Journaux et bulletins concis d’actualité internationale, mis à jour "
+            "automatiquement et classés du plus récent au plus ancien."
+        ),
+        countries=(CountryCode("FR"),),
+        languages=(LanguageTag("fr"),),
+        default_source_ids=(SourceId("rfi_fr"),),
+        cover_id="international_french_news",
+    ),
+    PlaylistTemplate(
+        id=PlaylistId("international_german_news"),
+        display_name="Internationale Nachrichten · DE",
+        description=(
+            "Kompakte Nachrichten aus Deutschland und der Welt, automatisch aktualisiert "
+            "und nach Aktualität sortiert."
+        ),
+        countries=(CountryCode("DE"),),
+        languages=(LanguageTag("de"),),
+        default_source_ids=(SourceId("dlf_news"),),
+        cover_id="international_german_news",
+    ),
+    PlaylistTemplate(
+        id=PlaylistId("international_polish_news"),
+        display_name="Wiadomości międzynarodowe · PL",
+        description=(
+            "Krótkie serwisy informacyjne z wiadomościami z kraju i ze świata, automatycznie "
+            "aktualizowane i uporządkowane od najnowszych."
+        ),
+        countries=(CountryCode("PL"),),
+        languages=(LanguageTag("pl"),),
+        default_source_ids=(SourceId("rmf_fakty"),),
+        cover_id="international_polish_news",
     ),
 )
 

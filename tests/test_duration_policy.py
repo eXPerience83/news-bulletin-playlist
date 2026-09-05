@@ -49,6 +49,7 @@ def _playlist() -> PlaylistDefinition:
         source_selection=SourceSelection(explicit=(SourceId("ser"),)),
         destination=DestinationReference(AdapterId("spotify"), "playlist"),
         duration_policy=DurationPolicy(
+            default_max_seconds=480,
             exceptions=(
                 DurationPolicyException(
                     id="ser_morning_0800",
@@ -56,7 +57,7 @@ def _playlist() -> PlaylistDefinition:
                     edition_local_time=time(8, 0),
                     max_seconds=1800,
                 ),
-            )
+            ),
         ),
     )
 
@@ -141,17 +142,18 @@ def test_unknown_spotify_duration_fails_closed() -> None:
         _build(edition, None)
 
 
-def test_builtin_catalog_and_managed_compile_inherit_ser_exception_without_local_copy() -> None:
-    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
-    exception = template.duration_policy.exceptions[0]
-    assert template.duration_policy.default_max_seconds == 480
-    assert exception.id == "ser_morning_0800"
-    assert exception.max_seconds == 1800
+def test_builtin_catalog_and_managed_compile_use_current_global_30_minute_default() -> None:
+    for template in BUILTIN_CATALOG.playlists:
+        assert template.duration_policy.default_max_seconds == 1800
+        assert template.duration_policy.exceptions == ()
 
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
     managed = activate_template(template, "destination")
+    assert managed.max_duration_seconds == 1800
     state = ManagedState(playlists=(managed,))
     compiled = compile_engine_config(BUILTIN_CATALOG, state)
-    assert compiled.playlists[0].duration_policy == template.duration_policy
+    assert compiled.playlists[0].duration_policy.default_max_seconds == 1800
+    assert compiled.playlists[0].duration_policy.exceptions == ()
 
 
 def _config_payload(exception_source: str = "ser", exception_max: int = 1800):
@@ -193,6 +195,16 @@ def _config_payload(exception_source: str = "ser", exception_max: int = 1800):
             }
         ],
     }
+
+
+def test_yaml_duration_policy_without_explicit_ceiling_uses_shared_30_minute_default() -> None:
+    payload = _config_payload()
+    payload["playlists"][0]["duration_policy"] = {}
+
+    parsed = parse_config(payload)
+
+    assert parsed.playlists[0].duration_policy.default_max_seconds == 1800
+    assert parsed.playlists[0].duration_policy.exceptions == ()
 
 
 def test_yaml_duration_policy_validates_bounded_exception_and_known_source() -> None:

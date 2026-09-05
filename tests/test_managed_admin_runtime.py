@@ -10,6 +10,8 @@ from http.client import HTTPMessage
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.effective_config import CONFIG_PATH_ENV
 from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
@@ -21,7 +23,12 @@ from news_bulletin_playlist.engine_runtime import (
 )
 from news_bulletin_playlist.lan_admin import LanAdminSecurity
 from news_bulletin_playlist.managed_admin import ManagedAdminService
-from news_bulletin_playlist.managed_state import ManagedStateStore
+from news_bulletin_playlist.managed_provisioning import (
+    ProvisioningIntent,
+    ProvisioningJournal,
+    ProvisioningState,
+)
+from news_bulletin_playlist.managed_state import ManagedStateStore, compile_engine_config
 from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.client import SpotifyTransportError
@@ -36,9 +43,18 @@ class _FakeSpotifyClient:
         self.create_calls: list[tuple[str, str]] = []
         self.update_calls: list[tuple[str, str, str]] = []
 
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         self.create_calls.append((name, description))
         return {"id": self.destination_id}
+
+    def current_user(self) -> dict[str, Any]:
+        return {"id": "owner"}
+
+    def playlist_details(self, playlist_id: str) -> dict[str, Any]:
+        return {"id": playlist_id, "name": "Noticias en Español", "owner": {"id": "owner"}}
 
     def change_playlist_details(
         self,
@@ -282,10 +298,13 @@ def test_dashboard_requires_auth_and_exposes_available_template(tmp_path: Path) 
     assert _response(authorized).status == HTTPStatus.OK
     assert "Active playlists" in body
     assert "Available playlists" in body
-    assert "Noticias España" in body
+    assert "Noticias en Español" in body
+    assert "Noticias Internacional · ES" in body
+    assert "International News · EN" in body
     assert "Cadena SER" in body
     assert "Radio Nacional de España" in body
     assert "Onda Cero" in body
+    assert "ABC — Las Noticias de ABC" in body
     assert "CNN 5 Cosas" in body
     assert "/admin/covers/spain_spanish_news.jpg" in body
 
@@ -338,6 +357,212 @@ def test_activation_is_csrf_protected_persists_once_and_requests_scheduler_start
     assert len(factory.client.create_calls) == 1
 
 
+def test_clear_uncertain_provisioning_route_is_csrf_protected_and_local_only(
+    tmp_path: Path,
+) -> None:
+    service, factory = _service(tmp_path)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    journal = ProvisioningJournal(tmp_path / "managed-playlist-provisioning.json")
+    journal.save(
+        ProvisioningIntent(
+            state=ProvisioningState.REQUEST_STARTED,
+            template_id=template.id,
+            display_name=template.display_name,
+            description=template.description,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            retention_hours=template.retention_hours,
+            max_episodes=template.max_episodes,
+            max_duration_seconds=1800,
+        )
+    )
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/provisioning/clear",
+        form={"csrf_token": [security.issue_csrf_token()]},
+        security=security,
+    )
+    handler.do_POST()
+
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert journal.load() is None
+    assert factory.client.create_calls == []
+    assert lifecycle.reconcile_calls == [False]
+
+
+def test_uncertain_provisioning_renders_only_recovery_actions(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    ProvisioningJournal(tmp_path / "managed-playlist-provisioning.json").save(
+        ProvisioningIntent(
+            state=ProvisioningState.REQUEST_STARTED,
+            template_id=template.id,
+            display_name=template.display_name,
+            description=template.description,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            retention_hours=template.retention_hours,
+            max_episodes=template.max_episodes,
+            max_duration_seconds=1800,
+        )
+    )
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=_FakeLifecycle(),
+        path="/admin/",
+    )
+    handler.do_GET()
+
+    body = _response(handler).payload.decode()
+    assert "Playlist creation needs recovery" in body
+    assert "/admin/provisioning/adopt" in body
+    assert "/admin/provisioning/clear" in body
+    assert "Create Spotify playlist" not in body
+
+
+def test_adopt_uncertain_provisioning_route_verifies_owner_and_starts_scheduler(
+    tmp_path: Path,
+) -> None:
+    service, factory = _service(tmp_path)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    ProvisioningJournal(tmp_path / "managed-playlist-provisioning.json").save(
+        ProvisioningIntent(
+            state=ProvisioningState.REQUEST_STARTED,
+            template_id=template.id,
+            display_name=template.display_name,
+            description=template.description,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            retention_hours=template.retention_hours,
+            max_episodes=template.max_episodes,
+            max_duration_seconds=1800,
+        )
+    )
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/provisioning/adopt",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "destination_id": ["A" * 22],
+        },
+        auth_provider=_AccessTokenProvider(),
+        security=security,
+    )
+    handler.do_POST()
+
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert service.snapshot().managed[0].destination.external_id == "A" * 22
+    assert factory.client.create_calls == []
+    assert lifecycle.reconcile_calls == [True]
+
+
+def test_activation_route_persists_requested_duration_without_metadata_io(tmp_path: Path) -> None:
+    service, factory = _service(tmp_path)
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    form = _activation_form(security.issue_csrf_token())
+    form["max_duration_minutes"] = ["15"]
+    form["max_duration_seconds_remainder"] = ["0"]
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/activate",
+        form=form,
+        auth_provider=_AccessTokenProvider(),
+        security=security,
+    )
+    handler.do_POST()
+    managed = service.snapshot().managed[0]
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert managed.max_duration_seconds == 900
+    assert factory.client.update_calls == []
+    assert (
+        compile_engine_config(service.catalog, service.store.load())
+        .playlists[0]
+        .duration_policy.default_max_seconds
+        == 900
+    )
+
+
+def test_update_route_persists_exact_duration_without_metadata_io(tmp_path: Path) -> None:
+    service, factory = _service(tmp_path)
+    _activate_direct(service)
+    current = service.snapshot().managed[0]
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/update",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(current.id)],
+            "display_name": [current.display_name],
+            "description": [current.description],
+            "cover_id": [current.cover_id],
+            "source_id": [str(source_id) for source_id in current.source_ids],
+            "enabled": ["1"],
+            "max_duration_minutes": ["12"],
+            "max_duration_seconds_remainder": ["0"],
+        },
+        security=security,
+    )
+    handler.do_POST()
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert service.snapshot().managed[0].max_duration_seconds == 720
+    assert factory.client.update_calls == []
+
+
+@pytest.mark.parametrize(
+    ("minutes", "expected_status"),
+    [
+        ("0", HTTPStatus.BAD_REQUEST),
+        ("-1", HTTPStatus.BAD_REQUEST),
+        ("bad", HTTPStatus.BAD_REQUEST),
+        ("1441", HTTPStatus.CONFLICT),
+    ],
+)
+def test_duration_route_rejects_invalid_values_without_state_change(
+    tmp_path: Path, minutes: str, expected_status: HTTPStatus
+) -> None:
+    service, _ = _service(tmp_path)
+    _activate_direct(service)
+    current = service.snapshot().managed[0]
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/update",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(current.id)],
+            "display_name": [current.display_name],
+            "description": [current.description],
+            "cover_id": [current.cover_id],
+            "source_id": [str(source_id) for source_id in current.source_ids],
+            "enabled": ["1"],
+            "max_duration_minutes": [minutes],
+        },
+        security=security,
+    )
+    handler.do_POST()
+    assert _response(handler).status == expected_status
+    assert service.snapshot().managed[0] == current
+
+
 def test_source_only_edit_works_offline_and_does_not_write_spotify_metadata(
     tmp_path: Path,
 ) -> None:
@@ -373,12 +598,13 @@ def test_source_only_edit_works_offline_and_does_not_write_spotify_metadata(
     assert lifecycle.reconcile_calls == [True]
 
 
-def test_metadata_edit_without_spotify_token_fails_without_changing_local_state(
+def test_metadata_edit_works_offline_and_does_not_write_spotify_metadata(
     tmp_path: Path,
 ) -> None:
     service, factory = _service(tmp_path)
     _activate_direct(service)
     current = service.snapshot().managed[0]
+    factory.client.update_calls.clear()
     lifecycle = _FakeLifecycle()
     security = LanAdminSecurity(_PASSWORD)
     handler = _HandlerHarness(
@@ -402,16 +628,16 @@ def test_metadata_edit_without_spotify_token_fails_without_changing_local_state(
     handler.do_POST()
 
     response = _response(handler)
-    assert response.status == HTTPStatus.CONFLICT
-    assert "Spotify must be connected" in response.payload.decode()
-    assert service.snapshot().managed[0] == current
+    assert response.status == HTTPStatus.SEE_OTHER
+    updated = service.snapshot().managed[0]
+    assert updated.display_name == "Nuevo nombre"
+    assert updated.description == current.description
     assert factory.client.update_calls == []
-    assert lifecycle.reconcile_calls == []
+    assert lifecycle.reconcile_calls == [True]
 
 
-def test_metadata_transport_failure_is_502_fail_closed_and_redacted(
+def test_metadata_save_does_not_call_spotify_even_if_remote_metadata_would_fail(
     tmp_path: Path,
-    capsys: Any,
 ) -> None:
     client = _FailingUpdateSpotifyClient()
     factory = _Factory(client)
@@ -420,6 +646,7 @@ def test_metadata_transport_failure_is_502_fail_closed_and_redacted(
         client_factory=factory,
     )
     _activate_direct(service)
+    client.update_calls.clear()
     current = service.snapshot().managed[0]
     lifecycle = _FakeLifecycle()
     security = LanAdminSecurity(_PASSWORD)
@@ -445,16 +672,12 @@ def test_metadata_transport_failure_is_502_fail_closed_and_redacted(
     handler.do_POST()
 
     response = _response(handler)
-    assert response.status == HTTPStatus.BAD_GATEWAY
-    body = response.payload.decode()
-    assert "Spotify could not apply the playlist change; local state was preserved" in body
-    assert "simulated transport failure" not in body
-    assert "update-token-sentinel" not in body
-    assert service.snapshot().managed[0] == current
-    assert lifecycle.reconcile_calls == []
-    captured = capsys.readouterr()
-    assert "update-token-sentinel" not in captured.out
-    assert "update-token-sentinel" not in captured.err
+    assert response.status == HTTPStatus.SEE_OTHER
+    updated = service.snapshot().managed[0]
+    assert updated.display_name == "Nuevo nombre"
+    assert client.update_calls == []
+    assert provider.calls == 0
+    assert lifecycle.reconcile_calls == [True]
 
 
 def test_managed_state_error_is_500_and_does_not_expose_storage_path(tmp_path: Path) -> None:

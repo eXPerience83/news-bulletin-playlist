@@ -178,12 +178,13 @@ def run_write_probe(client: SpotifyClient) -> int:
             return 1
         latest_uris.append(str(items[0]["uri"]))
 
-    playlist = client.create_private_playlist(
+    playlist = client.create_playlist(
         "News Bulletin Playlist P0 Probe",
-        description="Temporary private integration probe. Safe to delete.",
+        public=False,
+        description="Temporary integration probe. Safe to delete.",
     )
     playlist_id = str(playlist["id"])
-    print(f"Created private probe playlist: {playlist_id}")
+    print(f"Created probe playlist: {playlist_id}")
 
     reconcile_playlist_items(client, playlist_id, latest_uris)
     returned_uris = _read_playlist_uris(client, playlist_id)

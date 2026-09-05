@@ -23,7 +23,10 @@ class _FakeClient:
         self.create_calls: list[tuple[str, str]] = []
         self.update_calls: list[tuple[str, str, str]] = []
 
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         self.create_calls.append((name, description))
         return {"id": "destination"}
 
@@ -168,7 +171,7 @@ def test_available_template_requires_spotify_but_local_save_button_does_not(
         last_cycle=None,
         lan_mode=True,
     ).decode()
-    assert '<button type="submit" disabled>Create private playlist</button>' in disconnected
+    assert '<button type="submit" disabled>Create Spotify playlist</button>' in disconnected
     assert "Connect Spotify before activation" in disconnected
 
     _activate(service)

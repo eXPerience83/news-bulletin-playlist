@@ -42,7 +42,10 @@ class _CoverClient:
         self.update_calls: list[tuple[str, str, str]] = []
         self.cover_calls: list[tuple[str, bytes]] = []
 
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         self.create_calls.append((name, description))
         return {"id": "destination"}
 
@@ -64,7 +67,10 @@ class _CoverClient:
 
 
 class _CoverlessClient:
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         del name, description
         return {"id": "destination"}
 
@@ -233,24 +239,26 @@ def test_coverless_injected_client_skips_optional_cover_capability(tmp_path: Pat
     assert not loader_called
 
 
-def test_activation_uploads_cover_after_managed_state_is_persisted(tmp_path: Path) -> None:
+def test_activation_defers_cover_until_explicit_sync(tmp_path: Path) -> None:
     client = _CoverClient()
     jpeg = b"\xff\xd8cover\xff\xd9"
 
     service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
 
     assert service.snapshot().managed == (managed,)
-    assert client.cover_calls == [("destination", jpeg)]
+    assert client.create_calls == [(managed.display_name, "")]
+    assert client.update_calls == []
+    assert client.cover_calls == []
 
 
-def test_cover_api_failure_does_not_rollback_managed_playlist(tmp_path: Path) -> None:
+def test_failing_cover_cannot_rollback_activation_before_explicit_sync(tmp_path: Path) -> None:
     client = _CoverClient(fail_cover=True)
     jpeg = b"\xff\xd8cover\xff\xd9"
 
     service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
 
     assert service.snapshot().managed == (managed,)
-    assert client.cover_calls == [("destination", jpeg)]
+    assert client.cover_calls == []
 
 
 def test_explicit_sync_reapplies_metadata_and_retries_cover(tmp_path: Path) -> None:
@@ -258,8 +266,6 @@ def test_explicit_sync_reapplies_metadata_and_retries_cover(tmp_path: Path) -> N
     jpeg = b"\xff\xd8cover\xff\xd9"
     service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
     client.fail_cover = False
-    client.cover_calls.clear()
-    client.update_calls.clear()
 
     synced = service.sync_spotify_metadata_and_cover(
         managed.id,
@@ -284,8 +290,6 @@ def test_cover_failure_during_explicit_sync_reports_failure_after_metadata_sync(
     jpeg = b"\xff\xd8cover\xff\xd9"
     service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
     client.fail_cover = True
-    client.cover_calls.clear()
-    client.update_calls.clear()
 
     with pytest.raises(
         SpotifyPlaylistSyncError,
@@ -304,7 +308,6 @@ def test_local_save_without_access_token_skips_cover_and_still_persists(tmp_path
         client,
         cover_loader=lambda _cover_id: b"\xff\xd8cover\xff\xd9",
     )
-    client.cover_calls.clear()
 
     updated = service.update(
         managed.id,

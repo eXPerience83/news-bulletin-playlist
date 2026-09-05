@@ -7,6 +7,18 @@ from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.managed_duration import (
+    MAX_NEW_MANAGED_DURATION_SECONDS,
+    validate_duration_update,
+    validate_new_duration_seconds,
+)
+from news_bulletin_playlist.managed_provisioning import (
+    MANAGED_PROVISIONING_FILENAME,
+    ProvisioningIntent,
+    ProvisioningJournal,
+    ProvisioningJournalError,
+    ProvisioningState,
+)
 from news_bulletin_playlist.managed_state import (
     ManagedPlaylist,
     ManagedState,
@@ -25,8 +37,15 @@ from news_bulletin_playlist.spotify.client import (
 MAX_PLAYLIST_NAME_LENGTH = 100
 SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT = 300
 PROJECT_REPOSITORY_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
-PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {PROJECT_REPOSITORY_URL}"
-MAX_PLAYLIST_DESCRIPTION_LENGTH = SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
+LEGACY_PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {PROJECT_REPOSITORY_URL}"
+PROJECT_DESCRIPTION_FOOTER = f"Proyecto / Project: {PROJECT_REPOSITORY_URL}"
+PROJECT_DESCRIPTION_SEPARATOR = "\n\n"
+MAX_PLAYLIST_DESCRIPTION_LENGTH = (
+    SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
+    - len(PROJECT_DESCRIPTION_SEPARATOR)
+    - len(PROJECT_DESCRIPTION_FOOTER)
+)
+MAX_PLAYLIST_DURATION_MINUTES = MAX_NEW_MANAGED_DURATION_SECONDS // 60
 
 
 class ManagedAdminError(RuntimeError):
@@ -39,13 +58,13 @@ class SpotifyPlaylistProvisioningError(ManagedAdminError):
     def __init__(self, playlist_id: str) -> None:
         super().__init__(
             "Spotify playlist was created but local managed state could not be saved; "
-            f"preserve destination id {playlist_id!r} and link it manually before retrying"
+            f"destination id {playlist_id!r} now requires operator reconciliation"
         )
         self.playlist_id = playlist_id
 
 
 class SpotifyPlaylistPersistenceError(ManagedAdminError):
-    """Report remote metadata success followed by a local persistence failure."""
+    """Compatibility error retained for callers from pre-local-only metadata updates."""
 
     def __init__(self, playlist_id: str) -> None:
         super().__init__(
@@ -62,6 +81,16 @@ class SpotifyPlaylistCreationUncertainError(ManagedAdminError):
         super().__init__(
             "Spotify playlist creation outcome is unknown because Spotify did not confirm the "
             "result; inspect Spotify for a newly created playlist before retrying"
+        )
+
+
+class PlaylistProvisioningRecoveryRequired(ManagedAdminError):
+    """A previous create request may have succeeded and must be recovered first."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "A previous Spotify playlist creation may have succeeded; recover or clear the "
+            "pending activation before creating another playlist"
         )
 
 
@@ -82,7 +111,13 @@ class SpotifyPlaylistSyncError(ManagedAdminError):
 
 
 class PlaylistProvisioningClient(Protocol):
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]: ...
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]: ...
+
+    def current_user(self) -> dict[str, Any]: ...
+
+    def playlist_details(self, playlist_id: str) -> dict[str, Any]: ...
 
     def change_playlist_details(
         self,
@@ -103,6 +138,7 @@ CoverAssetLoader = Callable[[str], bytes]
 class ManagedAdminSnapshot:
     managed: tuple[ManagedPlaylist, ...]
     available_templates: tuple[PlaylistTemplate, ...]
+    provisioning_intent: ProvisioningIntent | None = None
 
 
 class ManagedAdminService:
@@ -115,19 +151,28 @@ class ManagedAdminService:
         catalog: BuiltInCatalog = BUILTIN_CATALOG,
         client_factory: PlaylistClientFactory | None = None,
         cover_loader: CoverAssetLoader | None = None,
+        provisioning_journal: ProvisioningJournal | None = None,
     ) -> None:
         self.store = store
         self.catalog = catalog
         self.client_factory = client_factory or SpotifyClient
         self.cover_loader = cover_loader
+        self.provisioning_journal = provisioning_journal or ProvisioningJournal(
+            store.path.with_name(MANAGED_PROVISIONING_FILENAME)
+        )
 
     def snapshot(self) -> ManagedAdminSnapshot:
+        self.finalize_known_provisioning()
         state = self.store.load()
         managed_templates = {playlist.template_id for playlist in state.playlists}
         available = tuple(
             template for template in self.catalog.playlists if template.id not in managed_templates
         )
-        return ManagedAdminSnapshot(managed=state.playlists, available_templates=available)
+        return ManagedAdminSnapshot(
+            managed=state.playlists,
+            available_templates=available,
+            provisioning_intent=self.provisioning_journal.load(),
+        )
 
     def activate(
         self,
@@ -138,24 +183,39 @@ class ManagedAdminService:
         cover_id: str,
         source_ids: Sequence[SourceId | str],
         access_token: str,
+        max_duration_seconds: int | None = None,
     ) -> ManagedPlaylist:
+        if self.provisioning_journal.load() is not None:
+            raise PlaylistProvisioningRecoveryRequired()
         state = self.store.load()
         template = self._template(template_id)
         if any(playlist.template_id == template.id for playlist in state.playlists):
             raise ManagedAdminError(f"playlist template {template.id} is already managed")
-        selected_sources = self._source_ids(source_ids, allow_empty=False)
-        name = _playlist_name(display_name)
-        safe_description = _playlist_description(description)
-        cover = self._cover_id(cover_id)
+        intent = ProvisioningIntent(
+            state=ProvisioningState.REQUEST_STARTED,
+            template_id=template.id,
+            display_name=_playlist_name(display_name),
+            description=_playlist_description(description),
+            cover_id=self._cover_id(cover_id),
+            source_ids=self._source_ids(source_ids, allow_empty=False),
+            retention_hours=template.retention_hours,
+            max_episodes=template.max_episodes,
+            max_duration_seconds=(
+                template.duration_policy.default_max_seconds
+                if max_duration_seconds is None
+                else _new_duration_max_seconds(max_duration_seconds)
+            ),
+        )
+        self.provisioning_journal.save(intent)
 
         client = self.client_factory(access_token)
         try:
-            response = client.create_private_playlist(
-                name,
-                description=render_spotify_description(safe_description),
-            )
+            # Provision only the durable destination identity. Metadata and cover are explicit
+            # follow-up operations so their provider behavior can never block activation.
+            response = client.create_playlist(intent.display_name, public=True)
         except SpotifyApiError as exc:
             if exc.status < 500:
+                self.provisioning_journal.clear()
                 raise
             raise SpotifyPlaylistCreationUncertainError() from exc
         except SpotifyTransportError as exc:
@@ -164,23 +224,93 @@ class ManagedAdminService:
             destination_id = _spotify_playlist_id(response)
         except ManagedAdminError as exc:
             raise SpotifyPlaylistCreationUncertainError() from exc
-        managed = replace(
-            activate_template(template, destination_id),
-            display_name=name,
-            description=safe_description,
-            cover_id=cover,
-            source_ids=selected_sources,
-        )
-        next_state = ManagedState(
-            schema_version=state.schema_version,
-            playlists=state.playlists + (managed,),
-        )
         try:
-            self._save_validated(next_state)
-        except (ManagedStateError, OSError) as exc:
+            self.provisioning_journal.save(intent.with_destination(destination_id))
+        except ProvisioningJournalError as exc:
+            raise SpotifyPlaylistCreationUncertainError() from exc
+        try:
+            managed = self.finalize_known_provisioning()
+            assert managed is not None
+            return managed
+        except (ManagedStateError, OSError, ProvisioningJournalError) as exc:
             raise SpotifyPlaylistProvisioningError(destination_id) from exc
-        self._best_effort_cover_upload(client, destination_id, cover)
+
+    def finalize_known_provisioning(self) -> ManagedPlaylist | None:
+        intent = self.provisioning_journal.load()
+        if intent is None or intent.state is ProvisioningState.REQUEST_STARTED:
+            return None
+        assert intent.destination_id is not None
+        state = self.store.load()
+        existing = next(
+            (
+                playlist
+                for playlist in state.playlists
+                if playlist.template_id == intent.template_id
+            ),
+            None,
+        )
+        if existing is not None:
+            if existing.destination.external_id != intent.destination_id:
+                raise PlaylistProvisioningRecoveryRequired()
+            self.provisioning_journal.clear()
+            return existing
+        template = self._template(intent.template_id)
+        managed = replace(
+            activate_template(template, intent.destination_id),
+            display_name=intent.display_name,
+            description=intent.description,
+            cover_id=intent.cover_id,
+            source_ids=self._source_ids(intent.source_ids, allow_empty=False),
+            retention_hours=intent.retention_hours,
+            max_episodes=intent.max_episodes,
+            max_duration_seconds=intent.max_duration_seconds,
+        )
+        self._save_validated(
+            ManagedState(
+                schema_version=state.schema_version,
+                playlists=state.playlists + (managed,),
+            )
+        )
+        self.provisioning_journal.clear()
         return managed
+
+    def adopt_uncertain_provisioning(
+        self,
+        destination_id: str,
+        *,
+        access_token: str,
+    ) -> ManagedPlaylist:
+        intent = self.provisioning_journal.load()
+        if intent is None or intent.state is not ProvisioningState.REQUEST_STARTED:
+            raise ManagedAdminError("there is no uncertain playlist activation to adopt")
+        candidate = _spotify_playlist_id_text(destination_id)
+        client = self.client_factory(access_token)
+        try:
+            user_id = _spotify_user_id(client.current_user())
+        except SpotifyApiError as exc:
+            if exc.status in {401, 403}:
+                raise ManagedAdminError(
+                    "Spotify ownership verification requires reconnecting Spotify to grant "
+                    "the user-read-private permission"
+                ) from exc
+            raise
+        owner_id = _spotify_playlist_owner_id(
+            client.playlist_details(candidate),
+            expected_playlist_id=candidate,
+            expected_name=intent.display_name,
+        )
+        if user_id != owner_id:
+            raise ManagedAdminError("Spotify playlist is not owned by the authorized user")
+        self.provisioning_journal.save(intent.with_destination(candidate))
+        result = self.finalize_known_provisioning()
+        assert result is not None
+        return result
+
+    def clear_uncertain_provisioning(self) -> None:
+        intent = self.provisioning_journal.load()
+        if intent is None or intent.state is not ProvisioningState.REQUEST_STARTED:
+            raise ManagedAdminError("only an uncertain playlist activation can be cleared")
+        self.provisioning_journal.clear()
 
     def update(
         self,
@@ -192,11 +322,22 @@ class ManagedAdminService:
         source_ids: Sequence[SourceId | str],
         enabled: bool,
         access_token: str | None,
+        max_duration_seconds: int | None = None,
     ) -> ManagedPlaylist:
+        # Saving managed configuration is deliberately local-only. Name/description are desired
+        # metadata and are pushed to Spotify only by the explicit metadata & cover sync action.
+        del access_token
         state = self.store.load()
         current = self._managed(state, playlist_id)
-        current_description = _playlist_description(current.description)
         selected_sources = self._source_ids(source_ids, allow_empty=not enabled)
+        duration_max = (
+            current.max_duration_seconds
+            if max_duration_seconds is None
+            else _updated_duration_max_seconds(
+                max_duration_seconds,
+                current_seconds=current.max_duration_seconds,
+            )
+        )
         updated = replace(
             current,
             enabled=enabled,
@@ -204,32 +345,10 @@ class ManagedAdminService:
             description=_playlist_description(description),
             cover_id=self._cover_id(cover_id),
             source_ids=selected_sources,
+            max_duration_seconds=duration_max,
         )
         next_state = self._state_with_replacement(state, updated)
-        self._validate_state(next_state)
-
-        metadata_changed = (
-            updated.display_name != current.display_name
-            or updated.description != current_description
-        )
-        spotify_metadata_updated = False
-        if metadata_changed:
-            if access_token is None:
-                raise ManagedAdminError(
-                    "Spotify must be connected to change playlist name or description"
-                )
-            self.client_factory(access_token).change_playlist_details(
-                current.destination.external_id,
-                name=updated.display_name,
-                description=render_spotify_description(updated.description),
-            )
-            spotify_metadata_updated = True
-        try:
-            self.store.save(next_state)
-        except (ManagedStateError, OSError) as exc:
-            if spotify_metadata_updated:
-                raise SpotifyPlaylistPersistenceError(current.destination.external_id) from exc
-            raise
+        self._save_validated(next_state)
         return updated
 
     def sync_spotify_metadata_and_cover(
@@ -245,11 +364,7 @@ class ManagedAdminService:
         cover_error: str | None = None
 
         try:
-            client.change_playlist_details(
-                current.destination.external_id,
-                name=current.display_name,
-                description=render_spotify_description(current.description),
-            )
+            self._apply_metadata_with_attribution_fallback(client, current)
         except (SpotifyApiError, SpotifyTransportError) as exc:
             metadata_error = _safe_spotify_operation_error(exc)
 
@@ -287,17 +402,27 @@ class ManagedAdminService:
         self._save_validated(ManagedState(schema_version=state.schema_version, playlists=remaining))
         return current.destination.external_id
 
-    def _best_effort_cover_upload(
+    def _apply_metadata_with_attribution_fallback(
         self,
         client: PlaylistProvisioningClient,
-        playlist_id: str,
-        cover_id: str,
+        playlist: ManagedPlaylist,
     ) -> None:
         try:
-            self._upload_cover_explicit(client, playlist_id, cover_id)
-        except OSError, ValueError, SpotifyApiError, SpotifyTransportError:
-            # Cover art is product metadata. It must never block playlist state or bulletin sync.
-            return
+            client.change_playlist_details(
+                playlist.destination.external_id,
+                name=playlist.display_name,
+                description=render_spotify_description(playlist.description),
+            )
+        except SpotifyApiError as exc:
+            if exc.status != 400:
+                raise
+            # Attribution is optional. Retry only a definitive validation failure; auth,
+            # rate-limit, server and transport failures must remain visible to the operator.
+            client.change_playlist_details(
+                playlist.destination.external_id,
+                name=playlist.display_name,
+                description=_playlist_description(playlist.description),
+            )
 
     def _upload_cover_explicit(
         self,
@@ -383,8 +508,11 @@ def _safe_spotify_operation_error(
 
 
 def render_spotify_description(base_description: str) -> str:
-    """Render the Web-API-safe Spotify description from editable managed state."""
-    return _playlist_description(base_description)
+    """Append a plain-text project URL while keeping managed state footer-free."""
+    base = _playlist_description(base_description)
+    if not base:
+        return PROJECT_DESCRIPTION_FOOTER
+    return f"{base}{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}"
 
 
 def _required_text(value: str, label: str) -> str:
@@ -404,9 +532,8 @@ def _playlist_name(value: str) -> str:
 
 
 def _playlist_description(value: str) -> str:
-    # Historical builds persisted/appended a project footer. Strip it when encountered so
-    # existing managed state migrates cleanly, but do not send external project URLs through
-    # Spotify's Web API.
+    # Keep attribution out of editable managed state. It is appended only when metadata is
+    # rendered for Spotify so repeated edits/syncs cannot duplicate the project URL.
     result = _strip_terminal_project_footer(value)
     if len(result) > MAX_PLAYLIST_DESCRIPTION_LENGTH:
         raise ManagedAdminError(
@@ -415,16 +542,35 @@ def _playlist_description(value: str) -> str:
     return result
 
 
+def _new_duration_max_seconds(value: int) -> int:
+    try:
+        return validate_new_duration_seconds(value)
+    except ValueError as exc:
+        raise ManagedAdminError(str(exc)) from exc
+
+
+def _updated_duration_max_seconds(value: int, *, current_seconds: int) -> int:
+    try:
+        return validate_duration_update(value, current_seconds=current_seconds)
+    except ValueError as exc:
+        raise ManagedAdminError(str(exc)) from exc
+
+
 def _strip_terminal_project_footer(value: str) -> str:
     result = value
+    footers = (PROJECT_DESCRIPTION_FOOTER, LEGACY_PROJECT_DESCRIPTION_FOOTER)
     while True:
         candidate = result.rstrip()
-        if candidate == PROJECT_DESCRIPTION_FOOTER:
+        matched_footer = next(
+            (footer for footer in footers if candidate == footer or candidate.endswith(footer)),
+            None,
+        )
+        if matched_footer is None:
+            return result
+        if candidate == matched_footer:
             result = ""
             continue
-        if not candidate.endswith(PROJECT_DESCRIPTION_FOOTER):
-            return result
-        prefix = candidate[: -len(PROJECT_DESCRIPTION_FOOTER)]
+        prefix = candidate[: -len(matched_footer)]
         if not prefix.endswith(("\n", "\r")):
             return result
         result = prefix.rstrip()
@@ -437,3 +583,38 @@ def _spotify_playlist_id(response: object) -> str:
     if not isinstance(playlist_id, str) or not playlist_id.strip():
         raise ManagedAdminError("Spotify playlist creation did not return a destination id")
     return playlist_id.strip()
+
+
+def _spotify_playlist_id_text(value: str) -> str:
+    candidate = value.strip()
+    if len(candidate) != 22 or not candidate.isalnum():
+        raise ManagedAdminError("Spotify playlist id must be a 22-character base62 id")
+    return candidate
+
+
+def _spotify_user_id(response: object) -> str:
+    if not isinstance(response, dict):
+        raise ManagedAdminError("Spotify user verification returned an invalid response")
+    value = response.get("id")
+    if not isinstance(value, str) or not value.strip():
+        raise ManagedAdminError("Spotify user verification did not return an owner id")
+    return value.strip()
+
+
+def _spotify_playlist_owner_id(
+    response: object,
+    *,
+    expected_playlist_id: str,
+    expected_name: str,
+) -> str:
+    if not isinstance(response, dict) or response.get("id") != expected_playlist_id:
+        raise ManagedAdminError("Spotify playlist verification returned an unexpected destination")
+    owner = response.get("owner")
+    if not isinstance(owner, dict):
+        raise ManagedAdminError("Spotify playlist verification did not return an owner")
+    value = owner.get("id")
+    if not isinstance(value, str) or not value.strip():
+        raise ManagedAdminError("Spotify playlist verification did not return an owner")
+    if response.get("name") != expected_name:
+        raise ManagedAdminError("Spotify playlist name does not match the pending activation")
+    return value.strip()

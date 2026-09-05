@@ -13,8 +13,10 @@ from news_bulletin_playlist.managed_admin import (
     MAX_PLAYLIST_NAME_LENGTH,
     ManagedAdminSnapshot,
 )
+from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
+from news_bulletin_playlist.managed_provisioning import ProvisioningState
 from news_bulletin_playlist.managed_state import ManagedPlaylist
-from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 
 
@@ -29,7 +31,6 @@ def render_managed_admin_page(
     notice: str | None = None,
     error: str | None = None,
 ) -> bytes:
-    """Render one authenticated dashboard for playlists, templates and sources."""
     spotify_connected = spotify_state is AuthorizationState.CONNECTED
     spotify_label = _spotify_label(spotify_state)
     warning = _lan_warning() if lan_mode else ""
@@ -48,19 +49,26 @@ def render_managed_admin_page(
         )
         or '<p class="empty">No managed playlists yet.</p>'
     )
-    available = (
-        "".join(
-            _template_card(
-                template,
-                catalog=catalog,
-                csrf_token=csrf,
-                spotify_connected=spotify_connected,
-            )
-            for template in snapshot.available_templates
+    if snapshot.provisioning_intent is not None:
+        available = (
+            '<p class="empty">Resolve the pending playlist creation before activating another '
+            "template.</p>"
         )
-        or '<p class="empty">No additional built-in playlists are available.</p>'
-    )
+    else:
+        available = (
+            "".join(
+                _template_card(
+                    template,
+                    catalog=catalog,
+                    csrf_token=csrf,
+                    spotify_connected=spotify_connected,
+                )
+                for template in snapshot.available_templates
+            )
+            or '<p class="empty">No additional built-in playlists are available.</p>'
+        )
     sources = _sources_table(snapshot, catalog, last_cycle)
+    recovery = _provisioning_recovery(snapshot.provisioning_intent, csrf_token=csrf)
     spotify_action = "Reconnect Spotify" if spotify_connected else "Connect Spotify"
 
     document = f"""<!doctype html>
@@ -83,8 +91,8 @@ def render_managed_admin_page(
     .cover {{ width: 5rem; height: 5rem; object-fit: cover; border-radius: .45rem;
               border: 1px solid #8888; flex: 0 0 auto; }}
     label {{ display: block; font-weight: 650; margin-top: .65rem; }}
-    input[type=text], textarea {{ box-sizing: border-box; width: 100%; font: inherit;
-                                 padding: .45rem; }}
+    input[type=text], input[type=number], textarea {{ box-sizing: border-box; width: 100%;
+                                                      font: inherit; padding: .45rem; }}
     textarea {{ min-height: 5.5rem; resize: vertical; }}
     fieldset {{ margin: .8rem 0; border: 1px solid #8888; }}
     fieldset label {{ font-weight: 400; margin: .25rem 0; }}
@@ -115,22 +123,25 @@ def render_managed_admin_page(
   {warning}
   {notice_html}
   {error_html}
+  {recovery}
 
   <section>
     <h2>Active playlists</h2>
-    <p class="muted">Each playlist keeps its own source selection. A source shared by several
-       active playlists is still fetched only once per engine cycle.</p>
+    <p class="muted">Each playlist keeps its own source selection and duration ceiling. A source
+       shared by several active playlists is still fetched only once per engine cycle.</p>
     <div class="grid">{managed}</div>
   </section>
 
   <section>
     <h2>Available playlists</h2>
-    <p class="muted">Review the built-in defaults before creating a private Spotify playlist.</p>
+    <p class="muted">Review the built-in defaults before creating a Spotify playlist.</p>
     <div class="grid">{available}</div>
   </section>
 
   <section>
     <h2>Sources</h2>
+    <p class="muted">Source labels separate provider country, editorial scope and language so a
+       foreign provider can still be a useful global source for another playlist.</p>
     {sources}
   </section>
 
@@ -171,19 +182,24 @@ def _managed_card(
         f'<textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">'
         f"{html.escape(playlist.description)}</textarea>"
     )
+    template = catalog.playlist(playlist.template_id)
+    effective_duration_seconds = (
+        template.duration_policy.default_max_seconds
+        if playlist.max_duration_seconds is None
+        else playlist.max_duration_seconds
+    )
+    duration_minutes, duration_remainder = divmod(effective_duration_seconds, 60)
     return f"""
 <article class="card">
   <div class="card-head">
     {_cover_image(playlist.cover_id, playlist.display_name)}
     <div>
       <h3>{html.escape(playlist.display_name)}</h3>
-      <p><strong>{"Active" if playlist.enabled else "Paused"}</strong> · Private when created</p>
+      <p><strong>{"Active" if playlist.enabled else "Paused"}</strong> · Spotify destination</p>
       <p><a href="{html.escape(spotify_url, quote=True)}" target="_blank"
             rel="noopener noreferrer">Open in Spotify</a></p>
       <p class="muted">Last result: {html.escape(result)}</p>
-      <p class="muted">Do not reconnect Spotify just to upload the cover.
-        Reconnect Spotify once for image permission only if Spotify reports an authorization
-        or permission failure; otherwise apply Spotify metadata and cover directly.</p>
+      <p class="muted">Spotify metadata/cover sync is independent from bulletin policy changes.</p>
     </div>
   </div>
   <form method="post" action="/admin/playlists/update">
@@ -197,6 +213,14 @@ def _managed_card(
     <label>Description
       {description_control}
     </label>
+    <label>Maximum episode duration
+      <input type="number" name="max_duration_minutes" required min="0"
+             step="1" value="{duration_minutes}"> min
+      <input type="number" name="max_duration_seconds_remainder" required min="0" max="59"
+             step="1" value="{duration_remainder}"> sec
+    </label>
+    <p class="muted">Episodes longer than this are omitted from this playlist only. Change this
+       setting without reconnecting Spotify.</p>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     <label><input type="checkbox" name="enabled" value="1"{checked}> Active</label>
     <button type="submit">Save playlist</button>
@@ -233,13 +257,14 @@ def _template_card(
         f'<textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">'
         f"{html.escape(template.description)}</textarea>"
     )
+    duration_minutes, duration_remainder = divmod(template.duration_policy.default_max_seconds, 60)
     return f"""
 <article class="card">
   <div class="card-head">
     {_cover_image(template.cover_id, template.display_name)}
     <div>
       <h3>{html.escape(template.display_name)}</h3>
-      <p class="muted">Built-in template · creates a private Spotify playlist</p>
+      <p class="muted">Built-in template · creates a Spotify playlist</p>
       <p class="muted">The bundled cover is uploaded when Spotify grants image permission.</p>
     </div>
   </div>
@@ -254,9 +279,15 @@ def _template_card(
     <label>Description
       {description_control}
     </label>
+    <label>Maximum episode duration
+      <input type="number" name="max_duration_minutes" required min="0"
+             step="1" value="{duration_minutes}"> min
+      <input type="number" name="max_duration_seconds_remainder" required min="0" max="59"
+             step="1" value="{duration_remainder}"> sec
+    </label>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     {hint}
-    <button type="submit"{disabled}>Create private playlist</button>
+    <button type="submit"{disabled}>Create Spotify playlist</button>
   </form>
 </article>
 """
@@ -276,9 +307,43 @@ def _source_checkboxes(
             f'<label for="{html.escape(control_id, quote=True)}">'
             f'<input id="{html.escape(control_id, quote=True)}" type="checkbox" '
             f'name="source_id" value="{html.escape(str(source.id), quote=True)}"{checked}> '
-            f"{html.escape(source.display_name)}</label>"
+            f"{html.escape(_source_label(source))}</label>"
         )
     return "".join(rows)
+
+
+def _provisioning_recovery(intent: object, *, csrf_token: str) -> str:
+    if intent is None:
+        return ""
+    if getattr(intent, "state", None) is not ProvisioningState.REQUEST_STARTED:
+        return ""
+    return f"""
+  <section class="warning">
+    <h2>Playlist creation needs recovery</h2>
+    <p>A Spotify playlist creation may have succeeded before this installation could save its
+       destination. Do not create another playlist until this is resolved.</p>
+    <form method="post" action="/admin/provisioning/adopt">
+      <input type="hidden" name="csrf_token" value="{csrf_token}">
+      <label>Existing Spotify playlist ID
+        <input type="text" name="destination_id" required minlength="22" maxlength="22">
+      </label>
+      <p class="muted">The playlist must exist and be owned by the authorized Spotify user.</p>
+      <button type="submit">Adopt existing playlist</button>
+    </form>
+    <form method="post" action="/admin/provisioning/clear">
+      <input type="hidden" name="csrf_token" value="{csrf_token}">
+      <p class="muted">Clear only after verifying that no usable Spotify playlist needs adoption.
+         This does not change Spotify.</p>
+      <button class="danger" type="submit">Clear uncertain activation</button>
+    </form>
+  </section>
+"""
+
+
+def _source_label(source: SourceDefinition) -> str:
+    origin = ",".join(str(value) for value in source.countries)
+    language = ",".join(str(value) for value in source.languages)
+    return f"{source.display_name} ({origin} · {source.editorial_scope.value} · {language})"
 
 
 def _sources_table(
@@ -302,6 +367,7 @@ def _sources_table(
             "<tr>"
             f"<td>{html.escape(source.display_name)}</td>"
             f"<td>{html.escape(', '.join(str(value) for value in source.countries))}</td>"
+            f"<td><code>{html.escape(source.editorial_scope.value)}</code></td>"
             f"<td>{html.escape(', '.join(str(value) for value in source.languages))}</td>"
             f"<td>{html.escape(health)}</td>"
             f"<td>{html.escape(playlists)}</td>"
@@ -309,8 +375,8 @@ def _sources_table(
             "</tr>"
         )
     return (
-        "<table><thead><tr><th>Source</th><th>Country</th><th>Language</th>"
-        "<th>Health</th><th>Used by</th><th>Origin</th></tr></thead><tbody>"
+        "<table><thead><tr><th>Source</th><th>Country</th><th>Scope</th><th>Language</th>"
+        "<th>Health</th><th>Used by</th><th>Catalog</th></tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
     )
@@ -355,7 +421,6 @@ def single_form_value(
     *,
     required: bool = True,
 ) -> str:
-    """Return exactly one form value and reject duplicates or missing required fields."""
     values = form.get(name, [])
     if not values and not required:
         return ""
@@ -364,8 +429,36 @@ def single_form_value(
     return values[0]
 
 
+def max_duration_seconds_from_form(form: Mapping[str, list[str]]) -> int | None:
+    values = form.get("max_duration_minutes", [])
+    if not values:
+        return None
+    if len(values) != 1:
+        raise ValueError("Exactly one max_duration_minutes value is required")
+    raw = values[0].strip()
+    remainder_values = form.get("max_duration_seconds_remainder", [])
+    if not remainder_values:
+        remainder = 0  # Compatibility with existing minute-only POSTs.
+    elif len(remainder_values) == 1:
+        try:
+            remainder = int(remainder_values[0].strip())
+        except ValueError as exc:
+            raise ValueError("max_duration_seconds_remainder must be an integer") from exc
+    else:
+        raise ValueError("Exactly one max_duration_seconds_remainder value is required")
+    try:
+        minutes = int(raw)
+    except ValueError as exc:
+        raise ValueError("max_duration_minutes must be an integer") from exc
+    if minutes < 0 or not 0 <= remainder < 60:
+        raise ValueError("maximum duration must be positive with seconds remainder from 0 to 59")
+    try:
+        return validate_persisted_duration_seconds(minutes * 60 + remainder)
+    except ValueError as exc:
+        raise ValueError("maximum duration must be positive") from exc
+
+
 def playlist_id_from_form(form: Mapping[str, list[str]]) -> PlaylistId:
-    """Parse one managed playlist ID from a form."""
     value = single_form_value(form, "playlist_id").strip()
     if not value:
         raise ValueError("playlist_id must not be empty")

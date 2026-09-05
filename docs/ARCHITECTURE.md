@@ -6,9 +6,9 @@ This document defines the architectural invariants of News Bulletin Playlist. Th
 
 News Bulletin Playlist is **one engine that manages many playlists**.
 
-Spain / Spanish-language news is the first implementation and validation target, not a permanent architectural boundary. The same runtime must be able to manage playlists for multiple countries and languages without duplicating the application or running one complete collector per playlist.
+Spanish-language news is the first implementation and validation target, not a permanent architectural boundary. The same runtime must be able to manage playlists for multiple countries and languages without duplicating the application or running one complete collector per playlist.
 
-Planned expansion includes English, French, German and Polish, followed by playlists for the main European countries and potentially cross-country / pan-European playlists.
+Current managed-catalog validation covers Spanish plus initial English, French, German and Polish playlists. Further expansion should reuse the same engine and source model.
 
 ## Core invariant
 
@@ -39,6 +39,8 @@ Source configuration and metadata should be capable of representing at least:
 
 Country and language are separate dimensions. For example, an English-language playlist may combine sources from several countries, while a UK playlist may apply a country-specific selection.
 
+A source's geographic origin is also separate from its editorial scope. A source produced outside Spain may be suitable for a Spanish-language playlist when its bulletin is genuinely global/international; a geographically narrow regional product is not automatically suitable merely because it is published in Spanish.
+
 ### Canonical edition
 
 Provider-specific metadata is converted to a provider-independent canonical representation before playlist selection.
@@ -58,10 +60,11 @@ Each playlist may independently define:
 - languages;
 - retention window;
 - maximum number of episodes;
+- maximum episode duration;
 - ordering policy;
 - inclusion/exclusion rules.
 
-The initial defaults remain 48 hours of playlist retention, a maximum of 100 episodes and 30 days of internal operational metadata unless a playlist explicitly overrides them.
+The current defaults are 48 hours of playlist retention, a maximum of 100 episodes, a 30-minute episode ceiling and 30 days of internal operational metadata unless a playlist explicitly overrides them.
 
 ## Editorial independence and monetization invariant
 
@@ -127,6 +130,19 @@ Adding a new country, language or playlist should normally require:
 
 It should **not** require copying the application, forking the engine, or creating a country-specific runtime implementation.
 
+## Source-promotion invariant
+
+The runtime catalog is deliberately stricter than the research list. A candidate source is promoted only when all of these are sufficiently established:
+
+- stable provider/feed identity;
+- deterministic Spotify show identity and matching contract;
+- language and editorial/geographic scope appropriate to at least one playlist;
+- a normal publishing format that behaves like a bulletin or concise news summary.
+
+The playlist's 30-minute ceiling is a safety/policy boundary, **not** permission to add long-form shows. A source whose usual product is predominantly long-form should remain outside the default runtime catalog even if some individual episodes happen to fit below 30 minutes. Occasional longer editions from an otherwise concise source are acceptable and are handled by playlist duration policy.
+
+This distinction prevents the catalog from drifting from “news bulletins” into generic news podcasts merely because a duration threshold happens to permit them.
+
 ## P1.1 domain and configuration contract
 
 Schema version 1 defines four separate concepts:
@@ -159,8 +175,8 @@ sources:
 
 playlists:
   - id: spain_spanish_news
-    display_name: Spain Spanish News
-    description: Core Spanish-language news bulletins
+    display_name: Noticias en Español
+    description: Boletines de España y una selección internacional en español
     languages: [es]
     countries: [ES]
     enabled: true
@@ -171,6 +187,8 @@ playlists:
       external_id: replace-with-provisioned-playlist-id
     retention_hours: 48
     max_episodes: 100
+    duration_policy:
+      default_max_seconds: 1800
     ordering: edition_at_desc
 ```
 
@@ -178,9 +196,7 @@ playlists:
 are independent editorial metadata and do not implicitly filter explicitly selected sources.
 Selectors may later evaluate source dimensions, but selectors are deliberately not part of P1.1.
 
-The default playlist policy is 48 retention hours, 100 episodes and descending semantic bulletin
-time (`edition_at`), falling back to RSS `published_at` only when no reliable edition timestamp exists. `published_at_desc` remains available as an explicit legacy ordering policy. `CORE_PROVIDERS` remains temporarily available to the P0 provider watch and Spotify probes;
-new P1 code resolves parsers independently and does not consume that legacy tuple.
+The default playlist policy is 48 retention hours, 100 episodes, a 1800-second duration ceiling and descending semantic bulletin time (`edition_at`), falling back to RSS `published_at` only when no reliable edition timestamp exists. `published_at_desc` remains available as an explicit legacy ordering policy. `CORE_PROVIDERS` remains temporarily available to the P0 provider watch and Spotify probes; new P1 code resolves parsers independently and does not consume that legacy tuple.
 
 ## P1.2 shared collection contract
 
@@ -191,7 +207,8 @@ The collection stage implements the first half of the core invariant without int
 - runtime collection uses the configured source endpoint, including Onda Cero's real RSS feed; watchdog-only webpage fallbacks are not production metadata authorities;
 - RSS/provider identity is preserved independently from title and timestamps. Native identity prefers `guid`/`id`, then the enclosure asset URL, then an editorial link when no stronger source-native identifier exists;
 - title/date/hour are never used to synthesize identity, so distinct native assets with identical visible metadata remain distinct;
-- RSS publication metadata produces `published_at`, while the provider title parser produces the editorial `edition_at`; the configured `SourceDefinition.timezone` is authoritative for interpreting that local editorial wall clock before the canonical model normalizes it to UTC;
+- RSS publication metadata produces `published_at`, while a provider title parser may produce editorial `edition_at`; sources without a trustworthy semantic timestamp may deliberately leave `edition_at` unset and use exact normalized title plus release-date matching downstream;
+- the configured `SourceDefinition.timezone` is authoritative for interpreting local editorial wall clocks before the canonical model normalizes them to UTC;
 - collection returns an explicit success/failure result for each source. A malformed feed, failed fetch, missing required endpoint, or feed with no valid canonical bulletin editions is a source failure for that cycle rather than an invented empty-success state;
 - one source failure does not prevent unrelated sources from being collected;
 - RSS response bodies are bounded to 10 MiB before parsing so an unhealthy or misconfigured endpoint cannot consume unbounded process memory.
@@ -224,11 +241,11 @@ Matching maps already-persisted canonical source identities to Spotify episode U
 - recent `PENDING` or `AMBIGUOUS` outcomes are reused for a 15-minute retry grace to avoid repeated catalogue churn; a future persisted timestamp is also retained until the matcher clock catches up so P1.3 monotonicity cannot be violated;
 - unresolved editions are matched in a source batch, so Spotify catalogue pages are fetched once and reused across all editions for that source rather than once per bulletin;
 - catalogue traversal is deliberately bounded to two pages of at most 50 episodes each: 100 candidates maximum per source matching pass;
-- matching is scoped to the known show and reuses the source's existing title parser to convert Spotify episode titles to the same editorial `edition_at` representation used during collection;
-- the configured source timezone remains authoritative when interpreting the parsed Spotify title wall clock;
+- matching is scoped to the known show and reuses the source's existing title parser when a semantic title timestamp exists;
+- the configured source timezone remains authoritative when interpreting parsed Spotify title wall clocks;
 - Spotify release-date precision must be compatible with the canonical edition date before a candidate is viable;
-- when canonical `edition_at` is unavailable, only normalized exact-title equality is accepted as the title signal;
-- duration may be recorded in diagnostics but never decides a match;
+- when canonical `edition_at` is unavailable, only normalized exact-title equality plus a compatible Spotify release date inside the configured show is accepted;
+- duration may be recorded in matching diagnostics but never decides identity;
 - one viable candidate produces `MATCHED`; more than one produces `AMBIGUOUS`; none produces `PENDING`. A Spotify API/transport failure is not rewritten as `PENDING` and therefore cannot masquerade as a valid empty catalogue result;
 - all three match outcomes and useful diagnostics are persisted through P1.3;
 - distinct RNE source-native identities remain distinct even when Spotify represents them with the same episode URI. Destination-level URI deduplication, if required, belongs to playlist desired-state construction in P1.5.
@@ -243,29 +260,20 @@ Separate runtimes may still be supported later for scaling or isolation, but the
 
 ## First implementation vs. long-term architecture
 
-The first release may contain only Spanish providers and one Spanish/Spain-oriented Spotify playlist. That is acceptable as an incremental delivery choice.
+The first production validation began with one Spanish playlist. The managed catalog now exposes several language playlists, but that expansion still uses the same source/domain/persistence/scheduler model.
 
 What is not acceptable is introducing assumptions into the shared domain model, persistence layer, scheduler or reconciliation engine that make `Spain`, `Spanish`, or `one playlist` mandatory concepts.
 
 When implementation convenience conflicts with this invariant, prefer the smallest implementation that preserves the multi-playlist, multi-country, multi-language architecture.
 
-
 ## Bulletin duration eligibility
 
-Duration is a common playlist eligibility policy, never provider-parser behavior. The
-default destination-side ceiling is 480 seconds. A longer bulletin is eligible only
-when a version-controlled, bounded exception matches its source and semantic local
-edition time. The initial exception is `ser_morning_0800`: SER 08:00 in the source
-timezone may run up to 1800 seconds. The exception is not a source-wide bypass.
+Duration is a common **per-playlist** eligibility policy, never provider-parser behavior. The current general default destination-side ceiling is **1800 seconds (30 minutes)**. Managed playlists persist their own maximum and `/admin/` can change it independently without a Spotify metadata write or reconnect.
 
-Final eligibility uses the matched destination episode duration (Spotify `duration_ms`
-converted to seconds). RSS/source duration remains diagnostic metadata only. If a
-matched destination duration is unavailable, desired-state construction fails closed
-and reconciliation preserves the existing destination rather than treating unknown
-metadata as an empty authoritative state. Non-default duration decisions are emitted
-to the bounded diagnostics event stream so exclusions and scoped exceptions are visible.
+The general 30-minute ceiling currently has no built-in source/time exception. Earlier SER 08:00 exception logic remains supported by the generic policy model and legacy/manual configuration path, but is unnecessary while the default itself is 30 minutes. A future exception, if ever justified, must still be finite, explicit and narrower than a source-wide bypass.
 
-To add a justified recurring exception, add one stable unique rule to the built-in
-playlist template with an existing `source_id`, exact `edition_local_time` in that
-source's timezone, and a finite `max_seconds` greater than the default. Do not add
-source-wide unlimited bypasses or provider-specific filtering.
+Final eligibility uses the matched destination episode duration (Spotify `duration_ms` converted to seconds). RSS/source duration remains diagnostic metadata only. If a matched destination duration is unavailable, desired-state construction fails closed and reconciliation preserves the existing destination rather than treating unknown metadata as an empty authoritative state.
+
+Diagnostics emit duration exclusions and accepted editions of at least 20 minutes. This is deliberate measurement: after enough production data, the project can decide whether the 30-minute ceiling should become tighter and/or whether a separate playlist for longer full-news editions is justified.
+
+The duration ceiling does not replace source curation. Predominantly long-form shows are rejected at catalog-promotion time under the source-promotion invariant above; the playlist filter handles occasional long editions from otherwise concise sources.

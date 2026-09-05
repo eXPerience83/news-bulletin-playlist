@@ -59,6 +59,7 @@ class _Spotify:
         self.playlist_reads: list[str] = []
         self.replacements: list[tuple[str, tuple[str, ...]]] = []
         self.items: dict[str, list[str]] = {}
+        self.snapshots: dict[str, str] = {}
 
     def show_episodes(
         self,
@@ -108,7 +109,12 @@ class _Spotify:
             raise SpotifyTransportError("simulated playlist outage")
         self.items[playlist_id] = list(uris)
         self.replacements.append((playlist_id, tuple(uris)))
-        return {}
+        snapshot = f"snapshot-{len(self.replacements)}"
+        self.snapshots[playlist_id] = snapshot
+        return {"snapshot_id": snapshot}
+
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+        return {"snapshot_id": self.snapshots.get(playlist_id, "snapshot-initial")}
 
 
 def _source() -> SourceDefinition:

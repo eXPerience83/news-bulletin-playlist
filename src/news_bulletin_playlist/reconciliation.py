@@ -16,12 +16,20 @@ from news_bulletin_playlist.desired_state import (
 )
 from news_bulletin_playlist.models import OrderingPolicy, PlaylistDefinition, PlaylistId, SourceId
 from news_bulletin_playlist.persistence import EditionMatch, SQLiteStore
+from news_bulletin_playlist.snapshot_pending import (
+    PendingSnapshotConfirmation,
+    PendingSnapshotJournal,
+)
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
 _SPOTIFY_PLAYLIST_PAGE_SIZE = 50
 _MANAGED_PLAYLIST_MAX_ITEMS = 100
+_PENDING_SNAPSHOT_TTL = timedelta(hours=1)
 _SNAPSHOT_PROPAGATION_WARNING = (
     "Spotify verification degraded: snapshot propagation pending after exact readback"
+)
+_PARTIAL_SNAPSHOT_PROPAGATION_WARNING = (
+    "Spotify verification degraded: snapshot propagation pending after partial readback"
 )
 
 
@@ -176,6 +184,29 @@ def _reconcile_playlist_items(
         allow_unavailable=True,
         phase="prewrite",
     )
+    desired_fingerprint = _desired_fingerprint(desired)
+    pending_journal = PendingSnapshotJournal(store) if store is not None else None
+
+    if (
+        pending_journal is not None
+        and store is not None
+        and logical_playlist_id is not None
+        and attestation_updated_at is not None
+    ):
+        pending_result = _resolve_pending_confirmation(
+            client,
+            playlist_id,
+            desired,
+            desired_fingerprint=desired_fingerprint,
+            current=current,
+            store=store,
+            logical_playlist_id=logical_playlist_id,
+            now=attestation_updated_at,
+            journal=pending_journal,
+        )
+        if pending_result is not None:
+            return pending_result
+
     if current.slots == desired:
         if len(current.slots) <= _SPOTIFY_PLAYLIST_PAGE_SIZE:
             return _PlaylistItemsReconciliationResult(wrote=False)
@@ -190,7 +221,7 @@ def _reconcile_playlist_items(
         if snapshot_before == snapshot_after and stable_current.slots == desired:
             return _PlaylistItemsReconciliationResult(wrote=False)
 
-    desired_fingerprint = _desired_fingerprint(desired)
+    prewrite_snapshot: str | None = None
     if (
         store is not None
         and logical_playlist_id is not None
@@ -203,21 +234,45 @@ def _reconcile_playlist_items(
             and attestation.destination_id == playlist_id
             and attestation.desired_fingerprint == desired_fingerprint
         ):
-            try:
-                current_snapshot = _read_current_snapshot(
-                    client,
-                    playlist_id,
-                    phase="prewrite",
-                )
-            except SpotifyReconciliationError:
-                current_snapshot = None
-            if current_snapshot == attestation.snapshot_id:
+            # A confirmed attestation is a safety boundary. If its snapshot cannot be checked,
+            # fail closed and preserve the destination; never reinterpret an ambiguous read as
+            # permission to rewrite.
+            prewrite_snapshot = _read_current_snapshot(
+                client,
+                playlist_id,
+                phase="prewrite",
+            )
+            if prewrite_snapshot == attestation.snapshot_id:
                 warning = _degraded_warning(current.unavailable_indices)
                 return _PlaylistItemsReconciliationResult(
                     wrote=False,
                     degraded_verification=True,
                     warning=warning,
                 )
+        else:
+            try:
+                prewrite_snapshot = _read_current_snapshot(
+                    client,
+                    playlist_id,
+                    phase="prewrite",
+                )
+            except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
+                # With no matching attestation this read is only a baseline for recognizing
+                # propagation after a subsequent write. The post-write path remains strict when
+                # the optional baseline is unavailable.
+                prewrite_snapshot = None
+
+    if store is not None and logical_playlist_id is not None and prewrite_snapshot is None:
+        try:
+            prewrite_snapshot = _read_current_snapshot(
+                client,
+                playlist_id,
+                phase="prewrite",
+            )
+        except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
+            # This read is only a baseline for recognizing later snapshot propagation. A failed
+            # baseline must not block the write; the post-write path simply remains strict.
+            prewrite_snapshot = None
 
     mutation_context = nullcontext() if mutation_guard is None else mutation_guard()
     with mutation_context:
@@ -247,9 +302,12 @@ def _reconcile_playlist_items(
 
     if not readback.had_unavailable_item:
         write_snapshot = _optional_snapshot(write_response)
+        pending_confirmation: PendingSnapshotConfirmation | None = None
         degraded_verification = False
         snapshot_warning: str | None = None
-        if len(readback.slots) > _SPOTIFY_PLAYLIST_PAGE_SIZE:
+        if len(readback.slots) > _SPOTIFY_PLAYLIST_PAGE_SIZE or (
+            store is not None and logical_playlist_id is not None
+        ):
             write_snapshot = _require_snapshot(
                 write_response,
                 context="Spotify playlist write response",
@@ -279,34 +337,51 @@ def _reconcile_playlist_items(
                 if stable_snapshot == write_snapshot:
                     pass
                 elif stable_snapshot == current_snapshot:
+                    if prewrite_snapshot is None or stable_snapshot != prewrite_snapshot:
+                        raise SpotifyReconciliationError(
+                            "Spotify playlist snapshot did not match the known prewrite baseline "
+                            "during exact readback verification"
+                        )
+                    if (
+                        pending_journal is None
+                        or logical_playlist_id is None
+                        or attestation_updated_at is None
+                    ):
+                        raise SpotifyReconciliationError(
+                            "Spotify playlist exact stale snapshot lacked durable pending storage"
+                        )
+                    pending_confirmation = PendingSnapshotConfirmation(
+                        playlist_id=logical_playlist_id,
+                        destination_id=playlist_id,
+                        baseline_snapshot_id=prewrite_snapshot,
+                        expected_snapshot_id=write_snapshot,
+                        desired_fingerprint=desired_fingerprint,
+                        created_at=attestation_updated_at,
+                        expires_at=attestation_updated_at + _PENDING_SNAPSHOT_TTL,
+                    )
                     degraded_verification = True
                     snapshot_warning = _SNAPSHOT_PROPAGATION_WARNING
                     write_snapshot = None
                 else:
-                    final_readback = _read_spotify_playlist(
-                        client,
-                        playlist_id,
-                        allow_unavailable=False,
-                        phase="readback",
+                    raise SpotifyReconciliationError(
+                        "Spotify playlist snapshot advanced outside the expected write transition"
                     )
-                    if final_readback.slots != desired:
-                        raise SpotifyReconciliationError(
-                            "Spotify playlist snapshot changed because content changed "
-                            "during advancing snapshot recheck"
-                        )
-                    degraded_verification = True
-                    snapshot_warning = _SNAPSHOT_PROPAGATION_WARNING
-                    write_snapshot = None
         if store is not None and logical_playlist_id is not None:
             assert attestation_updated_at is not None
-            if write_snapshot is not None:
-                store.set_playlist_attestation(
-                    logical_playlist_id,
-                    destination_id=playlist_id,
-                    snapshot_id=write_snapshot,
-                    desired_fingerprint=desired_fingerprint,
-                    updated_at=attestation_updated_at,
-                )
+            if pending_confirmation is not None:
+                assert pending_journal is not None
+                pending_journal.set(pending_confirmation)
+            else:
+                if pending_journal is not None:
+                    pending_journal.clear(logical_playlist_id)
+                if write_snapshot is not None:
+                    store.set_playlist_attestation(
+                        logical_playlist_id,
+                        destination_id=playlist_id,
+                        snapshot_id=write_snapshot,
+                        desired_fingerprint=desired_fingerprint,
+                        updated_at=attestation_updated_at,
+                    )
         return _PlaylistItemsReconciliationResult(
             wrote=True,
             degraded_verification=degraded_verification,
@@ -328,6 +403,24 @@ def _reconcile_playlist_items(
         phase="readback",
     )
     if current_snapshot != write_snapshot:
+        if prewrite_snapshot is not None and current_snapshot == prewrite_snapshot:
+            assert pending_journal is not None
+            pending_journal.set(
+                PendingSnapshotConfirmation(
+                    playlist_id=logical_playlist_id,
+                    destination_id=playlist_id,
+                    baseline_snapshot_id=prewrite_snapshot,
+                    expected_snapshot_id=write_snapshot,
+                    desired_fingerprint=desired_fingerprint,
+                    created_at=attestation_updated_at,
+                    expires_at=attestation_updated_at + _PENDING_SNAPSHOT_TTL,
+                )
+            )
+            return _PlaylistItemsReconciliationResult(
+                wrote=True,
+                degraded_verification=True,
+                warning=_partial_snapshot_warning(readback.unavailable_indices),
+            )
         raise SpotifyReconciliationError(
             "Spotify playlist snapshot changed during degraded readback verification"
         )
@@ -339,10 +432,102 @@ def _reconcile_playlist_items(
         desired_fingerprint=desired_fingerprint,
         updated_at=attestation_updated_at,
     )
+    if pending_journal is not None:
+        pending_journal.clear(logical_playlist_id)
     return _PlaylistItemsReconciliationResult(
         wrote=True,
         degraded_verification=True,
         warning=_degraded_warning(readback.unavailable_indices),
+    )
+
+
+def _resolve_pending_confirmation(
+    client: SpotifyPlaylistClient,
+    playlist_id: str,
+    desired: Sequence[str],
+    *,
+    desired_fingerprint: str,
+    current: _SpotifyPlaylistRead,
+    store: SQLiteStore,
+    logical_playlist_id: PlaylistId,
+    now: datetime,
+    journal: PendingSnapshotJournal,
+) -> _PlaylistItemsReconciliationResult | None:
+    pending = journal.get(logical_playlist_id)
+    if pending is None:
+        return None
+
+    if (
+        pending.destination_id != playlist_id
+        or pending.desired_fingerprint != desired_fingerprint
+        or now >= pending.expires_at
+    ):
+        journal.clear(logical_playlist_id)
+        return None
+
+    if not _visible_positions_match(current.slots, desired):
+        # Visible content has genuinely diverged. The old transition no longer authorizes a
+        # skip; clear it and let normal reconciliation repair the destination.
+        journal.clear(logical_playlist_id)
+        return None
+
+    # The pending transition itself is now the safety boundary. Ambiguous snapshot I/O must
+    # propagate and produce zero writes rather than falling through to a replace.
+    current_snapshot = _read_current_snapshot(client, playlist_id, phase="prewrite")
+    if current_snapshot == pending.expected_snapshot_id:
+        store.set_playlist_attestation(
+            logical_playlist_id,
+            destination_id=playlist_id,
+            snapshot_id=pending.expected_snapshot_id,
+            desired_fingerprint=desired_fingerprint,
+            updated_at=now,
+        )
+        journal.clear(logical_playlist_id)
+        if current.had_unavailable_item:
+            return _PlaylistItemsReconciliationResult(
+                wrote=False,
+                degraded_verification=True,
+                warning=_degraded_warning(current.unavailable_indices),
+            )
+        return _PlaylistItemsReconciliationResult(wrote=False)
+
+    if current_snapshot == pending.baseline_snapshot_id:
+        warning = (
+            _partial_snapshot_warning(current.unavailable_indices)
+            if current.had_unavailable_item
+            else _SNAPSHOT_PROPAGATION_WARNING
+        )
+        return _PlaylistItemsReconciliationResult(
+            wrote=False,
+            degraded_verification=True,
+            warning=warning,
+        )
+
+    # Playlist metadata, cover and privacy changes can advance Spotify's playlist-wide
+    # snapshot id without changing any item.  Accept that third snapshot only when a second
+    # complete read proves the ordered URI state is still exact and the snapshot remains stable
+    # across the recheck.  Partial reads intentionally retain the strict A/B boundary.
+    if not current.had_unavailable_item and current.slots == tuple(desired):
+        stable_current = _read_spotify_playlist(
+            client,
+            playlist_id,
+            allow_unavailable=False,
+            phase="prewrite",
+        )
+        stable_snapshot = _read_current_snapshot(client, playlist_id, phase="prewrite")
+        if stable_current.slots == tuple(desired) and stable_snapshot == current_snapshot:
+            store.set_playlist_attestation(
+                logical_playlist_id,
+                destination_id=playlist_id,
+                snapshot_id=stable_snapshot,
+                desired_fingerprint=desired_fingerprint,
+                updated_at=now,
+            )
+            journal.clear(logical_playlist_id)
+            return _PlaylistItemsReconciliationResult(wrote=False)
+
+    raise SpotifyReconciliationError(
+        "Spotify playlist snapshot advanced outside the pending confirmation transition"
     )
 
 
@@ -704,6 +889,14 @@ def _degraded_warning(indices: Sequence[int]) -> str:
     return (
         "Spotify verification degraded: unavailable media item(s) at index/indices "
         f"[{index_text}]; snapshot attestation matched"
+    )
+
+
+def _partial_snapshot_warning(indices: Sequence[int]) -> str:
+    index_text = ",".join(str(index) for index in indices)
+    return (
+        f"{_PARTIAL_SNAPSHOT_PROPAGATION_WARNING}; unavailable media item(s) at "
+        f"index/indices [{index_text}]"
     )
 
 

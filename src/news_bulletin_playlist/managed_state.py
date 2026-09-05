@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import cast
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
 from news_bulletin_playlist.models import (
     AdapterId,
     DestinationReference,
+    DurationPolicy,
     EngineConfig,
     PlaylistDefinition,
     PlaylistId,
@@ -23,7 +25,9 @@ from news_bulletin_playlist.models import (
 )
 
 MANAGED_STATE_FILENAME = "managed-state.json"
-_MANAGED_STATE_SCHEMA_VERSION = 1
+_MANAGED_STATE_SCHEMA_VERSION = 2
+_LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
+_LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
 
 
 class ManagedStateError(ValueError):
@@ -42,6 +46,7 @@ class ManagedPlaylist:
     destination: DestinationReference
     retention_hours: int
     max_episodes: int
+    max_duration_seconds: int = _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +75,17 @@ class ManagedStateStore:
             )
         except (OSError, json.JSONDecodeError, ManagedStateError) as exc:
             raise ManagedStateError(f"could not load managed state: {exc}") from exc
-        return parse_managed_state(payload)
+
+        state, migrated_from = _parse_managed_state_with_version(payload)
+        if migrated_from is not None:
+            try:
+                self.save(state)
+            except (OSError, ManagedStateError) as exc:
+                raise ManagedStateError(
+                    "managed-state migration could not be persisted atomically; "
+                    "original state preserved"
+                ) from exc
+        return state
 
     def save(self, state: ManagedState) -> None:
         payload = serialize_managed_state(state)
@@ -115,6 +130,7 @@ def activate_template(
         destination=DestinationReference(AdapterId("spotify"), external_id),
         retention_hours=template.retention_hours,
         max_episodes=template.max_episodes,
+        max_duration_seconds=template.duration_policy.default_max_seconds,
     )
 
 
@@ -155,6 +171,22 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
         if managed.enabled:
             seen_destinations.add(destination_key)
 
+        max_duration_seconds = managed.max_duration_seconds
+        try:
+            validate_persisted_duration_seconds(max_duration_seconds)
+        except ValueError as exc:
+            raise ManagedStateError(
+                f"managed playlist {managed.id} max_duration_seconds must be positive"
+            ) from exc
+        duration_policy = DurationPolicy(
+            default_max_seconds=max_duration_seconds,
+            exceptions=tuple(
+                exception
+                for exception in template.duration_policy.exceptions
+                if exception.max_seconds > max_duration_seconds
+            ),
+        )
+
         playlists.append(
             PlaylistDefinition(
                 id=managed.id,
@@ -168,7 +200,7 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
                 retention_hours=managed.retention_hours,
                 max_episodes=managed.max_episodes,
                 ordering=template.ordering,
-                duration_policy=template.duration_policy,
+                duration_policy=duration_policy,
             )
         )
 
@@ -180,14 +212,32 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
 
 
 def parse_managed_state(payload: object) -> ManagedState:
+    """Parse current or legacy managed state into the current in-memory schema."""
+    state, _ = _parse_managed_state_with_version(payload)
+    return state
+
+
+def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, int | None]:
     root = _mapping(payload, "managed state")
     _known_keys(root, {"schema_version", "playlists"}, "managed state")
-    schema_version = _integer(_required(root, "schema_version", "managed state"), "schema_version")
-    if schema_version != _MANAGED_STATE_SCHEMA_VERSION:
-        raise ManagedStateError(f"unsupported managed-state schema version: {schema_version}")
+    source_schema_version = _integer(
+        _required(root, "schema_version", "managed state"), "schema_version"
+    )
+    if source_schema_version not in {
+        _LEGACY_MANAGED_STATE_SCHEMA_VERSION,
+        _MANAGED_STATE_SCHEMA_VERSION,
+    }:
+        raise ManagedStateError(
+            f"unsupported managed-state schema version: {source_schema_version}"
+        )
     raw_playlists = _sequence(_required(root, "playlists", "managed state"), "playlists")
     playlists = tuple(
-        _parse_playlist(item, f"playlists[{index}]") for index, item in enumerate(raw_playlists)
+        _parse_playlist(
+            item,
+            f"playlists[{index}]",
+            source_schema_version=source_schema_version,
+        )
+        for index, item in enumerate(raw_playlists)
     )
     ids = [playlist.id for playlist in playlists]
     if len(ids) != len(set(ids)):
@@ -208,32 +258,40 @@ def parse_managed_state(payload: object) -> ManagedState:
         if playlist.enabled:
             seen_destinations.add(destination_key)
 
-    return ManagedState(schema_version=schema_version, playlists=playlists)
+    migrated_from = (
+        source_schema_version if source_schema_version != _MANAGED_STATE_SCHEMA_VERSION else None
+    )
+    return (
+        ManagedState(schema_version=_MANAGED_STATE_SCHEMA_VERSION, playlists=playlists),
+        migrated_from,
+    )
 
 
 def serialize_managed_state(state: ManagedState) -> dict[str, object]:
     if state.schema_version != _MANAGED_STATE_SCHEMA_VERSION:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
+    serialized_playlists: list[dict[str, object]] = []
+    for playlist in state.playlists:
+        item: dict[str, object] = {
+            "id": str(playlist.id),
+            "template_id": str(playlist.template_id),
+            "enabled": playlist.enabled,
+            "display_name": playlist.display_name,
+            "description": playlist.description,
+            "cover_id": playlist.cover_id,
+            "source_ids": [str(source_id) for source_id in playlist.source_ids],
+            "destination": {
+                "adapter_id": str(playlist.destination.adapter_id),
+                "external_id": playlist.destination.external_id,
+            },
+            "retention_hours": playlist.retention_hours,
+            "max_episodes": playlist.max_episodes,
+            "max_duration_seconds": playlist.max_duration_seconds,
+        }
+        serialized_playlists.append(item)
     payload: dict[str, object] = {
         "schema_version": state.schema_version,
-        "playlists": [
-            {
-                "id": str(playlist.id),
-                "template_id": str(playlist.template_id),
-                "enabled": playlist.enabled,
-                "display_name": playlist.display_name,
-                "description": playlist.description,
-                "cover_id": playlist.cover_id,
-                "source_ids": [str(source_id) for source_id in playlist.source_ids],
-                "destination": {
-                    "adapter_id": str(playlist.destination.adapter_id),
-                    "external_id": playlist.destination.external_id,
-                },
-                "retention_hours": playlist.retention_hours,
-                "max_episodes": playlist.max_episodes,
-            }
-            for playlist in state.playlists
-        ],
+        "playlists": serialized_playlists,
     }
     canonical = parse_managed_state(payload)
     if canonical != state:
@@ -241,7 +299,12 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
     return payload
 
 
-def _parse_playlist(value: object, path: str) -> ManagedPlaylist:
+def _parse_playlist(
+    value: object,
+    path: str,
+    *,
+    source_schema_version: int,
+) -> ManagedPlaylist:
     data = _mapping(value, path)
     _known_keys(
         data,
@@ -256,6 +319,7 @@ def _parse_playlist(value: object, path: str) -> ManagedPlaylist:
             "destination",
             "retention_hours",
             "max_episodes",
+            "max_duration_seconds",
         },
         path,
     )
@@ -272,6 +336,20 @@ def _parse_playlist(value: object, path: str) -> ManagedPlaylist:
         _required(data, "retention_hours", path), f"{path}.retention_hours"
     )
     max_episodes = _positive_integer(_required(data, "max_episodes", path), f"{path}.max_episodes")
+
+    if source_schema_version == _LEGACY_MANAGED_STATE_SCHEMA_VERSION:
+        raw_max_duration = data.get("max_duration_seconds")
+        max_duration_seconds = (
+            _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS
+            if raw_max_duration is None
+            else _duration_seconds(raw_max_duration, f"{path}.max_duration_seconds")
+        )
+    else:
+        max_duration_seconds = _duration_seconds(
+            _required(data, "max_duration_seconds", path),
+            f"{path}.max_duration_seconds",
+        )
+
     return ManagedPlaylist(
         id=PlaylistId(_nonempty_string(_required(data, "id", path), f"{path}.id")),
         template_id=PlaylistId(
@@ -298,6 +376,7 @@ def _parse_playlist(value: object, path: str) -> ManagedPlaylist:
         ),
         retention_hours=retention_hours,
         max_episodes=max_episodes,
+        max_duration_seconds=max_duration_seconds,
     )
 
 
@@ -364,6 +443,13 @@ def _positive_integer(value: object, path: str) -> int:
     if result <= 0:
         raise ManagedStateError(f"{path}: must be positive")
     return result
+
+
+def _duration_seconds(value: object, path: str) -> int:
+    try:
+        return validate_persisted_duration_seconds(value)
+    except ValueError as exc:
+        raise ManagedStateError(f"{path}: must be positive") from exc
 
 
 def _fsync_directory(path: Path) -> None:

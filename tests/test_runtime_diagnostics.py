@@ -12,6 +12,7 @@ import pytest
 from news_bulletin_playlist.desired_state import (
     DURATION_EXCEEDS_DEFAULT_MAX,
     DURATION_EXCEPTION,
+    DURATION_WITHIN_DEFAULT_MAX,
     DurationEligibilityDecision,
 )
 from news_bulletin_playlist.diagnostics import (
@@ -256,8 +257,8 @@ def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: P
             PlaylistCycleOutcome(
                 playlist_id=PlaylistId("spain_spanish_news"),
                 ok=True,
-                desired_count=1,
-                applied_count=1,
+                desired_count=3,
+                applied_count=3,
                 wrote=False,
                 last_success_at=NOW,
                 duration_decisions=(
@@ -278,6 +279,14 @@ def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: P
                         reason=DURATION_EXCEEDS_DEFAULT_MAX,
                         max_seconds=480,
                     ),
+                    DurationEligibilityDecision(
+                        source_id=SourceId("rne"),
+                        source_native_id="short-not-persisted",
+                        duration_seconds=245,
+                        accepted=True,
+                        reason=DURATION_WITHIN_DEFAULT_MAX,
+                        max_seconds=1800,
+                    ),
                 ),
             ),
         ),
@@ -290,9 +299,10 @@ def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: P
     ).run_cycle()
 
     policy_events = tuple(
-        event for event in store.list_events(limit=20) if event.component == "playlist.eligibility"
+        event for event in store.list_events(limit=30) if event.component == "playlist.eligibility"
     )
     assert {event.event_name for event in policy_events} == {
+        "duration_profile",
         "duration_exception_applied",
         "duration_episode_excluded",
     }
@@ -315,6 +325,31 @@ def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: P
         "eligibility_reason": "duration_exceeds_default_max",
         "max_seconds": 480,
     }
+    rne_profile = next(
+        event
+        for event in policy_events
+        if event.event_name == "duration_profile" and event.source_id == "rne"
+    )
+    assert rne_profile.details == {
+        "accepted_count": 1,
+        "excluded_count": 1,
+        "gt_30m": 0,
+        "lt_5m": 1,
+        "m10_lt15": 0,
+        "m15_lt20": 0,
+        "m20_le30": 0,
+        "m5_lt8": 0,
+        "m8_lt10": 1,
+        "sample_count": 2,
+    }
+    ser_profile = next(
+        event
+        for event in policy_events
+        if event.event_name == "duration_profile" and event.source_id == "ser"
+    )
+    assert ser_profile.details["m20_le30"] == 1
+    assert ser_profile.details["sample_count"] == 1
     rendered = output.getvalue()
     assert "must-not-be-persisted" not in rendered
     assert "also-not-persisted" not in rendered
+    assert "short-not-persisted" not in rendered

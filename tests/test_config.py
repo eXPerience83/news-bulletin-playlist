@@ -51,11 +51,26 @@ def _config(
 def test_example_config_is_valid_and_uses_real_source_contracts() -> None:
     config = load_config(EXAMPLE_CONFIG)
 
-    assert [source.id for source in config.sources] == ["ser", "rne", "ondacero", "cnn", "cope"]
+    assert [source.id for source in config.sources] == [
+        "ser",
+        "rne",
+        "ondacero",
+        "abc",
+        "cnn",
+        "cope",
+    ]
     assert config.sources[-1].enabled is False
     assert config.sources[-1].endpoint_url is None
     assert all("example.invalid" not in (source.endpoint_url or "") for source in config.sources)
-    assert config.playlists[0].source_selection.explicit == ("ser", "rne", "ondacero", "cnn")
+    assert config.playlists[0].display_name == "Noticias en Español"
+    assert config.playlists[0].source_selection.explicit == (
+        "ser",
+        "rne",
+        "ondacero",
+        "abc",
+        "cnn",
+    )
+    assert config.playlists[0].duration_policy.default_max_seconds == 1800
 
 
 def test_playlist_defaults_are_48_hours_100_episodes_and_newest_first() -> None:

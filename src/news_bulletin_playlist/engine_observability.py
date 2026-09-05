@@ -9,6 +9,8 @@ from news_bulletin_playlist.desired_state import (
     DURATION_EXCEEDS_DEFAULT_MAX,
     DURATION_EXCEEDS_EXCEPTION_MAX,
     DURATION_EXCEPTION,
+    DURATION_WITHIN_DEFAULT_MAX,
+    DurationEligibilityDecision,
 )
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
 from news_bulletin_playlist.engine import EngineCycleResult, EngineCycleRunner
@@ -16,6 +18,7 @@ from news_bulletin_playlist.reconciliation_diagnostics import classify_reconcili
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics, cycle_id_for
 
 Clock = Callable[[], datetime]
+_LONG_DURATION_DIAGNOSTIC_SECONDS = 20 * 60
 
 
 class InstrumentedEngineCycleRunner:
@@ -121,12 +124,27 @@ class InstrumentedEngineCycleRunner:
                 playlist_id=str(playlist.playlist_id),
                 details=details,
             )
+            self._emit_duration_profiles(
+                playlist.duration_decisions,
+                playlist_id=str(playlist.playlist_id),
+                cycle_id=cycle_id,
+                occurred_at=result.finished_at,
+            )
             for decision in playlist.duration_decisions:
-                if decision.reason not in {
-                    DURATION_EXCEPTION,
-                    DURATION_EXCEEDS_DEFAULT_MAX,
-                    DURATION_EXCEEDS_EXCEPTION_MAX,
-                }:
+                noteworthy_long_accept = (
+                    decision.reason == DURATION_WITHIN_DEFAULT_MAX
+                    and decision.accepted
+                    and decision.duration_seconds >= _LONG_DURATION_DIAGNOSTIC_SECONDS
+                )
+                if (
+                    decision.reason
+                    not in {
+                        DURATION_EXCEPTION,
+                        DURATION_EXCEEDS_DEFAULT_MAX,
+                        DURATION_EXCEEDS_EXCEPTION_MAX,
+                    }
+                    and not noteworthy_long_accept
+                ):
                     continue
                 policy_details: dict[str, str | int | bool | None] = {
                     "duration_seconds": decision.duration_seconds,
@@ -135,15 +153,17 @@ class InstrumentedEngineCycleRunner:
                 }
                 if decision.exception_id is not None:
                     policy_details["policy_exception"] = decision.exception_id
+                if noteworthy_long_accept:
+                    duration_event = "duration_long_episode_accepted"
+                elif decision.accepted:
+                    duration_event = "duration_exception_applied"
+                else:
+                    duration_event = "duration_episode_excluded"
                 self.diagnostics.emit(
                     occurred_at=result.finished_at,
                     severity=DiagnosticSeverity.INFO,
                     component="playlist.eligibility",
-                    event_name=(
-                        "duration_exception_applied"
-                        if decision.accepted
-                        else "duration_episode_excluded"
-                    ),
+                    event_name=duration_event,
                     cycle_id=cycle_id,
                     source_id=str(decision.source_id),
                     playlist_id=str(playlist.playlist_id),
@@ -178,6 +198,64 @@ class InstrumentedEngineCycleRunner:
                 "total": len(result.sources) + len(result.playlists),
             },
         )
+
+    def _emit_duration_profiles(
+        self,
+        decisions: tuple[DurationEligibilityDecision, ...],
+        *,
+        playlist_id: str,
+        cycle_id: str,
+        occurred_at: datetime,
+    ) -> None:
+        """Emit one bounded histogram per source instead of logging every short accepted episode."""
+        by_source: dict[str, list[DurationEligibilityDecision]] = {}
+        for decision in decisions:
+            by_source.setdefault(str(decision.source_id), []).append(decision)
+
+        for source_id, source_decisions in sorted(by_source.items()):
+            buckets = {
+                "lt_5m": 0,
+                "m5_lt8": 0,
+                "m8_lt10": 0,
+                "m10_lt15": 0,
+                "m15_lt20": 0,
+                "m20_le30": 0,
+                "gt_30m": 0,
+            }
+            accepted = 0
+            for decision in source_decisions:
+                duration = decision.duration_seconds
+                if duration < 300:
+                    buckets["lt_5m"] += 1
+                elif duration < 480:
+                    buckets["m5_lt8"] += 1
+                elif duration < 600:
+                    buckets["m8_lt10"] += 1
+                elif duration < 900:
+                    buckets["m10_lt15"] += 1
+                elif duration < 1200:
+                    buckets["m15_lt20"] += 1
+                elif duration <= 1800:
+                    buckets["m20_le30"] += 1
+                else:
+                    buckets["gt_30m"] += 1
+                accepted += int(decision.accepted)
+
+            self.diagnostics.emit(
+                occurred_at=occurred_at,
+                severity=DiagnosticSeverity.INFO,
+                component="playlist.eligibility",
+                event_name="duration_profile",
+                cycle_id=cycle_id,
+                source_id=source_id,
+                playlist_id=playlist_id,
+                details={
+                    "sample_count": len(source_decisions),
+                    "accepted_count": accepted,
+                    "excluded_count": len(source_decisions) - accepted,
+                    **buckets,
+                },
+            )
 
 
 def _destination_was_preserved(error: str | None) -> bool:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+import io
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -16,6 +18,7 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
 )
+from news_bulletin_playlist.providers.release_date_title import RELEASE_DATE_TITLE_PARSER_ID
 from news_bulletin_playlist.registry import get_title_parser
 
 FeedFetcher = Callable[[str], bytes]
@@ -24,6 +27,7 @@ _USER_AGENT = (
     "news-bulletin-playlist/0.0.1 (+https://github.com/eXPerience83/news-bulletin-playlist)"
 )
 _MAX_FEED_BYTES = 10 * 1024 * 1024
+_GZIP_MAGIC = b"\x1f\x8b"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,14 +69,41 @@ def required_sources(config: EngineConfig) -> tuple[SourceDefinition, ...]:
 
 
 def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
-    """Fetch a bounded RSS payload without applying provider or playlist policy."""
+    """Fetch a bounded RSS payload and safely decode gzip when providers use it."""
 
-    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept-Encoding": "gzip",
+        },
+    )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = response.read(_MAX_FEED_BYTES + 1)
+        headers = getattr(response, "headers", None)
+        content_encoding = ""
+        if headers is not None:
+            header_value = headers.get("Content-Encoding")
+            if isinstance(header_value, str):
+                content_encoding = header_value.strip().casefold()
     if len(payload) > _MAX_FEED_BYTES:
         raise ValueError("feed payload exceeds 10 MiB limit")
-    return bytes(payload)
+    return _decode_feed_payload(bytes(payload), content_encoding=content_encoding)
+
+
+def _decode_feed_payload(payload: bytes, *, content_encoding: str = "") -> bytes:
+    encoded_as_gzip = content_encoding == "gzip" or payload.startswith(_GZIP_MAGIC)
+    if not encoded_as_gzip:
+        return payload
+
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(payload), mode="rb") as compressed:
+            decoded = compressed.read(_MAX_FEED_BYTES + 1)
+    except OSError as exc:
+        raise ValueError("feed payload contained invalid gzip data") from exc
+    if len(decoded) > _MAX_FEED_BYTES:
+        raise ValueError("decoded feed payload exceeds 10 MiB limit")
+    return bytes(decoded)
 
 
 def collect_required_sources(
@@ -119,7 +150,8 @@ def normalize_rss_source(
     if not items:
         raise ValueError("feed contained no RSS items")
 
-    parser = get_title_parser(str(source.parser_id))
+    parser_id = str(source.parser_id)
+    parser = None if parser_id == RELEASE_DATE_TITLE_PARSER_ID else get_title_parser(parser_id)
     editions: list[CanonicalEdition] = []
     seen_native_ids: set[str] = set()
 
@@ -132,13 +164,17 @@ def normalize_rss_source(
         if source_native_id in seen_native_ids:
             continue
 
-        parsed = parser.parse(title)
-        if parsed is None:
-            continue
         try:
             published_at = _parse_published_at(published_text, source.timezone)
         except ValueError:
             continue
+
+        edition_at = None
+        if parser is not None:
+            parsed = parser.parse(title)
+            if parsed is None:
+                continue
+            edition_at = _apply_source_timezone(parsed, source.timezone)
 
         editions.append(
             CanonicalEdition(
@@ -146,7 +182,7 @@ def normalize_rss_source(
                 source_native_id=source_native_id,
                 title=title,
                 published_at=published_at,
-                edition_at=_apply_source_timezone(parsed, source.timezone),
+                edition_at=edition_at,
                 duration_seconds=_duration_seconds(item),
             )
         )

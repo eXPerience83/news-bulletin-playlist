@@ -12,6 +12,7 @@ import yaml  # type: ignore[import-untyped]
 from yaml.constructor import ConstructorError  # type: ignore[import-untyped]
 
 from news_bulletin_playlist.models import (
+    DEFAULT_DURATION_MAX_SECONDS,
     AdapterId,
     CountryCode,
     DestinationReference,
@@ -254,7 +255,8 @@ def _parse_duration_policy(value: object, path: str) -> DurationPolicy:
     data = _mapping(value, path)
     _known_keys(data, {"default_max_seconds", "exceptions"}, path)
     default_max = _positive_integer(
-        data.get("default_max_seconds", 480), f"{path}.default_max_seconds"
+        data.get("default_max_seconds", DEFAULT_DURATION_MAX_SECONDS),
+        f"{path}.default_max_seconds",
     )
     raw_exceptions = _sequence(data.get("exceptions", ()), f"{path}.exceptions")
     exceptions: list[DurationPolicyException] = []
