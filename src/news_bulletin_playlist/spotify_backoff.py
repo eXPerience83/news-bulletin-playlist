@@ -28,6 +28,18 @@ CREATE TABLE IF NOT EXISTS spotify_rate_limit_backoff (
 )
 """
 
+_UPSERT_MAX_DEADLINE_SQL = """
+INSERT INTO spotify_rate_limit_backoff (
+    singleton, observed_at, retry_not_before, retry_after_seconds, backoff_source
+) VALUES (1, ?, ?, ?, ?)
+ON CONFLICT(singleton) DO UPDATE SET
+    observed_at = excluded.observed_at,
+    retry_not_before = excluded.retry_not_before,
+    retry_after_seconds = excluded.retry_after_seconds,
+    backoff_source = excluded.backoff_source
+WHERE julianday(excluded.retry_not_before) > julianday(spotify_rate_limit_backoff.retry_not_before)
+"""
+
 T = TypeVar("T")
 Clock = Callable[[], datetime]
 
@@ -123,39 +135,33 @@ class SpotifyRateLimitJournal:
     def get(self) -> SpotifyRateLimitState | None:
         with self._connection("read Spotify rate-limit backoff") as connection:
             self._ensure_table(connection)
-            row = connection.execute(
-                """
-                SELECT observed_at, retry_not_before, retry_after_seconds, backoff_source
-                FROM spotify_rate_limit_backoff
-                WHERE singleton = 1
-                """
-            ).fetchone()
-        if row is None:
-            return None
-        retry_after = row["retry_after_seconds"]
-        if retry_after is not None and not isinstance(retry_after, int):
-            raise PersistenceError(
-                "Spotify rate-limit backoff contained invalid retry_after_seconds"
-            )
-        source = row["backoff_source"]
-        if not isinstance(source, str):
-            raise PersistenceError("Spotify rate-limit backoff contained invalid backoff_source")
-        return SpotifyRateLimitState(
-            observed_at=_parse_timestamp(_row_text(row, "observed_at")),
-            retry_not_before=_parse_timestamp(_row_text(row, "retry_not_before")),
-            retry_after_seconds=retry_after,
-            backoff_source=source,
-        )
+            row = self._select_row(connection)
+        return None if row is None else _state_from_row(row)
 
     def active(self, *, now: datetime) -> SpotifyRateLimitState | None:
         observed = _as_utc(now)
-        state = self.get()
-        if state is None:
-            return None
-        if observed < state.retry_not_before:
-            return state
-        self.clear()
-        return None
+        while True:
+            state = self.get()
+            if state is None:
+                return None
+            if observed < state.retry_not_before:
+                return state
+
+            with self._connection("expire Spotify rate-limit backoff") as connection:
+                self._ensure_table(connection)
+                cursor = connection.execute(
+                    """
+                    DELETE FROM spotify_rate_limit_backoff
+                    WHERE singleton = 1
+                      AND julianday(retry_not_before) <= julianday(?)
+                    """,
+                    (_format_storage_timestamp(observed),),
+                )
+                deleted = max(cursor.rowcount, 0)
+            if deleted:
+                return None
+            # A concurrent activation extended the singleton after our read. Re-read it
+            # instead of clearing or ignoring the newer, later deadline.
 
     def activate(
         self,
@@ -178,33 +184,22 @@ class SpotifyRateLimitJournal:
             retry_after_seconds=retry_after_seconds,
             backoff_source=source,
         )
-        existing = self.get()
-        chosen = (
-            existing
-            if existing is not None and existing.retry_not_before > candidate.retry_not_before
-            else candidate
-        )
+
         with self._connection("persist Spotify rate-limit backoff") as connection:
             self._ensure_table(connection)
             connection.execute(
-                """
-                INSERT INTO spotify_rate_limit_backoff (
-                    singleton, observed_at, retry_not_before, retry_after_seconds, backoff_source
-                ) VALUES (1, ?, ?, ?, ?)
-                ON CONFLICT(singleton) DO UPDATE SET
-                    observed_at = excluded.observed_at,
-                    retry_not_before = excluded.retry_not_before,
-                    retry_after_seconds = excluded.retry_after_seconds,
-                    backoff_source = excluded.backoff_source
-                """,
+                _UPSERT_MAX_DEADLINE_SQL,
                 (
-                    _format_timestamp(chosen.observed_at),
-                    _format_timestamp(chosen.retry_not_before),
-                    chosen.retry_after_seconds,
-                    chosen.backoff_source,
+                    _format_storage_timestamp(candidate.observed_at),
+                    _format_storage_timestamp(candidate.retry_not_before),
+                    candidate.retry_after_seconds,
+                    candidate.backoff_source,
                 ),
             )
-        return chosen
+            row = self._select_row(connection)
+        if row is None:
+            raise PersistenceError("Spotify rate-limit backoff disappeared during activation")
+        return _state_from_row(row)
 
     def clear(self) -> None:
         with self._connection("clear Spotify rate-limit backoff") as connection:
@@ -215,11 +210,25 @@ class SpotifyRateLimitJournal:
     def _ensure_table(connection: sqlite3.Connection) -> None:
         connection.execute(_TABLE_SQL)
 
+    @staticmethod
+    def _select_row(connection: sqlite3.Connection) -> sqlite3.Row | None:
+        row = connection.execute(
+            """
+            SELECT observed_at, retry_not_before, retry_after_seconds, backoff_source
+            FROM spotify_rate_limit_backoff
+            WHERE singleton = 1
+            """
+        ).fetchone()
+        if row is not None and not isinstance(row, sqlite3.Row):
+            raise PersistenceError("Spotify rate-limit backoff row had an invalid shape")
+        return row
+
     def _connection(self, operation: str) -> _ConnectionContext:
         try:
             connection = sqlite3.connect(self.path, timeout=10.0)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 10000")
         except sqlite3.Error as exc:
             raise PersistenceError(f"{operation} failed for {self.path}: {exc}") from exc
         return _ConnectionContext(connection, operation=operation, path=str(self.path))
@@ -341,7 +350,7 @@ def _emit_backoff(
         return
     details: dict[str, str | int] = {
         "http_status": 429,
-        "retry_not_before": _format_timestamp(state.retry_not_before),
+        "retry_not_before": _format_display_timestamp(state.retry_not_before),
         "backoff_source": state.backoff_source,
         "backoff_state": backoff_state,
         "write_decision": "skipped",
@@ -358,10 +367,32 @@ def _emit_backoff(
 
 
 def _active_message(state: SpotifyRateLimitState) -> str:
-    return f"Spotify rate-limit backoff active until {_format_timestamp(state.retry_not_before)}"
+    return (
+        "Spotify rate-limit backoff active until "
+        f"{_format_display_timestamp(state.retry_not_before)}"
+    )
 
 
-def _format_timestamp(value: datetime) -> str:
+def _state_from_row(row: sqlite3.Row) -> SpotifyRateLimitState:
+    retry_after = row["retry_after_seconds"]
+    if retry_after is not None and not isinstance(retry_after, int):
+        raise PersistenceError("Spotify rate-limit backoff contained invalid retry_after_seconds")
+    source = row["backoff_source"]
+    if not isinstance(source, str):
+        raise PersistenceError("Spotify rate-limit backoff contained invalid backoff_source")
+    return SpotifyRateLimitState(
+        observed_at=_parse_timestamp(_row_text(row, "observed_at")),
+        retry_not_before=_parse_timestamp(_row_text(row, "retry_not_before")),
+        retry_after_seconds=retry_after,
+        backoff_source=source,
+    )
+
+
+def _format_storage_timestamp(value: datetime) -> str:
+    return _as_utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _format_display_timestamp(value: datetime) -> str:
     return _as_utc(value).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
