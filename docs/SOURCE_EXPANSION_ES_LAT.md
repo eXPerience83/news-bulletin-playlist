@@ -37,7 +37,7 @@ The post-merge follow-up should apply these source-placement rules:
 - `ser`, `rne`, `ondacero`, `abc` remain strong defaults for `ES · es-ES`.
 - `cnn` / **CNN 5 Cosas** is confirmed by listening as spoken `es-ES`. Its editorial scope remains genuinely international, so classify it as `US · INT · es-ES`: it belongs in the Spain-Spanish world product (`INT · es-ES`), **not** automatically in the Spain-national playlist and not in LAT.
 - `RFI Español — Noticias de América` is regional-Americas content and belongs only in the LAT research bucket; it is not a default world-Spanish or Spain source.
-- sources such as ONU, DW, France 24, Univision, SBS and VOA require both editorial-scope and spoken-locale verification before assignment.
+- ONU, DW and N+ Univision are implemented as selectable `es` sources, but require spoken-locale verification before ES/LAT default assignment.
 
 ## Spanish-language source backlog
 
@@ -56,7 +56,7 @@ The post-merge follow-up should apply these source-placement rules:
 | Source | Provisional classification | Status | Note |
 | --- | --- | --- | --- |
 | RFI Español — Noticias de América | `FR · REG · es-419` | reject for current edition architecture | Individual-story cadence risks flooding; useful editorial reference for LAT. |
-| N+ Univision 24-7 | `US · MIX · es-419?` | candidate | Strong multi-story daily product; verify exact locale and regional balance. |
+| N+ Univision 24-7 | `US · INT · es` | implemented, not defaulted | Strong multi-story daily product; spoken locale remains unresolved. |
 | Noticias Univision | `US · MIX · es-419?` | optional candidate | High overlap with N+; do not enable both by default without evidence. |
 | Telemundo 52 — Noticiero Digital | `US · LOC/MIX · es-419?` | optional | LA/California-heavy; not a LAT default. |
 | VOA — Buenos Días América | `US · REG/MIX · es-419?` | verify active product | Useful if still active and deterministic. |
@@ -68,17 +68,17 @@ No source should be promoted merely because the publisher is European. Spoken lo
 | Source | Status | Note |
 | --- | --- | --- |
 | CNN — 5 Cosas | implemented / locale confirmed | `US · INT · es-ES`; current strongest implemented world-news source for this spoken locale. |
-| ONU en minutos | high-priority candidate | Excellent global bulletin; verify spoken locale, exact RSS product boundary and Spotify identity. |
-| DW — Actualidad en análisis | candidate | ~20–25 minute international analysis; verify spoken locale before assigning to ES vs LAT world product. |
+| ONU en minutos | implemented, not defaulted | Broad RSS is deterministically filtered to dated product editions; spoken locale remains unresolved. |
+| DW — Actualidad en análisis | implemented, not defaulted | ~20–25 minute international analysis with occasional longer items; spoken locale remains unresolved. |
 | France 24 Spanish products | research | Find a discrete world-news bulletin; do not use LAT-focused or long-form products by mistake. |
 
 ### World / Latin-American Spanish — `INT · es-419`
 
 | Source | Status | Note |
 | --- | --- | --- |
-| ONU en minutos | high-priority candidate | May be neutral enough for broader use, but locale must be evidenced rather than assumed. |
-| N+ Univision 24-7 | candidate | International + US agenda; useful optional world/LAT source if overlap remains acceptable. |
-| DW — Actualidad en análisis | candidate | Global content; assign only after spoken-locale verification. |
+| ONU en minutos | implemented, not defaulted | Locale must be evidenced rather than assumed. |
+| N+ Univision 24-7 | implemented, not defaulted | International + US agenda; assign only after spoken-locale verification. |
+| DW — Actualidad en análisis | implemented, not defaulted | Global content; assign only after spoken-locale verification. |
 | SBS Spanish — Noticias SBS Spanish | filtered candidate | Mixed feed; only bulletin-labelled entries should be considered. |
 
 ## Other-country and world expansion backlog
@@ -87,9 +87,9 @@ These remain independent of the Spain/LAT split.
 
 | Candidate | Proposed classification | Status / reason |
 | --- | --- | --- |
-| Reuters World News | `GB · INT · en` | high-priority candidate; daily ~10-minute world briefing |
-| CBC World Report | `CA · MIX · en` | high-priority candidate; concise Canada/world newscast |
-| KBS WORLD Radio News | `KR · MIX · en` | candidate; concise but multi-daily, cadence protection may be needed |
+| Reuters World News | `GB · INT · en` | implemented; `INT · EN` default alongside UN News Today |
+| CBC World Report | `CA · MIX · en` | implemented; registered for later Canada/country product |
+| Chequia en 30 minutos | `CZ · NAT · es` | deferred to #138; nullable Spotify catalogue policy is not changed here |
 | RNZ News | `NZ · MIX · en` | candidate; concise but several editions/day |
 | Czechia in 30 minutes / Radio Prague International | `CZ · NAT · <verified-language>` | candidate; country-news format around the current 30-minute ceiling |
 | Tagesschau in 100 Sekunden | `DE · NAT · de` | candidate; very short/high-cadence |

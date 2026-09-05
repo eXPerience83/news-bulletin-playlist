@@ -27,7 +27,7 @@ The three axes are source metadata. They are deliberately independent from playl
 
 `ORIGIN` describes the provider/product's primary country or operational origin. It does **not** decide where the source can be used.
 
-This is why **CNN 5 Cosas remains useful for Noticias en Español even though its provider country is US**: its source classification is `US · INT · es`, so the editorial product is global rather than US-local.
+This is why **CNN 5 Cosas remains useful for the international Spain-Spanish product even though its provider country is US**: its source classification is `US · INT · es-ES`, so the editorial product is global rather than US-local.
 
 For international institutions, the runtime may use a practical operational country/HQ value when a country field is required. Editorial suitability must always come from `SCOPE`, never inferred from that country value.
 
@@ -83,8 +83,13 @@ This is deliberately a source-level editorial gate. The current per-playlist def
 | Radio Nacional de España | `ES · NAT · es-ES` | Concise | Spain/general Spanish recurring bulletins |
 | Onda Cero | `ES · NAT · es-ES` | Concise | Spain/general Spanish recurring bulletins |
 | ABC — Las Noticias de ABC | `ES · NAT · es-ES` | Concise | Spain/general Spanish daily news summary |
-| CNN 5 Cosas | `US · INT · es` | Concise | global/international Spanish briefing; intentionally available to both general Spanish and international-Spanish playlists |
+| CNN 5 Cosas | `US · INT · es-ES` | Concise | confirmed Spain-Spanish global briefing; default only for `INT · es-ES` |
 | UN News Today | `US · INT · en` | Concise | global English bulletin |
+| Reuters — World News | `GB · INT · en` | Concise | daily global English briefing; default for `INT · EN` |
+| CBC — World Report | `CA · MIX · en` | Concise | Canada/world daily newscast; available but not an `INT · EN` default |
+| United Nations — ONU en minutos | `US · INT · es` | Concise | filtered Spanish UN bulletin; spoken locale unresolved |
+| N+ Univision 24-7 | `US · INT · es` | Concise | international/US daily Spanish newscast; spoken locale unresolved |
+| DW — Actualidad en análisis | `DE · INT · es` | Mixed | international Spanish analysis, with occasional >30-minute editions; spoken locale unresolved |
 | RFI — Journal Monde | `FR · INT · fr` | Mixed | world-news bulletin; ordinary journals are concise, with occasional longer tranches |
 | Deutschlandfunk — Die Nachrichten | `DE · MIX · de` | Concise | short recurring German bulletin mixing Germany and world news |
 | RMF FM — Fakty | `PL · MIX · pl` | Mixed | short recurring Polish bulletin mixing domestic/world news, with occasional longer editions |
@@ -97,7 +102,7 @@ The initial `INT · DE` and `INT · PL` playlist templates are therefore experim
 | --- | --- | --- |
 | BBC Global News Podcast | `GB · INT · en` | **Long-form**; not promoted under the concise-source rule |
 | RFI Español — Noticias de América | `FR · REG · es-419` | Regional Americas product; potentially useful for a future Latin-American playlist, not a default global-Spanish source |
-| ONU en minutos | `INT-origin · INT · es` pending exact origin metadata | Strong concise global candidate; deterministic Spotify show identity still needs verification before promotion |
+| Chequia en 30 minutos | `CZ · NAT · es` pending spoken-locale confirmation | Deferred to #138: Spotify's current catalogue has unavailable/null slots and must retain fail-closed handling |
 
 Other candidates such as DW, France 24, COPE or additional national broadcasters should be classified only after checking the actual bulletin product, not the publisher brand in isolation.
 

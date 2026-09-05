@@ -108,6 +108,45 @@ def test_default_ceiling_accepts_480_and_rejects_481_seconds() -> None:
     assert decision.max_seconds == 480
 
 
+def test_dw_long_episode_is_source_eligible_but_destination_duration_excludes_it() -> None:
+    playlist = PlaylistDefinition(
+        id=PlaylistId("dw"),
+        display_name="DW",
+        description="DW",
+        countries=(CountryCode("DE"),),
+        languages=(LanguageTag("es"),),
+        enabled=True,
+        source_selection=SourceSelection(explicit=(SourceId("dw_actualidad"),)),
+        destination=DestinationReference(AdapterId("spotify"), "playlist"),
+        duration_policy=DurationPolicy(default_max_seconds=1800),
+    )
+    edition = CanonicalEdition(
+        source_id=SourceId("dw_actualidad"),
+        source_native_id="dw-long",
+        title="DW analysis",
+        published_at=NOW,
+        edition_at=None,
+    )
+    match = EditionMatch(
+        source_id=edition.source_id,
+        source_native_id=edition.source_native_id,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:dw-long",
+        spotify_duration_seconds=1_901,
+        diagnostics="matched",
+        updated_at=NOW,
+    )
+    state = build_playlist_desired_state(
+        playlist,
+        (edition,),
+        {edition.identity: match},
+        now=NOW,
+        source_timezones={SourceId("dw_actualidad"): ZoneInfo("Europe/Berlin")},
+    )
+    assert state.uris == ()
+    assert state.duration_decisions[0].reason == DURATION_EXCEEDS_DEFAULT_MAX
+
+
 def test_ser_0800_exception_uses_source_timezone_and_is_bounded() -> None:
     # 06:00 UTC is 08:00 Europe/Madrid in September.
     edition = _edition(6)

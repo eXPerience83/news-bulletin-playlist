@@ -4,6 +4,10 @@ from dataclasses import dataclass
 
 from news_bulletin_playlist.providers.base import TitleParser
 from news_bulletin_playlist.providers.cnn import CnnParser
+from news_bulletin_playlist.providers.collection_filters import (
+    CollectionFilter,
+    UnNewsEsMinutesFilter,
+)
 from news_bulletin_playlist.providers.cope import CopeParser
 from news_bulletin_playlist.providers.ondacero import OndaCeroParser
 from news_bulletin_playlist.providers.release_date_title import ReleaseDateTitleParser
@@ -65,6 +69,10 @@ TITLE_PARSERS: dict[str, TitleParser] = {
     "release_date_title": ReleaseDateTitleParser(),
 }
 
+COLLECTION_FILTERS = {
+    "un_news_es_minutes": UnNewsEsMinutesFilter(),
+}
+
 
 def has_title_parser(parser_id: str) -> bool:
     return parser_id in TITLE_PARSERS
@@ -75,3 +83,14 @@ def get_title_parser(parser_id: str) -> TitleParser:
         return TITLE_PARSERS[parser_id]
     except KeyError as exc:
         raise KeyError(f"unknown parser_id: {parser_id}") from exc
+
+
+def has_collection_filter(filter_id: str) -> bool:
+    return filter_id in COLLECTION_FILTERS
+
+
+def get_collection_filter(filter_id: str) -> CollectionFilter:
+    try:
+        return COLLECTION_FILTERS[filter_id]
+    except KeyError as exc:
+        raise KeyError(f"unknown collection filter: {filter_id}") from exc

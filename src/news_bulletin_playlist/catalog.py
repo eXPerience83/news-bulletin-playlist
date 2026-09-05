@@ -17,6 +17,7 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
 )
+from news_bulletin_playlist.registry import has_collection_filter
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,10 @@ class BuiltInCatalog:
                 raise ValueError(
                     f"built-in source {source.id} requires exactly one Spotify show reference"
                 )
+            if source.collection_filter_id is not None and not has_collection_filter(
+                source.collection_filter_id
+            ):
+                raise ValueError(f"built-in source {source.id} has an unknown collection filter")
         for template in self.playlists:
             if not template.display_name.strip() or not template.cover_id.strip():
                 raise ValueError(f"playlist template {template.id} has incomplete metadata")
@@ -179,6 +184,67 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         external_references=(ExternalReference("spotify", "show", "3bCQUj5TafN5ichR8gXpFI"),),
     ),
     SourceDefinition(
+        id=SourceId("reuters_world"),
+        display_name="Reuters — World News",
+        countries=(CountryCode("GB"),),
+        languages=(LanguageTag("en"),),
+        timezone=ZoneInfo("UTC"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url="https://feeds.megaphone.fm/reutersworldnews",
+        external_references=(ExternalReference("spotify", "show", "1alpjXkCUjn3Y9fR5xl8fZ"),),
+    ),
+    SourceDefinition(
+        id=SourceId("cbc_world_report"),
+        display_name="CBC — World Report",
+        countries=(CountryCode("CA"),),
+        languages=(LanguageTag("en"),),
+        timezone=ZoneInfo("America/Toronto"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.MIXED,
+        endpoint_url="https://www.cbc.ca/podcasting/includes/wr.xml",
+        external_references=(ExternalReference("spotify", "show", "5qaYz2SRxlPUszXZQWNl1U"),),
+    ),
+    SourceDefinition(
+        id=SourceId("nplus_univision"),
+        display_name="N+ Univision 24-7",
+        countries=(CountryCode("US"),),
+        languages=(LanguageTag("es"),),
+        timezone=ZoneInfo("UTC"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url="https://feeds.simplecast.com/CC3CSCi5",
+        external_references=(ExternalReference("spotify", "show", "7G8CEhjsTshZeGtPLcuW6T"),),
+    ),
+    SourceDefinition(
+        id=SourceId("dw_actualidad"),
+        display_name="DW — Actualidad en análisis",
+        countries=(CountryCode("DE"),),
+        languages=(LanguageTag("es"),),
+        timezone=ZoneInfo("Europe/Berlin"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url="https://rss.dw.com/xml/podcast_actualidad_en_analisis",
+        external_references=(ExternalReference("spotify", "show", "7CzHDusNXRICUXuefIXbxd"),),
+    ),
+    SourceDefinition(
+        id=SourceId("un_news_es"),
+        display_name="United Nations — ONU en minutos",
+        countries=(CountryCode("US"),),
+        languages=(LanguageTag("es"),),
+        timezone=ZoneInfo("America/New_York"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        collection_filter_id="un_news_es_minutes",
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        endpoint_url="https://news.un.org/feed/subscribe/es/audio-product/all/audio-rss.xml",
+        external_references=(ExternalReference("spotify", "show", "77hGWK2o0NYsdS8WuXiLo6"),),
+    ),
+    SourceDefinition(
         id=SourceId("rfi_fr"),
         display_name="RFI — Journal Monde",
         countries=(CountryCode("FR"),),
@@ -258,7 +324,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         ),
         countries=(CountryCode("US"),),
         languages=(LanguageTag("en"),),
-        default_source_ids=(SourceId("un_news_en"),),
+        default_source_ids=(SourceId("un_news_en"), SourceId("reuters_world")),
         cover_id="international_english_news",
     ),
     PlaylistTemplate(

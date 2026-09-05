@@ -19,7 +19,7 @@ from news_bulletin_playlist.models import (
     SourceId,
 )
 from news_bulletin_playlist.providers.release_date_title import RELEASE_DATE_TITLE_PARSER_ID
-from news_bulletin_playlist.registry import get_title_parser
+from news_bulletin_playlist.registry import get_collection_filter, get_title_parser
 
 FeedFetcher = Callable[[str], bytes]
 
@@ -152,6 +152,11 @@ def normalize_rss_source(
 
     parser_id = str(source.parser_id)
     parser = None if parser_id == RELEASE_DATE_TITLE_PARSER_ID else get_title_parser(parser_id)
+    collection_filter = (
+        None
+        if source.collection_filter_id is None
+        else get_collection_filter(source.collection_filter_id)
+    )
     editions: list[CanonicalEdition] = []
     seen_native_ids: set[str] = set()
 
@@ -160,6 +165,8 @@ def normalize_rss_source(
         source_native_id = _source_native_id(item)
         published_text = _first_child_text(item, ("pubdate", "published", "date"))
         if title is None or source_native_id is None or published_text is None:
+            continue
+        if collection_filter is not None and not collection_filter.accepts(title):
             continue
         if source_native_id in seen_native_ids:
             continue

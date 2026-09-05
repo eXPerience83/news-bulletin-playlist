@@ -72,7 +72,7 @@ Before moving a source from research/candidate into the runtime catalog, verify 
 Promotion should be done by a focused implementation PR. Updating research notes alone must never
 change production behaviour.
 
-## Phase-1 runtime sources in PR #130
+## Runtime sources through PR #137
 
 These are the sources exposed by the current multi-playlist dev candidate branch.
 
@@ -82,17 +82,22 @@ These are the sources exposed by the current multi-playlist dev candidate branch
 | `rne` | `ES · NAT · es-ES` | RNE — Noticias RNE | Concise | recurring Spain news bulletins; observed useful editions can exceed the old 8-minute limit |
 | `ondacero` | `ES · NAT · es-ES` | Onda Cero — Las noticias en Onda Cero | Concise | recurring Spain radio bulletins |
 | `abc` | `ES · NAT · es-ES` | ABC — Las Noticias de ABC | Concise | daily Spain/general news summary |
-| `cnn` | `US · INT · es` | CNN — 5 Cosas | Concise | global/international Spanish briefing; intentionally shared by `Noticias en Español` and `INT · ES` |
+| `cnn` | `US · INT · es-ES` | CNN — 5 Cosas | Concise | global/international Spain-Spanish briefing; default for `INT · ES`, not the Spain-national product |
 | `un_news_en` | `US · INT · en` | United Nations — UN News Today | Concise | daily global English bulletin, preferred over long-form BBC Global News Podcast |
+| `reuters_world` | `GB · INT · en` | Reuters — World News | Concise | daily ~10-minute global briefing; `INT · EN` default alongside UN News Today |
+| `cbc_world_report` | `CA · MIX · en` | CBC — World Report | Concise | daily Canada/world newscast, registered for later country use |
+| `un_news_es` | `US · INT · es` | United Nations — ONU en minutos | Concise | broad UN Spanish audio feed is explicitly filtered to dated ONU-en-minutos editions; spoken locale unresolved |
+| `nplus_univision` | `US · INT · es` | N+ Univision 24-7 | Concise | international/US Spanish daily newscast; spoken locale unresolved |
+| `dw_actualidad` | `DE · INT · es` | DW — Actualidad en análisis | Mixed | normally under 30 minutes, with occasional longer episodes excluded by destination duration policy; spoken locale unresolved |
 | `rfi_fr` | `FR · INT · fr` | RFI — Journal Monde | Mixed | world-news journals, ordinarily around bulletin length with occasional longer tranches |
 | `dlf_news` | `DE · MIX · de` | Deutschlandfunk — Die Nachrichten | Concise | short recurring Germany/world bulletin; provisional source for the initial German playlist |
 | `rmf_fakty` | `PL · MIX · pl` | RMF FM — Fakty | Mixed | short recurring Poland/world bulletin with occasional longer editions; provisional source for the initial Polish playlist |
 
 The Phase-1 playlist templates are intentionally broader than the source labels:
 
-- `Noticias en Español`: SER, RNE, Onda Cero, ABC and CNN 5 Cosas;
+- `Noticias en Español`: SER, RNE, Onda Cero and ABC;
 - `INT · ES`: CNN 5 Cosas;
-- `INT · EN`: UN News Today;
+- `INT · EN`: UN News Today and Reuters World News;
 - `INT · FR`: RFI Journal Monde;
 - `INT · DE`: Deutschlandfunk — Die Nachrichten, provisionally while purer `INT` sources are researched;
 - `INT · PL`: RMF FM — Fakty, provisionally while purer `INT` sources are researched.
@@ -102,7 +107,7 @@ The Phase-1 playlist templates are intentionally broader than the source labels:
 | Proposed classification | Bulletin/source | Status | Current research note |
 | --- | --- | --- | --- |
 | `ES · NAT · es-ES` | COPE — boletines | `blocked` | Frequent concise bulletins and parser research exist, but deterministic Spotify show identity remains unverified. |
-| `INT-origin · INT · es` | ONU en minutos | `blocked / verify Spotify` | Strong concise global-Spanish candidate; exact deterministic Spotify show identity still needs verification. |
+| `CZ · NAT · es` | Chequia en 30 minutos | `blocked / #138` | Feed and show are known, but nullable Spotify catalogue entries require the dedicated global safety policy. |
 | `FR · REG · es-419` | RFI Español — Noticias de América | `candidate` | Americas-regional Spanish product; useful for a future Latin-American scope, not default `INT · ES`. |
 | `DE · NAT · de` | Tagesschau in 100 Sekunden | `candidate` | Multiple very short updates per day; verify feed identity and deterministic Spotify path. |
 | `FR · NAT · fr` | RTL — Le journal RTL | `candidate` | Hourly short bulletin; strong candidate for a future `FR · FR` product. |
