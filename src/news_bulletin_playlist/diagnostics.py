@@ -22,6 +22,8 @@ _ALLOWED_DETAIL_KEYS = frozenset(
     {
         "accepted_count",
         "applied_count",
+        "backoff_source",
+        "backoff_state",
         "candidate_count",
         "catalogue_calls",
         "desired_count",
@@ -49,6 +51,8 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "outcome",
         "phase",
         "policy_exception",
+        "retry_after_seconds",
+        "retry_not_before",
         "returned_count",
         "sample_count",
         "total",
@@ -58,6 +62,8 @@ _ALLOWED_DETAIL_KEYS = frozenset(
     }
 )
 _ALLOWED_DETAIL_STRING_VALUES = {
+    "backoff_source": frozenset({"fallback", "spotify_header"}),
+    "backoff_state": frozenset({"activated", "active"}),
     "failure_class": frozenset(
         {
             "api_error",
@@ -455,6 +461,9 @@ def _normalize_details(
                 raise ValueError(f"diagnostic detail {key} must be non-negative")
             normalized[key] = value
         elif isinstance(value, str):
+            if key == "retry_not_before":
+                normalized[key] = _normalize_detail_timestamp(value)
+                continue
             allowed_values = _ALLOWED_DETAIL_STRING_VALUES.get(key)
             if allowed_values is None or value not in allowed_values:
                 raise ValueError(f"diagnostic detail {key} contains an unsupported label")
@@ -462,6 +471,20 @@ def _normalize_details(
         else:
             raise ValueError(f"diagnostic detail {key} has unsupported value type")
     return normalized
+
+
+def _normalize_detail_timestamp(value: str) -> str:
+    if len(value) > 64:
+        raise ValueError("diagnostic detail retry_not_before contains an invalid timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            "diagnostic detail retry_not_before contains an invalid timestamp"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("diagnostic detail retry_not_before contains an invalid timestamp")
+    return parsed.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _event_from_row(row: sqlite3.Row) -> DiagnosticEvent:
