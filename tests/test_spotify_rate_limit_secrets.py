@@ -114,12 +114,12 @@ def _config() -> EngineConfig:
 
 def _rss() -> bytes:
     return (
-        "<rss><channel><item>"
-        "<guid>daily-1</guid>"
-        "<title>Daily bulletin</title>"
-        "<pubDate>Sat, 05 Sep 2026 09:30:00 +0000</pubDate>"
-        "</item></channel></rss>"
-    ).encode()
+        b"<rss><channel><item>"
+        b"<guid>daily-1</guid>"
+        b"<title>Daily bulletin</title>"
+        b"<pubDate>Sat, 05 Sep 2026 09:30:00 +0000</pubDate>"
+        b"</item></channel></rss>"
+    )
 
 
 def _store(tmp_path: Path) -> SQLiteStore:
@@ -161,12 +161,16 @@ def test_engine_and_backoff_exception_do_not_disclose_oauth_secrets(
     auth = _SecretAuth()
     limited = _RateLimitedSpotify()
 
+    def client_factory(token: str) -> _RateLimitedSpotify:
+        assert token == OAUTH_SENTINELS[0]
+        return limited
+
     result = EngineRunner(
         _config(),
         store,
         auth,
         fetcher=lambda _url: _rss(),
-        client_factory=lambda token: limited if token == OAUTH_SENTINELS[0] else limited,
+        client_factory=client_factory,
         clock=lambda: NOW,
     ).run_cycle()
 
