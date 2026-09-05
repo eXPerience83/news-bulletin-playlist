@@ -241,16 +241,20 @@ def test_engine_restart_keeps_cooldown_then_resumes_after_deadline(tmp_path: Pat
     assert fetch_count == 2
     assert restarted_auth.calls == 0
     assert factory_calls == 0
-    cutoff = (NOW + timedelta(minutes=1) - timedelta(days=30)).isoformat().replace(
-        "+00:00", "Z"
-    )
+    cutoff = (NOW + timedelta(minutes=1) - timedelta(days=30)).isoformat().replace("+00:00", "Z")
     with sqlite3.connect(store.path) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM source_runs WHERE finished_at < ?", (cutoff,)
-        ).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT COUNT(*) FROM playlist_runs WHERE finished_at < ?", (cutoff,)
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM source_runs WHERE finished_at < ?", (cutoff,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM playlist_runs WHERE finished_at < ?", (cutoff,)
+            ).fetchone()[0]
+            == 0
+        )
 
     resumed_auth = _Auth()
     working = _WorkingSpotify()
