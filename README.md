@@ -59,7 +59,7 @@ Source research and the admin UI classify each product on three independent axes
 
 > **`ORIGIN · SCOPE · LANGUAGE`**
 
-`SCOPE` is `LOC`, `REG`, `NAT`, `INT` or `MIX`. This prevents provider country from being confused with editorial coverage: **CNN 5 Cosas is `US · INT · es`**, so it remains useful in the general Spanish playlist despite its US origin. Spain broadcasters use `es-ES` where that locale is known. See [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md).
+`SCOPE` is `LOC`, `REG`, `NAT`, `INT` or `MIX`. This prevents provider country from being confused with editorial coverage: **CNN 5 Cosas is `US · INT · es-ES`**, so its US origin does not make it US-local; it is the current default only for the international Spain-Spanish product, not the Spain-national playlist. See [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md).
 
 | Provider | Classification | Duration profile | Typical format |
 | --- | --- | --- | --- |
@@ -67,13 +67,17 @@ Source research and the admin UI classify each product on three independent axes
 | RNE | `ES · NAT · es-ES` | Concise | recurring radio bulletins |
 | Onda Cero | `ES · NAT · es-ES` | Concise | recurring radio bulletins |
 | ABC — Las Noticias de ABC | `ES · NAT · es-ES` | Concise | concise daily news editions |
-| CNN 5 Cosas | `US · INT · es` | Concise | concise international briefing |
+| CNN 5 Cosas | `US · INT · es-ES` | Concise | concise international briefing; default for `INT · es-ES` |
 | UN News Today | `US · INT · en` | Concise | daily concise global bulletin |
+| Reuters — World News | `GB · INT · en` | Concise | daily global English briefing; default alongside UN News Today for `INT · EN` |
+| United Nations — ONU en minutos | `US · INT · es` | Concise | filtered global Spanish bulletin; spoken locale still unresolved |
+| N+ Univision 24-7 | `US · INT · es` | Concise | daily international/US Spanish newscast; spoken locale still unresolved |
+| DW — Actualidad en análisis | `DE · INT · es` | Mixed | international Spanish analysis with occasional >30-minute editions filtered by destination policy |
 | RFI — Journal Monde | `FR · INT · fr` | Concise selected product | dedicated parser admits only Journal Monde editions from the mixed provider feed |
 | Deutschlandfunk — Die Nachrichten | `DE · MIX · de` | Concise | recurring short Germany/world bulletins |
 | RMF FM — Fakty | `PL · MIX · pl` | Mixed | recurring short Poland/world bulletins, with occasional longer editions |
 
-Regional Spanish products such as **RFI Español — Noticias de América** remain research candidates rather than default runtime sources because the Spanish international playlist is intended to cover genuinely global news, not one non-Spanish region. Predominantly long-form products such as **BBC Global News Podcast** are likewise not promoted to the runtime catalog under the current concise-source rule.
+Regional Spanish products such as **RFI Español — Noticias de América** remain research candidates rather than default runtime sources because Latin-American/Americas-focused news is kept separate from Spain-focused and world-Spanish products. Predominantly long-form products such as **BBC Global News Podcast** are likewise not promoted to the runtime catalog under the current concise-source rule.
 
 See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md), [`docs/SOURCE_CATALOG.md`](docs/SOURCE_CATALOG.md), [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md) and issue #53 for continuing source research.
 
@@ -92,7 +96,7 @@ docker compose ps
 
 The local status page is available only on `http://127.0.0.1:8788/`.
 
-The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in playlist templates, edit metadata/cover/source selection and maximum episode duration if needed, and activate the desired playlists. The application creates each private Spotify destination, persists installation-owned choices in `/data/managed-state.json`, and wakes the scheduler immediately. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the production PKCE/HTTPS and first-run flow.
+The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in playlist templates, edit metadata/cover/source selection and maximum episode duration if needed, and activate the desired playlists. The application creates each Spotify destination with the current public product semantics, persists installation-owned choices in `/data/managed-state.json`, and wakes the scheduler immediately. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the production PKCE/HTTPS and first-run flow.
 
 For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and contains no Spotify credentials.
 
@@ -130,7 +134,7 @@ The managed state is compiled with the built-in catalog into the same `EngineCon
 
 The schema-v1 full-YAML loader remains an **advanced/manual compatibility path**, not the default first-run workflow. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is retained for that compatibility path. An explicit `NEWS_PLAYLIST_CONFIG` selects a legacy YAML file; otherwise the runtime prefers `/data/managed-state.json` when present and only falls back to the default legacy `/data/news-bulletin-playlist.yaml`. If managed state and that default legacy YAML both exist, startup fails closed rather than guessing which configuration should win.
 
-The current built-in runtime source IDs are `ser`, `rne`, `ondacero`, `abc`, `cnn`, `un_news_en`, `rfi_fr`, `dlf_news` and `rmf_fakty`. Research candidates remain outside ordinary selectable production configuration until their feed, Spotify identity, matching contract, editorial scope and typical episode duration have been checked.
+The current built-in runtime source IDs are `ser`, `rne`, `ondacero`, `abc`, `cnn`, `un_news_en`, `reuters_world`, `nplus_univision`, `dw_actualidad`, `un_news_es`, `rfi_fr`, `dlf_news` and `rmf_fakty`. Research candidates remain outside ordinary selectable production configuration until their feed, Spotify identity, matching contract, editorial scope and typical episode duration have been checked.
 
 Canonical editions are identified only by `(source_id, source_native_id)`. Titles and timestamps are metadata, never identity. Canonical timestamps are timezone-aware UTC values. Spotify show references are source catalogue metadata and are intentionally distinct from writable playlist destinations.
 
@@ -161,7 +165,7 @@ The completed production-engine roadmap is recorded in the [P1 umbrella issue #1
    - [x] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation; completed via #29.
    - [x] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI; completed via #30.
    - [x] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime; completed via #31.
-3. **Managed catalog validation — current** — operate Spanish plus initial EN/FR/DE/PL playlists from the same TrueNAS instance, export sanitized diagnostics and adjust source/policy choices from real operation.
+3. **Managed catalog validation — current** — operate Spain-focused Spanish plus initial international ES/EN/FR/DE/PL playlists from the same TrueNAS instance, export sanitized diagnostics and adjust source/policy choices from real operation.
 4. **Expansion** — add more concise, deterministic sources and playlist definitions without duplicating the engine.
 
 Parallel/non-blocking product work such as the playlist cover-art system in #12 may land when its configuration hook is stable, but it must never block bulletin synchronization.

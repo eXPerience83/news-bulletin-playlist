@@ -40,9 +40,9 @@ The ordinary first-run flow is:
 1. Install or update the container image.
 2. Configure the protected production administration surface and Spotify settings described below.
 3. Connect Spotify from `/admin/`.
-4. Review the available built-in playlist templates. The primary Spanish template is **Noticias en Español**; the current catalog also exposes initial `INT · ES`, `INT · EN`, `INT · FR`, `INT · DE` and `INT · PL` experiments.
+4. Review the available built-in playlist templates. The primary Spain-focused Spanish template is **Noticias en Español**; the current catalog also exposes initial `INT · ES`, `INT · EN`, `INT · FR`, `INT · DE` and `INT · PL` experiments.
 5. Review/edit each playlist name, provider-agnostic description, bundled cover, selected supported sources and maximum episode duration. The current general default is **30 minutes**, but every managed playlist stores its own configurable ceiling.
-6. Activate a template. The application creates a **private** Spotify playlist destination and persists the managed instance under `/data/managed-state.json`.
+6. Activate a template. The application creates a Spotify playlist destination using the current **public** product semantics and persists the managed instance under `/data/managed-state.json`.
 7. The scheduler is woken immediately; the read-only status page moves from **Not configured** to running/scheduled once an enabled managed playlist exists.
 8. Repeat activation only for the additional playlists you actually want this installation to manage.
 
@@ -52,7 +52,7 @@ Stopping management of a playlist does not delete its Spotify destination by def
 
 ### Source labels in admin
 
-The source table and selectors distinguish **provider country**, **editorial scope** and **language**. Scope values are `LOC`, `REG`, `NAT`, `INT` and `MIX`. This prevents origin from being mistaken for coverage: for example, CNN 5 Cosas is `US · INT · es`, so its US origin does not mean US-only news and it can intentionally feed both `Noticias en Español` and `INT · ES`.
+The source table and selectors distinguish **provider country**, **editorial scope** and **language**. Scope values are `LOC`, `REG`, `NAT`, `INT` and `MIX`. This prevents origin from being mistaken for coverage: for example, CNN 5 Cosas is `US · INT · es-ES`, so its US origin does not mean US-only news; it is the current default for `INT · ES`, not for the Spain-focused **Noticias en Español** template.
 
 ## Legacy/manual YAML compatibility
 
