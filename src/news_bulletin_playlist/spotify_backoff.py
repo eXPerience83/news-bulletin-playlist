@@ -37,7 +37,7 @@ ON CONFLICT(singleton) DO UPDATE SET
     retry_not_before = excluded.retry_not_before,
     retry_after_seconds = excluded.retry_after_seconds,
     backoff_source = excluded.backoff_source
-WHERE julianday(excluded.retry_not_before) > julianday(spotify_rate_limit_backoff.retry_not_before)
+WHERE excluded.retry_not_before > spotify_rate_limit_backoff.retry_not_before
 """
 
 T = TypeVar("T")
@@ -153,7 +153,7 @@ class SpotifyRateLimitJournal:
                     """
                     DELETE FROM spotify_rate_limit_backoff
                     WHERE singleton = 1
-                      AND julianday(retry_not_before) <= julianday(?)
+                      AND retry_not_before <= ?
                     """,
                     (_format_storage_timestamp(observed),),
                 )
@@ -170,18 +170,14 @@ class SpotifyRateLimitJournal:
         retry_after_seconds: int | None,
     ) -> SpotifyRateLimitState:
         observed = _as_utc(observed_at)
-        if retry_after_seconds is not None and retry_after_seconds < 0:
-            retry_after_seconds = None
-        seconds = (
-            DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS
-            if retry_after_seconds is None
-            else retry_after_seconds
+        deadline, effective_retry_after, source = _retry_deadline(
+            observed,
+            retry_after_seconds=retry_after_seconds,
         )
-        source = "fallback" if retry_after_seconds is None else "spotify_header"
         candidate = SpotifyRateLimitState(
             observed_at=observed,
-            retry_not_before=observed + timedelta(seconds=seconds),
-            retry_after_seconds=retry_after_seconds,
+            retry_not_before=deadline,
+            retry_after_seconds=effective_retry_after,
             backoff_source=source,
         )
 
@@ -370,6 +366,27 @@ def _active_message(state: SpotifyRateLimitState) -> str:
     return (
         "Spotify rate-limit backoff active until "
         f"{_format_display_timestamp(state.retry_not_before)}"
+    )
+
+
+def _retry_deadline(
+    observed: datetime,
+    *,
+    retry_after_seconds: int | None,
+) -> tuple[datetime, int | None, str]:
+    if retry_after_seconds is not None and retry_after_seconds >= 0:
+        try:
+            return (
+                observed + timedelta(seconds=retry_after_seconds),
+                retry_after_seconds,
+                "spotify_header",
+            )
+        except OverflowError:
+            pass
+    return (
+        observed + timedelta(seconds=DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS),
+        None,
+        "fallback",
     )
 
 
