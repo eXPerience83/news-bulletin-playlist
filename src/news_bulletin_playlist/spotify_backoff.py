@@ -138,6 +138,7 @@ class SpotifyRateLimitJournal:
     """Persist one runtime-wide Spotify Web API cooldown in the existing SQLite database."""
 
     def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
         self.path = store.path
         self.diagnostics = self._build_diagnostics()
 
@@ -211,6 +212,10 @@ class SpotifyRateLimitJournal:
             self._ensure_table(connection)
             connection.execute("DELETE FROM spotify_rate_limit_backoff WHERE singleton = 1")
 
+    def prune_run_history(self, *, now: datetime) -> None:
+        """Bound run-history growth while Spotify is intentionally skipped."""
+        self.store.prune_operational_history(now=_as_utc(now))
+
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
         connection.execute(_TABLE_SQL)
@@ -242,7 +247,7 @@ class SpotifyRateLimitJournal:
         try:
             diagnostic_store = DiagnosticEventStore(self.path)
             diagnostic_store.initialize()
-        except PersistenceError, ValueError:
+        except (PersistenceError, ValueError):
             return None
         return OperationalDiagnostics(diagnostic_store)
 
@@ -267,6 +272,8 @@ class SpotifyRateLimitGuardAuth:
         observed = _as_utc(self.clock() if now is None else now)
         try:
             state = self.journal.active(now=observed)
+            if state is not None:
+                self.journal.prune_run_history(now=observed)
         except PersistenceError as exc:
             raise SpotifyRateLimitStateUnavailable(
                 "Spotify rate-limit state is unavailable"
