@@ -247,7 +247,7 @@ class SpotifyRateLimitJournal:
         try:
             diagnostic_store = DiagnosticEventStore(self.path)
             diagnostic_store.initialize()
-        except (PersistenceError, ValueError):
+        except PersistenceError, ValueError:
             return None
         return OperationalDiagnostics(diagnostic_store)
 
