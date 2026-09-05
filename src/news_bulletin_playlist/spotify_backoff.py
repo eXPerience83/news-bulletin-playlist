@@ -134,7 +134,9 @@ class SpotifyRateLimitJournal:
             return None
         retry_after = row["retry_after_seconds"]
         if retry_after is not None and not isinstance(retry_after, int):
-            raise PersistenceError("Spotify rate-limit backoff contained invalid retry_after_seconds")
+            raise PersistenceError(
+                "Spotify rate-limit backoff contained invalid retry_after_seconds"
+            )
         source = row["backoff_source"]
         if not isinstance(source, str):
             raise PersistenceError("Spotify rate-limit backoff contained invalid backoff_source")
