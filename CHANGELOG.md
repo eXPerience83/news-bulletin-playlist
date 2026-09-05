@@ -25,7 +25,7 @@ current work remains under **Unreleased** until a stable release is cut.
 - Source editorial-scope metadata and three-axis source classification:
   **`ORIGIN · SCOPE · LANGUAGE`**, separating provider country from actual news coverage and language.
 - Admin source labels/table now expose country, scope and language. For example, CNN 5 Cosas is
-  represented as `US · INT · es`, so its US origin is not confused with US-only editorial coverage.
+  represented as `US · INT · es-ES`, so its US origin is not confused with US-only editorial coverage.
 - Plain-text project attribution appended to Spotify playlist descriptions on metadata creation/sync:
   `Proyecto / Project: https://github.com/eXPerience83/news-bulletin-playlist`.
 - Sanitized per-source/per-playlist duration histograms in diagnostics, plus explicit events for
@@ -53,8 +53,8 @@ current work remains under **Unreleased** until a stable release is cut.
   long-form BBC Global News Podcast candidate.
 - RFI Journal Monde, Deutschlandfunk and RMF Fakty seed the first FR/DE/PL playlist experiments while
   source classification remains honest about `INT` versus `MIX` editorial scope.
-- Spain-origin sources now carry `es-ES` language metadata where the Spain variant is known; CNN
-  remains general `es` metadata rather than being mislabeled as Spain-origin Spanish.
+- Spain-origin sources carry `es-ES` language metadata where the Spain variant is known; CNN is also
+  explicitly `es-ES` by listening confirmation while remaining `US · INT` in origin/scope.
 
 ### Fixed
 
