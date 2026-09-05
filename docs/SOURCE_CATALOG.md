@@ -14,8 +14,8 @@ listed here.
 
 Source classification uses the three-axis `ORIGIN · SCOPE · LANGUAGE` contract defined in
 [`SOURCE_SELECTION.md`](SOURCE_SELECTION.md). Provider country, editorial coverage and language are
-independent. For example, CNN 5 Cosas is `US · INT · es`: its US origin does not make it a US-local
-source, so it can intentionally feed both the general Spanish and international-Spanish playlists.
+independent. For example, CNN 5 Cosas is `US · INT · es-ES`: its US origin does not make it a US-local
+source, and its confirmed Spain-Spanish locale does not make it a Spain-national source.
 
 ## Boundaries
 
@@ -85,7 +85,6 @@ These are the sources exposed by the current multi-playlist dev candidate branch
 | `cnn` | `US · INT · es-ES` | CNN — 5 Cosas | Concise | global/international Spain-Spanish briefing; default for `INT · ES`, not the Spain-national product |
 | `un_news_en` | `US · INT · en` | United Nations — UN News Today | Concise | daily global English bulletin, preferred over long-form BBC Global News Podcast |
 | `reuters_world` | `GB · INT · en` | Reuters — World News | Concise | daily ~10-minute global briefing; `INT · EN` default alongside UN News Today |
-| `cbc_world_report` | `CA · MIX · en` | CBC — World Report | Concise | daily Canada/world newscast, registered for later country use |
 | `un_news_es` | `US · INT · es` | United Nations — ONU en minutos | Concise | broad UN Spanish audio feed is explicitly filtered to dated ONU-en-minutos editions; spoken locale unresolved |
 | `nplus_univision` | `US · INT · es` | N+ Univision 24-7 | Concise | international/US Spanish daily newscast; spoken locale unresolved |
 | `dw_actualidad` | `DE · INT · es` | DW — Actualidad en análisis | Mixed | normally under 30 minutes, with occasional longer episodes excluded by destination duration policy; spoken locale unresolved |
@@ -107,6 +106,7 @@ The Phase-1 playlist templates are intentionally broader than the source labels:
 | Proposed classification | Bulletin/source | Status | Current research note |
 | --- | --- | --- | --- |
 | `ES · NAT · es-ES` | COPE — boletines | `blocked` | Frequent concise bulletins and parser research exist, but deterministic Spotify show identity remains unverified. |
+| `CA · MIX · en` | CBC — World Report | `verified / blocked-runtime` | Feed/show/matching are deterministic in current samples, but the official RSS timed out after all provider-watch retries in two independent GitHub runner regions; do not promote until the runtime collection endpoint is reliably reachable. |
 | `CZ · NAT · es` | Chequia en 30 minutos | `blocked / #138` | Feed and show are known, but nullable Spotify catalogue entries require the dedicated global safety policy. |
 | `FR · REG · es-419` | RFI Español — Noticias de América | `candidate` | Americas-regional Spanish product; useful for a future Latin-American scope, not default `INT · ES`. |
 | `DE · NAT · de` | Tagesschau in 100 Sekunden | `candidate` | Multiple very short updates per day; verify feed identity and deterministic Spotify path. |
