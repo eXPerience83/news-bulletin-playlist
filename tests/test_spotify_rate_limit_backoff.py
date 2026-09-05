@@ -198,6 +198,26 @@ def test_journal_honors_header_fallback_and_never_shortens_deadline(tmp_path: Pa
     assert fallback.backoff_source == "fallback"
 
 
+def test_extreme_retry_after_uses_fallback_and_preserves_original_429(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    journal = SpotifyRateLimitJournal(store)
+    extreme_retry_after = 10**18
+    delegate = _Spotify(fail_show="one-show", retry_after=extreme_retry_after)
+    client = SpotifyRateLimitGuardClient(delegate, journal, clock=lambda: NOW)
+
+    with pytest.raises(SpotifyApiError, match="429") as error:
+        client.show_episodes("one-show")
+
+    assert error.value.retry_after == extreme_retry_after
+    state = journal.get()
+    assert state is not None
+    assert state.retry_not_before == NOW + timedelta(
+        seconds=DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS
+    )
+    assert state.retry_after_seconds is None
+    assert state.backoff_source == "fallback"
+
+
 def test_same_cycle_retry_after_zero_still_suppresses_every_later_request(tmp_path: Path) -> None:
     store = _store(tmp_path)
     delegate = _Spotify(fail_show="one-show", retry_after=0)
