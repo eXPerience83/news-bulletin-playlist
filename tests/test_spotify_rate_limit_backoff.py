@@ -142,9 +142,7 @@ def _source(source_id: str) -> SourceDefinition:
         enabled=True,
         parser_id=ParserId("release_date_title"),
         endpoint_url=f"https://example.test/{source_id}.xml",
-        external_references=(
-            ExternalReference("spotify", "show", f"{source_id}-show"),
-        ),
+        external_references=(ExternalReference("spotify", "show", f"{source_id}-show"),),
     )
 
 
