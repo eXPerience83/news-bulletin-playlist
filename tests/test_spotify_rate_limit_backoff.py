@@ -164,7 +164,10 @@ def _playlist(playlist_id: str, *source_ids: str) -> PlaylistDefinition:
     )
 
 
-def _config(sources: tuple[SourceDefinition, ...], playlists: tuple[PlaylistDefinition, ...]) -> EngineConfig:
+def _config(
+    sources: tuple[SourceDefinition, ...],
+    playlists: tuple[PlaylistDefinition, ...],
+) -> EngineConfig:
     return EngineConfig(schema_version=1, sources=sources, playlists=playlists)
 
 
