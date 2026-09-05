@@ -43,6 +43,11 @@ from news_bulletin_playlist.spotify.matcher import (
     MatchResponseError,
     match_source_editions,
 )
+from news_bulletin_playlist.spotify_backoff import (
+    SpotifyRateLimitGuardAuth,
+    SpotifyRateLimitGuardClient,
+    SpotifyRateLimitJournal,
+)
 
 DEFAULT_ENGINE_INTERVAL = timedelta(minutes=10)
 
@@ -188,10 +193,24 @@ class EngineRunner:
     ) -> None:
         self.config = config
         self.store = store
-        self.auth = auth
         self.fetcher = fetcher
-        self.client_factory = client_factory or _spotify_client
         self.clock = clock or _utc_now
+        self.rate_limit_journal = SpotifyRateLimitJournal(store)
+        self.auth = SpotifyRateLimitGuardAuth(
+            auth,
+            self.rate_limit_journal,
+            clock=self.clock,
+        )
+        base_client_factory = client_factory or _spotify_client
+
+        def guarded_client_factory(access_token: str) -> SpotifyEngineClient:
+            return SpotifyRateLimitGuardClient(
+                base_client_factory(access_token),
+                self.rate_limit_journal,
+                clock=self.clock,
+            )
+
+        self.client_factory = guarded_client_factory
         self.playlist_mutation_guard = playlist_mutation_guard
         self._cycle_lock = threading.Lock()
 
