@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import cast
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
 from news_bulletin_playlist.models import (
     AdapterId,
     DestinationReference,
@@ -171,10 +172,12 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
             seen_destinations.add(destination_key)
 
         max_duration_seconds = managed.max_duration_seconds
-        if max_duration_seconds <= 0:
+        try:
+            validate_persisted_duration_seconds(max_duration_seconds)
+        except ValueError as exc:
             raise ManagedStateError(
                 f"managed playlist {managed.id} max_duration_seconds must be positive"
-            )
+            ) from exc
         duration_policy = DurationPolicy(
             default_max_seconds=max_duration_seconds,
             exceptions=tuple(
@@ -339,10 +342,10 @@ def _parse_playlist(
         max_duration_seconds = (
             _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS
             if raw_max_duration is None
-            else _positive_integer(raw_max_duration, f"{path}.max_duration_seconds")
+            else _duration_seconds(raw_max_duration, f"{path}.max_duration_seconds")
         )
     else:
-        max_duration_seconds = _positive_integer(
+        max_duration_seconds = _duration_seconds(
             _required(data, "max_duration_seconds", path),
             f"{path}.max_duration_seconds",
         )
@@ -440,6 +443,13 @@ def _positive_integer(value: object, path: str) -> int:
     if result <= 0:
         raise ManagedStateError(f"{path}: must be positive")
     return result
+
+
+def _duration_seconds(value: object, path: str) -> int:
+    try:
+        return validate_persisted_duration_seconds(value)
+    except ValueError as exc:
+        raise ManagedStateError(f"{path}: must be positive") from exc
 
 
 def _fsync_directory(path: Path) -> None:

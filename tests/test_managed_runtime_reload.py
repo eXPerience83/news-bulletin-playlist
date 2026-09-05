@@ -11,6 +11,7 @@ from news_bulletin_playlist.engine_runtime import (
     ConfigurationSynchronization,
     ReloadingEngineCycleRunner,
     _load_runtime_config,
+    _playlist_write_contract,
 )
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
@@ -18,7 +19,13 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     activate_template,
 )
-from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.models import (
+    CountryCode,
+    ExternalReference,
+    LanguageTag,
+    ParserId,
+    SourceId,
+)
 from news_bulletin_playlist.persistence import SQLiteStore
 
 
@@ -230,3 +237,53 @@ def test_reloading_runner_prevents_stale_write_after_playlist_is_paused(
     assert playlists[0].wrote is None
     assert "configuration changed during cycle" in (playlists[0].error or "")
     assert spotify.replacements == []
+
+
+def test_item_write_contract_ignores_presentation_and_tracks_item_inputs(tmp_path: Path) -> None:
+    active, _, _ = _active_ser_state(tmp_path)
+    config = _load_runtime_config(tmp_path, {})
+    assert config is not None
+    baseline = _playlist_write_contract(config, active.id)
+    assert baseline is not None
+    playlist = config.playlists[0]
+    source = config.sources[0]
+
+    cosmetic_playlist = replace(playlist, display_name="Renamed", description="Changed")
+    cosmetic_source = replace(
+        source,
+        display_name="Presentation only",
+        countries=(CountryCode("US"),),
+        languages=(LanguageTag("en"),),
+    )
+    cosmetic = replace(config, playlists=(cosmetic_playlist,), sources=(cosmetic_source,))
+    assert _playlist_write_contract(cosmetic, active.id) == baseline
+
+    changed_playlists = (
+        replace(playlist, destination=replace(playlist.destination, external_id="other")),
+        replace(playlist, source_selection=replace(playlist.source_selection, explicit=())),
+        replace(playlist, retention_hours=1),
+        replace(playlist, max_episodes=1),
+        replace(playlist, ordering=playlist.ordering.__class__.PUBLISHED_AT_DESC),
+        replace(
+            playlist, duration_policy=replace(playlist.duration_policy, default_max_seconds=60)
+        ),
+        replace(playlist, enabled=False),
+    )
+    for changed in changed_playlists:
+        assert (
+            _playlist_write_contract(replace(config, playlists=(changed,)), active.id) != baseline
+        )
+
+    changed_sources = (
+        replace(source, enabled=False),
+        replace(source, timezone=source.timezone.__class__("UTC")),
+        replace(source, parser_id=ParserId("cnn")),
+        replace(source, endpoint_url="https://example.test/changed.xml"),
+        replace(
+            source,
+            external_references=(ExternalReference("spotify", "show", "other-show"),),
+        ),
+        replace(source, spotify_release_delay_days=1),
+    )
+    for changed in changed_sources:
+        assert _playlist_write_contract(replace(config, sources=(changed,)), active.id) != baseline

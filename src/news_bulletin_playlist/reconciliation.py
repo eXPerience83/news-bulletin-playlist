@@ -262,12 +262,7 @@ def _reconcile_playlist_items(
                 # the optional baseline is unavailable.
                 prewrite_snapshot = None
 
-    if (
-        store is not None
-        and logical_playlist_id is not None
-        and prewrite_snapshot is None
-        and max(len(current.slots), len(desired)) > _SPOTIFY_PLAYLIST_PAGE_SIZE
-    ):
+    if store is not None and logical_playlist_id is not None and prewrite_snapshot is None:
         try:
             prewrite_snapshot = _read_current_snapshot(
                 client,
@@ -310,7 +305,9 @@ def _reconcile_playlist_items(
         pending_confirmation: PendingSnapshotConfirmation | None = None
         degraded_verification = False
         snapshot_warning: str | None = None
-        if len(readback.slots) > _SPOTIFY_PLAYLIST_PAGE_SIZE:
+        if len(readback.slots) > _SPOTIFY_PLAYLIST_PAGE_SIZE or (
+            store is not None and logical_playlist_id is not None
+        ):
             write_snapshot = _require_snapshot(
                 write_response,
                 context="Spotify playlist write response",

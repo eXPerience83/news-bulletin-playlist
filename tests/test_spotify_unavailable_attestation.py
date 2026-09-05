@@ -143,7 +143,7 @@ def _apply(
     )
 
 
-def test_exact_readback_keeps_existing_semantics_and_needs_no_snapshot_get(tmp_path: Path) -> None:
+def test_exact_readback_confirms_write_snapshot_for_single_page(tmp_path: Path) -> None:
     store = _store(tmp_path)
     client = _AttestedSpotify(["spotify:episode:old"])
 
@@ -153,7 +153,7 @@ def test_exact_readback_keeps_existing_semantics_and_needs_no_snapshot_get(tmp_p
     assert result.wrote is True
     assert result.degraded_verification is False
     assert result.warning is None
-    assert client.snapshot_reads == 0
+    assert client.snapshot_reads == 2
     assert client.writes == [["spotify:episode:new"]]
     attestation = store.get_playlist_attestation(PLAYLIST_ID)
     assert attestation is not None
@@ -178,7 +178,7 @@ def test_write_with_unavailable_slot_is_attested_as_degraded_success(tmp_path: P
     assert result.degraded_verification is True
     assert result.warning is not None
     assert "[1]" in result.warning
-    assert client.snapshot_reads == 1
+    assert client.snapshot_reads == 2
     attestation = store.get_playlist_attestation(PLAYLIST_ID)
     assert attestation is not None
     assert attestation.destination_id == DESTINATION_ID
@@ -395,7 +395,10 @@ def test_snapshot_change_between_write_and_degraded_readback_fails_closed(tmp_pa
     store = _store(tmp_path)
     client = _AttestedSpotify(["spotify:episode:old"])
     client.opaque_after_write = {0}
-    client.snapshot_responses = [{"snapshot_id": "snapshot-concurrent-edit"}]
+    client.snapshot_responses = [
+        {"snapshot_id": "snapshot-initial"},
+        {"snapshot_id": "snapshot-concurrent-edit"},
+    ]
 
     with pytest.raises(SpotifyReconciliationError, match="snapshot changed"):
         _apply(store, client, "spotify:episode:new")
@@ -408,7 +411,10 @@ def test_snapshot_network_error_never_declares_degraded_success(tmp_path: Path) 
     store = _store(tmp_path)
     client = _AttestedSpotify(["spotify:episode:old"])
     client.opaque_after_write = {0}
-    client.snapshot_responses = [SpotifyTransportError("safe network error")]
+    client.snapshot_responses = [
+        {"snapshot_id": "snapshot-initial"},
+        SpotifyTransportError("safe network error"),
+    ]
 
     with pytest.raises(SpotifyTransportError, match="safe network error"):
         _apply(store, client, "spotify:episode:new")

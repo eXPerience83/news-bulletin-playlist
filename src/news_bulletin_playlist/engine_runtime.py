@@ -43,6 +43,7 @@ from news_bulletin_playlist.managed_admin import (
     SpotifyPlaylistSyncError,
 )
 from news_bulletin_playlist.managed_admin_web import (
+    max_duration_seconds_from_form,
     playlist_id_from_form,
     render_managed_admin_page,
     single_form_value,
@@ -393,18 +394,59 @@ class ReloadingEngineCycleRunner:
 def _playlist_write_contract(
     config: EngineConfig,
     playlist_id: PlaylistId,
-) -> tuple[PlaylistDefinition, tuple[object, ...]] | None:
+) -> tuple[object, ...] | None:
     playlist = next(
         (candidate for candidate in config.playlists if candidate.id == playlist_id),
         None,
     )
     if playlist is None or not playlist.enabled:
         return None
-    selected_source_ids = set(playlist.source_selection.explicit)
-    selected_sources = tuple(
-        source for source in config.sources if source.id in selected_source_ids
+    selected_source_ids = tuple(playlist.source_selection.explicit)
+    by_id = {source.id: source for source in config.sources}
+    selected_sources = []
+    for source_id in selected_source_ids:
+        source = by_id.get(source_id)
+        if source is None:
+            # This cannot describe a valid runtime configuration, but it must block a stale
+            # write rather than accidentally omitting a selected source from the contract.
+            return None
+        selected_sources.append(
+            (
+                str(source.id),
+                source.enabled,
+                str(source.timezone),
+                str(source.parser_id),
+                source.endpoint_url,
+                tuple(
+                    sorted(
+                        (reference.system, reference.resource_type, reference.external_id)
+                        for reference in source.external_references
+                    )
+                ),
+                source.spotify_release_delay_days,
+            )
+        )
+    return (
+        str(playlist.id),
+        playlist.enabled,
+        str(playlist.destination.adapter_id),
+        playlist.destination.external_id,
+        tuple(str(source_id) for source_id in selected_source_ids),
+        playlist.retention_hours,
+        playlist.max_episodes,
+        playlist.ordering.value,
+        playlist.duration_policy.default_max_seconds,
+        tuple(
+            (
+                exception.id,
+                str(exception.source_id),
+                exception.edition_local_time.isoformat(),
+                exception.max_seconds,
+            )
+            for exception in playlist.duration_policy.exceptions
+        ),
+        tuple(selected_sources),
     )
-    return playlist, selected_sources
 
 
 class OperationalHealthHandler(LanAdminHandler):
@@ -749,6 +791,7 @@ class OperationalHealthHandler(LanAdminHandler):
             cover_id=single_form_value(form, "cover_id"),
             source_ids=form.get("source_id", []),
             access_token=access_token,
+            max_duration_seconds=max_duration_seconds_from_form(form),
         )
         return str(managed.id)
 
@@ -774,6 +817,7 @@ class OperationalHealthHandler(LanAdminHandler):
             source_ids=form.get("source_id", []),
             enabled=enabled,
             access_token=None,
+            max_duration_seconds=max_duration_seconds_from_form(form),
         )
         return str(updated.id), updated.enabled
 

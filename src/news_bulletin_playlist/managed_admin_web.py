@@ -10,10 +10,10 @@ from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.engine import EngineCycleResult
 from news_bulletin_playlist.managed_admin import (
     MAX_PLAYLIST_DESCRIPTION_LENGTH,
-    MAX_PLAYLIST_DURATION_MINUTES,
     MAX_PLAYLIST_NAME_LENGTH,
     ManagedAdminSnapshot,
 )
+from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
 from news_bulletin_playlist.managed_state import ManagedPlaylist
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
@@ -179,7 +179,7 @@ def _managed_card(
         if playlist.max_duration_seconds is None
         else playlist.max_duration_seconds
     )
-    duration_minutes = _seconds_to_whole_minutes(effective_duration_seconds)
+    duration_minutes, duration_remainder = divmod(effective_duration_seconds, 60)
     return f"""
 <article class="card">
   <div class="card-head">
@@ -204,9 +204,11 @@ def _managed_card(
     <label>Description
       {description_control}
     </label>
-    <label>Maximum episode duration (minutes)
-      <input type="number" name="max_duration_minutes" required min="1"
-             max="{MAX_PLAYLIST_DURATION_MINUTES}" step="1" value="{duration_minutes}">
+    <label>Maximum episode duration
+      <input type="number" name="max_duration_minutes" required min="0"
+             step="1" value="{duration_minutes}"> min
+      <input type="number" name="max_duration_seconds_remainder" required min="0" max="59"
+             step="1" value="{duration_remainder}"> sec
     </label>
     <p class="muted">Episodes longer than this are omitted from this playlist only. Change this
        setting without reconnecting Spotify.</p>
@@ -246,7 +248,7 @@ def _template_card(
         f'<textarea name="description" maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">'
         f"{html.escape(template.description)}</textarea>"
     )
-    duration_minutes = _seconds_to_whole_minutes(template.duration_policy.default_max_seconds)
+    duration_minutes, duration_remainder = divmod(template.duration_policy.default_max_seconds, 60)
     return f"""
 <article class="card">
   <div class="card-head">
@@ -268,9 +270,11 @@ def _template_card(
     <label>Description
       {description_control}
     </label>
-    <label>Maximum episode duration (minutes)
-      <input type="number" name="max_duration_minutes" required min="1"
-             max="{MAX_PLAYLIST_DURATION_MINUTES}" step="1" value="{duration_minutes}">
+    <label>Maximum episode duration
+      <input type="number" name="max_duration_minutes" required min="0"
+             step="1" value="{duration_minutes}"> min
+      <input type="number" name="max_duration_seconds_remainder" required min="0" max="59"
+             step="1" value="{duration_remainder}"> sec
     </label>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     {hint}
@@ -395,15 +399,26 @@ def max_duration_seconds_from_form(form: Mapping[str, list[str]]) -> int | None:
     if len(values) != 1:
         raise ValueError("Exactly one max_duration_minutes value is required")
     raw = values[0].strip()
+    remainder_values = form.get("max_duration_seconds_remainder", [])
+    if not remainder_values:
+        remainder = 0  # Compatibility with existing minute-only POSTs.
+    elif len(remainder_values) == 1:
+        try:
+            remainder = int(remainder_values[0].strip())
+        except ValueError as exc:
+            raise ValueError("max_duration_seconds_remainder must be an integer") from exc
+    else:
+        raise ValueError("Exactly one max_duration_seconds_remainder value is required")
     try:
         minutes = int(raw)
     except ValueError as exc:
         raise ValueError("max_duration_minutes must be an integer") from exc
-    if minutes <= 0 or minutes > MAX_PLAYLIST_DURATION_MINUTES:
-        raise ValueError(
-            f"max_duration_minutes must be between 1 and {MAX_PLAYLIST_DURATION_MINUTES}"
-        )
-    return minutes * 60
+    if minutes < 0 or not 0 <= remainder < 60:
+        raise ValueError("maximum duration must be positive with seconds remainder from 0 to 59")
+    try:
+        return validate_persisted_duration_seconds(minutes * 60 + remainder)
+    except ValueError as exc:
+        raise ValueError("maximum duration must be positive") from exc
 
 
 def playlist_id_from_form(form: Mapping[str, list[str]]) -> PlaylistId:
@@ -411,9 +426,3 @@ def playlist_id_from_form(form: Mapping[str, list[str]]) -> PlaylistId:
     if not value:
         raise ValueError("playlist_id must not be empty")
     return PlaylistId(value)
-
-
-def _seconds_to_whole_minutes(seconds: int) -> int:
-    if seconds <= 0 or seconds % 60 != 0:
-        raise ValueError("managed duration ceiling must be a positive whole number of minutes")
-    return seconds // 60

@@ -43,7 +43,7 @@ def _playlist() -> PlaylistDefinition:
     )
 
 
-def _desired(*, generated_at: datetime = NOW) -> DesiredPlaylistState:
+def _desired(*, generated_at: datetime = NOW, count: int = 51) -> DesiredPlaylistState:
     items = tuple(
         DesiredPlaylistItem(
             source_id=SourceId("rne"),
@@ -51,7 +51,7 @@ def _desired(*, generated_at: datetime = NOW) -> DesiredPlaylistState:
             published_at=generated_at - timedelta(seconds=index),
             spotify_episode_uri=f"spotify:episode:{index:03d}",
         )
-        for index in range(51)
+        for index in range(count)
     )
     return DesiredPlaylistState(playlist_id=PLAYLIST_ID, generated_at=generated_at, items=items)
 
@@ -63,8 +63,10 @@ def _store(tmp_path: Path) -> SQLiteStore:
 
 
 class _LaggingSpotify:
-    def __init__(self) -> None:
-        self.slots: list[str | None] = [f"spotify:episode:old-{index:03d}" for index in range(51)]
+    def __init__(self, *, count: int = 51) -> None:
+        self.slots: list[str | None] = [
+            f"spotify:episode:old-{index:03d}" for index in range(count)
+        ]
         self.visible_snapshot = "snapshot-A"
         self.write_snapshot = "snapshot-B"
         self.writes: list[list[str]] = []
@@ -103,6 +105,123 @@ class _ExactLaggingSpotify(_LaggingSpotify):
         self.writes.append(list(uris))
         self.slots = list(uris)
         return {"snapshot_id": self.write_snapshot}
+
+
+def test_single_page_stale_snapshot_is_durable_across_restart(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    client = _ExactLaggingSpotify()
+    desired = _desired(count=35)
+
+    first = reconcile_spotify_playlist(client, _playlist(), desired, store=store)
+    pending = PendingSnapshotJournal(store).get(PLAYLIST_ID)
+    assert first.wrote is True and first.degraded_verification
+    assert pending is not None
+    assert pending.baseline_snapshot_id == "snapshot-A"
+    assert pending.expected_snapshot_id == "snapshot-B"
+    assert store.get_playlist_attestation(PLAYLIST_ID) is None
+
+    restarted = SQLiteStore(store.path)
+    restarted.initialize()
+    stale = reconcile_spotify_playlist(
+        client,
+        _playlist(),
+        _desired(count=35, generated_at=NOW + timedelta(minutes=10)),
+        store=restarted,
+    )
+    assert stale.wrote is False and stale.degraded_verification
+    assert len(client.writes) == 1
+
+    client.visible_snapshot = "snapshot-B"
+    promoted = reconcile_spotify_playlist(
+        client,
+        _playlist(),
+        _desired(count=35, generated_at=NOW + timedelta(minutes=20)),
+        store=restarted,
+    )
+    assert promoted.wrote is False
+    assert PendingSnapshotJournal(restarted).get(PLAYLIST_ID) is None
+    assert restarted.get_playlist_attestation(PLAYLIST_ID).snapshot_id == "snapshot-B"  # type: ignore[union-attr]
+
+
+def test_single_page_pending_partial_read_stays_degraded_without_rewrite(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    client = _ExactLaggingSpotify()
+    desired = _desired(count=35)
+    reconcile_spotify_playlist(client, _playlist(), desired, store=store)
+
+    client.slots[17] = None
+    partial = reconcile_spotify_playlist(
+        client,
+        _playlist(),
+        _desired(count=35, generated_at=NOW + timedelta(minutes=10)),
+        store=store,
+    )
+    assert partial.wrote is False and partial.degraded_verification
+    assert len(client.writes) == 1
+
+
+@pytest.mark.parametrize("divergence", ["uri", "order", "count"])
+def test_single_page_pending_content_divergence_is_repaired_not_accepted_as_cosmetic(
+    tmp_path: Path,
+    divergence: str,
+) -> None:
+    store = _store(tmp_path)
+    client = _ExactLaggingSpotify(count=35)
+    desired = _desired(count=35)
+    reconcile_spotify_playlist(client, _playlist(), desired, store=store)
+
+    if divergence == "uri":
+        client.slots[17] = "spotify:episode:wrong"
+    elif divergence == "order":
+        client.slots[0], client.slots[1] = client.slots[1], client.slots[0]
+    else:
+        client.slots.pop()
+    repaired = reconcile_spotify_playlist(
+        client,
+        _playlist(),
+        _desired(count=35, generated_at=NOW + timedelta(minutes=20)),
+        store=store,
+    )
+    assert repaired.wrote is True
+    assert len(client.writes) == 2
+
+
+def test_single_page_exact_cosmetic_third_snapshot_promotes_after_stable_recheck(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    client = _ExactLaggingSpotify(count=35)
+    reconcile_spotify_playlist(client, _playlist(), _desired(count=35), store=store)
+    client.visible_snapshot = "snapshot-C-metadata"
+
+    result = reconcile_spotify_playlist(
+        client,
+        _playlist(),
+        _desired(count=35, generated_at=NOW + timedelta(minutes=10)),
+        store=SQLiteStore(store.path),
+    )
+
+    assert result.wrote is False and not result.degraded_verification
+    assert len(client.writes) == 1
+    assert PendingSnapshotJournal(store).get(PLAYLIST_ID) is None
+    assert store.get_playlist_attestation(PLAYLIST_ID).snapshot_id == "snapshot-C-metadata"  # type: ignore[union-attr]
+
+
+def test_single_page_partial_cosmetic_third_snapshot_fails_closed(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    client = _LaggingSpotify(count=35)
+    reconcile_spotify_playlist(client, _playlist(), _desired(count=35), store=store)
+    client.visible_snapshot = "snapshot-C-cover"
+
+    with pytest.raises(SpotifyReconciliationError, match="outside the pending confirmation"):
+        reconcile_spotify_playlist(
+            client,
+            _playlist(),
+            _desired(count=35, generated_at=NOW + timedelta(minutes=10)),
+            store=SQLiteStore(store.path),
+        )
+
+    assert len(client.writes) == 1
 
 
 def test_partial_stale_snapshot_is_persisted_and_next_cycle_does_not_rewrite(

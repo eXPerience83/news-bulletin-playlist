@@ -7,6 +7,11 @@ from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.managed_duration import (
+    MAX_NEW_MANAGED_DURATION_SECONDS,
+    validate_duration_update,
+    validate_new_duration_seconds,
+)
 from news_bulletin_playlist.managed_state import (
     ManagedPlaylist,
     ManagedState,
@@ -33,7 +38,7 @@ MAX_PLAYLIST_DESCRIPTION_LENGTH = (
     - len(PROJECT_DESCRIPTION_SEPARATOR)
     - len(PROJECT_DESCRIPTION_FOOTER)
 )
-MAX_PLAYLIST_DURATION_MINUTES = 24 * 60
+MAX_PLAYLIST_DURATION_MINUTES = MAX_NEW_MANAGED_DURATION_SECONDS // 60
 
 
 class ManagedAdminError(RuntimeError):
@@ -158,7 +163,7 @@ class ManagedAdminService:
         duration_max = (
             template.duration_policy.default_max_seconds
             if max_duration_seconds is None
-            else _duration_max_seconds(max_duration_seconds)
+            else _new_duration_max_seconds(max_duration_seconds)
         )
 
         client = self.client_factory(access_token)
@@ -216,7 +221,10 @@ class ManagedAdminService:
         duration_max = (
             current.max_duration_seconds
             if max_duration_seconds is None
-            else _duration_max_seconds(max_duration_seconds)
+            else _updated_duration_max_seconds(
+                max_duration_seconds,
+                current_seconds=current.max_duration_seconds,
+            )
         )
         updated = replace(
             current,
@@ -422,16 +430,18 @@ def _playlist_description(value: str) -> str:
     return result
 
 
-def _duration_max_seconds(value: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ManagedAdminError("maximum duration must be an integer number of seconds")
-    if value <= 0:
-        raise ManagedAdminError("maximum duration must be positive")
-    if value > MAX_PLAYLIST_DURATION_MINUTES * 60:
-        raise ManagedAdminError(
-            f"maximum duration must be at most {MAX_PLAYLIST_DURATION_MINUTES} minutes"
-        )
-    return value
+def _new_duration_max_seconds(value: int) -> int:
+    try:
+        return validate_new_duration_seconds(value)
+    except ValueError as exc:
+        raise ManagedAdminError(str(exc)) from exc
+
+
+def _updated_duration_max_seconds(value: int, *, current_seconds: int) -> int:
+    try:
+        return validate_duration_update(value, current_seconds=current_seconds)
+    except ValueError as exc:
+        raise ManagedAdminError(str(exc)) from exc
 
 
 def _strip_terminal_project_footer(value: str) -> str:

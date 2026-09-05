@@ -10,6 +10,8 @@ from http.client import HTTPMessage
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.effective_config import CONFIG_PATH_ENV
 from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
@@ -21,7 +23,7 @@ from news_bulletin_playlist.engine_runtime import (
 )
 from news_bulletin_playlist.lan_admin import LanAdminSecurity
 from news_bulletin_playlist.managed_admin import ManagedAdminService
-from news_bulletin_playlist.managed_state import ManagedStateStore
+from news_bulletin_playlist.managed_state import ManagedStateStore, compile_engine_config
 from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.client import SpotifyTransportError
@@ -339,6 +341,104 @@ def test_activation_is_csrf_protected_persists_once_and_requests_scheduler_start
     assert _response(replay).status == HTTPStatus.FORBIDDEN
     assert provider.calls == 1
     assert len(factory.client.create_calls) == 1
+
+
+def test_activation_route_persists_requested_duration_without_metadata_io(tmp_path: Path) -> None:
+    service, factory = _service(tmp_path)
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    form = _activation_form(security.issue_csrf_token())
+    form["max_duration_minutes"] = ["15"]
+    form["max_duration_seconds_remainder"] = ["0"]
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/activate",
+        form=form,
+        auth_provider=_AccessTokenProvider(),
+        security=security,
+    )
+    handler.do_POST()
+    managed = service.snapshot().managed[0]
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert managed.max_duration_seconds == 900
+    assert factory.client.update_calls == []
+    assert (
+        compile_engine_config(service.catalog, service.store.load())
+        .playlists[0]
+        .duration_policy.default_max_seconds
+        == 900
+    )
+
+
+def test_update_route_persists_exact_duration_without_metadata_io(tmp_path: Path) -> None:
+    service, factory = _service(tmp_path)
+    _activate_direct(service)
+    current = service.snapshot().managed[0]
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/update",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(current.id)],
+            "display_name": [current.display_name],
+            "description": [current.description],
+            "cover_id": [current.cover_id],
+            "source_id": [str(source_id) for source_id in current.source_ids],
+            "enabled": ["1"],
+            "max_duration_minutes": ["12"],
+            "max_duration_seconds_remainder": ["0"],
+        },
+        security=security,
+    )
+    handler.do_POST()
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert service.snapshot().managed[0].max_duration_seconds == 720
+    assert factory.client.update_calls == []
+
+
+@pytest.mark.parametrize(
+    ("minutes", "expected_status"),
+    [
+        ("0", HTTPStatus.BAD_REQUEST),
+        ("-1", HTTPStatus.BAD_REQUEST),
+        ("bad", HTTPStatus.BAD_REQUEST),
+        ("1441", HTTPStatus.CONFLICT),
+    ],
+)
+def test_duration_route_rejects_invalid_values_without_state_change(
+    tmp_path: Path, minutes: str, expected_status: HTTPStatus
+) -> None:
+    service, _ = _service(tmp_path)
+    _activate_direct(service)
+    current = service.snapshot().managed[0]
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/update",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(current.id)],
+            "display_name": [current.display_name],
+            "description": [current.description],
+            "cover_id": [current.cover_id],
+            "source_id": [str(source_id) for source_id in current.source_ids],
+            "enabled": ["1"],
+            "max_duration_minutes": [minutes],
+        },
+        security=security,
+    )
+    handler.do_POST()
+    assert _response(handler).status == expected_status
+    assert service.snapshot().managed[0] == current
 
 
 def test_source_only_edit_works_offline_and_does_not_write_spotify_metadata(
