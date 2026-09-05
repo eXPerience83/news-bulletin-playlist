@@ -259,9 +259,11 @@ class InstrumentedEngineCycleRunner:
 
 
 def _destination_was_preserved(error: str | None) -> bool:
-    return error is not None and error.startswith(
+    if error is None:
+        return False
+    return error.startswith(
         "destination preserved because no last-known-good state is available"
-    )
+    ) or error.startswith("Spotify rate-limit backoff active until ")
 
 
 def _cycle_failure_phase(error: str | None) -> str:
