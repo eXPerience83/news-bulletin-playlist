@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -200,6 +201,25 @@ def test_engine_restart_keeps_cooldown_then_resumes_after_deadline(tmp_path: Pat
     assert state is not None
     assert state.retry_not_before == NOW + timedelta(minutes=5)
 
+    old_run_at = NOW - timedelta(days=31)
+    store.record_source_run(
+        SourceId("daily"),
+        started_at=old_run_at,
+        finished_at=old_run_at,
+        ok=False,
+        edition_count=0,
+        error="old source run",
+    )
+    store.record_playlist_run(
+        PlaylistId("daily"),
+        started_at=old_run_at,
+        finished_at=old_run_at,
+        ok=False,
+        desired_count=0,
+        applied_count=0,
+        error="old playlist run",
+    )
+
     restarted_auth = _Auth()
     factory_calls = 0
 
@@ -221,6 +241,16 @@ def test_engine_restart_keeps_cooldown_then_resumes_after_deadline(tmp_path: Pat
     assert fetch_count == 2
     assert restarted_auth.calls == 0
     assert factory_calls == 0
+    cutoff = (NOW + timedelta(minutes=1) - timedelta(days=30)).isoformat().replace(
+        "+00:00", "Z"
+    )
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM source_runs WHERE finished_at < ?", (cutoff,)
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM playlist_runs WHERE finished_at < ?", (cutoff,)
+        ).fetchone()[0] == 0
 
     resumed_auth = _Auth()
     working = _WorkingSpotify()
