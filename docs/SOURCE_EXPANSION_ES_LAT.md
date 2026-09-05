@@ -88,7 +88,7 @@ These remain independent of the Spain/LAT split.
 | Candidate | Proposed classification | Status / reason |
 | --- | --- | --- |
 | Reuters World News | `GB · INT · en` | implemented; `INT · EN` default alongside UN News Today |
-| CBC World Report | `CA · MIX · en` | implemented; registered for later Canada/country product |
+| CBC World Report | `CA · MIX · en` | verified / blocked-runtime; official RSS timed out after the normal provider-watch retry policy, so it is not registered as a runtime source |
 | Chequia en 30 minutos | `CZ · NAT · es` | deferred to #138; nullable Spotify catalogue policy is not changed here |
 | RNZ News | `NZ · MIX · en` | candidate; concise but several editions/day |
 | Czechia in 30 minutes / Radio Prague International | `CZ · NAT · <verified-language>` | candidate; country-news format around the current 30-minute ceiling |

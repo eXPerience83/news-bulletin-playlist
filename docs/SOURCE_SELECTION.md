@@ -86,7 +86,7 @@ This is deliberately a source-level editorial gate. The current per-playlist def
 | CNN 5 Cosas | `US · INT · es-ES` | Concise | confirmed Spain-Spanish global briefing; default only for `INT · es-ES` |
 | UN News Today | `US · INT · en` | Concise | global English bulletin |
 | Reuters — World News | `GB · INT · en` | Concise | daily global English briefing; default for `INT · EN` |
-| CBC — World Report | `CA · MIX · en` | Concise | Canada/world daily newscast; available but not an `INT · EN` default |
+| CBC — World Report | `CA · MIX · en` | Concise | Verified research, blocked from runtime promotion: its official RSS did not meet the provider-watch fetch contract |
 | United Nations — ONU en minutos | `US · INT · es` | Concise | filtered Spanish UN bulletin; spoken locale unresolved |
 | N+ Univision 24-7 | `US · INT · es` | Concise | international/US daily Spanish newscast; spoken locale unresolved |
 | DW — Actualidad en análisis | `DE · INT · es` | Mixed | international Spanish analysis, with occasional >30-minute editions; spoken locale unresolved |

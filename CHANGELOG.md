@@ -32,9 +32,10 @@ current work remains under **Unreleased** until a stable release is cut.
   accepted editions >=20 minutes and duration exclusions, to support the evidence review in #132.
 - Source-selection documentation that rejects predominantly long-form products even when individual
   episodes fit below a playlist hard limit.
-- Runtime support for Reuters World News, CBC World Report, ONU en minutos, N+ Univision 24-7 and
-  DW Actualidad en análisis. ONU's broad UN Spanish audio feed is filtered fail-closed to dated
-  ONU-en-minutos editions.
+- Runtime support for Reuters World News, ONU en minutos, N+ Univision 24-7 and DW Actualidad en
+  análisis. ONU's broad UN Spanish audio feed is filtered fail-closed to dated ONU-en-minutos
+  editions. CBC World Report remains verified research but is withheld from the runtime catalogue
+  because its official RSS did not meet the production provider-watch fetch contract.
 
 ### Changed
 

@@ -196,18 +196,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         external_references=(ExternalReference("spotify", "show", "1alpjXkCUjn3Y9fR5xl8fZ"),),
     ),
     SourceDefinition(
-        id=SourceId("cbc_world_report"),
-        display_name="CBC — World Report",
-        countries=(CountryCode("CA"),),
-        languages=(LanguageTag("en"),),
-        timezone=ZoneInfo("America/Toronto"),
-        enabled=True,
-        parser_id=ParserId("release_date_title"),
-        editorial_scope=EditorialScope.MIXED,
-        endpoint_url="https://www.cbc.ca/podcasting/includes/wr.xml",
-        external_references=(ExternalReference("spotify", "show", "5qaYz2SRxlPUszXZQWNl1U"),),
-    ),
-    SourceDefinition(
         id=SourceId("nplus_univision"),
         display_name="N+ Univision 24-7",
         countries=(CountryCode("US"),),

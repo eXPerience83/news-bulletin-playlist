@@ -108,9 +108,7 @@ def test_release_date_title_precision(
         assert "release_date_precision_insufficient=1" in result.outcomes[0].diagnostics
 
 
-@pytest.mark.parametrize(
-    "source_id", ["reuters_world", "nplus_univision", "dw_actualidad", "cbc_world_report"]
-)
+@pytest.mark.parametrize("source_id", ["reuters_world", "nplus_univision", "dw_actualidad"])
 def test_wave_one_release_date_title_sources_match_exact_title_and_day(
     tmp_path: Path, source_id: str
 ) -> None:
@@ -151,9 +149,17 @@ def test_wave_one_release_date_title_sources_match_exact_title_and_day(
 
 
 def test_cbc_same_title_same_day_remains_ambiguous(tmp_path: Path) -> None:
-    from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-
-    source = BUILTIN_CATALOG.source("cbc_world_report")
+    source = SourceDefinition(
+        id=SourceId("cbc_world_report"),
+        display_name="CBC — World Report",
+        countries=(CountryCode("CA"),),
+        languages=(LanguageTag("en"),),
+        timezone=ZoneInfo("America/Toronto"),
+        enabled=True,
+        parser_id=ParserId("release_date_title"),
+        endpoint_url="https://www.cbc.ca/podcasting/includes/wr.xml",
+        external_references=(ExternalReference("spotify", "show", "5qaYz2SRxlPUszXZQWNl1U"),),
+    )
     edition = CanonicalEdition(
         source.id,
         "native",

@@ -60,9 +60,9 @@ def test_expanded_sources_have_deterministic_spotify_show_references() -> None:
     assert "rfi_es" not in source_ids
     assert "bbc_world" not in source_ids
     assert "chequia_30_minutos" not in source_ids
+    assert "cbc_world_report" not in source_ids
     assert {
         "reuters_world",
-        "cbc_world_report",
         "nplus_univision",
         "dw_actualidad",
         "un_news_es",
@@ -88,7 +88,6 @@ def test_expanded_sources_have_deterministic_spotify_show_references() -> None:
 def test_wave_one_source_identity_and_unresolved_spanish_classification() -> None:
     expected = {
         "reuters_world": ("GB", "INT", "en", "1alpjXkCUjn3Y9fR5xl8fZ"),
-        "cbc_world_report": ("CA", "MIX", "en", "5qaYz2SRxlPUszXZQWNl1U"),
         "nplus_univision": ("US", "INT", "es", "7G8CEhjsTshZeGtPLcuW6T"),
         "dw_actualidad": ("DE", "INT", "es", "7CzHDusNXRICUXuefIXbxd"),
         "un_news_es": ("US", "INT", "es", "77hGWK2o0NYsdS8WuXiLo6"),

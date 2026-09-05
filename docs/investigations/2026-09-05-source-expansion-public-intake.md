@@ -27,7 +27,7 @@ CNN 5 Cosas is already confirmed by listening as `US · INT · es-ES`.
 | DW Actualidad en análisis | `7CzHDusNXRICUXuefIXbxd` | `https://rss.dw.com/xml/podcast_actualidad_en_analisis` | 50 | min 13:12; median 23:24; p90 29:31; max 33:04; 5/50 >30m | day 50/50 | `READY_RELEASE_DATE_TITLE` | spoken locale unresolved; occasional >30m items remain duration-filtered |
 | N+ Univision 24-7 | `7G8CEhjsTshZeGtPLcuW6T` | `https://feeds.simplecast.com/CC3CSCi5` | 50 | min 11:12; median 18:14; p90 22:11; max 23:55 | day 50/50 | `READY_RELEASE_DATE_TITLE` | spoken locale unresolved |
 | Reuters World News | `1alpjXkCUjn3Y9fR5xl8fZ` | `https://feeds.megaphone.fm/reutersworldnews` | 50 | min 9:27; median 10:15; p90 10:42; max 10:54 | day 50/50 | `READY_RELEASE_DATE_TITLE` | none observed |
-| CBC World Report | `5qaYz2SRxlPUszXZQWNl1U` | `https://www.cbc.ca/podcasting/includes/wr.xml` | 50 | min 10:02; median 10:09; p90 10:09; max 27:42 | day 50/50 | `READY_RELEASE_DATE_TITLE` | monitor future cadence changes; no current same-title/day collision |
+| CBC World Report | `5qaYz2SRxlPUszXZQWNl1U` | `https://www.cbc.ca/podcasting/includes/wr.xml` | 50 | min 10:02; median 10:09; p90 10:09; max 27:42 | day 50/50 | `READY_RELEASE_DATE_TITLE` | verified / blocked-runtime: official RSS timed out after the normal provider-watch retry policy in two runner regions; no current same-title/day collision |
 | Chequia en 30 minutos | `7FNA3UYPexmOtCtsdWX9QN` | `https://espanol.radio.cz/rcz-rss/show/audio/8705332` | 45 usable / 50 slots | min 25:38; median 28:49; p90 29:29; max 29:48 | day 45; 5 null slots | deterministic content, but blocked by current structural fail-closed matcher policy | safe global handling of unavailable/null Spotify catalogue slots + spoken locale |
 
 Duration fields use Spotify metadata and the observed bounded sample.
@@ -78,6 +78,7 @@ Duration fields use Spotify metadata and the observed bounded sample.
 - Existing day-precision title matching is deterministic in the observed catalogue.
 - Conceptual classification: `CA · MIX · en`.
 - Keep provider monitoring for a future change from replacement-style updates to multiple retained same-day episodes.
+- Runtime promotion is blocked until the official RSS is reliably fetchable under the normal provider-watch contract; it is not in `BUILTIN_CATALOG`.
 
 ## Chequia en 30 minutos
 
@@ -94,7 +95,7 @@ Duration fields use Spotify metadata and the observed bounded sample.
 2. ONU en minutos — add a dedicated fail-closed product filter, then keep exact title/day matching.
 3. N+ Univision 24-7 — direct `release_date_title`; do not assign to ES/LAT defaults until listening resolves locale.
 4. DW Actualidad en análisis — direct `release_date_title`; keep the existing 30-minute ceiling and allow outlier exclusion.
-5. CBC World Report — direct `release_date_title`; provider-watch should detect future same-day catalogue shape changes.
+5. CBC World Report — direct `release_date_title` research result; runtime promotion remains blocked until its official RSS meets the normal provider-watch fetch contract.
 
 Chequia remains deferred until a separate globally safe policy for null/unavailable Spotify catalogue slots is designed and tested.
 

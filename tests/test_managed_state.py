@@ -33,7 +33,6 @@ def test_builtin_catalog_has_stable_first_template_and_supported_sources() -> No
         "cnn",
         "un_news_en",
         "reuters_world",
-        "cbc_world_report",
         "nplus_univision",
         "dw_actualidad",
         "un_news_es",
