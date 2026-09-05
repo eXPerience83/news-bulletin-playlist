@@ -62,13 +62,15 @@ def test_example_config_is_valid_and_uses_real_source_contracts() -> None:
     assert config.sources[-1].enabled is False
     assert config.sources[-1].endpoint_url is None
     assert all("example.invalid" not in (source.endpoint_url or "") for source in config.sources)
+    cnn = next(source for source in config.sources if source.id == SourceId("cnn"))
+    assert tuple(map(str, cnn.languages)) == ("es-ES",)
     assert config.playlists[0].display_name == "Noticias en Español"
+    assert tuple(map(str, config.playlists[0].languages)) == ("es-ES",)
     assert config.playlists[0].source_selection.explicit == (
         "ser",
         "rne",
         "ondacero",
         "abc",
-        "cnn",
     )
     assert config.playlists[0].duration_policy.default_max_seconds == 1800
 
