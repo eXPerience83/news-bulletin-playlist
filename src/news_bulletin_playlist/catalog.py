@@ -158,7 +158,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         id=SourceId("cnn"),
         display_name="CNN 5 Cosas",
         countries=(CountryCode("US"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("America/New_York"),
         enabled=True,
         parser_id=ParserId("cnn"),
@@ -224,18 +224,16 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         id=PlaylistId("spain_spanish_news"),
         display_name="Noticias en Español",
         description=(
-            "Últimos boletines y resúmenes informativos en español, con fuentes de España "
-            "y una selección internacional de alcance global, actualizados automáticamente "
-            "y ordenados del más reciente al más antiguo."
+            "Últimos boletines y resúmenes informativos de España en español, "
+            "actualizados automáticamente y ordenados del más reciente al más antiguo."
         ),
         countries=(CountryCode("ES"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         default_source_ids=(
             SourceId("ser"),
             SourceId("rne"),
             SourceId("ondacero"),
             SourceId("abc"),
-            SourceId("cnn"),
         ),
         cover_id="spain_spanish_news",
     ),
@@ -247,7 +245,7 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
             "actualizados automáticamente y ordenados del más reciente al más antiguo."
         ),
         countries=(CountryCode("US"),),
-        languages=(LanguageTag("es"),),
+        languages=(LanguageTag("es-ES"),),
         default_source_ids=(SourceId("cnn"),),
         cover_id="international_spanish_news",
     ),
