@@ -80,6 +80,8 @@ _MANAGED_POST_PATHS = {
     "/admin/playlists/update",
     "/admin/playlists/sync",
     "/admin/playlists/stop",
+    "/admin/provisioning/adopt",
+    "/admin/provisioning/clear",
 }
 _ADMIN_NOTICE_MESSAGES = {
     "spotify-sync-applied": "Spotify metadata and cover applied successfully.",
@@ -701,6 +703,33 @@ class OperationalHealthHandler(LanAdminHandler):
                     metadata_error=None,
                     cover_error=None,
                 )
+            elif path in {"/admin/provisioning/adopt", "/admin/provisioning/clear"}:
+                with synchronization.hold():
+                    if path == "/admin/provisioning/adopt":
+                        auth = self.managed_admin_auth
+                        if auth is None:
+                            raise ManagedAdminError("Spotify authorization is required to adopt")
+                        playlist_id_for_event = str(
+                            service.adopt_uncertain_provisioning(
+                                single_form_value(form, "destination_id"),
+                                access_token=auth.get_access_token(),
+                            ).id
+                        )
+                        event_name = "admin_playlist_adopted"
+                        next_state = "enabled"
+                    else:
+                        service.clear_uncertain_provisioning()
+                        playlist_id_for_event = "provisioning"
+                        event_name = "admin_playlist_provisioning_cleared"
+                        next_state = "cleared"
+                    configured = any(playlist.enabled for playlist in service.snapshot().managed)
+                lifecycle.reconcile(configured=configured)
+                self.__class__.engine_scheduler = lifecycle.scheduler
+                self._emit_admin_configuration_event(
+                    event_name=event_name,
+                    playlist_id=playlist_id_for_event,
+                    next_state=next_state,
+                )
             else:
                 with synchronization.hold():
                     if path == "/admin/playlists/activate":
@@ -932,6 +961,13 @@ def serve(
         )
 
     admin_security, spotify_auth = build_engine_runtime_auth(data_dir, environ=env)
+    managed_admin_service = _build_managed_admin_service(
+        data_dir,
+        env,
+        spotify_auth=spotify_auth,
+    )
+    if managed_admin_service is not None:
+        managed_admin_service.finalize_known_provisioning()
     config = _load_runtime_config(data_dir, env)
     configured = config is not None
     if configured and spotify_auth is None:
@@ -966,12 +1002,6 @@ def serve(
         status: OperationalStatus = lifecycle.status
     else:
         status = _MutableOperationalStatus(configured=configured)
-
-    managed_admin_service = _build_managed_admin_service(
-        data_dir,
-        env,
-        spotify_auth=spotify_auth,
-    )
 
     OperationalHealthHandler.data_dir = data_dir
     OperationalHealthHandler.admin_security = admin_security

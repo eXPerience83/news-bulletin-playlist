@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import urllib.error
 import urllib.parse
 
@@ -98,6 +99,31 @@ def test_client_write_and_readback_requests(monkeypatch: pytest.MonkeyPatch) -> 
         "limit": ["50"],
         "offset": ["10"],
         "additional_types": ["episode"],
+    }
+
+
+def test_client_creates_public_playlist_and_reads_adoption_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[urllib.request.Request] = []
+
+    def fake_urlopen(request: object, *, timeout: float) -> _Response:
+        assert isinstance(request, urllib.request.Request)
+        del timeout
+        requests.append(request)
+        return _Response(b'{"id":"playlist"}')
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = SpotifyClient("token")
+    client.create_playlist("News")
+    client.current_user()
+    client.playlist_details("playlist")
+
+    assert requests[0].method == "POST"
+    assert json.loads(requests[0].data or b"{}") == {"name": "News", "public": True}
+    assert urllib.parse.urlsplit(requests[1].full_url).path.endswith("/me")
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(requests[2].full_url).query) == {
+        "fields": ["id,owner(id)"]
     }
 
 

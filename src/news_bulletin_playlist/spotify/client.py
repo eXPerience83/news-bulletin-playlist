@@ -49,11 +49,27 @@ class SpotifyClient:
             params["market"] = self.market
         return self._request("GET", "/search", query=params)
 
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
-        body: dict[str, Any] = {"name": name, "public": False}
+    def create_playlist(
+        self,
+        name: str,
+        *,
+        public: bool = True,
+        description: str = "",
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"name": name, "public": public}
         if description:
             body["description"] = description
         return self._request("POST", "/me/playlists", json_body=body)
+
+    def current_user(self) -> dict[str, Any]:
+        return self._request("GET", "/me", query={"fields": "id"})
+
+    def playlist_details(self, playlist_id: str) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/playlists/{playlist_id}",
+            query={"fields": "id,owner(id)"},
+        )
 
     def change_playlist_details(
         self,

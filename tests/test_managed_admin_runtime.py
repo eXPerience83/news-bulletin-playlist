@@ -23,6 +23,11 @@ from news_bulletin_playlist.engine_runtime import (
 )
 from news_bulletin_playlist.lan_admin import LanAdminSecurity
 from news_bulletin_playlist.managed_admin import ManagedAdminService
+from news_bulletin_playlist.managed_provisioning import (
+    ProvisioningIntent,
+    ProvisioningJournal,
+    ProvisioningState,
+)
 from news_bulletin_playlist.managed_state import ManagedStateStore, compile_engine_config
 from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
@@ -38,9 +43,18 @@ class _FakeSpotifyClient:
         self.create_calls: list[tuple[str, str]] = []
         self.update_calls: list[tuple[str, str, str]] = []
 
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         self.create_calls.append((name, description))
         return {"id": self.destination_id}
+
+    def current_user(self) -> dict[str, Any]:
+        return {"id": "owner"}
+
+    def playlist_details(self, playlist_id: str) -> dict[str, Any]:
+        return {"id": playlist_id, "owner": {"id": "owner"}}
 
     def change_playlist_details(
         self,
@@ -341,6 +355,108 @@ def test_activation_is_csrf_protected_persists_once_and_requests_scheduler_start
     assert _response(replay).status == HTTPStatus.FORBIDDEN
     assert provider.calls == 1
     assert len(factory.client.create_calls) == 1
+
+
+def test_clear_uncertain_provisioning_route_is_csrf_protected_and_local_only(
+    tmp_path: Path,
+) -> None:
+    service, factory = _service(tmp_path)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    journal = ProvisioningJournal(tmp_path / "managed-playlist-provisioning.json")
+    journal.save(
+        ProvisioningIntent(
+            state=ProvisioningState.REQUEST_STARTED,
+            template_id=template.id,
+            display_name=template.display_name,
+            description=template.description,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            max_duration_seconds=1800,
+        )
+    )
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/provisioning/clear",
+        form={"csrf_token": [security.issue_csrf_token()]},
+        security=security,
+    )
+    handler.do_POST()
+
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert journal.load() is None
+    assert factory.client.create_calls == []
+    assert lifecycle.reconcile_calls == [False]
+
+
+def test_uncertain_provisioning_renders_only_recovery_actions(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    ProvisioningJournal(tmp_path / "managed-playlist-provisioning.json").save(
+        ProvisioningIntent(
+            state=ProvisioningState.REQUEST_STARTED,
+            template_id=template.id,
+            display_name=template.display_name,
+            description=template.description,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            max_duration_seconds=1800,
+        )
+    )
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=_FakeLifecycle(),
+        path="/admin/",
+    )
+    handler.do_GET()
+
+    body = _response(handler).payload.decode()
+    assert "Playlist creation needs recovery" in body
+    assert "/admin/provisioning/adopt" in body
+    assert "/admin/provisioning/clear" in body
+    assert "Create Spotify playlist" not in body
+
+
+def test_adopt_uncertain_provisioning_route_verifies_owner_and_starts_scheduler(
+    tmp_path: Path,
+) -> None:
+    service, factory = _service(tmp_path)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    ProvisioningJournal(tmp_path / "managed-playlist-provisioning.json").save(
+        ProvisioningIntent(
+            state=ProvisioningState.REQUEST_STARTED,
+            template_id=template.id,
+            display_name=template.display_name,
+            description=template.description,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            max_duration_seconds=1800,
+        )
+    )
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/provisioning/adopt",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "destination_id": ["A" * 22],
+        },
+        auth_provider=_AccessTokenProvider(),
+        security=security,
+    )
+    handler.do_POST()
+
+    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    assert service.snapshot().managed[0].destination.external_id == "A" * 22
+    assert factory.client.create_calls == []
+    assert lifecycle.reconcile_calls == [True]
 
 
 def test_activation_route_persists_requested_duration_without_metadata_io(tmp_path: Path) -> None:

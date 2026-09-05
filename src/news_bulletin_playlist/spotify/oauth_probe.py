@@ -300,9 +300,7 @@ def _print_manual_instructions() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the authenticated Spotify P0 probe via PKCE.")
-    parser.add_argument(
-        "--write", action="store_true", help="also run the private playlist write probe"
-    )
+    parser.add_argument("--write", action="store_true", help="also run the playlist write probe")
     parser.add_argument("--callback-mode", choices=("manual", "local"), default="manual")
     parser.add_argument(
         "--authorization-url-file",

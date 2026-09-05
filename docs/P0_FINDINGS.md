@@ -105,7 +105,7 @@ The relevant API endpoints and scopes still need to be verified with the authent
 - Confirm latest 24-48h mappings for SER, RNE, Onda Cero and CNN using market `ES`.
 - Check whether Spotify contains one or both RNE 2026-08-25 18:00 republications.
 - Search Spotify for `Boletines COPE` and recent exact national bulletin titles in market `ES`.
-- Create a temporary private playlist and verify ordered episode replacement + readback.
+- Create a temporary probe playlist and verify ordered episode replacement + readback.
 - Verify repeat reconciliation produces zero writes when desired state is unchanged.
 
 ## Branding

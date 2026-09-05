@@ -23,7 +23,10 @@ class _FakeSpotifyClient:
         self.create_calls: list[tuple[str, str]] = []
         self.update_calls: list[tuple[str, str, str]] = []
 
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         self.create_calls.append((name, description))
         return self.responses.pop(0)
 
@@ -39,13 +42,19 @@ class _FakeSpotifyClient:
 
 
 class _FailingCreateSpotifyClient(_FakeSpotifyClient):
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         self.create_calls.append((name, description))
         raise SpotifyTransportError("simulated create transport failure")
 
 
 class _FailingCreateSpotify5xxClient(_FakeSpotifyClient):
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         self.create_calls.append((name, description))
         raise SpotifyApiError(503, "simulated create server failure")
 

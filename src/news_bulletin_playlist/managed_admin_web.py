@@ -14,6 +14,7 @@ from news_bulletin_playlist.managed_admin import (
     ManagedAdminSnapshot,
 )
 from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
+from news_bulletin_playlist.managed_provisioning import ProvisioningState
 from news_bulletin_playlist.managed_state import ManagedPlaylist
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
@@ -48,19 +49,26 @@ def render_managed_admin_page(
         )
         or '<p class="empty">No managed playlists yet.</p>'
     )
-    available = (
-        "".join(
-            _template_card(
-                template,
-                catalog=catalog,
-                csrf_token=csrf,
-                spotify_connected=spotify_connected,
-            )
-            for template in snapshot.available_templates
+    if snapshot.provisioning_intent is not None:
+        available = (
+            '<p class="empty">Resolve the pending playlist creation before activating another '
+            "template.</p>"
         )
-        or '<p class="empty">No additional built-in playlists are available.</p>'
-    )
+    else:
+        available = (
+            "".join(
+                _template_card(
+                    template,
+                    catalog=catalog,
+                    csrf_token=csrf,
+                    spotify_connected=spotify_connected,
+                )
+                for template in snapshot.available_templates
+            )
+            or '<p class="empty">No additional built-in playlists are available.</p>'
+        )
     sources = _sources_table(snapshot, catalog, last_cycle)
+    recovery = _provisioning_recovery(snapshot.provisioning_intent, csrf_token=csrf)
     spotify_action = "Reconnect Spotify" if spotify_connected else "Connect Spotify"
 
     document = f"""<!doctype html>
@@ -115,6 +123,7 @@ def render_managed_admin_page(
   {warning}
   {notice_html}
   {error_html}
+  {recovery}
 
   <section>
     <h2>Active playlists</h2>
@@ -125,7 +134,7 @@ def render_managed_admin_page(
 
   <section>
     <h2>Available playlists</h2>
-    <p class="muted">Review the built-in defaults before creating a private Spotify playlist.</p>
+    <p class="muted">Review the built-in defaults before creating a Spotify playlist.</p>
     <div class="grid">{available}</div>
   </section>
 
@@ -186,7 +195,7 @@ def _managed_card(
     {_cover_image(playlist.cover_id, playlist.display_name)}
     <div>
       <h3>{html.escape(playlist.display_name)}</h3>
-      <p><strong>{"Active" if playlist.enabled else "Paused"}</strong> · Private when created</p>
+      <p><strong>{"Active" if playlist.enabled else "Paused"}</strong> · Spotify destination</p>
       <p><a href="{html.escape(spotify_url, quote=True)}" target="_blank"
             rel="noopener noreferrer">Open in Spotify</a></p>
       <p class="muted">Last result: {html.escape(result)}</p>
@@ -255,7 +264,7 @@ def _template_card(
     {_cover_image(template.cover_id, template.display_name)}
     <div>
       <h3>{html.escape(template.display_name)}</h3>
-      <p class="muted">Built-in template · creates a private Spotify playlist</p>
+      <p class="muted">Built-in template · creates a Spotify playlist</p>
       <p class="muted">The bundled cover is uploaded when Spotify grants image permission.</p>
     </div>
   </div>
@@ -278,7 +287,7 @@ def _template_card(
     </label>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     {hint}
-    <button type="submit"{disabled}>Create private playlist</button>
+    <button type="submit"{disabled}>Create Spotify playlist</button>
   </form>
 </article>
 """
@@ -301,6 +310,34 @@ def _source_checkboxes(
             f"{html.escape(_source_label(source))}</label>"
         )
     return "".join(rows)
+
+
+def _provisioning_recovery(intent: object, *, csrf_token: str) -> str:
+    if intent is None:
+        return ""
+    if getattr(intent, "state", None) is not ProvisioningState.REQUEST_STARTED:
+        return ""
+    return f"""
+  <section class="warning">
+    <h2>Playlist creation needs recovery</h2>
+    <p>A Spotify playlist creation may have succeeded before this installation could save its
+       destination. Do not create another playlist until this is resolved.</p>
+    <form method="post" action="/admin/provisioning/adopt">
+      <input type="hidden" name="csrf_token" value="{csrf_token}">
+      <label>Existing Spotify playlist ID
+        <input type="text" name="destination_id" required minlength="22" maxlength="22">
+      </label>
+      <p class="muted">The playlist must exist and be owned by the authorized Spotify user.</p>
+      <button type="submit">Adopt existing playlist</button>
+    </form>
+    <form method="post" action="/admin/provisioning/clear">
+      <input type="hidden" name="csrf_token" value="{csrf_token}">
+      <p class="muted">Clear only after verifying that no usable Spotify playlist needs adoption.
+         This does not change Spotify.</p>
+      <button class="danger" type="submit">Clear uncertain activation</button>
+    </form>
+  </section>
+"""
 
 
 def _source_label(source: SourceDefinition) -> str:

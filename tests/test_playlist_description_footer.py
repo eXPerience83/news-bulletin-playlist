@@ -26,7 +26,10 @@ class _Spotify:
         self.update_calls: list[tuple[str, str, str]] = []
         self.cover_calls: list[tuple[str, bytes]] = []
 
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         self.create_calls.append((name, description))
         return {"id": "destination"}
 

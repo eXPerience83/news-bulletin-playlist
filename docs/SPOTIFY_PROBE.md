@@ -151,5 +151,5 @@ Use manual mode with `--authorization-url-file` only when browser and process do
 loopback. The helper exchanges the returned authorization code using PKCE, runs the catalogue probe,
 and does not persist returned tokens.
 
-For the local manual write probe, append `--write`. The temporary private playlist is intentionally
+For the local manual write probe, append `--write`. The temporary probe playlist is intentionally
 left in the account so its order can be inspected manually, then deleted.

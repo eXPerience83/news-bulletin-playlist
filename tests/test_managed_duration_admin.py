@@ -26,7 +26,10 @@ class _SpotifyClient:
     def __init__(self) -> None:
         self.update_calls: list[tuple[str, str, str]] = []
 
-    def create_private_playlist(self, name: str, *, description: str = "") -> dict[str, Any]:
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, Any]:
+        assert public is True
         del name, description
         return {"id": "duration-destination"}
 

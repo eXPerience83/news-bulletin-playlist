@@ -154,7 +154,7 @@ The external URL must be an HTTPS origin without path, query string or embedded 
 
 Open the HTTPS external origin, authenticate to `/admin/` with username `admin` and the configured administration password, then choose **Connect Spotify**. The application uses one-time CSRF, strong OAuth state and PKCE S256; Spotify returns directly to the server callback. Normal production operation requires no shell and no callback URL paste.
 
-After Spotify reports connected, review **Noticias en Español** and any additional built-in templates you want to operate. Each activation creates a private Spotify destination, persists its managed state and wakes the scheduler. There is no need to pre-create Spotify playlists or paste their IDs into YAML for the ordinary managed path.
+After Spotify reports connected, review **Noticias en Español** and any additional built-in templates you want to operate. Each activation creates a Spotify destination, persists its managed state and wakes the scheduler. There is no need to pre-create Spotify playlists or paste their IDs into YAML for the ordinary managed path.
 
 Only the long-lived refresh credential is persisted under `/data`, owner-only and atomically replaced. Access tokens remain memory-only. Scheduler token refresh and Web UI reconnect/callback operations are serialized against the same credential store so they cannot race.
 
