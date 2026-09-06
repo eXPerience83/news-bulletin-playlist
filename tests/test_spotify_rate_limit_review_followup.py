@@ -162,14 +162,14 @@ def test_failed_backoff_persistence_is_retained_in_memory_and_retried_before_spo
     original_select = journal._select_row
     select_calls = 0
 
-    def fail_first_select(connection: sqlite3.Connection):  # type: ignore[no-untyped-def]
+    def fail_persist_select(connection: sqlite3.Connection):  # type: ignore[no-untyped-def]
         nonlocal select_calls
         select_calls += 1
-        if select_calls == 1:
+        if select_calls == 2:
             raise sqlite3.OperationalError("database is locked")
         return original_select(connection)
 
-    monkeypatch.setattr(journal, "_select_row", fail_first_select)
+    monkeypatch.setattr(journal, "_select_row", fail_persist_select)
 
     with pytest.raises(PersistenceError, match="persist Spotify rate-limit backoff"):
         client.show_episodes("slow-show")
