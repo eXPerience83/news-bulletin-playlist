@@ -7,7 +7,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any, Protocol
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.collection import (
@@ -43,34 +43,26 @@ from news_bulletin_playlist.spotify.matcher import (
     MatchResponseError,
     match_source_editions,
 )
+from news_bulletin_playlist.spotify_backoff import (
+    SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE,
+    SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE,
+    SpotifyBackoffAuthProvider,
+    SpotifyBackoffClient,
+    SpotifyRateLimitGuardAuth,
+    SpotifyRateLimitGuardClient,
+    SpotifyRateLimitJournal,
+    is_spotify_rate_limit_suppressed,
+)
 
 DEFAULT_ENGINE_INTERVAL = timedelta(minutes=10)
 
 
-class SpotifyAuthProvider(Protocol):
-    def get_access_token(self, *, now: datetime | None = None) -> str: ...
+class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
+    """Authentication surface required by the production engine."""
 
 
-class SpotifyEngineClient(Protocol):
-    def show_episodes(
-        self,
-        show_id: str,
-        *,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> dict[str, Any]: ...
-
-    def playlist_items(
-        self,
-        playlist_id: str,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> dict[str, Any]: ...
-
-    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]: ...
-
-    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]: ...
+class SpotifyEngineClient(SpotifyBackoffClient, Protocol):
+    """Combined Spotify catalogue/playlist surface required by the production engine."""
 
 
 class EngineCycleRunner(Protocol):
@@ -188,10 +180,24 @@ class EngineRunner:
     ) -> None:
         self.config = config
         self.store = store
-        self.auth = auth
         self.fetcher = fetcher
-        self.client_factory = client_factory or _spotify_client
         self.clock = clock or _utc_now
+        self.rate_limit_journal = SpotifyRateLimitJournal(store)
+        self.auth = SpotifyRateLimitGuardAuth(
+            auth,
+            self.rate_limit_journal,
+            clock=self.clock,
+        )
+        base_client_factory = client_factory or _spotify_client
+
+        def guarded_client_factory(access_token: str) -> SpotifyEngineClient:
+            return SpotifyRateLimitGuardClient(
+                base_client_factory(access_token),
+                self.rate_limit_journal,
+                clock=self.clock,
+            )
+
+        self.client_factory = guarded_client_factory
         self.playlist_mutation_guard = playlist_mutation_guard
         self._cycle_lock = threading.Lock()
 
@@ -298,14 +304,20 @@ class EngineRunner:
                 SpotifyApiError,
                 SpotifyTransportError,
             ) as exc:
+                suppressed = is_spotify_rate_limit_suppressed(exc)
                 if not had_durable_match:
                     unsafe_source_ids.add(source.id)
                 current = source_outcomes.get(source.id)
                 if current is not None:
                     source_outcomes[source.id] = replace(
                         current,
-                        matching_ok=False,
-                        error=_combine_errors(current.error, str(exc)),
+                        matching_ok=None if suppressed else False,
+                        error=_combine_errors(
+                            current.error,
+                            SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE
+                            if suppressed
+                            else str(exc),
+                        ),
                     )
             except PersistenceError as exc:
                 return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
@@ -421,6 +433,11 @@ class EngineRunner:
                 SpotifyReconciliationError,
             ) as exc:
                 playlist_finished_at = _as_utc(self.clock())
+                error_message = (
+                    SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE
+                    if is_spotify_rate_limit_suppressed(exc)
+                    else str(exc)
+                )
                 try:
                     self.store.record_playlist_run(
                         playlist.id,
@@ -429,7 +446,7 @@ class EngineRunner:
                         ok=False,
                         desired_count=desired_count,
                         applied_count=0,
-                        error=str(exc),
+                        error=error_message,
                     )
                     playlist_state = self.store.get_playlist_state(playlist.id)
                 except PersistenceError as persistence_exc:
@@ -449,7 +466,7 @@ class EngineRunner:
                         last_success_at=(
                             None if playlist_state is None else playlist_state.last_success_at
                         ),
-                        error=str(exc),
+                        error=error_message,
                     )
                 )
             except PersistenceError as exc:
@@ -457,10 +474,7 @@ class EngineRunner:
 
         finished_at = _as_utc(self.clock())
         try:
-            self.store.prune_operational_history(
-                now=finished_at,
-                protected_identities=self._protected_identities(finished_at),
-            )
+            self._prune_operational_history(finished_at)
         except PersistenceError as exc:
             return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
 
@@ -538,9 +552,15 @@ class EngineRunner:
                 )
             )
 
+        finished_at = _as_utc(self.clock())
+        try:
+            self._prune_operational_history(finished_at)
+        except PersistenceError as exc:
+            return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
+
         return EngineCycleResult(
             started_at=started_at,
-            finished_at=_as_utc(self.clock()),
+            finished_at=finished_at,
             ok=False,
             sources=tuple(
                 source_outcomes[source.id]
@@ -565,6 +585,12 @@ class EngineRunner:
             sources=tuple(source_outcomes.values()),
             playlists=tuple(playlist_outcomes),
             error=str(error),
+        )
+
+    def _prune_operational_history(self, now: datetime) -> None:
+        self.store.prune_operational_history(
+            now=now,
+            protected_identities=self._protected_identities(now),
         )
 
     def _source_timezones(self) -> Mapping[SourceId, ZoneInfo]:

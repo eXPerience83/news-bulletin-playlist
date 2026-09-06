@@ -162,6 +162,42 @@ def test_client_sanitizes_http_errors(monkeypatch: pytest.MonkeyPatch, status: i
     assert error.value.retry_after == 12
 
 
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("later", None),
+        ("-1", None),
+        ("0", 0),
+        ("1800", 1800),
+    ],
+)
+def test_client_parses_retry_after_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    header: str | None,
+    expected: int | None,
+) -> None:
+    def fake_urlopen(request: object, *, timeout: float) -> _Response:
+        assert isinstance(request, urllib.request.Request)
+        headers = {} if header is None else {"Retry-After": header}
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "rate limited",
+            headers,
+            io.BytesIO(b"provider-body-must-not-escape"),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SpotifyApiError) as error:
+        SpotifyClient("token-sentinel").search_shows("query")
+
+    assert error.value.retry_after == expected
+    assert "provider-body-must-not-escape" not in str(error.value)
+    assert "token-sentinel" not in str(error.value)
+
+
 def test_client_handles_network_and_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
     def network_error(request: object, *, timeout: float) -> _Response:
         raise urllib.error.URLError("offline")

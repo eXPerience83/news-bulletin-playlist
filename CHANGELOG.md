@@ -36,6 +36,9 @@ current work remains under **Unreleased** until a stable release is cut.
   análisis. ONU's broad UN Spanish audio feed is filtered fail-closed to dated ONU-en-minutos
   editions. CBC World Report remains verified research but is withheld from the runtime catalogue
   because its official RSS did not meet the production provider-watch fetch contract.
+- Durable runtime-wide Spotify 429 backoff state with sanitized `Retry-After` diagnostics. The engine
+  keeps its ordinary RSS collection cadence while Spotify Web API activity is suppressed until the
+  persisted retry deadline expires, including across process/container restarts.
 
 ### Changed
 
@@ -62,10 +65,15 @@ current work remains under **Unreleased** until a stable release is cut.
   **RNE 10:05 / 605-second** bulletin from production diagnostics on build `71788836ea1e`.
 - Spotify description attribution remains outside editable managed state, preventing duplicate project
   URLs across repeated metadata updates while staying within the playlist description length limit.
+- Spotify HTTP 429 no longer causes fixed ten-minute Web API retry loops. A valid provider
+  `Retry-After` is honored (or a conservative 30-minute fallback is used), a later existing deadline
+  is never shortened, and the first 429 suppresses every subsequent Spotify request in that engine
+  cycle without weakening destination verification or reconnecting Spotify.
 
 ### Validation / follow-up
 
 - #129 tracks configurable duration policy implementation.
 - #130 is the reviewed multi-playlist/dev-candidate PR.
 - #132 tracks production log review and the eventual default hard-duration decision.
+- #140 tracks the durable Spotify 429 / `Retry-After` recovery behavior.
 - #53 remains the living source research catalog; #44 remains the playlist rollout matrix.
