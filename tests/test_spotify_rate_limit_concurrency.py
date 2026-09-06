@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from news_bulletin_playlist.persistence import SQLiteStore
-from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
+from news_bulletin_playlist.spotify_backoff import (
+    SpotifyRateLimitJournal,
+    SpotifyRateLimitState,
+)
 
 NOW = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
 
@@ -47,6 +50,23 @@ def test_concurrent_activations_cannot_shorten_later_deadline(tmp_path: Path) ->
     assert state.retry_not_before == NOW + timedelta(hours=1)
     assert state.retry_after_seconds == 3600
     assert state.backoff_source == "spotify_header"
+
+
+def test_conditional_upsert_preserves_entire_later_state_deterministically(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    journal = SpotifyRateLimitJournal(store)
+    later = journal.activate(observed_at=NOW, retry_after_seconds=3600)
+    shorter = SpotifyRateLimitState(
+        observed_at=NOW + timedelta(minutes=1),
+        retry_not_before=NOW + timedelta(minutes=31),
+        retry_after_seconds=None,
+        backoff_source="fallback",
+    )
+
+    returned = journal._persist_candidate(shorter)
+
+    assert returned == later
+    assert journal.get() == later
 
 
 def test_sub_millisecond_extension_is_not_lost(tmp_path: Path) -> None:
