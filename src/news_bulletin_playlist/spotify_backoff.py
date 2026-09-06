@@ -153,7 +153,10 @@ class SpotifyRateLimitJournal:
         observed = _as_utc(now)
         fallback = self._fallback_snapshot()
         if fallback is not None and observed < fallback.retry_not_before:
-            persisted = self._persist_candidate(fallback)
+            try:
+                persisted = self._persist_candidate(fallback)
+            except PersistenceError:
+                return fallback
             self._forget_fallback_through(persisted.retry_not_before)
             return persisted
         if fallback is not None:
