@@ -32,6 +32,8 @@ from news_bulletin_playlist.reconciliation import (
 from news_bulletin_playlist.spotify.client import SpotifyApiError
 from news_bulletin_playlist.spotify_backoff import (
     DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS,
+    SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE,
+    SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE,
     SpotifyRateLimitBackoffActive,
     SpotifyRateLimitGuardAuth,
     SpotifyRateLimitGuardClient,
@@ -320,6 +322,9 @@ def test_matching_429_stops_later_live_catalogue_requests(tmp_path: Path) -> Non
     assert delegate.show_calls == ["one-show"]
     assert delegate.playlist_calls == []
     assert delegate.replace_calls == []
+    assert result.sources[0].matching_ok is False
+    assert result.sources[1].matching_ok is None
+    assert result.sources[1].error == SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE
     active = SpotifyRateLimitJournal(store).active(now=NOW + timedelta(seconds=1))
     assert active is not None
     assert active.retry_not_before == NOW + timedelta(seconds=300)
@@ -346,6 +351,8 @@ def test_playlist_429_stops_later_live_destination_requests(tmp_path: Path) -> N
     assert delegate.playlist_calls == ["destination-first"]
     assert delegate.replace_calls == []
     assert all(outcome.wrote is None for outcome in result.playlists)
+    assert result.playlists[0].error != SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE
+    assert result.playlists[1].error == SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE
 
 
 def test_optional_snapshot_429_cannot_reach_live_replace(tmp_path: Path) -> None:
