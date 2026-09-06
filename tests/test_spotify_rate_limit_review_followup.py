@@ -87,6 +87,39 @@ def test_sqlite_error_inside_backoff_context_fails_closed_without_escaping_engin
     assert client_factory_calls == 0
 
 
+def test_corrupt_persisted_backoff_state_fails_closed_before_auth_or_client(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    SpotifyRateLimitJournal(store).activate(observed_at=NOW, retry_after_seconds=300)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE spotify_rate_limit_backoff SET retry_not_before = ? WHERE singleton = 1",
+            ("2026-09-05T10:05:00",),
+        )
+
+    auth = _Auth()
+    client_factory_calls = 0
+
+    def client_factory(_access_token: str) -> Any:
+        nonlocal client_factory_calls
+        client_factory_calls += 1
+        raise AssertionError("Spotify client must not be created from corrupt backoff state")
+
+    result = EngineRunner(
+        EngineConfig(schema_version=1, sources=(), playlists=()),
+        SQLiteStore(store.path),
+        auth,
+        client_factory=client_factory,
+        clock=lambda: NOW,
+    ).run_cycle()
+
+    assert not result.ok
+    assert result.error == "Spotify rate-limit state is unavailable"
+    assert auth.calls == 0
+    assert client_factory_calls == 0
+
+
 def test_retry_after_deadline_starts_when_429_is_received(tmp_path: Path) -> None:
     store = _store(tmp_path)
     journal = SpotifyRateLimitJournal(store)
