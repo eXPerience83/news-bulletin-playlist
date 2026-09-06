@@ -2,21 +2,29 @@
 
 from __future__ import annotations
 
-import math
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
-from typing import Any, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
+from news_bulletin_playlist.reconciliation import SpotifyPlaylistClient
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
+from news_bulletin_playlist.spotify.matcher import SpotifyCatalogClient
 
 DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS = 30 * 60
+SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX = "Spotify rate-limit backoff active until "
+SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE = (
+    "destination preserved because Spotify rate-limit backoff is active"
+)
+SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE = (
+    "Spotify matching skipped because rate-limit backoff is active"
+)
 
 _TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS spotify_rate_limit_backoff (
@@ -44,26 +52,8 @@ T = TypeVar("T")
 Clock = Callable[[], datetime]
 
 
-class SpotifyBackoffClient(Protocol):
-    def show_episodes(
-        self,
-        show_id: str,
-        *,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> dict[str, Any]: ...
-
-    def playlist_items(
-        self,
-        playlist_id: str,
-        *,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> dict[str, Any]: ...
-
-    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]: ...
-
-    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]: ...
+class SpotifyBackoffClient(SpotifyCatalogClient, SpotifyPlaylistClient, Protocol):
+    """Combined Spotify catalogue/playlist surface guarded by runtime backoff."""
 
 
 class SpotifyBackoffAuthProvider(Protocol):
@@ -138,7 +128,6 @@ class SpotifyRateLimitJournal:
     """Persist one runtime-wide Spotify Web API cooldown in the existing SQLite database."""
 
     def __init__(self, store: SQLiteStore) -> None:
-        self.store = store
         self.path = store.path
         self.diagnostics = self._build_diagnostics()
 
@@ -212,10 +201,6 @@ class SpotifyRateLimitJournal:
             self._ensure_table(connection)
             connection.execute("DELETE FROM spotify_rate_limit_backoff WHERE singleton = 1")
 
-    def prune_run_history(self, *, now: datetime) -> None:
-        """Bound run-history growth while Spotify is intentionally skipped."""
-        self.store.prune_operational_history(now=_as_utc(now))
-
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
         connection.execute(_TABLE_SQL)
@@ -272,8 +257,6 @@ class SpotifyRateLimitGuardAuth:
         observed = _as_utc(self.clock() if now is None else now)
         try:
             state = self.journal.active(now=observed)
-            if state is not None:
-                self.journal.prune_run_history(now=observed)
         except PersistenceError as exc:
             raise SpotifyRateLimitStateUnavailable(
                 "Spotify rate-limit state is unavailable"
@@ -307,7 +290,7 @@ class SpotifyRateLimitGuardClient:
         *,
         limit: int = 50,
         offset: int = 0,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         return self._call(lambda: self.client.show_episodes(show_id, limit=limit, offset=offset))
 
     def playlist_items(
@@ -316,15 +299,15 @@ class SpotifyRateLimitGuardClient:
         *,
         limit: int = 50,
         offset: int = 0,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         return self._call(
             lambda: self.client.playlist_items(playlist_id, limit=limit, offset=offset)
         )
 
-    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, object]:
         return self._call(lambda: self.client.replace_playlist_items(playlist_id, uris))
 
-    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, object]:
         return self._call(lambda: self.client.playlist_snapshot(playlist_id))
 
     def _call(self, operation: Callable[[], T]) -> T:
@@ -357,6 +340,20 @@ class SpotifyRateLimitGuardClient:
             raise
 
 
+def is_spotify_rate_limit_suppressed(error: BaseException) -> bool:
+    """Return whether a bounded exception chain contains local rate-limit suppression."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    for _ in range(16):
+        if current is None or id(current) in seen:
+            return False
+        if isinstance(current, SpotifyRateLimitSuppressed):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
+    return False
+
+
 def _emit_backoff(
     diagnostics: OperationalDiagnostics | None,
     state: SpotifyRateLimitState,
@@ -385,10 +382,7 @@ def _emit_backoff(
 
 
 def _active_message(state: SpotifyRateLimitState) -> str:
-    return (
-        "Spotify rate-limit backoff active until "
-        f"{_format_display_timestamp(state.retry_not_before)}"
-    )
+    return SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX + _format_display_timestamp(state.retry_not_before)
 
 
 def _retry_deadline(
@@ -419,12 +413,15 @@ def _state_from_row(row: sqlite3.Row) -> SpotifyRateLimitState:
     source = row["backoff_source"]
     if not isinstance(source, str):
         raise PersistenceError("Spotify rate-limit backoff contained invalid backoff_source")
-    return SpotifyRateLimitState(
-        observed_at=_parse_timestamp(_row_text(row, "observed_at")),
-        retry_not_before=_parse_timestamp(_row_text(row, "retry_not_before")),
-        retry_after_seconds=retry_after,
-        backoff_source=source,
-    )
+    try:
+        return SpotifyRateLimitState(
+            observed_at=_parse_timestamp(_row_text(row, "observed_at")),
+            retry_not_before=_parse_timestamp(_row_text(row, "retry_not_before")),
+            retry_after_seconds=retry_after,
+            backoff_source=source,
+        )
+    except ValueError as exc:
+        raise PersistenceError("Spotify rate-limit backoff contained invalid state") from exc
 
 
 def _format_storage_timestamp(value: datetime) -> str:
@@ -438,9 +435,9 @@ def _format_display_timestamp(value: datetime) -> str:
 def _parse_timestamp(value: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return _as_utc(parsed)
     except ValueError as exc:
         raise PersistenceError("Spotify rate-limit backoff contained an invalid timestamp") from exc
-    return _as_utc(parsed)
 
 
 def _row_text(row: sqlite3.Row, key: str) -> str:
@@ -454,9 +451,3 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Spotify rate-limit timestamps must be timezone-aware")
     return value.astimezone(UTC)
-
-
-def remaining_retry_after_seconds(state: SpotifyRateLimitState, *, now: datetime) -> int:
-    """Return a non-negative whole-second remainder for status/testing purposes."""
-    remaining = (state.retry_not_before - _as_utc(now)).total_seconds()
-    return max(0, math.ceil(remaining))
