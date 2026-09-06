@@ -60,7 +60,7 @@ def _edition(source: SourceDefinition) -> CanonicalEdition:
 
 def _valid_item() -> dict[str, object]:
     return {
-        "uri": "spotify:episode:valid",
+        "uri": "spotify:episode:0000000000000000000005",
         "name": "Las noticias de la SER, 10:00 (30/08/2026)",
         "release_date": "2026-08-30",
         "release_date_precision": "day",
@@ -91,7 +91,7 @@ class WrongReleaseDateClient:
         return {
             "items": [
                 {
-                    "uri": "spotify:episode:wrong-date",
+                    "uri": "spotify:episode:0000000000000000000006",
                     "name": "Las noticias de la SER, 10:00 (30/08/2026)",
                     "release_date": "2026-08-31",
                     "release_date_precision": "day",
@@ -253,7 +253,7 @@ def test_malformed_catalogue_response_does_not_persist_false_pending(tmp_path: P
             {
                 "items": [
                     {
-                        "uri": "spotify:episode:missing-precision",
+                        "uri": "spotify:episode:0000000000000000000007",
                         "name": "Las noticias de la SER, 10:00 (30/08/2026)",
                         "release_date": "2026-08-30",
                     }
@@ -266,7 +266,7 @@ def test_malformed_catalogue_response_does_not_persist_false_pending(tmp_path: P
             {
                 "items": [
                     {
-                        "uri": "spotify:episode:bad-precision",
+                        "uri": "spotify:episode:0000000000000000000008",
                         "name": "Las noticias de la SER, 10:00 (30/08/2026)",
                         "release_date": "2026-08-30",
                         "release_date_precision": "hour",
@@ -280,7 +280,7 @@ def test_malformed_catalogue_response_does_not_persist_false_pending(tmp_path: P
             {
                 "items": [
                     {
-                        "uri": "spotify:episode:bad-date",
+                        "uri": "spotify:episode:0000000000000000000009",
                         "name": "Las noticias de la SER, 10:00 (30/08/2026)",
                         "release_date": "2026-08",
                         "release_date_precision": "day",

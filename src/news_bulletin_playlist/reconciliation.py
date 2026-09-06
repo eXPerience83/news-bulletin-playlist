@@ -284,6 +284,7 @@ def _reconcile_playlist_items(
                 _attest_ambiguous_write(
                     client,
                     playlist_id,
+                    desired=desired,
                     desired_fingerprint=desired_fingerprint,
                     store=store,
                     logical_playlist_id=logical_playlist_id,
@@ -303,6 +304,7 @@ def _reconcile_playlist_items(
                 _attest_ambiguous_write(
                     client,
                     playlist_id,
+                    desired=desired,
                     desired_fingerprint=desired_fingerprint,
                     store=store,
                     logical_playlist_id=logical_playlist_id,
@@ -493,6 +495,7 @@ def _attest_ambiguous_write(
     client: SpotifyPlaylistClient,
     playlist_id: str,
     *,
+    desired: Sequence[str],
     desired_fingerprint: str,
     store: SQLiteStore | None,
     logical_playlist_id: PlaylistId | None,
@@ -502,15 +505,24 @@ def _attest_ambiguous_write(
     if store is None or logical_playlist_id is None or updated_at is None:
         return
     try:
-        snapshot = _read_current_snapshot(client, playlist_id, phase="readback")
+        snapshot_before = _read_current_snapshot(client, playlist_id, phase="readback")
+        readback = _read_spotify_playlist(
+            client,
+            playlist_id,
+            allow_unavailable=False,
+            phase="readback",
+        )
+        snapshot_after = _read_current_snapshot(client, playlist_id, phase="readback")
     except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
-        # The complete exact readback already proves the ambiguous mutation applied.
-        # A failed optional attestation read must not turn that verified result into a retry.
+        # The preceding complete exact readback already proves the ambiguous mutation applied.
+        # Attestation is optional and must never convert that verified result into a retry.
+        return
+    if readback.slots != tuple(desired) or snapshot_before != snapshot_after:
         return
     store.set_playlist_attestation(
         logical_playlist_id,
         destination_id=playlist_id,
-        snapshot_id=snapshot,
+        snapshot_id=snapshot_after,
         desired_fingerprint=desired_fingerprint,
         updated_at=updated_at,
     )

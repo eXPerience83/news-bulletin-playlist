@@ -107,7 +107,7 @@ def _candidate(
     *,
     title: str,
     release_date: str,
-    uri: str = "spotify:episode:rne-delayed",
+    uri: str = "spotify:episode:9f9c076df552789f402546",
 ) -> dict[str, object]:
     return {
         "uri": uri,
@@ -166,7 +166,7 @@ def test_next_day_rne_release_matches_and_enters_semantic_chronology(tmp_path: P
     outcome = match_source_editions(client, store, rne, (rne_21,), now=now).outcomes[0]
 
     assert outcome.status is MatchStatus.MATCHED
-    assert outcome.spotify_episode_uri == "spotify:episode:rne-delayed"
+    assert outcome.spotify_episode_uri == "spotify:episode:9f9c076df552789f402546"
     assert "delayed Spotify release=+1d" in outcome.diagnostics
 
     ser_20 = CanonicalEdition(
@@ -181,7 +181,7 @@ def test_next_day_rne_release_matches_and_enters_semantic_chronology(tmp_path: P
         ser_20.source_id,
         ser_20.source_native_id,
         status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:ser-2000",
+        spotify_episode_uri="spotify:episode:5c01eb5f96a194985d4048",
         spotify_duration_seconds=60,
         diagnostics="matched",
         updated_at=now,
@@ -194,8 +194,8 @@ def test_next_day_rne_release_matches_and_enters_semantic_chronology(tmp_path: P
     )
 
     assert desired.uris[:2] == (
-        "spotify:episode:rne-delayed",
-        "spotify:episode:ser-2000",
+        "spotify:episode:9f9c076df552789f402546",
+        "spotify:episode:5c01eb5f96a194985d4048",
     )
 
 
@@ -277,7 +277,7 @@ def test_other_sources_do_not_inherit_rne_release_tolerance(tmp_path: Path) -> N
                     _candidate(
                         title="Las noticias de la SER, 21:00 (01/09/2026)",
                         release_date="2026-09-02",
-                        uri="spotify:episode:ser-next-day",
+                        uri="spotify:episode:f98f0907abd6e466fd9556",
                     )
                 ],
                 "next": None,
@@ -310,7 +310,7 @@ def test_missing_semantic_time_keeps_strict_release_date_matching(tmp_path: Path
                     _candidate(
                         title="Fallback bulletin",
                         release_date="2026-09-02",
-                        uri="spotify:episode:fallback",
+                        uri="spotify:episode:5c7ee2074b65853f71fc5a",
                     )
                 ],
                 "next": None,

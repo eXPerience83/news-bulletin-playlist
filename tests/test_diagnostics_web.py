@@ -38,6 +38,7 @@ from news_bulletin_playlist.engine import (
     SourceCycleOutcome,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.runtime import AdminSecurity
 
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
@@ -246,6 +247,48 @@ def test_diagnostic_export_truncation_uses_total_matching_count(tmp_path: Path) 
 
     assert len(exact_events) == 3
     assert exact_truncated is False
+
+
+def test_diagnostic_count_failure_keeps_page_and_zip_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticEventStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    event = store.record(
+        occurred_at=NOW,
+        severity=DiagnosticSeverity.WARNING,
+        component="spotify",
+        event_name="spotify_rate_limit_backoff",
+    )
+    handler = type("DiagnosticHandler", (), {"diagnostic_store": store})()
+
+    def fail_count(**_kwargs: object) -> int:
+        raise PersistenceError("count unavailable")
+
+    monkeypatch.setattr(store, "count_events", fail_count)
+    filters, events, truncated = DiagnosticOperationalHealthHandler._diagnostic_events(
+        handler, "hours=all&limit=2"
+    )
+    page = render_diagnostics_page(events=events, filters=filters)
+    bundle = build_diagnostic_bundle(
+        events=events,
+        generated_at=NOW,
+        last_cycle=None,
+        retention_days=30,
+        max_events=10_000,
+        filters=filters,
+        result_truncated=truncated,
+    )
+
+    assert len(events) == 1
+    assert events[0].event_id == event
+    assert truncated is None
+    assert b"spotify_rate_limit_backoff" in page
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        runtime = json.loads(archive.read("runtime.json"))
+        combined = b"\n".join(archive.read(name) for name in archive.namelist())
+    assert b"spotify_rate_limit_backoff" in combined
+    assert runtime["export_result_truncated"] is None
 
 
 def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(

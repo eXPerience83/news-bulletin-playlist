@@ -139,6 +139,31 @@ class _AppliedThen502WithSnapshotFailure(_AttestedSpotify):
         raise SpotifyTransportError("snapshot unavailable")
 
 
+class _AppliedThen502WithConcurrentMutation(_AttestedSpotify):
+    def __init__(self, slots: list[str | None]) -> None:
+        super().__init__(slots)
+        self.post_write_reads = 0
+
+    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+        super().replace_playlist_items(playlist_id, uris)
+        raise SpotifyApiError(502, "provider body must not escape")
+
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        response = super().playlist_items(playlist_id, limit=limit, offset=offset)
+        if self.writes:
+            self.post_write_reads += 1
+            if self.post_write_reads == 2:
+                self.slots = ["spotify:episode:concurrent"]
+                self.snapshot = "snapshot-concurrent"
+        return response
+
+
 def _apply(
     store: SQLiteStore,
     client: _AttestedSpotify,
@@ -184,6 +209,18 @@ def test_ambiguous_write_exact_readback_stays_verified_when_attestation_read_fai
     assert second.ok
     assert second.wrote is False
     assert client.writes == [["spotify:episode:new"]]
+    assert store.get_playlist_attestation(PLAYLIST_ID) is None
+
+
+def test_ambiguous_write_does_not_attest_across_a_concurrent_mutation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    client = _AppliedThen502WithConcurrentMutation(["spotify:episode:old"])
+
+    result = _apply(store, client, "spotify:episode:new")
+
+    assert result.ok
+    assert result.wrote is True
+    assert client.snapshot_reads == 3
     assert store.get_playlist_attestation(PLAYLIST_ID) is None
 
 

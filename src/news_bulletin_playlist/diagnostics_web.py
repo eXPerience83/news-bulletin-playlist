@@ -190,7 +190,7 @@ def build_diagnostic_bundle(
     max_events: int,
     build_revision: str = "dev",
     filters: DiagnosticFilters | None = None,
-    result_truncated: bool = False,
+    result_truncated: bool | None = False,
 ) -> bytes:
     """Build an in-memory ZIP from sanitized models; never copy the SQLite file."""
     observed = _as_utc(generated_at)

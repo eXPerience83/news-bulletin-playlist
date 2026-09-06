@@ -80,6 +80,7 @@ def test_release_date_title_precision(
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.initialize()
     store.upsert_editions((edition,), observed_at=datetime(2026, 9, 4, 6, tzinfo=UTC))
+    episode_uri = "spotify:episode:" + "0" * 21 + {"day": "1", "month": "2", "year": "3"}[precision]
 
     class Client:
         def show_episodes(
@@ -89,7 +90,7 @@ def test_release_date_title_precision(
             return {
                 "items": [
                     {
-                        "uri": f"spotify:episode:{precision}",
+                        "uri": episode_uri,
                         "name": edition.title,
                         "release_date": value,
                         "release_date_precision": precision,
@@ -130,7 +131,7 @@ def test_wave_one_release_date_title_sources_match_exact_title_and_day(
             return {
                 "items": [
                     {
-                        "uri": "spotify:episode:exact",
+                        "uri": "spotify:episode:0000000000000000000010",
                         "name": edition.title,
                         "release_date": edition.published_at.astimezone(source.timezone)
                         .date()
@@ -184,8 +185,8 @@ def test_cbc_same_title_same_day_remains_ambiguous(tmp_path: Path) -> None:
             }
             return {
                 "items": [
-                    {**candidate, "uri": "spotify:episode:a"},
-                    {**candidate, "uri": "spotify:episode:b"},
+                    {**candidate, "uri": "spotify:episode:0000000000000000000011"},
+                    {**candidate, "uri": "spotify:episode:0000000000000000000012"},
                 ],
                 "next": None,
             }

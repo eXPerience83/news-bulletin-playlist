@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from news_bulletin_playlist.models import CanonicalEdition, SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.registry import get_title_parser
+from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 
 DEFAULT_PAGE_SIZE = 50
 DEFAULT_MAX_PAGES = 2
@@ -18,7 +19,6 @@ DEFAULT_RETRY_GRACE = timedelta(minutes=15)
 
 _WHITESPACE = re.compile(r"\s+")
 _RELEASE_PRECISIONS = {"year", "month", "day"}
-_EPISODE_URI_PREFIX = "spotify:episode:"
 _REJECTION_REASON_ORDER = (
     "title_parse_failed",
     "semantic_time_mismatch",
@@ -319,8 +319,10 @@ def _candidate_from_item(item: object) -> _SpotifyEpisodeCandidate:
     if not isinstance(uri, str) or not uri.strip():
         raise MatchResponseError("Spotify episode item contained invalid uri")
     uri = uri.strip()
-    if not uri.startswith(_EPISODE_URI_PREFIX) or len(uri) == len(_EPISODE_URI_PREFIX):
+    if not uri.startswith("spotify:episode:"):
         raise MatchResponseError("Spotify episode item contained a non-episode uri")
+    if not is_spotify_episode_uri(uri):
+        raise MatchResponseError("Spotify episode item contained an invalid episode uri")
 
     duration_ms = item.get("duration_ms")
     duration_seconds = None

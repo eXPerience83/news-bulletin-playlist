@@ -36,7 +36,7 @@ from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransp
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
 SER_URL = "https://example.test/ser.xml"
 SER_TITLE = "Las noticias de la SER, 11:00 (30/08/2026)"
-SER_URI = "spotify:episode:ser-1100"
+SER_URI = "spotify:episode:0000000000000000000001"
 
 
 class _Auth:
@@ -245,7 +245,7 @@ def test_first_source_failure_preserves_existing_destination_without_lkg(
     tmp_path: Path,
 ) -> None:
     spotify = _Spotify()
-    existing_uri = "spotify:episode:preexisting"
+    existing_uri = "spotify:episode:0000000000000000000002"
     spotify.items["destination-first"] = [existing_uri]
     runner = EngineRunner(
         _config("first"),
@@ -270,7 +270,7 @@ def test_first_source_failure_preserves_existing_destination_without_lkg(
 def test_first_matching_failure_preserves_existing_destination_without_lkg(
     tmp_path: Path,
 ) -> None:
-    existing_uri = "spotify:episode:preexisting"
+    existing_uri = "spotify:episode:0000000000000000000002"
 
     class MatchingUnavailableSpotify(_Spotify):
         def show_episodes(
@@ -509,7 +509,7 @@ def test_scheduler_stop_event_interrupts_wait_without_explicit_wake() -> None:
 def test_missing_spotify_duration_preserves_existing_destination_without_write(
     tmp_path: Path,
 ) -> None:
-    existing_uri = "spotify:episode:preexisting"
+    existing_uri = "spotify:episode:0000000000000000000002"
 
     class MissingDurationSpotify(_Spotify):
         def show_episodes(

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -46,6 +45,7 @@ from news_bulletin_playlist.spotify.matcher import (
     MatchResponseError,
     match_source_editions,
 )
+from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 from news_bulletin_playlist.spotify_backoff import (
     SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE,
     SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE,
@@ -637,9 +637,7 @@ class EngineRunner:
         ).hexdigest()
         previous = self._previous_desired_fingerprints.get(playlist_id)
         self._previous_desired_fingerprints[playlist_id] = fingerprint
-        valid = sum(
-            re.fullmatch(r"spotify:episode:[A-Za-z0-9]{22}", uri) is not None for uri in uris
-        )
+        valid = sum(is_spotify_episode_uri(uri) for uri in uris)
         return {
             "request_item_count": len(uris),
             "request_payload_bytes": len(encoded),

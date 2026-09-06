@@ -62,7 +62,7 @@ def test_reloading_runner_observes_managed_state_change_before_next_cycle(tmp_pa
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
 SER_TITLE = "Las noticias de la SER, 11:00 (30/08/2026)"
-SER_URI = "spotify:episode:ser-1100"
+SER_URI = "spotify:episode:0000000000000000000001"
 
 
 class _Auth:

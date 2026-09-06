@@ -187,7 +187,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
     def _diagnostic_events(
         self,
         query: str,
-    ) -> tuple[DiagnosticFilters, tuple[DiagnosticEvent, ...], bool]:
+    ) -> tuple[DiagnosticFilters, tuple[DiagnosticEvent, ...], bool | None]:
         store = self.diagnostic_store
         if store is None:
             raise RuntimeError("diagnostic store unavailable")
@@ -202,14 +202,17 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 playlist_id=filters.playlist_id,
                 limit=filters.limit,
             )
+        except PersistenceError as exc:
+            raise RuntimeError("diagnostic store unavailable") from exc
+        try:
             matching_count = store.count_events(
                 since=since,
                 severity=filters.severity,
                 source_id=filters.source_id,
                 playlist_id=filters.playlist_id,
             )
-        except PersistenceError as exc:
-            raise RuntimeError("diagnostic store unavailable") from exc
+        except PersistenceError:
+            return filters, events, None
         return filters, events, matching_count > len(events)
 
     def _invalid_diagnostic_filters(self) -> None:

@@ -22,6 +22,7 @@ from news_bulletin_playlist.registry import get_title_parser
 from news_bulletin_playlist.spotify.matcher import (
     DEFAULT_MAX_PAGES,
     DEFAULT_PAGE_SIZE,
+    MatchResponseError,
     match_source_editions,
 )
 
@@ -93,7 +94,7 @@ def _candidate(
     source: SourceDefinition,
     *,
     title: str | None = None,
-    uri: str = "spotify:episode:match",
+    uri: str = "spotify:episode:4945a70fa7f9c13fe1931a",
     duration_ms: int = 65_000,
 ) -> dict[str, object]:
     assert edition.edition_at is not None
@@ -180,11 +181,11 @@ def test_known_enabled_provider_cases_match_deterministically(
     assert len(result.outcomes) == 1
     outcome = result.outcomes[0]
     assert outcome.status is MatchStatus.MATCHED
-    assert outcome.spotify_episode_uri == "spotify:episode:match"
+    assert outcome.spotify_episode_uri == "spotify:episode:4945a70fa7f9c13fe1931a"
     assert outcome.spotify_duration_seconds == 65
     assert "duration delta=5s" in outcome.diagnostics
     assert store.get_spotify_episode_uri(edition.source_id, edition.source_native_id) == (
-        "spotify:episode:match"
+        "spotify:episode:4945a70fa7f9c13fe1931a"
     )
 
 
@@ -198,7 +199,7 @@ def test_persisted_mapping_is_revalidated_against_complete_catalogue(tmp_path: P
         edition.source_id,
         edition.source_native_id,
         status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:persisted",
+        spotify_episode_uri="spotify:episode:255703f871486907cb7a6c",
         spotify_duration_seconds=60,
         diagnostics="known durable mapping",
         updated_at=now - timedelta(days=1),
@@ -206,7 +207,9 @@ def test_persisted_mapping_is_revalidated_against_complete_catalogue(tmp_path: P
     client = FakeCatalogClient(
         pages=[
             {
-                "items": [_candidate(edition, source, uri="spotify:episode:persisted")],
+                "items": [
+                    _candidate(edition, source, uri="spotify:episode:255703f871486907cb7a6c")
+                ],
                 "next": None,
             }
         ]
@@ -217,7 +220,7 @@ def test_persisted_mapping_is_revalidated_against_complete_catalogue(tmp_path: P
     assert result.catalogue_calls == 1
     assert client.calls == [("show-ser", DEFAULT_PAGE_SIZE, 0)]
     assert result.outcomes[0].from_cache
-    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:persisted"
+    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:255703f871486907cb7a6c"
     assert result.outcomes[0].spotify_duration_seconds == 60
 
 
@@ -232,7 +235,7 @@ def test_removed_persisted_episode_is_invalidated_when_show_catalogue_is_complet
     store.set_match_state(
         *edition.identity,
         status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:removed",
+        spotify_episode_uri="spotify:episode:e1f79758cc42e6fe603794",
         spotify_duration_seconds=60,
         diagnostics="known durable mapping",
         updated_at=now - timedelta(days=1),
@@ -242,7 +245,9 @@ def test_removed_persisted_episode_is_invalidated_when_show_catalogue_is_complet
         FakeCatalogClient(
             pages=[
                 {
-                    "items": [_candidate(edition, source, uri="spotify:episode:other")],
+                    "items": [
+                        _candidate(edition, source, uri="spotify:episode:d9298a10d1b0735837dc4b")
+                    ],
                     "next": None,
                 }
             ]
@@ -273,12 +278,12 @@ def test_absence_from_truncated_catalogue_does_not_invalidate_persisted_mapping(
     store.set_match_state(
         *edition.identity,
         status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:beyond-window",
+        spotify_episode_uri="spotify:episode:749805a97028902eef9ca5",
         spotify_duration_seconds=60,
         diagnostics="known durable mapping",
         updated_at=now - timedelta(days=1),
     )
-    unrelated = _candidate(edition, source, uri="spotify:episode:unrelated")
+    unrelated = _candidate(edition, source, uri="spotify:episode:c2703a7ddf6c74b3950533")
     client = FakeCatalogClient(
         pages=[
             {"items": [unrelated], "next": "page-2"},
@@ -290,7 +295,7 @@ def test_absence_from_truncated_catalogue_does_not_invalidate_persisted_mapping(
 
     assert result.catalogue_calls == DEFAULT_MAX_PAGES
     assert result.outcomes[0].status is MatchStatus.MATCHED
-    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:beyond-window"
+    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:749805a97028902eef9ca5"
 
 
 def test_empty_complete_catalogue_does_not_invalidate_every_persisted_mapping(
@@ -304,7 +309,7 @@ def test_empty_complete_catalogue_does_not_invalidate_every_persisted_mapping(
     store.set_match_state(
         *edition.identity,
         status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:persisted",
+        spotify_episode_uri="spotify:episode:255703f871486907cb7a6c",
         spotify_duration_seconds=60,
         diagnostics="known durable mapping",
         updated_at=now - timedelta(days=1),
@@ -319,7 +324,7 @@ def test_empty_complete_catalogue_does_not_invalidate_every_persisted_mapping(
     )
 
     assert result.outcomes[0].status is MatchStatus.MATCHED
-    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:persisted"
+    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:255703f871486907cb7a6c"
 
 
 def test_empty_page_with_next_does_not_prove_catalogue_is_complete(tmp_path: Path) -> None:
@@ -331,7 +336,7 @@ def test_empty_page_with_next_does_not_prove_catalogue_is_complete(tmp_path: Pat
     store.set_match_state(
         *edition.identity,
         status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:beyond-window",
+        spotify_episode_uri="spotify:episode:749805a97028902eef9ca5",
         spotify_duration_seconds=60,
         diagnostics="known durable mapping",
         updated_at=now - timedelta(days=1),
@@ -339,7 +344,12 @@ def test_empty_page_with_next_does_not_prove_catalogue_is_complete(tmp_path: Pat
     client = FakeCatalogClient(
         pages=[
             {"items": [], "next": "page-2"},
-            {"items": [_candidate(edition, source, uri="spotify:episode:other")], "next": "page-3"},
+            {
+                "items": [
+                    _candidate(edition, source, uri="spotify:episode:d9298a10d1b0735837dc4b")
+                ],
+                "next": "page-3",
+            },
         ]
     )
 
@@ -347,7 +357,7 @@ def test_empty_page_with_next_does_not_prove_catalogue_is_complete(tmp_path: Pat
 
     assert result.catalogue_calls == DEFAULT_MAX_PAGES
     assert result.outcomes[0].status is MatchStatus.MATCHED
-    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:beyond-window"
+    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:749805a97028902eef9ca5"
 
 
 def test_legacy_persisted_mapping_without_duration_is_refreshed(tmp_path: Path) -> None:
@@ -360,7 +370,7 @@ def test_legacy_persisted_mapping_without_duration_is_refreshed(tmp_path: Path) 
         edition.source_id,
         edition.source_native_id,
         status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:legacy",
+        spotify_episode_uri="spotify:episode:c49fea7425fa7f8699897a",
         diagnostics="schema-v2 durable mapping",
         updated_at=now - timedelta(days=1),
     )
@@ -371,7 +381,7 @@ def test_legacy_persisted_mapping_without_duration_is_refreshed(tmp_path: Path) 
                     _candidate(
                         edition,
                         source,
-                        uri="spotify:episode:legacy",
+                        uri="spotify:episode:c49fea7425fa7f8699897a",
                         duration_ms=66_000,
                     )
                 ],
@@ -400,8 +410,8 @@ def test_multiple_viable_candidates_are_persisted_as_ambiguous(tmp_path: Path) -
     store = _store(tmp_path)
     now = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
     store.upsert_editions((edition,), observed_at=now)
-    first = _candidate(edition, source, uri="spotify:episode:first")
-    second = _candidate(edition, source, uri="spotify:episode:second")
+    first = _candidate(edition, source, uri="spotify:episode:a7937b64b8caa58f03721b")
+    second = _candidate(edition, source, uri="spotify:episode:16367aacb67a4a017c8da8")
     client = FakeCatalogClient(pages=[{"items": [first, second], "next": None}])
 
     outcome = match_source_editions(client, store, source, (edition,), now=now).outcomes[0]
@@ -452,7 +462,7 @@ def test_missing_candidate_is_pending_and_retry_grace_avoids_churn(tmp_path: Pat
     )
     assert retried.catalogue_calls == 1
     assert retried.outcomes[0].status is MatchStatus.MATCHED
-    assert retried.outcomes[0].spotify_episode_uri == "spotify:episode:match"
+    assert retried.outcomes[0].spotify_episode_uri == "spotify:episode:4945a70fa7f9c13fe1931a"
 
 
 def test_rne_duplicate_source_identities_remain_independent(tmp_path: Path) -> None:
@@ -464,7 +474,12 @@ def test_rne_duplicate_source_identities_remain_independent(tmp_path: Path) -> N
     now = datetime(2026, 8, 30, 19, 0, tzinfo=UTC)
     store.upsert_editions((first, second), observed_at=now)
     client = FakeCatalogClient(
-        pages=[{"items": [_candidate(first, source, uri="spotify:episode:rne-1800")], "next": None}]
+        pages=[
+            {
+                "items": [_candidate(first, source, uri="spotify:episode:e8b738304e219e654f2233")],
+                "next": None,
+            }
+        ]
     )
 
     result = match_source_editions(client, store, source, (first, second), now=now)
@@ -474,8 +489,12 @@ def test_rne_duplicate_source_identities_remain_independent(tmp_path: Path) -> N
         MatchStatus.MATCHED,
     ]
     assert first.identity != second.identity
-    assert store.get_spotify_episode_uri(*first.identity) == "spotify:episode:rne-1800"
-    assert store.get_spotify_episode_uri(*second.identity) == "spotify:episode:rne-1800"
+    assert (
+        store.get_spotify_episode_uri(*first.identity) == "spotify:episode:e8b738304e219e654f2233"
+    )
+    assert (
+        store.get_spotify_episode_uri(*second.identity) == "spotify:episode:e8b738304e219e654f2233"
+    )
     assert len(store.list_editions(source_id=source.id)) == 2
 
 
@@ -486,7 +505,7 @@ def test_catalogue_pagination_is_bounded_even_when_spotify_reports_more(tmp_path
     now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
     store.upsert_editions((edition,), observed_at=now)
     unrelated = {
-        "uri": "spotify:episode:unrelated",
+        "uri": "spotify:episode:c2703a7ddf6c74b3950533",
         "name": "Las noticias de la SER, 11:00 (30/08/2026)",
         "release_date": "2026-08-30",
         "release_date_precision": "day",
@@ -528,3 +547,26 @@ def test_max_pages_cannot_exceed_two_page_contract(tmp_path: Path) -> None:
         )
 
     assert client.calls == []
+
+
+def test_catalogue_rejects_malformed_episode_uri_before_persisting(tmp_path: Path) -> None:
+    source = _source("ser", "ser", "Europe/Madrid", "show-ser")
+    edition = _edition(source, "ser-native", "Las noticias de la SER, 10:00 (30/08/2026)")
+    store = _store(tmp_path)
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    store.upsert_editions((edition,), observed_at=now)
+    client = FakeCatalogClient(
+        pages=[
+            {
+                "items": [
+                    _candidate(edition, source, uri="spotify:episode:too-short"),
+                ],
+                "next": None,
+            }
+        ]
+    )
+
+    with pytest.raises(MatchResponseError, match="invalid episode uri"):
+        match_source_editions(client, store, source, (edition,), now=now)
+
+    assert store.get_spotify_episode_uri(*edition.identity) is None
