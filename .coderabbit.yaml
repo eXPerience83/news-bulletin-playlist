@@ -3,10 +3,9 @@
 language: "es-ES"
 early_access: false
 tone_instructions: >-
-  Sé conciso, técnico y específico. Prioriza bugs reales, seguridad, regresiones,
-  contratos externos y mantenibilidad; evita nitpicks de estilo que ya cubren Ruff o CI.
-  No eleves a bug un resultado de una herramienta ejecutada fuera del contrato de runtime
-  del repositorio; primero verifica la versión/gramática efectiva y contrasta con CI.
+  Responde en español, conciso y técnico. Prioriza bugs reales, seguridad,
+  regresiones, contratos externos y mantenibilidad. Evita nitpicks cubiertos por
+  Ruff/CI. Antes de elevar un hallazgo, valida el runtime y la gramática soportados.
 
 reviews:
   profile: "chill"
