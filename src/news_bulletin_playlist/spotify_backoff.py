@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -88,6 +89,10 @@ class SpotifyRateLimitState:
             raise ValueError("Spotify retry_after_seconds must not be negative")
         if self.backoff_source not in {"spotify_header", "fallback"}:
             raise ValueError("Spotify backoff_source is invalid")
+        if self.backoff_source == "spotify_header" and self.retry_after_seconds is None:
+            raise ValueError("Spotify header backoff requires retry_after_seconds")
+        if self.backoff_source == "fallback" and self.retry_after_seconds is not None:
+            raise ValueError("Spotify fallback backoff must not contain retry_after_seconds")
         object.__setattr__(self, "observed_at", observed)
         object.__setattr__(self, "retry_not_before", retry_not_before)
 
@@ -130,21 +135,33 @@ class SpotifyRateLimitJournal:
     def __init__(self, store: SQLiteStore) -> None:
         self.path = store.path
         self.diagnostics = self._build_diagnostics()
+        self._volatile_state: SpotifyRateLimitState | None = None
+        self._volatile_durable = False
+        self._volatile_lock = threading.Lock()
 
     def get(self) -> SpotifyRateLimitState | None:
         with self._connection("read Spotify rate-limit backoff") as connection:
             self._ensure_table(connection)
             row = self._select_row(connection)
-        return None if row is None else _state_from_row(row)
+            return None if row is None else _state_from_row(row)
 
     def active(self, *, now: datetime) -> SpotifyRateLimitState | None:
         observed = _as_utc(now)
+        volatile, durable = self._volatile_snapshot()
+        if volatile is not None and observed < volatile.retry_not_before:
+            if durable:
+                return volatile
+            persisted = self._persist_candidate(volatile)
+            return self._remember(persisted, durable=True)
+        if volatile is not None:
+            self._forget_if_expired(volatile, observed)
+
         while True:
             state = self.get()
             if state is None:
                 return None
             if observed < state.retry_not_before:
-                return state
+                return self._remember(state, durable=True)
 
             with self._connection("expire Spotify rate-limit backoff") as connection:
                 self._ensure_table(connection)
@@ -179,7 +196,19 @@ class SpotifyRateLimitJournal:
             retry_after_seconds=effective_retry_after,
             backoff_source=source,
         )
+        effective = self._remember(candidate, durable=False)
+        persisted = self._persist_candidate(effective)
+        return self._remember(persisted, durable=True)
 
+    def clear(self) -> None:
+        with self._connection("clear Spotify rate-limit backoff") as connection:
+            self._ensure_table(connection)
+            connection.execute("DELETE FROM spotify_rate_limit_backoff WHERE singleton = 1")
+        with self._volatile_lock:
+            self._volatile_state = None
+            self._volatile_durable = False
+
+    def _persist_candidate(self, candidate: SpotifyRateLimitState) -> SpotifyRateLimitState:
         with self._connection("persist Spotify rate-limit backoff") as connection:
             self._ensure_table(connection)
             connection.execute(
@@ -192,14 +221,31 @@ class SpotifyRateLimitJournal:
                 ),
             )
             row = self._select_row(connection)
-        if row is None:
-            raise PersistenceError("Spotify rate-limit backoff disappeared during activation")
-        return _state_from_row(row)
+            if row is None:
+                raise PersistenceError("Spotify rate-limit backoff disappeared during activation")
+            return _state_from_row(row)
 
-    def clear(self) -> None:
-        with self._connection("clear Spotify rate-limit backoff") as connection:
-            self._ensure_table(connection)
-            connection.execute("DELETE FROM spotify_rate_limit_backoff WHERE singleton = 1")
+    def _volatile_snapshot(self) -> tuple[SpotifyRateLimitState | None, bool]:
+        with self._volatile_lock:
+            return self._volatile_state, self._volatile_durable
+
+    def _remember(self, candidate: SpotifyRateLimitState, *, durable: bool) -> SpotifyRateLimitState:
+        with self._volatile_lock:
+            current = self._volatile_state
+            if current is None or candidate.retry_not_before > current.retry_not_before:
+                self._volatile_state = candidate
+                self._volatile_durable = durable
+            elif candidate.retry_not_before == current.retry_not_before and durable:
+                self._volatile_durable = True
+            assert self._volatile_state is not None
+            return self._volatile_state
+
+    def _forget_if_expired(self, observed_state: SpotifyRateLimitState, now: datetime) -> None:
+        with self._volatile_lock:
+            current = self._volatile_state
+            if current == observed_state and now >= current.retry_not_before:
+                self._volatile_state = None
+                self._volatile_durable = False
 
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
@@ -350,7 +396,12 @@ def is_spotify_rate_limit_suppressed(error: BaseException) -> bool:
         if isinstance(current, SpotifyRateLimitSuppressed):
             return True
         seen.add(id(current))
-        current = current.__cause__ if current.__cause__ is not None else current.__context__
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            current = None
+        else:
+            current = current.__context__
     return False
 
 
