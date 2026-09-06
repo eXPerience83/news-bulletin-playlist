@@ -249,7 +249,7 @@ def test_diagnostic_export_truncation_uses_total_matching_count(tmp_path: Path) 
     assert exact_truncated is False
 
 
-def test_diagnostic_count_failure_keeps_page_and_zip_events(
+def test_diagnostic_export_does_not_use_a_separate_count_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = DiagnosticEventStore(tmp_path / "state.sqlite3")
@@ -263,7 +263,7 @@ def test_diagnostic_count_failure_keeps_page_and_zip_events(
     handler = type("DiagnosticHandler", (), {"diagnostic_store": store})()
 
     def fail_count(**_kwargs: object) -> int:
-        raise PersistenceError("count unavailable")
+        raise AssertionError("the export must not issue a separate count query")
 
     monkeypatch.setattr(store, "count_events", fail_count)
     filters, events, truncated = DiagnosticOperationalHealthHandler._diagnostic_events(
@@ -282,13 +282,28 @@ def test_diagnostic_count_failure_keeps_page_and_zip_events(
 
     assert len(events) == 1
     assert events[0].event_id == event
-    assert truncated is None
+    assert truncated is False
     assert b"spotify_rate_limit_backoff" in page
     with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
         runtime = json.loads(archive.read("runtime.json"))
         combined = b"\n".join(archive.read(name) for name in archive.namelist())
     assert b"spotify_rate_limit_backoff" in combined
-    assert runtime["export_result_truncated"] is None
+    assert runtime["export_result_truncated"] is False
+
+
+def test_diagnostic_snapshot_failure_remains_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticEventStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    handler = type("DiagnosticHandler", (), {"diagnostic_store": store})()
+
+    def fail_snapshot(**_kwargs: object) -> tuple[tuple[DiagnosticEvent, ...], bool]:
+        raise PersistenceError("snapshot unavailable")
+
+    monkeypatch.setattr(store, "list_events_with_truncation", fail_snapshot)
+    with pytest.raises(RuntimeError, match="diagnostic store unavailable"):
+        DiagnosticOperationalHealthHandler._diagnostic_events(handler, "hours=all&limit=2")
 
 
 def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(

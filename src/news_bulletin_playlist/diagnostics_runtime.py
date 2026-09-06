@@ -195,7 +195,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         observed_at = datetime.now(UTC)
         since = filters.since(now=observed_at)
         try:
-            events = store.list_events(
+            events, result_truncated = store.list_events_with_truncation(
                 since=since,
                 severity=filters.severity,
                 source_id=filters.source_id,
@@ -204,16 +204,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             )
         except PersistenceError as exc:
             raise RuntimeError("diagnostic store unavailable") from exc
-        try:
-            matching_count = store.count_events(
-                since=since,
-                severity=filters.severity,
-                source_id=filters.source_id,
-                playlist_id=filters.playlist_id,
-            )
-        except PersistenceError:
-            return filters, events, None
-        return filters, events, matching_count > len(events)
+        return filters, events, result_truncated
 
     def _invalid_diagnostic_filters(self) -> None:
         self._reply(

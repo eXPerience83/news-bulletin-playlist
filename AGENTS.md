@@ -65,6 +65,7 @@ Never log, commit, persist in diagnostics, or expose in user-visible errors:
 When temporary raw provider instrumentation is needed for a LAB investigation, keep it outside committed/product diagnostics, sanitize the final report, and remove temporary dumps/debugging before finishing.
 
 Diagnostics should prefer bounded, allowlisted metadata that is sufficient to reconstruct an incident without exposing raw URI lists or credentials.
+For bounded diagnostics exports, derive the exported rows and `truncated` from one SQLite read snapshot; do not combine separately committed list and count queries.
 
 ## Architecture invariants
 

@@ -354,20 +354,12 @@ class DiagnosticEventStore:
             raise ValueError(
                 f"diagnostic query limit must be between 1 and {MAX_DIAGNOSTIC_QUERY_LIMIT}"
             )
-        clauses: list[str] = []
-        values: list[object] = []
-        if since is not None:
-            clauses.append("occurred_at >= ?")
-            values.append(_format_timestamp(since))
-        if severity is not None:
-            clauses.append("severity = ?")
-            values.append(severity.value)
-        if source_id is not None:
-            clauses.append("source_id = ?")
-            values.append(_identifier(source_id, "source_id", max_length=128))
-        if playlist_id is not None:
-            clauses.append("playlist_id = ?")
-            values.append(_identifier(playlist_id, "playlist_id", max_length=128))
+        clauses, values = _event_filter_query(
+            since=since,
+            severity=severity,
+            source_id=source_id,
+            playlist_id=playlist_id,
+        )
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         values.append(limit)
@@ -381,6 +373,38 @@ class DiagnosticEventStore:
             rows = connection.execute(query, values).fetchall()
         return tuple(_event_from_row(row) for row in rows)
 
+    def list_events_with_truncation(
+        self,
+        *,
+        since: datetime | None = None,
+        severity: DiagnosticSeverity | None = None,
+        source_id: str | None = None,
+        playlist_id: str | None = None,
+        limit: int = DEFAULT_DIAGNOSTIC_QUERY_LIMIT,
+    ) -> tuple[tuple[DiagnosticEvent, ...], bool]:
+        """Return one bounded event snapshot and whether it contained an additional row."""
+        if not 1 <= limit <= MAX_DIAGNOSTIC_QUERY_LIMIT:
+            raise ValueError(
+                f"diagnostic query limit must be between 1 and {MAX_DIAGNOSTIC_QUERY_LIMIT}"
+            )
+        clauses, values = _event_filter_query(
+            since=since,
+            severity=severity,
+            source_id=source_id,
+            playlist_id=playlist_id,
+        )
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = (
+            "SELECT event_id, occurred_at, severity, component, event_name, "
+            "cycle_id, source_id, playlist_id, details_json "
+            f"FROM diagnostic_events{where} "
+            "ORDER BY occurred_at DESC, event_id DESC LIMIT ?"
+        )
+        values.append(limit + 1)
+        with self._connection("list diagnostic events with truncation") as connection:
+            rows = connection.execute(query, values).fetchall()
+        return tuple(_event_from_row(row) for row in rows[:limit]), len(rows) > limit
+
     def count_events(
         self,
         *,
@@ -390,20 +414,12 @@ class DiagnosticEventStore:
         playlist_id: str | None = None,
     ) -> int:
         """Count events matching the same sanitized filters used by list_events."""
-        clauses: list[str] = []
-        values: list[object] = []
-        if since is not None:
-            clauses.append("occurred_at >= ?")
-            values.append(_format_timestamp(since))
-        if severity is not None:
-            clauses.append("severity = ?")
-            values.append(severity.value)
-        if source_id is not None:
-            clauses.append("source_id = ?")
-            values.append(_identifier(source_id, "source_id", max_length=128))
-        if playlist_id is not None:
-            clauses.append("playlist_id = ?")
-            values.append(_identifier(playlist_id, "playlist_id", max_length=128))
+        clauses, values = _event_filter_query(
+            since=since,
+            severity=severity,
+            source_id=source_id,
+            playlist_id=playlist_id,
+        )
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connection("count diagnostic events") as connection:
             row = connection.execute(
@@ -459,6 +475,30 @@ class DiagnosticEventStore:
 
     def _connection(self, operation: str):  # type: ignore[no-untyped-def]
         return _DiagnosticConnection(self.path, operation)
+
+
+def _event_filter_query(
+    *,
+    since: datetime | None,
+    severity: DiagnosticSeverity | None,
+    source_id: str | None,
+    playlist_id: str | None,
+) -> tuple[list[str], list[object]]:
+    clauses: list[str] = []
+    values: list[object] = []
+    if since is not None:
+        clauses.append("occurred_at >= ?")
+        values.append(_format_timestamp(since))
+    if severity is not None:
+        clauses.append("severity = ?")
+        values.append(severity.value)
+    if source_id is not None:
+        clauses.append("source_id = ?")
+        values.append(_identifier(source_id, "source_id", max_length=128))
+    if playlist_id is not None:
+        clauses.append("playlist_id = ?")
+        values.append(_identifier(playlist_id, "playlist_id", max_length=128))
+    return clauses, values
 
 
 class _DiagnosticConnection:
