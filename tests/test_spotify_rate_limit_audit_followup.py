@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyClient
 from news_bulletin_playlist.spotify_backoff import (
@@ -192,3 +193,58 @@ def test_malformed_numeric_retry_after_uses_conservative_fallback(
     assert state.retry_not_before == NOW + timedelta(
         seconds=DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS
     )
+
+
+def test_oversized_decimal_retry_after_uses_fallback_and_latches_cycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    access_token = "oversized-header-token-sentinel"
+    provider_body = b"oversized-header-provider-body-sentinel"
+    calls = 0
+
+    def fake_urlopen(request: object, *, timeout: float) -> object:
+        nonlocal calls
+        assert isinstance(request, urllib.request.Request)
+        assert timeout == 30.0
+        calls += 1
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "rate limited",
+            {"Retry-After": "9" * 10_000},
+            io.BytesIO(provider_body),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = SpotifyRateLimitGuardClient(
+        SpotifyClient(access_token),
+        SpotifyRateLimitJournal(store),
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(SpotifyApiError) as error:
+        client.show_episodes("show-id")
+
+    assert error.value.status == 429
+    assert error.value.retry_after is None
+    assert access_token not in str(error.value)
+    assert provider_body.decode() not in str(error.value)
+
+    state = SpotifyRateLimitJournal(store).get()
+    assert state is not None
+    assert state.backoff_source == "fallback"
+    assert state.retry_after_seconds is None
+    assert state.retry_not_before == NOW + timedelta(
+        seconds=DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS
+    )
+
+    with pytest.raises(SpotifyRateLimitSuppressed):
+        client.show_episodes("must-not-reach-provider")
+    assert calls == 1
+
+    events = DiagnosticEventStore(store.path).list_events(limit=20)
+    rendered_events = repr(events)
+    assert access_token not in rendered_events
+    assert provider_body.decode() not in rendered_events
