@@ -28,7 +28,7 @@ from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 NOW = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
 RSS_URL = "https://example.test/news.xml"
 TITLE = "Daily bulletin"
-URI = "spotify:episode:daily"
+URI = "spotify:episode:0000000000000000000003"
 
 
 class _Auth:

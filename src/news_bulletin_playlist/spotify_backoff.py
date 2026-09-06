@@ -181,6 +181,7 @@ class SpotifyRateLimitJournal:
                 )
                 deleted = max(cursor.rowcount, 0)
             if deleted:
+                _emit_backoff_expired(self.diagnostics, state, occurred_at=observed)
                 return None
             # A concurrent activation extended the singleton after our read. Re-read it
             # instead of clearing or ignoring the newer, later deadline.
@@ -447,6 +448,32 @@ def _emit_backoff(
         severity=DiagnosticSeverity.WARNING,
         component="spotify",
         event_name="spotify_rate_limit_backoff",
+        details=details,
+    )
+
+
+def _emit_backoff_expired(
+    diagnostics: OperationalDiagnostics | None,
+    state: SpotifyRateLimitState,
+    *,
+    occurred_at: datetime,
+) -> None:
+    if diagnostics is None:
+        return
+    details: dict[str, str | int] = {
+        "http_status": 429,
+        "retry_not_before": _format_display_timestamp(state.retry_not_before),
+        "backoff_source": state.backoff_source,
+        "backoff_state": "expired",
+        "write_decision": "retry",
+    }
+    if state.retry_after_seconds is not None:
+        details["retry_after_seconds"] = state.retry_after_seconds
+    diagnostics.emit(
+        occurred_at=occurred_at,
+        severity=DiagnosticSeverity.INFO,
+        component="spotify",
+        event_name="spotify_rate_limit_backoff_expired",
         details=details,
     )
 

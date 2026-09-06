@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from news_bulletin_playlist.models import CanonicalEdition, SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.registry import get_title_parser
+from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 
 DEFAULT_PAGE_SIZE = 50
 DEFAULT_MAX_PAGES = 2
@@ -18,7 +19,6 @@ DEFAULT_RETRY_GRACE = timedelta(minutes=15)
 
 _WHITESPACE = re.compile(r"\s+")
 _RELEASE_PRECISIONS = {"year", "month", "day"}
-_EPISODE_URI_PREFIX = "spotify:episode:"
 _REJECTION_REASON_ORDER = (
     "title_parse_failed",
     "semantic_time_mismatch",
@@ -117,7 +117,12 @@ def match_source_editions(
         else:
             outcomes[index] = cached
 
-    if not unresolved:
+    cached_matched = [
+        (index, outcome)
+        for index, outcome in enumerate(outcomes)
+        if outcome is not None and outcome.status is MatchStatus.MATCHED
+    ]
+    if not unresolved and not cached_matched:
         return SourceMatchResult(
             source_id=source.id,
             outcomes=tuple(_require_outcome(outcome) for outcome in outcomes),
@@ -125,12 +130,36 @@ def match_source_editions(
         )
 
     show_id = _spotify_show_id(source)
-    candidates, catalogue_calls = _fetch_candidates(
+    candidates, catalogue_calls, catalogue_complete = _fetch_candidates(
         client,
         show_id,
         page_size=page_size,
         max_pages=max_pages,
     )
+    candidate_uris = {candidate.uri for candidate in candidates}
+
+    if catalogue_complete and candidates:
+        for index, cached in cached_matched:
+            uri = cached.spotify_episode_uri
+            if uri is None or uri in candidate_uris:
+                continue
+            diagnostics = "persisted Spotify episode is absent from the complete show catalogue"
+            store.set_match_state(
+                cached.edition.source_id,
+                cached.edition.source_native_id,
+                status=MatchStatus.PENDING,
+                spotify_episode_uri=None,
+                spotify_duration_seconds=None,
+                diagnostics=diagnostics,
+                updated_at=observed_at,
+            )
+            outcomes[index] = MatchOutcome(
+                edition=cached.edition,
+                status=MatchStatus.PENDING,
+                spotify_episode_uri=None,
+                spotify_duration_seconds=None,
+                diagnostics=diagnostics,
+            )
 
     for index, edition in unresolved:
         evaluations = tuple(
@@ -172,6 +201,18 @@ def _cached_outcome(
         return None
 
     if state.status is MatchStatus.MATCHED and state.spotify_episode_uri:
+        if not is_spotify_episode_uri(state.spotify_episode_uri):
+            diagnostics = "persisted Spotify mapping contained an invalid episode URI"
+            store.set_match_state(
+                edition.source_id,
+                edition.source_native_id,
+                status=MatchStatus.PENDING,
+                spotify_episode_uri=None,
+                spotify_duration_seconds=None,
+                diagnostics=diagnostics,
+                updated_at=now,
+            )
+            return None
         # Schema-v2 matches predate durable destination duration. Refresh those
         # mappings once instead of treating unknown duration as eligibility proof.
         if state.spotify_duration_seconds is None:
@@ -230,9 +271,10 @@ def _fetch_candidates(
     *,
     page_size: int,
     max_pages: int,
-) -> tuple[tuple[_SpotifyEpisodeCandidate, ...], int]:
+) -> tuple[tuple[_SpotifyEpisodeCandidate, ...], int, bool]:
     by_uri: dict[str, _SpotifyEpisodeCandidate] = {}
     calls = 0
+    complete = False
     for page_number in range(max_pages):
         page = client.show_episodes(
             show_id,
@@ -261,9 +303,10 @@ def _fetch_candidates(
                     "Spotify catalogue repeated an episode URI with conflicting metadata"
                 )
 
-        if not items or next_page is None:
+        if next_page is None:
+            complete = True
             break
-    return tuple(by_uri.values()), calls
+    return tuple(by_uri.values()), calls, complete
 
 
 def _candidate_from_item(item: object) -> _SpotifyEpisodeCandidate:
@@ -288,8 +331,10 @@ def _candidate_from_item(item: object) -> _SpotifyEpisodeCandidate:
     if not isinstance(uri, str) or not uri.strip():
         raise MatchResponseError("Spotify episode item contained invalid uri")
     uri = uri.strip()
-    if not uri.startswith(_EPISODE_URI_PREFIX) or len(uri) == len(_EPISODE_URI_PREFIX):
+    if not uri.startswith("spotify:episode:"):
         raise MatchResponseError("Spotify episode item contained a non-episode uri")
+    if not is_spotify_episode_uri(uri):
+        raise MatchResponseError("Spotify episode item contained an invalid episode uri")
 
     duration_ms = item.get("duration_ms")
     duration_seconds = None

@@ -129,7 +129,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if self._require_admin() is None:
             return
         try:
-            filters, events = self._diagnostic_events(query)
+            filters, events, _ = self._diagnostic_events(query)
         except ValueError:
             self._invalid_diagnostic_filters()
             return
@@ -154,7 +154,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._diagnostic_history_unavailable()
             return
         try:
-            filters, events = self._diagnostic_events(query)
+            filters, events, result_truncated = self._diagnostic_events(query)
         except ValueError:
             self._invalid_diagnostic_filters()
             return
@@ -172,6 +172,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             retention_days=store.retention_days,
             max_events=store.max_events,
             build_revision=self.build_revision,
+            filters=filters,
+            result_truncated=result_truncated,
         )
         self._reply(
             HTTPStatus.OK,
@@ -185,14 +187,16 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
     def _diagnostic_events(
         self,
         query: str,
-    ) -> tuple[DiagnosticFilters, tuple[DiagnosticEvent, ...]]:
+    ) -> tuple[DiagnosticFilters, tuple[DiagnosticEvent, ...], bool | None]:
         store = self.diagnostic_store
         if store is None:
             raise RuntimeError("diagnostic store unavailable")
         filters = parse_diagnostic_filters(query)
+        observed_at = datetime.now(UTC)
+        since = filters.since(now=observed_at)
         try:
-            events = store.list_events(
-                since=filters.since(now=datetime.now(UTC)),
+            events, result_truncated = store.list_events_with_truncation(
+                since=since,
                 severity=filters.severity,
                 source_id=filters.source_id,
                 playlist_id=filters.playlist_id,
@@ -200,7 +204,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             )
         except PersistenceError as exc:
             raise RuntimeError("diagnostic store unavailable") from exc
-        return filters, events
+        return filters, events, result_truncated
 
     def _invalid_diagnostic_filters(self) -> None:
         self._reply(

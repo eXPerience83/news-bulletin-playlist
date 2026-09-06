@@ -70,7 +70,7 @@ def test_un_news_es_uses_existing_release_date_title_matching(tmp_path: Path) ->
             return {
                 "items": [
                     {
-                        "uri": "spotify:episode:onu",
+                        "uri": "spotify:episode:0000000000000000000004",
                         "name": edition.title,
                         "release_date": "2026-05-28",
                         "release_date_precision": "day",

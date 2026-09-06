@@ -73,6 +73,7 @@ class _PlaylistItemsReconciliationResult:
     wrote: bool
     degraded_verification: bool = False
     warning: str | None = None
+    write_outcome: str = "verified"
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,12 +280,43 @@ def _reconcile_playlist_items(
         try:
             write_response = client.replace_playlist_items(playlist_id, list(desired))
         except SpotifyApiError as exc:
+            if exc.status >= 500 and _ambiguous_write_applied(client, playlist_id, desired):
+                _attest_ambiguous_write(
+                    client,
+                    playlist_id,
+                    desired=desired,
+                    desired_fingerprint=desired_fingerprint,
+                    store=store,
+                    logical_playlist_id=logical_playlist_id,
+                    updated_at=attestation_updated_at,
+                    pending_journal=pending_journal,
+                )
+                return _PlaylistItemsReconciliationResult(
+                    wrote=True,
+                    write_outcome="verified",
+                )
             raise SpotifyReconciliationError(
                 f"Spotify playlist write replace_items API failure (http_status={exc.status})"
+                + (" (write_outcome=unknown)" if exc.status >= 500 else "")
             ) from exc
         except SpotifyTransportError as exc:
+            if _ambiguous_write_applied(client, playlist_id, desired):
+                _attest_ambiguous_write(
+                    client,
+                    playlist_id,
+                    desired=desired,
+                    desired_fingerprint=desired_fingerprint,
+                    store=store,
+                    logical_playlist_id=logical_playlist_id,
+                    updated_at=attestation_updated_at,
+                    pending_journal=pending_journal,
+                )
+                return _PlaylistItemsReconciliationResult(
+                    wrote=True,
+                    write_outcome="verified",
+                )
             raise SpotifyReconciliationError(
-                "Spotify playlist write replace_items transport failure"
+                "Spotify playlist write replace_items transport failure (write_outcome=unknown)"
             ) from exc
 
     allow_degraded_readback = store is not None and logical_playlist_id is not None
@@ -439,6 +471,63 @@ def _reconcile_playlist_items(
         degraded_verification=True,
         warning=_degraded_warning(readback.unavailable_indices),
     )
+
+
+def _ambiguous_write_applied(
+    client: SpotifyPlaylistClient,
+    playlist_id: str,
+    desired: Sequence[str],
+) -> bool:
+    """Resolve a mutating transport/5xx outcome only through a complete exact readback."""
+    try:
+        readback = _read_spotify_playlist(
+            client,
+            playlist_id,
+            allow_unavailable=False,
+            phase="readback",
+        )
+    except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
+        return False
+    return readback.slots == tuple(desired)
+
+
+def _attest_ambiguous_write(
+    client: SpotifyPlaylistClient,
+    playlist_id: str,
+    *,
+    desired: Sequence[str],
+    desired_fingerprint: str,
+    store: SQLiteStore | None,
+    logical_playlist_id: PlaylistId | None,
+    updated_at: datetime | None,
+    pending_journal: PendingSnapshotJournal | None,
+) -> None:
+    if store is None or logical_playlist_id is None or updated_at is None:
+        return
+    try:
+        snapshot_before = _read_current_snapshot(client, playlist_id, phase="readback")
+        readback = _read_spotify_playlist(
+            client,
+            playlist_id,
+            allow_unavailable=False,
+            phase="readback",
+        )
+        snapshot_after = _read_current_snapshot(client, playlist_id, phase="readback")
+    except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
+        # The preceding complete exact readback already proves the ambiguous mutation applied.
+        # Attestation is optional and must never convert that verified result into a retry.
+        return
+    if readback.slots != tuple(desired) or snapshot_before != snapshot_after:
+        return
+    store.set_playlist_attestation(
+        logical_playlist_id,
+        destination_id=playlist_id,
+        snapshot_id=snapshot_after,
+        desired_fingerprint=desired_fingerprint,
+        updated_at=updated_at,
+    )
+    if pending_journal is not None:
+        pending_journal.clear(logical_playlist_id)
 
 
 def _resolve_pending_confirmation(

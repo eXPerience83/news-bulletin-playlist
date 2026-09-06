@@ -90,7 +90,7 @@ def test_client_write_and_readback_requests(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     client = SpotifyClient("token")
-    client.replace_playlist_items("playlist", ["spotify:episode:one"])
+    client.replace_playlist_items("playlist", ["spotify:episode:0123456789ABCDEFGHIJKL"])
     client.playlist_items("playlist", limit=50, offset=10)
     assert requests[0].method == "PUT"
     assert requests[1].method == "GET"
@@ -100,6 +100,18 @@ def test_client_write_and_readback_requests(monkeypatch: pytest.MonkeyPatch) -> 
         "offset": ["10"],
         "additional_types": ["episode"],
     }
+
+
+def test_client_rejects_malformed_episode_uri_before_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_urlopen(*args: object, **kwargs: object) -> _Response:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr("urllib.request.urlopen", unexpected_urlopen)
+
+    with pytest.raises(ValueError, match="1 invalid Spotify episode URI"):
+        SpotifyClient("token").replace_playlist_items("playlist", ["spotify:episode:not-a-real-id"])
 
 
 def test_client_creates_public_playlist_and_reads_adoption_identity(

@@ -36,13 +36,14 @@ def test_classifies_exact_spotify_operation_phase_without_provider_text() -> Non
     }
 
     write = classify_reconciliation_failure(
-        "Spotify playlist write replace_items transport failure"
+        "Spotify playlist write replace_items transport failure (write_outcome=unknown)"
     )
     assert write.details() == {
         "failure_class": "transport_error",
         "phase": "write",
         "operation": "replace_items",
         "verification_outcome": "failed",
+        "write_outcome": "unknown",
     }
 
     snapshot = classify_reconciliation_failure(

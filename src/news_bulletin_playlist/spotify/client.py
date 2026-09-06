@@ -8,6 +8,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, cast
 
+from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
+
 _API_BASE = "https://api.spotify.com/v1"
 _SPOTIFY_COVER_MAX_PAYLOAD_BYTES = 256 * 1024
 
@@ -100,6 +102,11 @@ class SpotifyClient:
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
         if len(uris) > 100:
             raise ValueError("playlist replacement is limited to 100 items")
+        invalid_count = sum(not is_spotify_episode_uri(uri) for uri in uris)
+        if invalid_count:
+            raise ValueError(
+                f"playlist replacement contains {invalid_count} invalid Spotify episode URI(s)"
+            )
         return self._request("PUT", f"/playlists/{playlist_id}/items", json_body={"uris": uris})
 
     def playlist_items(

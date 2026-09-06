@@ -199,6 +199,99 @@ def test_diagnostic_filters_are_bounded_and_newest_first(tmp_path: Path) -> None
         diagnostics.list_events(limit=501)
 
 
+def test_bounded_event_snapshot_reports_truncation_from_the_same_query(tmp_path: Path) -> None:
+    _, diagnostics = _stores(tmp_path)
+    for index in range(3):
+        diagnostics.record(
+            occurred_at=NOW + timedelta(seconds=index),
+            severity=DiagnosticSeverity.INFO,
+            component="engine",
+            event_name=f"cycle_{index}",
+        )
+
+    exact_events, exact_truncated = diagnostics.list_events_with_truncation(limit=3)
+    bounded_events, bounded_truncated = diagnostics.list_events_with_truncation(limit=2)
+
+    assert [event.event_name for event in exact_events] == ["cycle_2", "cycle_1", "cycle_0"]
+    assert exact_truncated is False
+    assert [event.event_name for event in bounded_events] == ["cycle_2", "cycle_1"]
+    assert bounded_truncated is True
+
+
+def test_bounded_event_snapshot_applies_filters_to_events_and_truncation(tmp_path: Path) -> None:
+    _, diagnostics = _stores(tmp_path)
+    for index in range(3):
+        diagnostics.record(
+            occurred_at=NOW + timedelta(seconds=index),
+            severity=DiagnosticSeverity.WARNING,
+            component="engine",
+            event_name=f"rne_{index}",
+            source_id="rne",
+        )
+    diagnostics.record(
+        occurred_at=NOW + timedelta(seconds=4),
+        severity=DiagnosticSeverity.WARNING,
+        component="engine",
+        event_name="other_source",
+        source_id="ser",
+    )
+
+    events, truncated = diagnostics.list_events_with_truncation(
+        source_id="rne", severity=DiagnosticSeverity.WARNING, limit=2
+    )
+
+    assert [event.event_name for event in events] == ["rne_2", "rne_1"]
+    assert truncated is True
+
+
+def test_bounded_event_snapshot_is_not_changed_by_a_later_insert_or_prune(tmp_path: Path) -> None:
+    _, diagnostics = _stores(tmp_path)
+    event_ids = [
+        diagnostics.record(
+            occurred_at=NOW + timedelta(seconds=index),
+            severity=DiagnosticSeverity.INFO,
+            component="engine",
+            event_name=f"cycle_{index}",
+        )
+        for index in range(3)
+    ]
+
+    events, truncated = diagnostics.list_events_with_truncation(limit=2)
+    diagnostics.record(
+        occurred_at=NOW + timedelta(seconds=4),
+        severity=DiagnosticSeverity.INFO,
+        component="engine",
+        event_name="later_insert",
+    )
+    with sqlite3.connect(diagnostics.path) as connection:
+        connection.execute("DELETE FROM diagnostic_events WHERE event_id = ?", (event_ids[0],))
+
+    assert [event.event_name for event in events] == ["cycle_2", "cycle_1"]
+    assert truncated is True
+
+
+def test_complete_bounded_snapshot_is_not_truncated_by_a_later_insert(tmp_path: Path) -> None:
+    _, diagnostics = _stores(tmp_path)
+    for index in range(2):
+        diagnostics.record(
+            occurred_at=NOW + timedelta(seconds=index),
+            severity=DiagnosticSeverity.INFO,
+            component="engine",
+            event_name=f"cycle_{index}",
+        )
+
+    events, truncated = diagnostics.list_events_with_truncation(limit=2)
+    diagnostics.record(
+        occurred_at=NOW + timedelta(seconds=3),
+        severity=DiagnosticSeverity.INFO,
+        component="engine",
+        event_name="later_insert",
+    )
+
+    assert [event.event_name for event in events] == ["cycle_1", "cycle_0"]
+    assert truncated is False
+
+
 def test_diagnostics_initialize_is_idempotent(tmp_path: Path) -> None:
     _, diagnostics = _stores(tmp_path)
     diagnostics.initialize()

@@ -29,14 +29,14 @@ from news_bulletin_playlist.models import (
     SourceId,
     SourceSelection,
 )
-from news_bulletin_playlist.persistence import SQLiteStore
+from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.spotify.auth import SpotifyReauthorizationRequired
-from news_bulletin_playlist.spotify.client import SpotifyTransportError
+from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
 SER_URL = "https://example.test/ser.xml"
 SER_TITLE = "Las noticias de la SER, 11:00 (30/08/2026)"
-SER_URI = "spotify:episode:ser-1100"
+SER_URI = "spotify:episode:0000000000000000000001"
 
 
 class _Auth:
@@ -200,7 +200,7 @@ def test_cycle_fetches_shared_source_once_and_reconciles_two_playlists(tmp_path:
     assert first.ok
     assert second.ok
     assert calls == [SER_URL, SER_URL]
-    assert spotify.show_calls == 1
+    assert spotify.show_calls == 2
     assert spotify.replacements == [
         ("destination-first", (SER_URI,)),
         ("destination-second", (SER_URI,)),
@@ -245,7 +245,7 @@ def test_first_source_failure_preserves_existing_destination_without_lkg(
     tmp_path: Path,
 ) -> None:
     spotify = _Spotify()
-    existing_uri = "spotify:episode:preexisting"
+    existing_uri = "spotify:episode:0000000000000000000002"
     spotify.items["destination-first"] = [existing_uri]
     runner = EngineRunner(
         _config("first"),
@@ -270,7 +270,7 @@ def test_first_source_failure_preserves_existing_destination_without_lkg(
 def test_first_matching_failure_preserves_existing_destination_without_lkg(
     tmp_path: Path,
 ) -> None:
-    existing_uri = "spotify:episode:preexisting"
+    existing_uri = "spotify:episode:0000000000000000000002"
 
     class MatchingUnavailableSpotify(_Spotify):
         def show_episodes(
@@ -324,6 +324,81 @@ def test_playlist_failure_does_not_block_other_destination(tmp_path: Path) -> No
     assert not by_id[PlaylistId("first")].ok
     assert by_id[PlaylistId("second")].ok
     assert spotify.items["destination-second"] == [SER_URI]
+
+
+def test_polish_replace_502_does_not_block_rss_or_healthy_destination(tmp_path: Path) -> None:
+    class Replace502Spotify(_Spotify):
+        def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+            if playlist_id == "destination-first":
+                raise SpotifyApiError(502, "provider raw body must stay private")
+            return super().replace_playlist_items(playlist_id, uris)
+
+    spotify = Replace502Spotify()
+    fetch_calls: list[str] = []
+
+    def fetcher(url: str) -> bytes:
+        fetch_calls.append(url)
+        return _rss()
+
+    result = EngineRunner(
+        _config("first", "second"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=fetcher,
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    ).run_cycle()
+
+    by_id = {outcome.playlist_id: outcome for outcome in result.playlists}
+    assert fetch_calls == [SER_URL]
+    assert not by_id[PlaylistId("first")].ok
+    assert by_id[PlaylistId("first")].write_outcome == "unknown"
+    assert by_id[PlaylistId("second")].ok
+    assert spotify.items["destination-second"] == [SER_URI]
+
+
+def test_legacy_malformed_mapping_does_not_abort_or_block_later_playlist(tmp_path: Path) -> None:
+    class EmptyCatalogueSpotify(_Spotify):
+        def show_episodes(
+            self,
+            show_id: str,
+            *,
+            limit: int = 50,
+            offset: int = 0,
+        ) -> dict[str, Any]:
+            del show_id, limit, offset
+            return {"items": [], "next": None}
+
+    store = _store(tmp_path)
+    spotify = EmptyCatalogueSpotify()
+    runner = EngineRunner(
+        _config("first", "second"),
+        store,
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+    initial = runner.run_cycle()
+    assert initial.ok
+    store.set_match_state(
+        SourceId("ser"),
+        "ser-1",
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:legacy-invalid",
+        spotify_duration_seconds=60,
+        diagnostics="legacy mapping",
+        updated_at=NOW,
+    )
+
+    result = runner.run_cycle()
+
+    assert result.ok
+    assert all(outcome.ok for outcome in result.playlists)
+    state = store.get_match_state(SourceId("ser"), "ser-1")
+    assert state is not None
+    assert state.status is MatchStatus.PENDING
+    assert state.spotify_episode_uri is None
 
 
 def test_auth_failure_is_reported_without_empty_success(tmp_path: Path) -> None:
@@ -478,7 +553,7 @@ def test_scheduler_stop_event_interrupts_wait_without_explicit_wake() -> None:
 def test_missing_spotify_duration_preserves_existing_destination_without_write(
     tmp_path: Path,
 ) -> None:
-    existing_uri = "spotify:episode:preexisting"
+    existing_uri = "spotify:episode:0000000000000000000002"
 
     class MissingDurationSpotify(_Spotify):
         def show_episodes(

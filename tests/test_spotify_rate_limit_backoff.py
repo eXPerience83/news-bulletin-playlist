@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -8,7 +10,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from news_bulletin_playlist.desired_state import DesiredPlaylistItem, DesiredPlaylistState
-from news_bulletin_playlist.diagnostics import DiagnosticEventStore
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
+from news_bulletin_playlist.diagnostics_web import (
+    DiagnosticFilters,
+    build_diagnostic_bundle,
+    render_diagnostics_page,
+)
 from news_bulletin_playlist.engine import EngineRunner
 from news_bulletin_playlist.models import (
     AdapterId,
@@ -24,7 +31,7 @@ from news_bulletin_playlist.models import (
     SourceId,
     SourceSelection,
 )
-from news_bulletin_playlist.persistence import SQLiteStore
+from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
     reconcile_spotify_playlist,
@@ -88,7 +95,7 @@ class _Spotify:
         return {
             "items": [
                 {
-                    "uri": f"spotify:episode:{source_id}",
+                    "uri": f"spotify:episode:{'0' * 21}{'1' if source_id == 'one' else '2'}",
                     "name": f"Bulletin {source_id}",
                     "release_date": "2026-09-05",
                     "release_date_precision": "day",
@@ -330,7 +337,9 @@ def test_matching_429_stops_later_live_catalogue_requests(tmp_path: Path) -> Non
     assert active.retry_not_before == NOW + timedelta(seconds=300)
 
 
-def test_playlist_429_stops_later_live_destination_requests(tmp_path: Path) -> None:
+def test_playlist_429_stops_later_live_destination_requests(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     store = _store(tmp_path)
     delegate = _Spotify(fail_playlist="destination-first", retry_after=300)
 
@@ -353,6 +362,30 @@ def test_playlist_429_stops_later_live_destination_requests(tmp_path: Path) -> N
     assert all(outcome.wrote is None for outcome in result.playlists)
     assert result.playlists[0].error != SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE
     assert result.playlists[1].error == SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE
+    events = DiagnosticEventStore(store.path).list_events(limit=20)
+    backoff_event = next(
+        event for event in events if event.event_name == "spotify_rate_limit_backoff"
+    )
+    assert backoff_event.details["backoff_state"] == "activated"
+    page = render_diagnostics_page(events=(backoff_event,), filters=DiagnosticFilters())
+    assert b"spotify_rate_limit_backoff" in page
+    assert b"backoff_state=activated" in page
+    bundle = build_diagnostic_bundle(
+        events=(backoff_event,),
+        generated_at=NOW,
+        last_cycle=result,
+        retention_days=30,
+        max_events=10_000,
+    )
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        combined = b"\n".join(archive.read(name) for name in archive.namelist())
+    assert b"spotify_rate_limit_backoff" in combined
+    assert b'"backoff_state":"activated"' in combined
+    stdout, stderr = capsys.readouterr()
+    visible_text = (
+        page.decode() + combined.decode() + stdout + stderr + (result.playlists[0].error or "")
+    )
+    assert "access-token" not in visible_text
 
 
 def test_optional_snapshot_429_cannot_reach_live_replace(tmp_path: Path) -> None:
@@ -419,3 +452,48 @@ def test_backoff_diagnostics_are_sanitized_and_distinguish_activation_from_activ
         assert event.details["backoff_source"] == "spotify_header"
         assert event.details["write_decision"] == "skipped"
         assert "token" not in repr(event).casefold()
+
+
+@pytest.mark.parametrize(
+    "error", [PersistenceError("diagnostics unavailable"), ValueError("bad diagnostic")]
+)
+def test_expired_backoff_ignores_diagnostic_persistence_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    store = _store(tmp_path)
+    journal = SpotifyRateLimitJournal(store)
+    journal.activate(observed_at=NOW, retry_after_seconds=90)
+    assert journal.diagnostics is not None
+
+    def fail_record(**_kwargs: object) -> int:
+        raise error
+
+    monkeypatch.setattr(journal.diagnostics.store, "record", fail_record)
+
+    assert journal.active(now=NOW + timedelta(seconds=90)) is None
+    assert journal.active(now=NOW + timedelta(seconds=91)) is None
+    assert journal.get() is None
+
+
+def test_expired_backoff_emits_one_recovery_event(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    journal = SpotifyRateLimitJournal(store)
+    journal.activate(observed_at=NOW, retry_after_seconds=90)
+
+    assert journal.active(now=NOW + timedelta(seconds=90)) is None
+    assert journal.active(now=NOW + timedelta(seconds=91)) is None
+
+    events = DiagnosticEventStore(store.path).list_events(limit=20)
+    recovered = [
+        event for event in events if event.event_name == "spotify_rate_limit_backoff_expired"
+    ]
+    assert len(recovered) == 1
+    assert recovered[0].severity is DiagnosticSeverity.INFO
+    assert recovered[0].details == {
+        "http_status": 429,
+        "retry_after_seconds": 90,
+        "retry_not_before": "2026-09-05T10:01:30Z",
+        "backoff_source": "spotify_header",
+        "backoff_state": "expired",
+        "write_decision": "retry",
+    }

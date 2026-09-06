@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import threading
 import urllib.error
 import urllib.request
@@ -37,6 +38,7 @@ from news_bulletin_playlist.engine import (
     SourceCycleOutcome,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.runtime import AdminSecurity
 
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
@@ -139,6 +141,7 @@ def test_diagnostics_page_contains_only_sanitized_event_fields() -> None:
     assert "destination_preserved" in payload
     assert "write_decision=preserved" in payload
     assert "/admin/diagnostics/export.zip?" in payload
+    assert "limit=500" in payload
     assert SECRET not in payload
 
 
@@ -195,12 +198,112 @@ def test_diagnostic_bundle_never_copies_raw_cycle_errors() -> None:
             "status.json",
         }
         jsonl = archive.read("diagnostics.jsonl")
+        runtime = json.loads(archive.read("runtime.json"))
         combined = b"\n".join(archive.read(name) for name in archive.namelist())
     assert SECRET.encode() not in combined
     assert b"destination_preserved" in combined
     assert b'"source_id": "rne"' in combined
     assert b'"occurred_at":"2026-09-02T10:00:00Z"' in jsonl
     assert b"+02:00" not in jsonl
+    assert runtime["exported_event_count"] == 1
+    assert runtime["export_requested_limit"] == 200
+    assert runtime["export_max_allowed_limit"] == 500
+    assert runtime["export_result_truncated"] is False
+    assert runtime["export_first_event_id"] == 7
+    assert runtime["export_last_event_id"] == 7
+    assert runtime["export_filters"] == {
+        "hours": 24,
+        "playlist_id": None,
+        "severity": None,
+        "source_id": None,
+    }
+
+
+def test_diagnostic_export_truncation_uses_total_matching_count(tmp_path: Path) -> None:
+    store = DiagnosticEventStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    observed = datetime.now(UTC)
+    for index in range(3):
+        store.record(
+            occurred_at=observed + timedelta(seconds=index),
+            severity=DiagnosticSeverity.INFO,
+            component="engine",
+            event_name="cycle_completed",
+            cycle_id=f"cycle-{index}",
+        )
+    handler = type("DiagnosticHandler", (), {"diagnostic_store": store})()
+
+    filters, events, truncated = DiagnosticOperationalHealthHandler._diagnostic_events(
+        handler, "hours=all&limit=2"
+    )
+
+    assert filters.limit == 2
+    assert len(events) == 2
+    assert truncated is True
+
+    _, exact_events, exact_truncated = DiagnosticOperationalHealthHandler._diagnostic_events(
+        handler, "hours=all&limit=3"
+    )
+
+    assert len(exact_events) == 3
+    assert exact_truncated is False
+
+
+def test_diagnostic_export_does_not_use_a_separate_count_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticEventStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    event = store.record(
+        occurred_at=NOW,
+        severity=DiagnosticSeverity.WARNING,
+        component="spotify",
+        event_name="spotify_rate_limit_backoff",
+    )
+    handler = type("DiagnosticHandler", (), {"diagnostic_store": store})()
+
+    def fail_count(**_kwargs: object) -> int:
+        raise AssertionError("the export must not issue a separate count query")
+
+    monkeypatch.setattr(store, "count_events", fail_count)
+    filters, events, truncated = DiagnosticOperationalHealthHandler._diagnostic_events(
+        handler, "hours=all&limit=2"
+    )
+    page = render_diagnostics_page(events=events, filters=filters)
+    bundle = build_diagnostic_bundle(
+        events=events,
+        generated_at=NOW,
+        last_cycle=None,
+        retention_days=30,
+        max_events=10_000,
+        filters=filters,
+        result_truncated=truncated,
+    )
+
+    assert len(events) == 1
+    assert events[0].event_id == event
+    assert truncated is False
+    assert b"spotify_rate_limit_backoff" in page
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        runtime = json.loads(archive.read("runtime.json"))
+        combined = b"\n".join(archive.read(name) for name in archive.namelist())
+    assert b"spotify_rate_limit_backoff" in combined
+    assert runtime["export_result_truncated"] is False
+
+
+def test_diagnostic_snapshot_failure_remains_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticEventStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    handler = type("DiagnosticHandler", (), {"diagnostic_store": store})()
+
+    def fail_snapshot(**_kwargs: object) -> tuple[tuple[DiagnosticEvent, ...], bool]:
+        raise PersistenceError("snapshot unavailable")
+
+    monkeypatch.setattr(store, "list_events_with_truncation", fail_snapshot)
+    with pytest.raises(RuntimeError, match="diagnostic store unavailable"):
+        DiagnosticOperationalHealthHandler._diagnostic_events(handler, "hours=all&limit=2")
 
 
 def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(

@@ -101,6 +101,27 @@ class InstrumentedEngineCycleRunner:
             details: dict[str, str | int | bool | None] = {
                 "desired_count": playlist.desired_count,
             }
+            if playlist.request_item_count is not None:
+                details["provider"] = "spotify"
+                details["service"] = "spotify"
+            optional_details = {
+                "request_item_count": playlist.request_item_count,
+                "request_payload_bytes": playlist.request_payload_bytes,
+                "valid_uri_count": playlist.valid_uri_count,
+                "invalid_uri_count": playlist.invalid_uri_count,
+                "duplicate_count": playlist.duplicate_count,
+                "desired_fingerprint": playlist.desired_fingerprint,
+                "desired_changed_since_previous_attempt": (
+                    playlist.desired_changed_since_previous_attempt
+                ),
+                "consecutive_failure_count": playlist.consecutive_failure_count,
+                "first_failure_at": _optional_diagnostic_timestamp(playlist.first_failure_at),
+                "last_failure_at": _optional_diagnostic_timestamp(playlist.last_failure_at),
+                "write_outcome": playlist.write_outcome,
+            }
+            details.update(
+                (key, value) for key, value in optional_details.items() if value is not None
+            )
             if playlist.applied_count is not None:
                 details["applied_count"] = playlist.applied_count
 
@@ -112,6 +133,10 @@ class InstrumentedEngineCycleRunner:
                     else DiagnosticSeverity.INFO
                 )
                 details["write_decision"] = "applied" if playlist.wrote else "unchanged"
+                if playlist.request_item_count is not None:
+                    details.setdefault(
+                        "write_outcome", "verified" if playlist.wrote else "not_attempted"
+                    )
                 if playlist.error is not None:
                     details["verification_outcome"] = "degraded"
             elif _destination_was_preserved(playlist.error):
@@ -290,6 +315,12 @@ def _cycle_failure_phase(error: str | None) -> str:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _optional_diagnostic_timestamp(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return _as_utc(value).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _as_utc(value: datetime) -> datetime:

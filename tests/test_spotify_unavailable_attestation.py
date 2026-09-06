@@ -22,7 +22,7 @@ from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
     reconcile_spotify_playlist,
 )
-from news_bulletin_playlist.spotify.client import SpotifyTransportError
+from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
 NOW = datetime(2026, 9, 1, 20, 0, tzinfo=UTC)
 PLAYLIST_ID = PlaylistId("spain_spanish_news")
@@ -129,6 +129,41 @@ class _AttestedSpotify:
         return {"snapshot_id": self.snapshot}
 
 
+class _AppliedThen502WithSnapshotFailure(_AttestedSpotify):
+    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+        super().replace_playlist_items(playlist_id, uris)
+        raise SpotifyApiError(502, "provider body must not escape")
+
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+        del playlist_id
+        raise SpotifyTransportError("snapshot unavailable")
+
+
+class _AppliedThen502WithConcurrentMutation(_AttestedSpotify):
+    def __init__(self, slots: list[str | None]) -> None:
+        super().__init__(slots)
+        self.post_write_reads = 0
+
+    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+        super().replace_playlist_items(playlist_id, uris)
+        raise SpotifyApiError(502, "provider body must not escape")
+
+    def playlist_items(
+        self,
+        playlist_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        response = super().playlist_items(playlist_id, limit=limit, offset=offset)
+        if self.writes:
+            self.post_write_reads += 1
+            if self.post_write_reads == 2:
+                self.slots = ["spotify:episode:concurrent"]
+                self.snapshot = "snapshot-concurrent"
+        return response
+
+
 def _apply(
     store: SQLiteStore,
     client: _AttestedSpotify,
@@ -158,6 +193,35 @@ def test_exact_readback_confirms_write_snapshot_for_single_page(tmp_path: Path) 
     attestation = store.get_playlist_attestation(PLAYLIST_ID)
     assert attestation is not None
     assert attestation.snapshot_id == "snapshot-write-1"
+
+
+def test_ambiguous_write_exact_readback_stays_verified_when_attestation_read_fails(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    client = _AppliedThen502WithSnapshotFailure(["spotify:episode:old"])
+
+    first = _apply(store, client, "spotify:episode:new")
+    second = _apply(store, client, "spotify:episode:new", generated_at=NOW + timedelta(minutes=10))
+
+    assert first.ok
+    assert first.wrote is True
+    assert second.ok
+    assert second.wrote is False
+    assert client.writes == [["spotify:episode:new"]]
+    assert store.get_playlist_attestation(PLAYLIST_ID) is None
+
+
+def test_ambiguous_write_does_not_attest_across_a_concurrent_mutation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    client = _AppliedThen502WithConcurrentMutation(["spotify:episode:old"])
+
+    result = _apply(store, client, "spotify:episode:new")
+
+    assert result.ok
+    assert result.wrote is True
+    assert client.snapshot_reads == 3
+    assert store.get_playlist_attestation(PLAYLIST_ID) is None
 
 
 def test_write_with_unavailable_slot_is_attested_as_degraded_success(tmp_path: Path) -> None:
