@@ -145,7 +145,7 @@ def test_retry_after_deadline_starts_when_429_is_received(tmp_path: Path) -> Non
     assert state.backoff_source == "spotify_header"
 
 
-def test_failed_backoff_persistence_survives_journal_recreation_and_retries_before_spotify(
+def test_failed_backoff_persistence_survives_repeated_failure_then_recovers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,31 +161,55 @@ def test_failed_backoff_persistence_survives_journal_recreation_and_retries_befo
     original_select = journal._select_row
     select_calls = 0
 
-    def fail_persist_select(connection: sqlite3.Connection):  # type: ignore[no-untyped-def]
+    def fail_initial_persist_select(connection: sqlite3.Connection):  # type: ignore[no-untyped-def]
         nonlocal select_calls
         select_calls += 1
         if select_calls == 2:
             raise sqlite3.OperationalError("database is locked")
         return original_select(connection)
 
-    monkeypatch.setattr(journal, "_select_row", fail_persist_select)
+    monkeypatch.setattr(journal, "_select_row", fail_initial_persist_select)
 
     with pytest.raises(PersistenceError, match="persist Spotify rate-limit backoff"):
         client.show_episodes("slow-show")
     assert delegate.calls == 1
+    assert SpotifyRateLimitJournal(store).get() is None
 
     auth = _Auth()
-    recreated = SpotifyRateLimitGuardAuth(
+    repeated_failure_journal = SpotifyRateLimitJournal(store)
+
+    def fail_re_persist(_candidate: object) -> None:
+        raise PersistenceError("database is still locked")
+
+    monkeypatch.setattr(repeated_failure_journal, "_persist_candidate", fail_re_persist)
+    repeated_failure_auth = SpotifyRateLimitGuardAuth(
         auth,
-        SpotifyRateLimitJournal(store),
+        repeated_failure_journal,
         clock=lambda: NOW + timedelta(seconds=21),
     )
-    with pytest.raises(SpotifyRateLimitBackoffActive):
-        recreated.get_access_token(now=NOW + timedelta(seconds=21))
+
+    with pytest.raises(SpotifyRateLimitBackoffActive, match="backoff active until"):
+        repeated_failure_auth.get_access_token(now=NOW + timedelta(seconds=21))
 
     assert auth.calls == 0
-    assert delegate.calls == 1
+    fallback = repeated_failure_journal._fallback_snapshot()
+    assert fallback is not None
+    assert fallback.observed_at == NOW + timedelta(seconds=20)
+    assert fallback.retry_not_before == NOW + timedelta(seconds=50)
+    assert SpotifyRateLimitJournal(store).get() is None
+
+    recovered_journal = SpotifyRateLimitJournal(store)
+    recovered_auth = SpotifyRateLimitGuardAuth(
+        auth,
+        recovered_journal,
+        clock=lambda: NOW + timedelta(seconds=22),
+    )
+    with pytest.raises(SpotifyRateLimitBackoffActive):
+        recovered_auth.get_access_token(now=NOW + timedelta(seconds=22))
+
+    assert auth.calls == 0
     persisted = SpotifyRateLimitJournal(store).get()
     assert persisted is not None
     assert persisted.observed_at == NOW + timedelta(seconds=20)
     assert persisted.retry_not_before == NOW + timedelta(seconds=50)
+    assert recovered_journal._fallback_snapshot() is None
