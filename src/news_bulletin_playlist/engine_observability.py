@@ -16,6 +16,10 @@ from news_bulletin_playlist.diagnostics import DiagnosticSeverity
 from news_bulletin_playlist.engine import EngineCycleResult, EngineCycleRunner
 from news_bulletin_playlist.reconciliation_diagnostics import classify_reconciliation_failure
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics, cycle_id_for
+from news_bulletin_playlist.spotify_backoff import (
+    SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX,
+    SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE,
+)
 
 Clock = Callable[[], datetime]
 _LONG_DURATION_DIAGNOSTIC_SECONDS = 20 * 60
@@ -70,6 +74,10 @@ class InstrumentedEngineCycleRunner:
             elif source.matching_ok is False:
                 event_name = "source_matching_failed"
                 severity = DiagnosticSeverity.ERROR
+                phase = "matching"
+            elif source.matching_ok is None:
+                event_name = "source_matching_deferred"
+                severity = DiagnosticSeverity.WARNING
                 phase = "matching"
             else:
                 event_name = "source_cycle_completed"
@@ -261,9 +269,11 @@ class InstrumentedEngineCycleRunner:
 def _destination_was_preserved(error: str | None) -> bool:
     if error is None:
         return False
-    return error.startswith(
-        "destination preserved because no last-known-good state is available"
-    ) or error.startswith("Spotify rate-limit backoff active until ")
+    return (
+        error.startswith("destination preserved because no last-known-good state is available")
+        or error.startswith(SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX)
+        or error == SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE
+    )
 
 
 def _cycle_failure_phase(error: str | None) -> str:
