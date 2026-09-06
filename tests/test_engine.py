@@ -29,7 +29,7 @@ from news_bulletin_playlist.models import (
     SourceId,
     SourceSelection,
 )
-from news_bulletin_playlist.persistence import SQLiteStore
+from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.spotify.auth import SpotifyReauthorizationRequired
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
@@ -355,6 +355,50 @@ def test_polish_replace_502_does_not_block_rss_or_healthy_destination(tmp_path: 
     assert by_id[PlaylistId("first")].write_outcome == "unknown"
     assert by_id[PlaylistId("second")].ok
     assert spotify.items["destination-second"] == [SER_URI]
+
+
+def test_legacy_malformed_mapping_does_not_abort_or_block_later_playlist(tmp_path: Path) -> None:
+    class EmptyCatalogueSpotify(_Spotify):
+        def show_episodes(
+            self,
+            show_id: str,
+            *,
+            limit: int = 50,
+            offset: int = 0,
+        ) -> dict[str, Any]:
+            del show_id, limit, offset
+            return {"items": [], "next": None}
+
+    store = _store(tmp_path)
+    spotify = EmptyCatalogueSpotify()
+    runner = EngineRunner(
+        _config("first", "second"),
+        store,
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+    initial = runner.run_cycle()
+    assert initial.ok
+    store.set_match_state(
+        SourceId("ser"),
+        "ser-1",
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:legacy-invalid",
+        spotify_duration_seconds=60,
+        diagnostics="legacy mapping",
+        updated_at=NOW,
+    )
+
+    result = runner.run_cycle()
+
+    assert result.ok
+    assert all(outcome.ok for outcome in result.playlists)
+    state = store.get_match_state(SourceId("ser"), "ser-1")
+    assert state is not None
+    assert state.status is MatchStatus.PENDING
+    assert state.spotify_episode_uri is None
 
 
 def test_auth_failure_is_reported_without_empty_success(tmp_path: Path) -> None:

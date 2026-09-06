@@ -570,3 +570,72 @@ def test_catalogue_rejects_malformed_episode_uri_before_persisting(tmp_path: Pat
         match_source_editions(client, store, source, (edition,), now=now)
 
     assert store.get_spotify_episode_uri(*edition.identity) is None
+
+
+@pytest.mark.parametrize(
+    "pages",
+    [
+        [{"items": [], "next": None}],
+        [
+            {"items": [], "next": "page-2"},
+            {"items": [], "next": "page-3"},
+        ],
+    ],
+    ids=["empty", "truncated"],
+)
+def test_legacy_malformed_mapping_is_pending_and_rematchable(
+    tmp_path: Path, pages: list[dict[str, Any]]
+) -> None:
+    source = _source("ser", "ser", "Europe/Madrid", "show-ser")
+    edition = _edition(source, "ser-native", "Las noticias de la SER, 10:00 (30/08/2026)")
+    store = _store(tmp_path)
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    store.upsert_editions((edition,), observed_at=now)
+    store.set_match_state(
+        *edition.identity,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:legacy-invalid",
+        spotify_duration_seconds=60,
+        diagnostics="legacy mapping",
+        updated_at=now - timedelta(days=1),
+    )
+
+    result = match_source_editions(
+        FakeCatalogClient(pages=pages), store, source, (edition,), now=now
+    )
+
+    assert result.outcomes[0].status is MatchStatus.PENDING
+    assert result.outcomes[0].spotify_episode_uri is None
+    state = store.get_match_state(*edition.identity)
+    assert state is not None
+    assert state.status is MatchStatus.PENDING
+    assert state.spotify_episode_uri is None
+
+
+def test_legacy_valid_mapping_remains_reusable(tmp_path: Path) -> None:
+    source = _source("ser", "ser", "Europe/Madrid", "show-ser")
+    edition = _edition(source, "ser-native", "Las noticias de la SER, 10:00 (30/08/2026)")
+    store = _store(tmp_path)
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    store.upsert_editions((edition,), observed_at=now)
+    uri = "spotify:episode:255703f871486907cb7a6c"
+    store.set_match_state(
+        *edition.identity,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri=uri,
+        spotify_duration_seconds=60,
+        diagnostics="legacy mapping",
+        updated_at=now - timedelta(days=1),
+    )
+
+    result = match_source_editions(
+        FakeCatalogClient(pages=[{"items": [_candidate(edition, source, uri=uri)], "next": None}]),
+        store,
+        source,
+        (edition,),
+        now=now,
+    )
+
+    assert result.outcomes[0].status is MatchStatus.MATCHED
+    assert result.outcomes[0].spotify_episode_uri == uri
+    assert result.outcomes[0].from_cache

@@ -201,6 +201,18 @@ def _cached_outcome(
         return None
 
     if state.status is MatchStatus.MATCHED and state.spotify_episode_uri:
+        if not is_spotify_episode_uri(state.spotify_episode_uri):
+            diagnostics = "persisted Spotify mapping contained an invalid episode URI"
+            store.set_match_state(
+                edition.source_id,
+                edition.source_native_id,
+                status=MatchStatus.PENDING,
+                spotify_episode_uri=None,
+                spotify_duration_seconds=None,
+                diagnostics=diagnostics,
+                updated_at=now,
+            )
+            return None
         # Schema-v2 matches predate durable destination duration. Refresh those
         # mappings once instead of treating unknown duration as eligibility proof.
         if state.spotify_duration_seconds is None:
