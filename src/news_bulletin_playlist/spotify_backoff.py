@@ -132,12 +132,13 @@ class _ConnectionContext:
 class SpotifyRateLimitJournal:
     """Persist one runtime-wide Spotify Web API cooldown in the existing SQLite database."""
 
+    _fallback_lock = threading.Lock()
+    _fallback_by_path: dict[str, SpotifyRateLimitState] = {}
+
     def __init__(self, store: SQLiteStore) -> None:
         self.path = store.path
+        self._fallback_key = str(self.path.resolve())
         self.diagnostics = self._build_diagnostics()
-        self._volatile_state: SpotifyRateLimitState | None = None
-        self._volatile_durable = False
-        self._volatile_lock = threading.Lock()
 
     def get(self) -> SpotifyRateLimitState | None:
         with self._connection("read Spotify rate-limit backoff") as connection:
@@ -147,21 +148,20 @@ class SpotifyRateLimitJournal:
 
     def active(self, *, now: datetime) -> SpotifyRateLimitState | None:
         observed = _as_utc(now)
-        volatile, durable = self._volatile_snapshot()
-        if volatile is not None and observed < volatile.retry_not_before:
-            if durable:
-                return volatile
-            persisted = self._persist_candidate(volatile)
-            return self._remember(persisted, durable=True)
-        if volatile is not None:
-            self._forget_if_expired(volatile, observed)
+        fallback = self._fallback_snapshot()
+        if fallback is not None and observed < fallback.retry_not_before:
+            persisted = self._persist_candidate(fallback)
+            self._forget_fallback_through(persisted.retry_not_before)
+            return persisted
+        if fallback is not None:
+            self._forget_fallback_if(fallback)
 
         while True:
             state = self.get()
             if state is None:
                 return None
             if observed < state.retry_not_before:
-                return self._remember(state, durable=True)
+                return state
 
             with self._connection("expire Spotify rate-limit backoff") as connection:
                 self._ensure_table(connection)
@@ -196,17 +196,17 @@ class SpotifyRateLimitJournal:
             retry_after_seconds=effective_retry_after,
             backoff_source=source,
         )
-        effective = self._remember(candidate, durable=False)
+        effective = self._remember_fallback(candidate)
         persisted = self._persist_candidate(effective)
-        return self._remember(persisted, durable=True)
+        self._forget_fallback_through(persisted.retry_not_before)
+        return persisted
 
     def clear(self) -> None:
-        with self._connection("clear Spotify rate-limit backoff") as connection:
-            self._ensure_table(connection)
-            connection.execute("DELETE FROM spotify_rate_limit_backoff WHERE singleton = 1")
-        with self._volatile_lock:
-            self._volatile_state = None
-            self._volatile_durable = False
+        with self._fallback_lock:
+            with self._connection("clear Spotify rate-limit backoff") as connection:
+                self._ensure_table(connection)
+                connection.execute("DELETE FROM spotify_rate_limit_backoff WHERE singleton = 1")
+            self._fallback_by_path.pop(self._fallback_key, None)
 
     def _persist_candidate(self, candidate: SpotifyRateLimitState) -> SpotifyRateLimitState:
         with self._connection("persist Spotify rate-limit backoff") as connection:
@@ -225,32 +225,29 @@ class SpotifyRateLimitJournal:
                 raise PersistenceError("Spotify rate-limit backoff disappeared during activation")
             return _state_from_row(row)
 
-    def _volatile_snapshot(self) -> tuple[SpotifyRateLimitState | None, bool]:
-        with self._volatile_lock:
-            return self._volatile_state, self._volatile_durable
+    def _fallback_snapshot(self) -> SpotifyRateLimitState | None:
+        with self._fallback_lock:
+            return self._fallback_by_path.get(self._fallback_key)
 
-    def _remember(
-        self,
-        candidate: SpotifyRateLimitState,
-        *,
-        durable: bool,
-    ) -> SpotifyRateLimitState:
-        with self._volatile_lock:
-            current = self._volatile_state
+    def _remember_fallback(self, candidate: SpotifyRateLimitState) -> SpotifyRateLimitState:
+        with self._fallback_lock:
+            current = self._fallback_by_path.get(self._fallback_key)
             if current is None or candidate.retry_not_before > current.retry_not_before:
-                self._volatile_state = candidate
-                self._volatile_durable = durable
-            elif candidate.retry_not_before == current.retry_not_before and durable:
-                self._volatile_durable = True
-            assert self._volatile_state is not None
-            return self._volatile_state
+                self._fallback_by_path[self._fallback_key] = candidate
+                return candidate
+            return current
 
-    def _forget_if_expired(self, observed_state: SpotifyRateLimitState, now: datetime) -> None:
-        with self._volatile_lock:
-            current = self._volatile_state
-            if current == observed_state and now >= current.retry_not_before:
-                self._volatile_state = None
-                self._volatile_durable = False
+    def _forget_fallback_if(self, observed_state: SpotifyRateLimitState) -> None:
+        with self._fallback_lock:
+            current = self._fallback_by_path.get(self._fallback_key)
+            if current == observed_state:
+                self._fallback_by_path.pop(self._fallback_key, None)
+
+    def _forget_fallback_through(self, persisted_deadline: datetime) -> None:
+        with self._fallback_lock:
+            current = self._fallback_by_path.get(self._fallback_key)
+            if current is not None and current.retry_not_before <= persisted_deadline:
+                self._fallback_by_path.pop(self._fallback_key, None)
 
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
