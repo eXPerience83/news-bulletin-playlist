@@ -7,9 +7,13 @@ name = "news-bulletin-playlist"
 version = "0.0.1"
 description = "Open-source service for dynamic news bulletin playlists across countries and languages"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.14,<3.15"
 license = "MIT"
 authors = [{ name = "news-bulletin-playlist contributors" }]
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+]
 dependencies = ["PyYAML>=6.0.3,<7"]
 
 [project.scripts]
