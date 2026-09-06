@@ -5,6 +5,8 @@ early_access: false
 tone_instructions: >-
   Sé conciso, técnico y específico. Prioriza bugs reales, seguridad, regresiones,
   contratos externos y mantenibilidad; evita nitpicks de estilo que ya cubren Ruff o CI.
+  No eleves a bug un resultado de una herramienta ejecutada fuera del contrato de runtime
+  del repositorio; primero verifica la versión/gramática efectiva y contrasta con CI.
 
 reviews:
   profile: "chill"
@@ -40,6 +42,10 @@ reviews:
     ignore_usernames:
       - "renovate[bot]"
 
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+
   finishing_touches:
     docstrings:
       enabled: false
@@ -67,6 +73,26 @@ reviews:
       enabled: false
 
   path_instructions:
+    - path: "**/*.py"
+      instructions: |
+        Contrato de lenguaje: este repositorio soporta únicamente CPython 3.14.x.
+        `pyproject.toml` declara `>=3.14,<3.15`; Ruff usa `target-version = py314`,
+        mypy usa `python_version = 3.14`, CI ejecuta Python 3.14 y la imagen de
+        producción usa CPython 3.14.x. Interpreta toda sintaxis, AST, typing y
+        compatibilidad con la gramática de Python 3.14.
+
+        PEP 758 forma parte explícita del contrato: en Python 3.14 una cláusula
+        `except A, B:` sin `as` es sintaxis válida. No la marques como error ni
+        propongas añadir paréntesis por compatibilidad con parsers anteriores.
+
+        Antes de usar `python`, `python3`, `ast.parse`, `compile`, linters o análisis
+        estático como evidencia de un error de sintaxis/compatibilidad, confirma que
+        la herramienta está interpretando Python 3.14. Si el sandbox o analizador
+        interno usa Python <3.14 o una gramática anterior, trata ese resultado como
+        no autoritativo y contrástalo con `pyproject.toml`, CI Python 3.14 y el
+        Container validate. No solicites cambios de código para satisfacer un
+        toolchain fuera del runtime soportado.
+
     - path: "src/news_bulletin_playlist/spotify/**"
       instructions: |
         Trata esta integración como código sensible. Revisa OAuth/PKCE, state,
@@ -106,7 +132,7 @@ reviews:
     - path: ".github/workflows/**"
       instructions: |
         Mantén permisos mínimos y acciones de terceros fijadas por SHA completo.
-        El proyecto soporta únicamente Python 3.14. GitHub Actions sirve para CI,
+        El proyecto soporta únicamente Python 3.14.x. GitHub Actions sirve para CI,
         watchdog y automatización del repositorio; no debe convertirse en el
         scheduler de producción que actualizará playlists.
 
@@ -119,10 +145,9 @@ reviews:
 
     - path: "Dockerfile"
       instructions: |
-        Cuando exista, prioriza imagen Python 3.14 ligera, usuario no-root,
-        superficie mínima, healthcheck y secretos fuera de la imagen. El runtime
-        debe ser apto para Docker/TrueNAS y escribir solo en almacenamiento
-        persistente explícito.
+        Mantén la imagen en CPython 3.14.x, ligera, con usuario no-root, superficie
+        mínima, healthcheck y secretos fuera de la imagen. El runtime debe ser apto
+        para Docker/TrueNAS y escribir solo en almacenamiento persistente explícito.
 
     - path: "deploy/**"
       instructions: |
@@ -145,6 +170,10 @@ knowledge_base:
   code_guidelines:
     enabled: true
     filePatterns:
+      - "AGENTS.md"
+      - "pyproject.toml"
+      - ".github/workflows/ci.yml"
+      - "Dockerfile"
       - "docs/ARCHITECTURE.md"
       - "docs/P0_FINDINGS.md"
       - "docs/SPOTIFY_PROBE.md"
