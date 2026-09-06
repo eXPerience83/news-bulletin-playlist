@@ -109,3 +109,71 @@ def test_live_shape_failure_is_safe_in_store_ui_and_zip(tmp_path: Path) -> None:
     assert b'"operation":"playlist_items"' in combined
     assert b'"offset":50' in combined
     assert SECRET.encode() not in combined
+
+
+def test_ambiguous_502_request_metrics_are_sanitized_in_store_ui_and_zip(
+    tmp_path: Path,
+) -> None:
+    store = DiagnosticEventStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    diagnostics = OperationalDiagnostics(store)
+    result = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=2),
+        ok=False,
+        sources=(),
+        playlists=(
+            PlaylistCycleOutcome(
+                playlist_id=PlaylistId("international_polish_news"),
+                ok=False,
+                desired_count=41,
+                applied_count=None,
+                wrote=None,
+                last_success_at=None,
+                error=(
+                    "Spotify playlist write replace_items API failure (http_status=502) "
+                    "(write_outcome=unknown)"
+                ),
+                request_item_count=41,
+                request_payload_bytes=1732,
+                valid_uri_count=41,
+                invalid_uri_count=0,
+                duplicate_count=0,
+                desired_fingerprint="a" * 64,
+                desired_changed_since_previous_attempt=False,
+                consecutive_failure_count=7,
+                first_failure_at=NOW - timedelta(hours=1),
+                last_failure_at=NOW,
+                write_outcome="unknown",
+            ),
+        ),
+        error="cycle degraded",
+    )
+    InstrumentedEngineCycleRunner(_Runner(result), diagnostics, clock=lambda: NOW).run_cycle()
+    event = next(
+        event
+        for event in store.list_events(limit=10)
+        if event.event_name == "playlist_reconciliation_failed"
+    )
+    assert event.details["provider"] == "spotify"
+    assert event.details["http_status"] == 502
+    assert event.details["write_outcome"] == "unknown"
+    assert event.details["request_item_count"] == 41
+    assert event.details["valid_uri_count"] == 41
+    assert event.details["desired_fingerprint"] == "a" * 64
+    assert "uri" not in repr(event.details).replace("valid_uri_count", "").replace(
+        "invalid_uri_count", ""
+    )
+    page = render_diagnostics_page(events=(event,), filters=DiagnosticFilters())
+    bundle = build_diagnostic_bundle(
+        events=(event,),
+        generated_at=NOW,
+        last_cycle=result,
+        retention_days=30,
+        max_events=10_000,
+    )
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        combined = b"\n".join(archive.read(name) for name in archive.namelist())
+    assert b"write_outcome=unknown" in page
+    assert b'"write_outcome":"unknown"' in combined
+    assert SECRET.encode() not in page + combined

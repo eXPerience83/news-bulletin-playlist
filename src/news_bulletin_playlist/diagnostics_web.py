@@ -8,7 +8,7 @@ import json
 import re
 import urllib.parse
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 
 from news_bulletin_playlist import __version__
@@ -114,7 +114,8 @@ def render_diagnostics_page(
     rows = "".join(_event_row(event, display_timezone=display_timezone) for event in events)
     if not rows:
         rows = '<tr><td colspan="8">No diagnostic events match these filters.</td></tr>'
-    export_href = "/admin/diagnostics/export.zip?" + filters.query_string()
+    export_filters = replace(filters, limit=MAX_DIAGNOSTIC_QUERY_LIMIT)
+    export_href = "/admin/diagnostics/export.zip?" + export_filters.query_string()
     severity_value = "" if filters.severity is None else filters.severity.value
     source_value = "" if filters.source_id is None else filters.source_id
     playlist_value = "" if filters.playlist_id is None else filters.playlist_id
@@ -188,6 +189,8 @@ def build_diagnostic_bundle(
     retention_days: int,
     max_events: int,
     build_revision: str = "dev",
+    filters: DiagnosticFilters | None = None,
+    result_truncated: bool = False,
 ) -> bytes:
     """Build an in-memory ZIP from sanitized models; never copy the SQLite file."""
     observed = _as_utc(generated_at)
@@ -197,6 +200,7 @@ def build_diagnostic_bundle(
         for document in event_documents
     )
     readable = "".join(_event_text(document) for document in event_documents)
+    effective_filters = filters or DiagnosticFilters()
     runtime = {
         "generated_at": _timestamp(observed),
         "version": __version__,
@@ -204,7 +208,21 @@ def build_diagnostic_bundle(
         "diagnostic_retention_days": retention_days,
         "diagnostic_store_max_events": max_events,
         "exported_event_count": len(events),
-        "export_event_limit": MAX_DIAGNOSTIC_QUERY_LIMIT,
+        "export_requested_limit": effective_filters.limit,
+        "export_max_allowed_limit": MAX_DIAGNOSTIC_QUERY_LIMIT,
+        "export_result_truncated": result_truncated,
+        "export_first_event_id": events[0].event_id if events else None,
+        "export_last_event_id": events[-1].event_id if events else None,
+        "export_first_occurred_at": _timestamp(events[0].occurred_at) if events else None,
+        "export_last_occurred_at": _timestamp(events[-1].occurred_at) if events else None,
+        "export_filters": {
+            "severity": (
+                None if effective_filters.severity is None else effective_filters.severity.value
+            ),
+            "source_id": effective_filters.source_id,
+            "playlist_id": effective_filters.playlist_id,
+            "hours": effective_filters.hours,
+        },
     }
     manifest = {
         "format": "news-bulletin-playlist-diagnostics-v1",

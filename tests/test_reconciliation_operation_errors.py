@@ -36,6 +36,31 @@ class _WriteTransportFailure:
         raise AssertionError(playlist_id)
 
 
+class _AppliedThen502:
+    def __init__(self) -> None:
+        self.items: list[str] = []
+        self.writes = 0
+
+    def playlist_items(self, playlist_id: str, *, limit: int, offset: int):  # type: ignore[no-untyped-def]
+        del playlist_id, limit
+        page = self.items[offset:]
+        return {
+            "items": [{"item": {"uri": uri}} for uri in page],
+            "next": None,
+            "total": len(self.items),
+        }
+
+    def replace_playlist_items(self, playlist_id: str, uris: list[str]):  # type: ignore[no-untyped-def]
+        del playlist_id
+        self.writes += 1
+        self.items = list(uris)
+        raise SpotifyApiError(502, SECRET)
+
+    def playlist_snapshot(self, playlist_id: str):  # type: ignore[no-untyped-def]
+        del playlist_id
+        return {"snapshot_id": "applied-snapshot"}
+
+
 class _ReadbackApiFailure:
     def __init__(self) -> None:
         self.reads = 0
@@ -77,8 +102,23 @@ def test_write_transport_failure_has_safe_phase() -> None:
         )
 
     message = str(raised.value)
-    assert message == "Spotify playlist write replace_items transport failure"
+    assert message == (
+        "Spotify playlist write replace_items transport failure (write_outcome=unknown)"
+    )
     assert SECRET not in message
+
+
+def test_5xx_after_applied_mutation_is_verified_by_readback_without_retry() -> None:
+    client = _AppliedThen502()
+
+    wrote = reconcile_playlist_items(
+        client,  # type: ignore[arg-type]
+        "playlist",
+        ["spotify:episode:one"],
+    )
+
+    assert wrote is True
+    assert client.writes == 1
 
 
 def test_readback_api_failure_has_safe_phase_and_status() -> None:

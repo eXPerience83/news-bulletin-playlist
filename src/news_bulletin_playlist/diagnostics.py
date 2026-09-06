@@ -35,6 +35,19 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "failure_class",
         "gt_30m",
         "http_status",
+        "provider",
+        "service",
+        "request_item_count",
+        "request_payload_bytes",
+        "valid_uri_count",
+        "invalid_uri_count",
+        "duplicate_count",
+        "desired_fingerprint",
+        "desired_changed_since_previous_attempt",
+        "consecutive_failure_count",
+        "first_failure_at",
+        "last_failure_at",
+        "next_retry_at",
         "limit",
         "lt_5m",
         "m10_lt15",
@@ -59,11 +72,12 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "unavailable_count",
         "verification_outcome",
         "write_decision",
+        "write_outcome",
     }
 )
 _ALLOWED_DETAIL_STRING_VALUES = {
     "backoff_source": frozenset({"fallback", "spotify_header"}),
-    "backoff_state": frozenset({"activated", "active"}),
+    "backoff_state": frozenset({"activated", "active", "expired"}),
     "failure_class": frozenset(
         {
             "api_error",
@@ -167,6 +181,9 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "unchanged",
         }
     ),
+    "write_outcome": frozenset({"not_attempted", "applied", "verified", "unknown", "skipped"}),
+    "provider": frozenset({"spotify"}),
+    "service": frozenset({"spotify"}),
 }
 
 type DiagnosticValue = str | int | bool | None
@@ -364,6 +381,39 @@ class DiagnosticEventStore:
             rows = connection.execute(query, values).fetchall()
         return tuple(_event_from_row(row) for row in rows)
 
+    def count_events(
+        self,
+        *,
+        since: datetime | None = None,
+        severity: DiagnosticSeverity | None = None,
+        source_id: str | None = None,
+        playlist_id: str | None = None,
+    ) -> int:
+        """Count events matching the same sanitized filters used by list_events."""
+        clauses: list[str] = []
+        values: list[object] = []
+        if since is not None:
+            clauses.append("occurred_at >= ?")
+            values.append(_format_timestamp(since))
+        if severity is not None:
+            clauses.append("severity = ?")
+            values.append(severity.value)
+        if source_id is not None:
+            clauses.append("source_id = ?")
+            values.append(_identifier(source_id, "source_id", max_length=128))
+        if playlist_id is not None:
+            clauses.append("playlist_id = ?")
+            values.append(_identifier(playlist_id, "playlist_id", max_length=128))
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection("count diagnostic events") as connection:
+            row = connection.execute(
+                f"SELECT COUNT(*) AS event_count FROM diagnostic_events{where}", values
+            ).fetchone()
+        count = None if row is None else row["event_count"]
+        if not isinstance(count, int):
+            raise PersistenceError("count diagnostic events returned an invalid result")
+        return count
+
     def prune(
         self,
         *,
@@ -461,8 +511,11 @@ def _normalize_details(
                 raise ValueError(f"diagnostic detail {key} must be non-negative")
             normalized[key] = value
         elif isinstance(value, str):
-            if key == "retry_not_before":
+            if key in {"retry_not_before", "next_retry_at", "first_failure_at", "last_failure_at"}:
                 normalized[key] = _normalize_detail_timestamp(value)
+                continue
+            if key == "desired_fingerprint" and re.fullmatch(r"[0-9a-f]{64}", value):
+                normalized[key] = value
                 continue
             allowed_values = _ALLOWED_DETAIL_STRING_VALUES.get(key)
             if allowed_values is None or value not in allowed_values:

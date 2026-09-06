@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,6 +11,7 @@ from typing import Any, cast
 
 _API_BASE = "https://api.spotify.com/v1"
 _SPOTIFY_COVER_MAX_PAYLOAD_BYTES = 256 * 1024
+_SPOTIFY_EPISODE_URI = re.compile(r"spotify:episode:[A-Za-z0-9]{22}\Z")
 
 
 class SpotifyApiError(RuntimeError):
@@ -100,6 +102,11 @@ class SpotifyClient:
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
         if len(uris) > 100:
             raise ValueError("playlist replacement is limited to 100 items")
+        invalid_count = sum(_SPOTIFY_EPISODE_URI.fullmatch(uri) is None for uri in uris)
+        if invalid_count:
+            raise ValueError(
+                f"playlist replacement contains {invalid_count} invalid Spotify episode URI(s)"
+            )
         return self._request("PUT", f"/playlists/{playlist_id}/items", json_body={"uris": uris})
 
     def playlist_items(

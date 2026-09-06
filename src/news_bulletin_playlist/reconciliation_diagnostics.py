@@ -12,7 +12,8 @@ _OPERATION_FAILURE = re.compile(
     r"^Spotify playlist (?P<phase>prewrite|readback|verification|write) "
     r"(?P<operation>playlist_items|replace_items|snapshot) "
     r"(?P<kind>API|transport) failure"
-    r"(?: \(http_status=(?P<status>\d{3})\))?$"
+    r"(?: \(http_status=(?P<status>\d{3})\))?"
+    r"(?: \(write_outcome=(?P<write_outcome>unknown)\))?$"
 )
 _OFFSET = re.compile(r"(?:^|[ (])offset=(?P<value>\d+)(?:[ )]|$)")
 _RETURNED = re.compile(r"(?:^|[ (])returned=(?P<value>\d+)(?:[ )]|$)")
@@ -36,6 +37,7 @@ class ReconciliationFailureDiagnostic:
     http_status: int | None = None
     write_decision: str | None = None
     eligibility_reason: str | None = None
+    write_outcome: str | None = None
 
     def details(self) -> dict[str, DiagnosticValue]:
         result: dict[str, DiagnosticValue] = {
@@ -53,6 +55,7 @@ class ReconciliationFailureDiagnostic:
             ("http_status", self.http_status),
             ("write_decision", self.write_decision),
             ("eligibility_reason", self.eligibility_reason),
+            ("write_outcome", self.write_outcome),
         )
         result.update((key, value) for key, value in optional if value is not None)
         return result
@@ -86,6 +89,7 @@ def classify_reconciliation_failure(error: str | None) -> ReconciliationFailureD
                 if operation_match.group("phase") in {"prewrite", "verification"}
                 else None
             ),
+            write_outcome=operation_match.group("write_outcome"),
         )
 
     api_match = _API_ERROR.match(error)

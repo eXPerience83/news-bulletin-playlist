@@ -31,7 +31,7 @@ from news_bulletin_playlist.models import (
 )
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.spotify.auth import SpotifyReauthorizationRequired
-from news_bulletin_playlist.spotify.client import SpotifyTransportError
+from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
 SER_URL = "https://example.test/ser.xml"
@@ -200,7 +200,7 @@ def test_cycle_fetches_shared_source_once_and_reconciles_two_playlists(tmp_path:
     assert first.ok
     assert second.ok
     assert calls == [SER_URL, SER_URL]
-    assert spotify.show_calls == 1
+    assert spotify.show_calls == 2
     assert spotify.replacements == [
         ("destination-first", (SER_URI,)),
         ("destination-second", (SER_URI,)),
@@ -322,6 +322,37 @@ def test_playlist_failure_does_not_block_other_destination(tmp_path: Path) -> No
     assert not result.ok
     by_id = {outcome.playlist_id: outcome for outcome in result.playlists}
     assert not by_id[PlaylistId("first")].ok
+    assert by_id[PlaylistId("second")].ok
+    assert spotify.items["destination-second"] == [SER_URI]
+
+
+def test_polish_replace_502_does_not_block_rss_or_healthy_destination(tmp_path: Path) -> None:
+    class Replace502Spotify(_Spotify):
+        def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]:
+            if playlist_id == "destination-first":
+                raise SpotifyApiError(502, "provider raw body must stay private")
+            return super().replace_playlist_items(playlist_id, uris)
+
+    spotify = Replace502Spotify()
+    fetch_calls: list[str] = []
+
+    def fetcher(url: str) -> bytes:
+        fetch_calls.append(url)
+        return _rss()
+
+    result = EngineRunner(
+        _config("first", "second"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=fetcher,
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    ).run_cycle()
+
+    by_id = {outcome.playlist_id: outcome for outcome in result.playlists}
+    assert fetch_calls == [SER_URL]
+    assert not by_id[PlaylistId("first")].ok
+    assert by_id[PlaylistId("first")].write_outcome == "unknown"
     assert by_id[PlaylistId("second")].ok
     assert spotify.items["destination-second"] == [SER_URI]
 

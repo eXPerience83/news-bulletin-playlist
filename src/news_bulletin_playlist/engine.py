@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -7,7 +10,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Protocol
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.collection import (
@@ -102,6 +105,17 @@ class PlaylistCycleOutcome:
     last_success_at: datetime | None
     error: str | None = None
     duration_decisions: tuple[DurationEligibilityDecision, ...] = ()
+    request_item_count: int | None = None
+    request_payload_bytes: int | None = None
+    valid_uri_count: int | None = None
+    invalid_uri_count: int | None = None
+    duplicate_count: int | None = None
+    desired_fingerprint: str | None = None
+    desired_changed_since_previous_attempt: bool | None = None
+    consecutive_failure_count: int | None = None
+    first_failure_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    write_outcome: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +214,9 @@ class EngineRunner:
         self.client_factory = guarded_client_factory
         self.playlist_mutation_guard = playlist_mutation_guard
         self._cycle_lock = threading.Lock()
+        # Operational diagnostics only: these observations intentionally reset on process restart.
+        self._previous_desired_fingerprints: dict[PlaylistId, str] = {}
+        self._playlist_failure_streaks: dict[PlaylistId, tuple[int, datetime]] = {}
 
     def run_cycle(self) -> EngineCycleResult:
         if not self._cycle_lock.acquire(blocking=False):
@@ -327,6 +344,7 @@ class EngineRunner:
                 continue
             playlist_started_at = _as_utc(self.clock())
             desired_count = 0
+            request_diagnostics: dict[str, Any] = {}
             unsafe_for_playlist = tuple(
                 source_id
                 for source_id in playlist.source_selection.explicit
@@ -390,6 +408,7 @@ class EngineRunner:
                     source_timezones=self._source_timezones(),
                 )
                 desired_count = len(desired.items)
+                request_diagnostics = self._request_diagnostics(playlist.id, desired.uris)
                 mutation_guard = (
                     None
                     if self.playlist_mutation_guard is None
@@ -412,6 +431,7 @@ class EngineRunner:
                     applied_count=reconciled.applied_count or 0,
                 )
                 playlist_state = self.store.get_playlist_state(playlist.id)
+                self._playlist_failure_streaks.pop(playlist.id, None)
                 playlist_outcomes.append(
                     PlaylistCycleOutcome(
                         playlist_id=playlist.id,
@@ -424,6 +444,8 @@ class EngineRunner:
                         ),
                         error=reconciled.warning,
                         duration_decisions=desired.duration_decisions,
+                        **request_diagnostics,
+                        write_outcome=("verified" if reconciled.wrote else "not_attempted"),
                     )
                 )
             except (
@@ -456,6 +478,9 @@ class EngineRunner:
                         playlist_outcomes,
                         persistence_exc,
                     )
+                failure_count, first_failure_at = self._record_failure(
+                    playlist.id, playlist_finished_at
+                )
                 playlist_outcomes.append(
                     PlaylistCycleOutcome(
                         playlist_id=playlist.id,
@@ -467,6 +492,13 @@ class EngineRunner:
                             None if playlist_state is None else playlist_state.last_success_at
                         ),
                         error=error_message,
+                        **request_diagnostics,
+                        consecutive_failure_count=failure_count,
+                        first_failure_at=first_failure_at,
+                        last_failure_at=playlist_finished_at,
+                        write_outcome=(
+                            "unknown" if "write_outcome=unknown" in error_message else None
+                        ),
                     )
                 )
             except PersistenceError as exc:
@@ -595,6 +627,38 @@ class EngineRunner:
 
     def _source_timezones(self) -> Mapping[SourceId, ZoneInfo]:
         return {source.id: source.timezone for source in self.config.sources}
+
+    def _request_diagnostics(
+        self, playlist_id: PlaylistId, uris: tuple[str, ...]
+    ) -> dict[str, Any]:
+        encoded = json.dumps({"uris": list(uris)}).encode("utf-8")
+        fingerprint = hashlib.sha256(
+            json.dumps(uris, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        previous = self._previous_desired_fingerprints.get(playlist_id)
+        self._previous_desired_fingerprints[playlist_id] = fingerprint
+        valid = sum(
+            re.fullmatch(r"spotify:episode:[A-Za-z0-9]{22}", uri) is not None for uri in uris
+        )
+        return {
+            "request_item_count": len(uris),
+            "request_payload_bytes": len(encoded),
+            "valid_uri_count": valid,
+            "invalid_uri_count": len(uris) - valid,
+            "duplicate_count": len(uris) - len(set(uris)),
+            "desired_fingerprint": fingerprint,
+            "desired_changed_since_previous_attempt": (
+                None if previous is None else previous != fingerprint
+            ),
+        }
+
+    def _record_failure(
+        self, playlist_id: PlaylistId, occurred_at: datetime
+    ) -> tuple[int, datetime]:
+        prior = self._playlist_failure_streaks.get(playlist_id)
+        result = (1, occurred_at) if prior is None else (prior[0] + 1, prior[1])
+        self._playlist_failure_streaks[playlist_id] = result
+        return result
 
     def _matching_cutoff(self, now: datetime) -> datetime:
         enabled = [

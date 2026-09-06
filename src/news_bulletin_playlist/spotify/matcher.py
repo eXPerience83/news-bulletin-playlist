@@ -117,7 +117,12 @@ def match_source_editions(
         else:
             outcomes[index] = cached
 
-    if not unresolved:
+    cached_matched = [
+        (index, outcome)
+        for index, outcome in enumerate(outcomes)
+        if outcome is not None and outcome.status is MatchStatus.MATCHED
+    ]
+    if not unresolved and not cached_matched:
         return SourceMatchResult(
             source_id=source.id,
             outcomes=tuple(_require_outcome(outcome) for outcome in outcomes),
@@ -125,12 +130,36 @@ def match_source_editions(
         )
 
     show_id = _spotify_show_id(source)
-    candidates, catalogue_calls = _fetch_candidates(
+    candidates, catalogue_calls, catalogue_complete = _fetch_candidates(
         client,
         show_id,
         page_size=page_size,
         max_pages=max_pages,
     )
+    candidate_uris = {candidate.uri for candidate in candidates}
+
+    if catalogue_complete and candidates:
+        for index, cached in cached_matched:
+            uri = cached.spotify_episode_uri
+            if uri is None or uri in candidate_uris:
+                continue
+            diagnostics = "persisted Spotify episode is absent from the complete show catalogue"
+            store.set_match_state(
+                cached.edition.source_id,
+                cached.edition.source_native_id,
+                status=MatchStatus.PENDING,
+                spotify_episode_uri=None,
+                spotify_duration_seconds=None,
+                diagnostics=diagnostics,
+                updated_at=observed_at,
+            )
+            outcomes[index] = MatchOutcome(
+                edition=cached.edition,
+                status=MatchStatus.PENDING,
+                spotify_episode_uri=None,
+                spotify_duration_seconds=None,
+                diagnostics=diagnostics,
+            )
 
     for index, edition in unresolved:
         evaluations = tuple(
@@ -230,9 +259,10 @@ def _fetch_candidates(
     *,
     page_size: int,
     max_pages: int,
-) -> tuple[tuple[_SpotifyEpisodeCandidate, ...], int]:
+) -> tuple[tuple[_SpotifyEpisodeCandidate, ...], int, bool]:
     by_uri: dict[str, _SpotifyEpisodeCandidate] = {}
     calls = 0
+    complete = False
     for page_number in range(max_pages):
         page = client.show_episodes(
             show_id,
@@ -261,9 +291,10 @@ def _fetch_candidates(
                     "Spotify catalogue repeated an episode URI with conflicting metadata"
                 )
 
-        if not items or next_page is None:
+        if next_page is None:
+            complete = True
             break
-    return tuple(by_uri.values()), calls
+    return tuple(by_uri.values()), calls, complete
 
 
 def _candidate_from_item(item: object) -> _SpotifyEpisodeCandidate:
