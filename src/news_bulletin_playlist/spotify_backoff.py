@@ -229,7 +229,12 @@ class SpotifyRateLimitJournal:
         with self._volatile_lock:
             return self._volatile_state, self._volatile_durable
 
-    def _remember(self, candidate: SpotifyRateLimitState, *, durable: bool) -> SpotifyRateLimitState:
+    def _remember(
+        self,
+        candidate: SpotifyRateLimitState,
+        *,
+        durable: bool,
+    ) -> SpotifyRateLimitState:
         with self._volatile_lock:
             current = self._volatile_state
             if current is None or candidate.retry_not_before > current.retry_not_before:
