@@ -134,10 +134,13 @@ class SpotifyRateLimitJournal:
 
     _fallback_lock = threading.Lock()
     _fallback_by_path: dict[str, SpotifyRateLimitState] = {}
+    _request_locks_guard = threading.Lock()
+    _request_locks_by_path: dict[str, threading.Lock] = {}
 
     def __init__(self, store: SQLiteStore) -> None:
         self.path = store.path
         self._fallback_key = str(self.path.resolve())
+        self._request_lock = self._request_lock_for_path(self._fallback_key)
         self.diagnostics = self._build_diagnostics()
 
     def get(self) -> SpotifyRateLimitState | None:
@@ -249,6 +252,15 @@ class SpotifyRateLimitJournal:
             if current is not None and current.retry_not_before <= persisted_deadline:
                 self._fallback_by_path.pop(self._fallback_key, None)
 
+    @classmethod
+    def _request_lock_for_path(cls, key: str) -> threading.Lock:
+        with cls._request_locks_guard:
+            lock = cls._request_locks_by_path.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                cls._request_locks_by_path[key] = lock
+            return lock
+
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
         connection.execute(_TABLE_SQL)
@@ -302,17 +314,18 @@ class SpotifyRateLimitGuardAuth:
         self.diagnostics = journal.diagnostics if diagnostics is None else diagnostics
 
     def get_access_token(self, *, now: datetime | None = None) -> str:
-        observed = _as_utc(self.clock() if now is None else now)
-        try:
-            state = self.journal.active(now=observed)
-        except PersistenceError as exc:
-            raise SpotifyRateLimitStateUnavailable(
-                "Spotify rate-limit state is unavailable"
-            ) from exc
-        if state is not None:
-            _emit_backoff(self.diagnostics, state, backoff_state="active", occurred_at=observed)
-            raise SpotifyRateLimitBackoffActive(_active_message(state))
-        return self.provider.get_access_token(now=now)
+        with self.journal._request_lock:
+            observed = _as_utc(self.clock() if now is None else now)
+            try:
+                state = self.journal.active(now=observed)
+            except PersistenceError as exc:
+                raise SpotifyRateLimitStateUnavailable(
+                    "Spotify rate-limit state is unavailable"
+                ) from exc
+            if state is not None:
+                _emit_backoff(self.diagnostics, state, backoff_state="active", occurred_at=observed)
+                raise SpotifyRateLimitBackoffActive(_active_message(state))
+            return self.provider.get_access_token(now=now)
 
 
 class SpotifyRateLimitGuardClient:
@@ -359,33 +372,34 @@ class SpotifyRateLimitGuardClient:
         return self._call(lambda: self.client.playlist_snapshot(playlist_id))
 
     def _call(self, operation: Callable[[], T]) -> T:
-        observed = _as_utc(self.clock())
-        state = self._cycle_limited
-        if state is None:
-            state = self.journal.active(now=observed)
-        if state is not None:
-            self._cycle_limited = state
-            raise SpotifyRateLimitSuppressed(
-                "Spotify request skipped because rate-limit backoff is active"
-            )
-        try:
-            return operation()
-        except SpotifyApiError as exc:
-            if exc.status != 429:
+        with self.journal._request_lock:
+            observed = _as_utc(self.clock())
+            state = self._cycle_limited
+            if state is None:
+                state = self.journal.active(now=observed)
+            if state is not None:
+                self._cycle_limited = state
+                raise SpotifyRateLimitSuppressed(
+                    "Spotify request skipped because rate-limit backoff is active"
+                )
+            try:
+                return operation()
+            except SpotifyApiError as exc:
+                if exc.status != 429:
+                    raise
+                rate_limited_at = _as_utc(self.clock())
+                state = self.journal.activate(
+                    observed_at=rate_limited_at,
+                    retry_after_seconds=exc.retry_after,
+                )
+                self._cycle_limited = state
+                _emit_backoff(
+                    self.diagnostics,
+                    state,
+                    backoff_state="activated",
+                    occurred_at=rate_limited_at,
+                )
                 raise
-            rate_limited_at = _as_utc(self.clock())
-            state = self.journal.activate(
-                observed_at=rate_limited_at,
-                retry_after_seconds=exc.retry_after,
-            )
-            self._cycle_limited = state
-            _emit_backoff(
-                self.diagnostics,
-                state,
-                backoff_state="activated",
-                occurred_at=rate_limited_at,
-            )
-            raise
 
 
 def is_spotify_rate_limit_suppressed(error: BaseException) -> bool:
@@ -487,10 +501,12 @@ def _format_display_timestamp(value: datetime) -> str:
 
 def _parse_timestamp(value: str) -> datetime:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return _as_utc(parsed)
+        parsed = _as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
     except ValueError as exc:
         raise PersistenceError("Spotify rate-limit backoff contained an invalid timestamp") from exc
+    if value != _format_storage_timestamp(parsed):
+        raise PersistenceError("Spotify rate-limit backoff contained an invalid timestamp")
+    return parsed
 
 
 def _row_text(row: sqlite3.Row, key: str) -> str:

@@ -182,13 +182,9 @@ class SpotifyClient:
 
 
 def _retry_after(value: str | None) -> int | None:
-    if value is None:
+    if value is None or not value or not value.isascii() or not value.isdigit():
         return None
-    try:
-        seconds = int(value)
-    except ValueError:
-        return None
-    return seconds if seconds >= 0 else None
+    return int(value)
 
 
 def _safe_http_message(status: int) -> str:
