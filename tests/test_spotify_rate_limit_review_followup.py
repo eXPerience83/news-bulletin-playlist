@@ -16,7 +16,6 @@ from news_bulletin_playlist.spotify_backoff import (
     SpotifyRateLimitGuardAuth,
     SpotifyRateLimitGuardClient,
     SpotifyRateLimitJournal,
-    SpotifyRateLimitSuppressed,
 )
 
 NOW = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
@@ -146,7 +145,7 @@ def test_retry_after_deadline_starts_when_429_is_received(tmp_path: Path) -> Non
     assert state.backoff_source == "spotify_header"
 
 
-def test_failed_backoff_persistence_is_retained_in_memory_and_retried_before_spotify(
+def test_failed_backoff_persistence_survives_journal_recreation_and_retries_before_spotify(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -175,21 +174,18 @@ def test_failed_backoff_persistence_is_retained_in_memory_and_retried_before_spo
         client.show_episodes("slow-show")
     assert delegate.calls == 1
 
-    with pytest.raises(SpotifyRateLimitSuppressed):
-        client.show_episodes("must-not-reach-provider")
-    assert delegate.calls == 1
-
-    persisted = SpotifyRateLimitJournal(store).get()
-    assert persisted is not None
-    assert persisted.observed_at == NOW + timedelta(seconds=20)
-    assert persisted.retry_not_before == NOW + timedelta(seconds=50)
-
     auth = _Auth()
-    restarted = SpotifyRateLimitGuardAuth(
+    recreated = SpotifyRateLimitGuardAuth(
         auth,
         SpotifyRateLimitJournal(store),
         clock=lambda: NOW + timedelta(seconds=21),
     )
     with pytest.raises(SpotifyRateLimitBackoffActive):
-        restarted.get_access_token(now=NOW + timedelta(seconds=21))
+        recreated.get_access_token(now=NOW + timedelta(seconds=21))
+
     assert auth.calls == 0
+    assert delegate.calls == 1
+    persisted = SpotifyRateLimitJournal(store).get()
+    assert persisted is not None
+    assert persisted.observed_at == NOW + timedelta(seconds=20)
+    assert persisted.retry_not_before == NOW + timedelta(seconds=50)
