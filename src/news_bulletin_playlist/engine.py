@@ -56,6 +56,7 @@ from news_bulletin_playlist.spotify_backoff import (
     SpotifyRateLimitJournal,
     is_spotify_rate_limit_suppressed,
 )
+from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
 DEFAULT_ENGINE_INTERVAL = timedelta(minutes=10)
 
@@ -191,18 +192,24 @@ class EngineRunner:
         playlist_mutation_guard: (
             Callable[[PlaylistDefinition], AbstractContextManager[None]] | None
         ) = None,
+        request_metrics: SpotifyRequestMetrics | None = None,
     ) -> None:
         self.config = config
         self.store = store
         self.fetcher = fetcher
         self.clock = clock or _utc_now
         self.rate_limit_journal = SpotifyRateLimitJournal(store)
+        self.request_metrics = request_metrics or SpotifyRequestMetrics(store.path)
+        self.request_metrics.initialize()
         self.auth = SpotifyRateLimitGuardAuth(
             auth,
             self.rate_limit_journal,
             clock=self.clock,
         )
-        base_client_factory = client_factory or _spotify_client
+        base_client_factory = client_factory or partial(
+            _spotify_client,
+            metrics=self.request_metrics,
+        )
 
         def guarded_client_factory(access_token: str) -> SpotifyEngineClient:
             return SpotifyRateLimitGuardClient(
@@ -742,8 +749,8 @@ class EngineScheduler:
                 return
 
 
-def _spotify_client(access_token: str) -> SpotifyEngineClient:
-    return SpotifyClient(access_token=access_token)
+def _spotify_client(access_token: str, *, metrics: SpotifyRequestMetrics) -> SpotifyEngineClient:
+    return SpotifyClient(access_token=access_token, metrics=metrics)
 
 
 def _combine_errors(first: str | None, second: str) -> str:

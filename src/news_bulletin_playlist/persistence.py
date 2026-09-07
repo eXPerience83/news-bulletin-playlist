@@ -13,7 +13,7 @@ from news_bulletin_playlist.models import CanonicalEdition, PlaylistId, SourceId
 DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
 DEFAULT_RETENTION_DAYS = 30
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
 
 
 class PersistenceError(RuntimeError):
@@ -185,6 +185,35 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             ALTER TABLE spotify_matches
             ADD COLUMN spotify_duration_seconds INTEGER
                 CHECK (spotify_duration_seconds IS NULL OR spotify_duration_seconds >= 0)
+            """,
+        ),
+    ),
+    (
+        4,
+        (
+            """
+            CREATE TABLE spotify_request_metrics (
+                bucket_at TEXT NOT NULL,
+                surface TEXT NOT NULL CHECK (surface IN ('web_api', 'oauth')),
+                operation TEXT NOT NULL,
+                outcome TEXT NOT NULL CHECK (
+                    outcome IN ('success', 'http_error', 'transport_error', 'response_error')
+                ),
+                http_status INTEGER NOT NULL DEFAULT -1,
+                quota_reason TEXT NOT NULL DEFAULT '',
+                request_count INTEGER NOT NULL CHECK (request_count > 0),
+                PRIMARY KEY (bucket_at, surface, operation, outcome, http_status, quota_reason)
+            )
+            """,
+            """
+            CREATE INDEX spotify_request_metrics_bucket_idx
+            ON spotify_request_metrics (bucket_at DESC)
+            """,
+            """
+            CREATE TABLE spotify_request_metrics_coverage (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                incomplete_at TEXT NOT NULL
+            )
             """,
         ),
     ),

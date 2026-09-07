@@ -69,7 +69,12 @@ from news_bulletin_playlist.spotify.auth import (
     SpotifyAuthError,
     SpotifyAuthService,
 )
-from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
+from news_bulletin_playlist.spotify.client import (
+    SpotifyApiError,
+    SpotifyClient,
+    SpotifyTransportError,
+)
+from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
 _INTERVAL_SECONDS_ENV = "NEWS_PLAYLIST_INTERVAL_SECONDS"
 _MIN_RUNTIME_INTERVAL = timedelta(minutes=1)
@@ -309,6 +314,7 @@ class ReloadingEngineCycleRunner:
         fetcher: FeedFetcher = fetch_feed,
         client_factory: SpotifyClientFactory | None = None,
         clock: Clock | None = None,
+        request_metrics: SpotifyRequestMetrics | None = None,
     ) -> None:
         self.data_dir = data_dir
         self.environ = environ
@@ -318,6 +324,7 @@ class ReloadingEngineCycleRunner:
         self.fetcher = fetcher
         self.client_factory = client_factory
         self.clock = clock
+        self.request_metrics = request_metrics
 
     def run_cycle(self) -> EngineCycleResult:
         started_at = datetime.now(UTC)
@@ -358,6 +365,7 @@ class ReloadingEngineCycleRunner:
             client_factory=self.client_factory,
             clock=self.clock,
             playlist_mutation_guard=playlist_mutation_guard,
+            request_metrics=self.request_metrics,
         ).run_cycle()
 
     @contextmanager
@@ -463,6 +471,7 @@ class OperationalHealthHandler(LanAdminHandler):
     managed_admin_service: ManagedAdminService | None = None
     managed_admin_auth: SpotifyAuthProvider | None = None
     diagnostic_store: DiagnosticEventStore | None = None
+    spotify_request_metrics: SpotifyRequestMetrics | None = None
     operational_diagnostics: OperationalDiagnostics | None = None
 
     def _send_headers(
@@ -952,6 +961,8 @@ def serve(
     else:
         diagnostic_store = diagnostic_candidate
     diagnostics = OperationalDiagnostics(diagnostic_store)
+    request_metrics = SpotifyRequestMetrics(database_path)
+    request_metrics.initialize()
     if diagnostic_store is None:
         diagnostics.emit(
             occurred_at=datetime.now(UTC),
@@ -962,10 +973,13 @@ def serve(
         )
 
     admin_security, spotify_auth = build_engine_runtime_auth(data_dir, environ=env)
+    if spotify_auth is not None:
+        spotify_auth.set_request_metrics(request_metrics)
     managed_admin_service = _build_managed_admin_service(
         data_dir,
         env,
         spotify_auth=spotify_auth,
+        request_metrics=request_metrics,
     )
     if managed_admin_service is not None:
         managed_admin_service.finalize_known_provisioning()
@@ -991,6 +1005,7 @@ def serve(
             store,
             auth_provider,
             configuration_synchronization,
+            request_metrics=request_metrics,
         )
         runner = InstrumentedEngineCycleRunner(base_runner, diagnostics)
         lifecycle = EngineLifecycleController(
@@ -1016,6 +1031,7 @@ def serve(
     OperationalHealthHandler.managed_admin_auth = auth_provider
     OperationalHealthHandler.diagnostic_store = diagnostic_store
     OperationalHealthHandler.operational_diagnostics = diagnostics
+    OperationalHealthHandler.spotify_request_metrics = request_metrics
     server = HTTPServer((host, port), OperationalHealthHandler)
     server.timeout = 0.5
     stopped = stop_event if stop_event is not None else threading.Event()
@@ -1064,6 +1080,7 @@ def serve(
         OperationalHealthHandler.managed_admin_service = None
         OperationalHealthHandler.managed_admin_auth = None
         OperationalHealthHandler.diagnostic_store = None
+        OperationalHealthHandler.spotify_request_metrics = None
         if handlers_installed:
             signal.signal(signal.SIGTERM, previous_sigterm)
             signal.signal(signal.SIGINT, previous_sigint)
@@ -1082,6 +1099,7 @@ def _build_managed_admin_service(
     environ: Mapping[str, str],
     *,
     spotify_auth: SpotifyAuthService | None,
+    request_metrics: SpotifyRequestMetrics | None = None,
 ) -> ManagedAdminService | None:
     if spotify_auth is None:
         return None
@@ -1093,6 +1111,14 @@ def _build_managed_admin_service(
         return None
     return ManagedAdminService(
         ManagedStateStore(data_dir / MANAGED_STATE_FILENAME),
+        client_factory=(
+            SpotifyClient
+            if request_metrics is None
+            else lambda access_token: SpotifyClient(
+                access_token=access_token,
+                metrics=request_metrics,
+            )
+        ),
         cover_loader=_load_bundled_cover,
     )
 

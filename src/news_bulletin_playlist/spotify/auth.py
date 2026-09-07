@@ -19,6 +19,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from news_bulletin_playlist.spotify_metrics import (
+    SpotifyOAuthOperation,
+    SpotifyRequestMetrics,
+    SpotifyRequestOutcome,
+)
+
 AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_AUTH_FILENAME = "spotify-auth.json"
@@ -125,8 +131,14 @@ class SpotifyTokenTransport(Protocol):
 class SpotifyAccountsClient:
     """Minimal PKCE token endpoint client with secret-safe errors."""
 
-    def __init__(self, *, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        timeout: float = 30.0,
+        metrics: SpotifyRequestMetrics | None = None,
+    ) -> None:
         self.timeout = timeout
+        self.metrics = metrics
 
     def exchange_code(
         self,
@@ -137,25 +149,31 @@ class SpotifyAccountsClient:
         verifier: str,
     ) -> TokenResponse:
         return self._post_token(
+            SpotifyOAuthOperation.TOKEN_EXCHANGE,
             {
                 "client_id": client_id,
                 "grant_type": "authorization_code",
                 "code": code,
                 "redirect_uri": redirect_uri,
                 "code_verifier": verifier,
-            }
+            },
         )
 
     def refresh_token(self, *, client_id: str, refresh_token: str) -> TokenResponse:
         return self._post_token(
+            SpotifyOAuthOperation.TOKEN_REFRESH,
             {
                 "client_id": client_id,
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
-            }
+            },
         )
 
-    def _post_token(self, fields: dict[str, str]) -> TokenResponse:
+    def _post_token(
+        self,
+        operation: SpotifyOAuthOperation,
+        fields: dict[str, str],
+    ) -> TokenResponse:
         body = urllib.parse.urlencode(fields).encode("ascii")
         request = urllib.request.Request(
             TOKEN_URL,
@@ -167,6 +185,7 @@ class SpotifyAccountsClient:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 payload = bytes(response.read())
         except urllib.error.HTTPError as exc:
+            self._record(operation, SpotifyRequestOutcome.HTTP_ERROR, http_status=exc.code)
             error_code = _oauth_error_code(_read_http_error_body(exc))
             raise SpotifyTokenEndpointError(
                 f"Spotify token endpoint rejected the request (HTTP {exc.code})",
@@ -174,15 +193,34 @@ class SpotifyAccountsClient:
                 error_code=error_code,
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            self._record(operation, SpotifyRequestOutcome.TRANSPORT_ERROR)
             raise SpotifyTokenError("Spotify token endpoint is temporarily unreachable") from exc
 
         try:
             decoded = json.loads(payload)
         except json.JSONDecodeError as exc:
+            self._record(operation, SpotifyRequestOutcome.RESPONSE_ERROR)
             raise SpotifyTokenError("Spotify token endpoint returned invalid JSON") from exc
         if not isinstance(decoded, dict):
+            self._record(operation, SpotifyRequestOutcome.RESPONSE_ERROR)
             raise SpotifyTokenError("Spotify token endpoint returned an unexpected response")
-        return _validate_token_response(cast(dict[str, Any], decoded))
+        try:
+            response = _validate_token_response(cast(dict[str, Any], decoded))
+        except SpotifyTokenError:
+            self._record(operation, SpotifyRequestOutcome.RESPONSE_ERROR)
+            raise
+        self._record(operation, SpotifyRequestOutcome.SUCCESS)
+        return response
+
+    def _record(
+        self,
+        operation: SpotifyOAuthOperation,
+        outcome: SpotifyRequestOutcome,
+        *,
+        http_status: int | None = None,
+    ) -> None:
+        if self.metrics is not None:
+            self.metrics.record_oauth(operation, outcome, http_status=http_status)
 
 
 class SpotifyCredentialStore:
@@ -302,13 +340,16 @@ class SpotifyAuthService:
         transport: SpotifyTokenTransport | None = None,
         scopes: Sequence[str] | None = None,
         required_scopes: Sequence[str] | None = None,
+        metrics: SpotifyRequestMetrics | None = None,
     ) -> None:
         if not client_id.strip():
             raise SpotifyAuthConfigurationError("Spotify client ID is required")
         self.client_id = client_id.strip()
         self.redirect_uri = validate_redirect_uri(redirect_uri)
         self.store = store
-        self.transport = transport if transport is not None else SpotifyAccountsClient()
+        self.transport = (
+            transport if transport is not None else SpotifyAccountsClient(metrics=metrics)
+        )
         if scopes is None:
             self.scopes: tuple[str, ...] = PRODUCTION_REQUESTED_SCOPES
             self.required_scopes: tuple[str, ...] = PRODUCTION_SCOPES
@@ -326,6 +367,11 @@ class SpotifyAuthService:
         self._pending: PendingAuthorization | None = None
         self._access_token: _CachedAccessToken | None = None
         self._reauthorization_required = False
+
+    def set_request_metrics(self, metrics: SpotifyRequestMetrics) -> None:
+        """Attach process-owned metrics to the built-in token transport only."""
+        if isinstance(self.transport, SpotifyAccountsClient):
+            self.transport.metrics = metrics
 
     def authorization_state(self) -> AuthorizationState:
         if self._reauthorization_required:

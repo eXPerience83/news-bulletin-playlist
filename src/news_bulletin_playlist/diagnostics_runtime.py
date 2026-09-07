@@ -36,6 +36,10 @@ from news_bulletin_playlist.runtime import (
     _data_dir_ready,
 )
 from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.spotify_metrics import (
+    SpotifyRequestMetrics,
+    SpotifyRequestMetricsSnapshot,
+)
 
 
 class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler):
@@ -44,6 +48,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
     diagnostic_timezone: tzinfo = UTC
     diagnostic_timezone_label = "UTC"
     build_revision = "dev"
+    spotify_request_metrics: SpotifyRequestMetrics | None = None
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         try:
@@ -143,6 +148,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 filters=filters,
                 display_timezone=self.diagnostic_timezone,
                 timezone_label=self.diagnostic_timezone_label,
+                spotify_metrics=self._spotify_metrics(),
             ),
         )
 
@@ -174,6 +180,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             build_revision=self.build_revision,
             filters=filters,
             result_truncated=result_truncated,
+            spotify_metrics=self._spotify_metrics(),
         )
         self._reply(
             HTTPStatus.OK,
@@ -205,6 +212,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except PersistenceError as exc:
             raise RuntimeError("diagnostic store unavailable") from exc
         return filters, events, result_truncated
+
+    def _spotify_metrics(self) -> SpotifyRequestMetricsSnapshot | None:
+        metrics = self.spotify_request_metrics
+        return None if metrics is None else metrics.last_24_hours()
 
     def _invalid_diagnostic_filters(self) -> None:
         self._reply(
