@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -12,6 +13,7 @@ from pathlib import Path
 from news_bulletin_playlist.persistence import DEFAULT_DB_PATH, PersistenceError, SQLiteStore
 
 SPOTIFY_METRICS_RETENTION_DAYS = 30
+Clock = Callable[[], datetime]
 
 
 class SpotifyWebApiOperation(StrEnum):
@@ -90,24 +92,17 @@ class SpotifyRequestMetricsSnapshot:
 class SpotifyRequestMetrics:
     """Persist minute-level aggregates without letting observability alter provider behavior."""
 
-    def __init__(self, path: Path | str = DEFAULT_DB_PATH) -> None:
+    def __init__(self, path: Path | str = DEFAULT_DB_PATH, *, clock: Clock | None = None) -> None:
         self.path = Path(path)
-        self._coverage_complete = True
+        self._clock = _utc_now if clock is None else clock
+        self._pending_incomplete_at: datetime | None = None
         self._lock = threading.Lock()
 
     def initialize(self) -> None:
         try:
             SQLiteStore(self.path).initialize()
-            with self._connection("read Spotify request metric coverage") as connection:
-                row = connection.execute(
-                    "SELECT incomplete_at FROM spotify_request_metrics_coverage WHERE singleton = 1"
-                ).fetchone()
-            if row is not None and _parse_timestamp(row["incomplete_at"]) >= datetime.now(
-                UTC
-            ) - timedelta(days=SPOTIFY_METRICS_RETENTION_DAYS):
-                self._mark_incomplete(persist=False)
         except PersistenceError, ValueError:
-            self._mark_incomplete()
+            self._mark_incomplete(_as_utc(self._clock()))
 
     def record_web_api(
         self,
@@ -145,11 +140,12 @@ class SpotifyRequestMetrics:
         )
 
     def last_24_hours(self, *, now: datetime | None = None) -> SpotifyRequestMetricsSnapshot:
-        observed = _as_utc(now or datetime.now(UTC))
+        observed = _as_utc(now or self._clock())
         coverage_since = observed - timedelta(hours=24)
         since = _bucket(coverage_since)
         try:
             with self._connection("read Spotify request metrics") as connection:
+                persisted_pending = self._persist_pending_incomplete(connection)
                 rows = connection.execute(
                     """
                     SELECT surface, operation, outcome, http_status, quota_reason,
@@ -164,8 +160,9 @@ class SpotifyRequestMetrics:
                 coverage_row = connection.execute(
                     "SELECT incomplete_at FROM spotify_request_metrics_coverage WHERE singleton = 1"
                 ).fetchone()
+            self._clear_persisted_pending(persisted_pending)
         except PersistenceError:
-            self._mark_incomplete()
+            self._mark_incomplete(observed)
             return SpotifyRequestMetricsSnapshot((), coverage_complete=False)
         try:
             metrics = tuple(_metric_from_row(row) for row in rows)
@@ -174,17 +171,13 @@ class SpotifyRequestMetrics:
                 and _parse_timestamp(coverage_row["incomplete_at"]) >= coverage_since
             )
         except KeyError, TypeError, ValueError:
-            self._mark_incomplete()
+            self._mark_incomplete(observed)
             return SpotifyRequestMetricsSnapshot((), coverage_complete=False)
+        pending_gap = self._pending_incomplete_in_window(coverage_since)
         return SpotifyRequestMetricsSnapshot(
             metrics,
-            coverage_complete=self.coverage_complete and not durable_gap,
+            coverage_complete=not durable_gap and not pending_gap,
         )
-
-    @property
-    def coverage_complete(self) -> bool:
-        with self._lock:
-            return self._coverage_complete
 
     def _record(
         self,
@@ -197,12 +190,13 @@ class SpotifyRequestMetrics:
         occurred_at: datetime | None,
     ) -> None:
         if http_status is not None and not 100 <= http_status <= 599:
-            self._mark_incomplete()
+            self._mark_incomplete(_as_utc(occurred_at or self._clock()))
             return
-        observed = _as_utc(occurred_at or datetime.now(UTC))
+        observed = _as_utc(occurred_at or self._clock())
         bucket = _bucket(observed)
         try:
             with self._connection("record Spotify request metric") as connection:
+                persisted_pending = self._persist_pending_incomplete(connection)
                 connection.execute(
                     """
                     INSERT INTO spotify_request_metrics (
@@ -229,29 +223,53 @@ class SpotifyRequestMetrics:
                     "DELETE FROM spotify_request_metrics_coverage WHERE incomplete_at < ?",
                     (_bucket(observed - timedelta(days=SPOTIFY_METRICS_RETENTION_DAYS)),),
                 )
+            self._clear_persisted_pending(persisted_pending)
         except PersistenceError:
-            self._mark_incomplete()
+            self._mark_incomplete(observed)
 
     def _connection(self, operation: str) -> _MetricsConnection:
         return _MetricsConnection(self.path, operation)
 
-    def _mark_incomplete(self, *, persist: bool = True) -> None:
+    def _mark_incomplete(self, observed_at: datetime) -> None:
+        observed = _as_utc(observed_at)
         with self._lock:
-            self._coverage_complete = False
-        if not persist:
-            return
+            pending = self._pending_incomplete_at
+            if pending is None or observed > pending:
+                self._pending_incomplete_at = observed
         try:
             with self._connection("persist Spotify request metric coverage") as connection:
-                connection.execute(
-                    """
-                    INSERT INTO spotify_request_metrics_coverage (singleton, incomplete_at)
-                    VALUES (1, ?)
-                    ON CONFLICT(singleton) DO UPDATE SET incomplete_at = excluded.incomplete_at
-                    """,
-                    (_bucket(datetime.now(UTC)),),
-                )
+                persisted_pending = self._persist_pending_incomplete(connection)
+            self._clear_persisted_pending(persisted_pending)
         except PersistenceError:
             return
+
+    def _persist_pending_incomplete(self, connection: sqlite3.Connection) -> datetime | None:
+        with self._lock:
+            pending = self._pending_incomplete_at
+        if pending is None:
+            return None
+        connection.execute(
+            """
+            INSERT INTO spotify_request_metrics_coverage (singleton, incomplete_at)
+            VALUES (1, ?)
+            ON CONFLICT(singleton) DO UPDATE SET incomplete_at = excluded.incomplete_at
+            WHERE excluded.incomplete_at > spotify_request_metrics_coverage.incomplete_at
+            """,
+            (_bucket(pending),),
+        )
+        return pending
+
+    def _clear_persisted_pending(self, persisted: datetime | None) -> None:
+        if persisted is None:
+            return
+        with self._lock:
+            if self._pending_incomplete_at == persisted:
+                self._pending_incomplete_at = None
+
+    def _pending_incomplete_in_window(self, coverage_since: datetime) -> bool:
+        with self._lock:
+            pending = self._pending_incomplete_at
+        return pending is not None and pending >= coverage_since
 
 
 class _MetricsConnection:
@@ -325,6 +343,10 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Spotify metric timestamp must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def _parse_timestamp(value: object) -> datetime:

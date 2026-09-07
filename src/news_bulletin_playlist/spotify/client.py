@@ -208,7 +208,7 @@ class SpotifyClient:
             with urllib.request.urlopen(request, timeout=30.0) as response:
                 payload = bytes(response.read())
         except urllib.error.HTTPError as exc:
-            quota_reason = _quota_reason(_bounded_http_error_body(exc))
+            quota_reason = _quota_reason(_bounded_http_error_body(exc)) if exc.code == 429 else None
             self._record(
                 operation,
                 SpotifyRequestOutcome.HTTP_ERROR,
@@ -273,7 +273,7 @@ def _safe_http_message(status: int) -> str:
 
 def _bounded_http_error_body(error: urllib.error.HTTPError) -> bytes:
     try:
-        return error.read(_MAX_ERROR_BODY_BYTES + 1)[:_MAX_ERROR_BODY_BYTES]
+        return error.read(_MAX_ERROR_BODY_BYTES)
     except OSError:
         return b""
 

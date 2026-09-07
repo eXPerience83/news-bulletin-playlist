@@ -63,7 +63,7 @@ class _Response:
 
 
 def _metrics(tmp_path: Path) -> SpotifyRequestMetrics:
-    metrics = SpotifyRequestMetrics(tmp_path / "state.sqlite3")
+    metrics = SpotifyRequestMetrics(tmp_path / "state.sqlite3", clock=lambda: NOW)
     metrics.initialize()
     return metrics
 
@@ -174,6 +174,36 @@ def test_http_429_preserves_only_allowlisted_quota_reason_and_secrets_do_not_per
     assert TOKEN.encode() not in stored and BODY_SENTINEL.encode() not in stored
 
 
+def test_quota_exceeded_reason_is_not_accepted_for_non_429(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _metrics(tmp_path)
+
+    def urlopen(request: object, *, timeout: float) -> _Response:
+        assert isinstance(request, urllib.request.Request)
+        raise urllib.error.HTTPError(
+            request.full_url,
+            500,
+            "ignored",
+            {},
+            io.BytesIO(b'{"error":{"reason":"QUOTA_EXCEEDED"}}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    with pytest.raises(SpotifyApiError) as raised:
+        SpotifyClient(TOKEN, metrics=metrics).search_shows("query")
+
+    assert raised.value.quota_reason is None
+    metric = _metric(
+        metrics.last_24_hours(now=NOW),
+        operation="search_shows",
+        outcome=SpotifyRequestOutcome.HTTP_ERROR,
+    )
+    assert metric.http_status == 500
+    assert metric.quota_reason is None
+
+
 @pytest.mark.parametrize("body", [b"not-json", b'{"error":{"reason":"OTHER"}}', b"x" * 9000])
 def test_unknown_or_oversized_429_reason_remains_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: bytes
@@ -204,6 +234,35 @@ def test_unknown_or_oversized_429_reason_remains_unknown(
         ).quota_reason
         is None
     )
+
+
+def test_http_error_body_read_is_limited_to_eight_kib(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _metrics(tmp_path)
+    reads: list[int] = []
+
+    class SizedBody(io.BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            reads.append(size)
+            return super().read(size)
+
+    def urlopen(request: object, *, timeout: float) -> _Response:
+        assert isinstance(request, urllib.request.Request)
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "ignored",
+            {},
+            SizedBody(b"x" * 9000),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    with pytest.raises(SpotifyApiError):
+        SpotifyClient(TOKEN, metrics=metrics).search_shows("query")
+
+    assert reads == [8 * 1024]
 
 
 def test_transport_error_is_counted_after_real_attempt(
@@ -402,7 +461,6 @@ def test_metric_persistence_failure_does_not_change_successful_spotify_response(
     monkeypatch.setattr("urllib.request.urlopen", urlopen)
     monkeypatch.setattr(metrics, "_connection", unavailable)
     assert SpotifyClient(TOKEN, metrics=metrics).show_episodes("show") == {"items": []}
-    assert metrics.coverage_complete is False
     snapshot = metrics.last_24_hours(now=NOW)
     page = render_diagnostics_page(
         events=(),
@@ -413,13 +471,41 @@ def test_metric_persistence_failure_does_not_change_successful_spotify_response(
     assert b"Web API requests: 0" not in page
 
 
-def test_incomplete_coverage_survives_restart_without_reporting_missing_data_as_zero(
+@pytest.mark.parametrize(
+    ("gap_age", "expected_complete"),
+    [
+        (timedelta(hours=1), False),
+        (timedelta(hours=23, minutes=59), False),
+        (timedelta(hours=25), True),
+    ],
+)
+def test_coverage_is_evaluated_against_the_requested_window_in_the_same_process(
     tmp_path: Path,
+    gap_age: timedelta,
+    expected_complete: bool,
 ) -> None:
     metrics = _metrics(tmp_path)
-    metrics._mark_incomplete()
+    metrics._mark_incomplete(NOW - gap_age)
 
-    restarted = SpotifyRequestMetrics(metrics.path)
+    assert metrics.last_24_hours(now=NOW).coverage_complete is expected_complete
+
+
+@pytest.mark.parametrize(
+    ("gap_age", "expected_complete"),
+    [
+        (timedelta(hours=23, minutes=59), False),
+        (timedelta(hours=25), True),
+    ],
+)
+def test_coverage_window_decision_survives_restart(
+    tmp_path: Path,
+    gap_age: timedelta,
+    expected_complete: bool,
+) -> None:
+    metrics = _metrics(tmp_path)
+    metrics._mark_incomplete(NOW - gap_age)
+
+    restarted = SpotifyRequestMetrics(metrics.path, clock=lambda: NOW)
     restarted.initialize()
     snapshot = restarted.last_24_hours(now=NOW)
     bundle = build_diagnostic_bundle(
@@ -433,11 +519,50 @@ def test_incomplete_coverage_survives_restart_without_reporting_missing_data_as_
     with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
         runtime = json.loads(archive.read("runtime.json"))
     metric_document = runtime["spotify_request_metrics_last_24_hours"]
+    assert snapshot.coverage_complete is expected_complete
+    if expected_complete:
+        assert metric_document["web_api_requests"] == 0
+        assert metric_document["recorded_counts"] is None
+    else:
+        assert metric_document["web_api_requests"] is None
+        assert metric_document["recorded_counts"] == {
+            "http_429s": 0,
+            "oauth_refreshes": 0,
+            "quota_exceeded": 0,
+            "web_api_requests": 0,
+        }
+
+
+def test_recovered_sqlite_persists_a_pending_gap_before_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _metrics(tmp_path)
+    original_connection = metrics._connection
+    attempts = 0
+
+    def fail_first_two_connections(operation: str):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            raise PersistenceError(f"{operation} unavailable")
+        return original_connection(operation)
+
+    monkeypatch.setattr(metrics, "_connection", fail_first_two_connections)
+    gap_at = NOW - timedelta(minutes=5)
+    metrics.record_web_api(
+        SpotifyWebApiOperation.SHOW_EPISODES,
+        SpotifyRequestOutcome.SUCCESS,
+        occurred_at=gap_at,
+    )
+    metrics.record_web_api(
+        SpotifyWebApiOperation.SHOW_EPISODES,
+        SpotifyRequestOutcome.SUCCESS,
+        occurred_at=NOW,
+    )
+
+    restarted = SpotifyRequestMetrics(metrics.path, clock=lambda: NOW)
+    restarted.initialize()
+    snapshot = restarted.last_24_hours(now=NOW)
     assert snapshot.coverage_complete is False
-    assert metric_document["web_api_requests"] is None
-    assert metric_document["recorded_counts"] == {
-        "http_429s": 0,
-        "oauth_refreshes": 0,
-        "quota_exceeded": 0,
-        "web_api_requests": 0,
-    }
+    assert snapshot.web_api_requests == 1
