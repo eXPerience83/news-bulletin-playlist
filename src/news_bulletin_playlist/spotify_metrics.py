@@ -221,7 +221,11 @@ class SpotifyRequestMetrics:
                 )
                 connection.execute(
                     "DELETE FROM spotify_request_metrics_coverage WHERE incomplete_at < ?",
-                    (_bucket(observed - timedelta(days=SPOTIFY_METRICS_RETENTION_DAYS)),),
+                    (
+                        _coverage_timestamp(
+                            observed - timedelta(days=SPOTIFY_METRICS_RETENTION_DAYS)
+                        ),
+                    ),
                 )
             self._clear_persisted_pending(persisted_pending)
         except PersistenceError:
@@ -255,7 +259,7 @@ class SpotifyRequestMetrics:
             ON CONFLICT(singleton) DO UPDATE SET incomplete_at = excluded.incomplete_at
             WHERE excluded.incomplete_at > spotify_request_metrics_coverage.incomplete_at
             """,
-            (_bucket(pending),),
+            (_coverage_timestamp(pending),),
         )
         return pending
 
@@ -290,19 +294,28 @@ class _MetricsConnection:
         return connection
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        del exc, tb
+        del tb
         connection = self.connection
         if connection is None:
             return
+        db_error = exc if isinstance(exc, sqlite3.Error) else None
         try:
             if exc_type is None:
                 connection.commit()
             else:
                 connection.rollback()
-        except sqlite3.Error as db_exc:
-            raise PersistenceError(f"{self.operation} failed for {self.path}: {db_exc}") from db_exc
+        except sqlite3.Error as cleanup_error:
+            db_error = cleanup_error
         finally:
-            connection.close()
+            try:
+                connection.close()
+            except sqlite3.Error as close_error:
+                if db_error is None:
+                    db_error = close_error
+        if db_error is not None:
+            raise PersistenceError(
+                f"{self.operation} failed for {self.path}: {db_error}"
+            ) from db_error
 
 
 def _metric_from_row(row: sqlite3.Row) -> SpotifyRequestMetric:
@@ -337,6 +350,10 @@ def _metric_from_row(row: sqlite3.Row) -> SpotifyRequestMetric:
 
 def _bucket(value: datetime) -> str:
     return _as_utc(value).replace(second=0, microsecond=0).isoformat(timespec="seconds")
+
+
+def _coverage_timestamp(value: datetime) -> str:
+    return _as_utc(value).isoformat(timespec="microseconds")
 
 
 def _as_utc(value: datetime) -> datetime:

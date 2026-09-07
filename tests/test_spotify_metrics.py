@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import urllib.error
 import urllib.request
 import zipfile
@@ -43,7 +44,7 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyWebApiOperation,
 )
 
-NOW = datetime(2026, 9, 7, 10, 30, tzinfo=UTC)
+NOW = datetime(2026, 9, 7, 10, 30, 45, tzinfo=UTC)
 TOKEN = "access-token-sentinel"
 BODY_SENTINEL = "provider-message-sentinel"
 
@@ -60,6 +61,27 @@ class _Response:
 
     def read(self) -> bytes:
         return self.payload
+
+
+class _ExecuteFailureContext:
+    def __init__(self, context: object) -> None:
+        self.context = context
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        connection = self.context.__enter__()  # type: ignore[attr-defined]
+
+        class ConnectionProxy:
+            def execute(self, *args: object, **kwargs: object) -> object:
+                del args, kwargs
+                raise sqlite3.OperationalError("simulated metrics execute failure")
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(connection, name)
+
+        return ConnectionProxy()
+
+    def __exit__(self, *args: object) -> object:
+        return self.context.__exit__(*args)  # type: ignore[attr-defined]
 
 
 def _metrics(tmp_path: Path) -> SpotifyRequestMetrics:
@@ -263,6 +285,103 @@ def test_http_error_body_read_is_limited_to_eight_kib(
         SpotifyClient(TOKEN, metrics=metrics).search_shows("query")
 
     assert reads == [8 * 1024]
+
+
+def test_sqlite_execute_failure_does_not_change_successful_spotify_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _metrics(tmp_path)
+    original_connection = metrics._connection
+
+    def failing_connection(operation: str) -> _ExecuteFailureContext:
+        return _ExecuteFailureContext(original_connection(operation))
+
+    def urlopen(request: object, *, timeout: float) -> _Response:
+        assert isinstance(request, urllib.request.Request)
+        assert timeout == 30.0
+        return _Response(b'{"items":[]}')
+
+    monkeypatch.setattr(metrics, "_connection", failing_connection)
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    assert SpotifyClient(TOKEN, metrics=metrics).show_episodes("show") == {"items": []}
+
+    monkeypatch.setattr(metrics, "_connection", original_connection)
+    assert metrics.last_24_hours(now=NOW).coverage_complete is False
+
+
+def test_sqlite_execute_failure_does_not_mask_429_or_prevent_rate_limit_backoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _metrics(tmp_path)
+    original_connection = metrics._connection
+    journal = SpotifyRateLimitJournal(SQLiteStore(metrics.path))
+
+    def failing_connection(operation: str) -> _ExecuteFailureContext:
+        return _ExecuteFailureContext(original_connection(operation))
+
+    def urlopen(request: object, *, timeout: float) -> _Response:
+        assert isinstance(request, urllib.request.Request)
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "ignored",
+            {"Retry-After": "41164"},
+            io.BytesIO(b'{"error":{"reason":"QUOTA_EXCEEDED"}}'),
+        )
+
+    monkeypatch.setattr(metrics, "_connection", failing_connection)
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    guarded = SpotifyRateLimitGuardClient(
+        SpotifyClient(TOKEN, metrics=metrics),
+        journal,
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(SpotifyApiError) as raised:
+        guarded.show_episodes("show")
+
+    assert raised.value.status == 429
+    assert raised.value.retry_after == 41164
+    assert raised.value.quota_reason is SpotifyQuotaReason.QUOTA_EXCEEDED
+    state = journal.active(now=NOW)
+    assert state is not None
+    assert state.retry_after_seconds == 41164
+
+
+def test_sqlite_select_failure_returns_incomplete_metrics_without_exposing_sqlite_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = _metrics(tmp_path)
+    original_connection = metrics._connection
+
+    def failing_connection(operation: str) -> _ExecuteFailureContext:
+        return _ExecuteFailureContext(original_connection(operation))
+
+    monkeypatch.setattr(metrics, "_connection", failing_connection)
+    snapshot = metrics.last_24_hours(now=NOW)
+    page = render_diagnostics_page(
+        events=(),
+        filters=DiagnosticFilters(),
+        spotify_metrics=snapshot,
+    )
+    bundle = build_diagnostic_bundle(
+        events=(),
+        generated_at=NOW,
+        last_cycle=None,
+        retention_days=30,
+        max_events=10_000,
+        spotify_metrics=snapshot,
+    )
+
+    assert snapshot.coverage_complete is False
+    assert b"Coverage: incomplete" in page
+    assert b"Web API requests: 0" not in page
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        runtime = json.loads(archive.read("runtime.json"))
+    assert runtime["spotify_request_metrics_last_24_hours"]["web_api_requests"] is None
 
 
 def test_transport_error_is_counted_after_real_attempt(
@@ -476,7 +595,9 @@ def test_metric_persistence_failure_does_not_change_successful_spotify_response(
     [
         (timedelta(hours=1), False),
         (timedelta(hours=23, minutes=59), False),
-        (timedelta(hours=25), True),
+        (timedelta(hours=23, minutes=59, seconds=59), False),
+        (timedelta(hours=24), False),
+        (timedelta(hours=24, seconds=1), True),
     ],
 )
 def test_coverage_is_evaluated_against_the_requested_window_in_the_same_process(
@@ -493,8 +614,9 @@ def test_coverage_is_evaluated_against_the_requested_window_in_the_same_process(
 @pytest.mark.parametrize(
     ("gap_age", "expected_complete"),
     [
-        (timedelta(hours=23, minutes=59), False),
-        (timedelta(hours=25), True),
+        (timedelta(hours=23, minutes=59, seconds=59), False),
+        (timedelta(hours=24), False),
+        (timedelta(hours=24, seconds=1), True),
     ],
 )
 def test_coverage_window_decision_survives_restart(
