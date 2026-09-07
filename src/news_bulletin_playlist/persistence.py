@@ -209,6 +209,12 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             CREATE INDEX spotify_request_metrics_bucket_idx
             ON spotify_request_metrics (bucket_at DESC)
             """,
+            """
+            CREATE TABLE spotify_request_metrics_coverage (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                incomplete_at TEXT NOT NULL
+            )
+            """,
         ),
     ),
 )

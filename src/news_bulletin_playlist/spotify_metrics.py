@@ -98,7 +98,15 @@ class SpotifyRequestMetrics:
     def initialize(self) -> None:
         try:
             SQLiteStore(self.path).initialize()
-        except PersistenceError:
+            with self._connection("read Spotify request metric coverage") as connection:
+                row = connection.execute(
+                    "SELECT incomplete_at FROM spotify_request_metrics_coverage WHERE singleton = 1"
+                ).fetchone()
+            if row is not None and _parse_timestamp(row["incomplete_at"]) >= datetime.now(
+                UTC
+            ) - timedelta(days=SPOTIFY_METRICS_RETENTION_DAYS):
+                self._mark_incomplete(persist=False)
+        except PersistenceError, ValueError:
             self._mark_incomplete()
 
     def record_web_api(
@@ -138,7 +146,8 @@ class SpotifyRequestMetrics:
 
     def last_24_hours(self, *, now: datetime | None = None) -> SpotifyRequestMetricsSnapshot:
         observed = _as_utc(now or datetime.now(UTC))
-        since = _bucket(observed - timedelta(hours=24))
+        coverage_since = observed - timedelta(hours=24)
+        since = _bucket(coverage_since)
         try:
             with self._connection("read Spotify request metrics") as connection:
                 rows = connection.execute(
@@ -152,15 +161,25 @@ class SpotifyRequestMetrics:
                     """,
                     (since,),
                 ).fetchall()
+                coverage_row = connection.execute(
+                    "SELECT incomplete_at FROM spotify_request_metrics_coverage WHERE singleton = 1"
+                ).fetchone()
         except PersistenceError:
             self._mark_incomplete()
             return SpotifyRequestMetricsSnapshot((), coverage_complete=False)
         try:
             metrics = tuple(_metric_from_row(row) for row in rows)
+            durable_gap = (
+                coverage_row is not None
+                and _parse_timestamp(coverage_row["incomplete_at"]) >= coverage_since
+            )
         except KeyError, TypeError, ValueError:
             self._mark_incomplete()
             return SpotifyRequestMetricsSnapshot((), coverage_complete=False)
-        return SpotifyRequestMetricsSnapshot(metrics, coverage_complete=self.coverage_complete)
+        return SpotifyRequestMetricsSnapshot(
+            metrics,
+            coverage_complete=self.coverage_complete and not durable_gap,
+        )
 
     @property
     def coverage_complete(self) -> bool:
@@ -206,15 +225,33 @@ class SpotifyRequestMetrics:
                     "DELETE FROM spotify_request_metrics WHERE bucket_at < ?",
                     (_bucket(observed - timedelta(days=SPOTIFY_METRICS_RETENTION_DAYS)),),
                 )
+                connection.execute(
+                    "DELETE FROM spotify_request_metrics_coverage WHERE incomplete_at < ?",
+                    (_bucket(observed - timedelta(days=SPOTIFY_METRICS_RETENTION_DAYS)),),
+                )
         except PersistenceError:
             self._mark_incomplete()
 
     def _connection(self, operation: str) -> _MetricsConnection:
         return _MetricsConnection(self.path, operation)
 
-    def _mark_incomplete(self) -> None:
+    def _mark_incomplete(self, *, persist: bool = True) -> None:
         with self._lock:
             self._coverage_complete = False
+        if not persist:
+            return
+        try:
+            with self._connection("persist Spotify request metric coverage") as connection:
+                connection.execute(
+                    """
+                    INSERT INTO spotify_request_metrics_coverage (singleton, incomplete_at)
+                    VALUES (1, ?)
+                    ON CONFLICT(singleton) DO UPDATE SET incomplete_at = excluded.incomplete_at
+                    """,
+                    (_bucket(datetime.now(UTC)),),
+                )
+        except PersistenceError:
+            return
 
 
 class _MetricsConnection:
@@ -288,3 +325,9 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Spotify metric timestamp must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _parse_timestamp(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("invalid Spotify request metric coverage timestamp")
+    return _as_utc(datetime.fromisoformat(value))

@@ -411,3 +411,33 @@ def test_metric_persistence_failure_does_not_change_successful_spotify_response(
     )
     assert b"Coverage: incomplete" in page
     assert b"Web API requests: 0" not in page
+
+
+def test_incomplete_coverage_survives_restart_without_reporting_missing_data_as_zero(
+    tmp_path: Path,
+) -> None:
+    metrics = _metrics(tmp_path)
+    metrics._mark_incomplete()
+
+    restarted = SpotifyRequestMetrics(metrics.path)
+    restarted.initialize()
+    snapshot = restarted.last_24_hours(now=NOW)
+    bundle = build_diagnostic_bundle(
+        events=(),
+        generated_at=NOW,
+        last_cycle=None,
+        retention_days=30,
+        max_events=10_000,
+        spotify_metrics=snapshot,
+    )
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        runtime = json.loads(archive.read("runtime.json"))
+    metric_document = runtime["spotify_request_metrics_last_24_hours"]
+    assert snapshot.coverage_complete is False
+    assert metric_document["web_api_requests"] is None
+    assert metric_document["recorded_counts"] == {
+        "http_429s": 0,
+        "oauth_refreshes": 0,
+        "quota_exceeded": 0,
+        "web_api_requests": 0,
+    }
