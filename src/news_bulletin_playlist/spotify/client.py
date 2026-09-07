@@ -9,17 +9,32 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
+from news_bulletin_playlist.spotify_metrics import (
+    SpotifyQuotaReason,
+    SpotifyRequestMetrics,
+    SpotifyRequestOutcome,
+    SpotifyWebApiOperation,
+)
 
 _API_BASE = "https://api.spotify.com/v1"
 _SPOTIFY_COVER_MAX_PAYLOAD_BYTES = 256 * 1024
+_MAX_ERROR_BODY_BYTES = 8 * 1024
 
 
 class SpotifyApiError(RuntimeError):
-    def __init__(self, status: int, message: str, *, retry_after: int | None = None) -> None:
+    def __init__(
+        self,
+        status: int,
+        message: str,
+        *,
+        retry_after: int | None = None,
+        quota_reason: SpotifyQuotaReason | None = None,
+    ) -> None:
         super().__init__(f"Spotify API {status}: {message}")
         self.status = status
         self.message = message
         self.retry_after = retry_after
+        self.quota_reason = quota_reason
 
 
 class SpotifyTransportError(RuntimeError):
@@ -31,6 +46,7 @@ class SpotifyClient:
     access_token: str
     market: str | None = None
     api_base: str = _API_BASE
+    metrics: SpotifyRequestMetrics | None = None
 
     def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         if not 1 <= limit <= 50:
@@ -38,7 +54,10 @@ class SpotifyClient:
         if offset < 0:
             raise ValueError("show episode offset must not be negative")
         return self._request(
-            "GET", f"/shows/{show_id}/episodes", query=self._market_query(limit, offset)
+            SpotifyWebApiOperation.SHOW_EPISODES,
+            "GET",
+            f"/shows/{show_id}/episodes",
+            query=self._market_query(limit, offset),
         )
 
     def search_shows(self, query: str, *, limit: int = 10, offset: int = 0) -> dict[str, Any]:
@@ -49,7 +68,7 @@ class SpotifyClient:
         params = {"q": query, "type": "show", "limit": str(limit), "offset": str(offset)}
         if self.market is not None:
             params["market"] = self.market
-        return self._request("GET", "/search", query=params)
+        return self._request(SpotifyWebApiOperation.SEARCH_SHOWS, "GET", "/search", query=params)
 
     def create_playlist(
         self,
@@ -61,13 +80,24 @@ class SpotifyClient:
         body: dict[str, Any] = {"name": name, "public": public}
         if description:
             body["description"] = description
-        return self._request("POST", "/me/playlists", json_body=body)
+        return self._request(
+            SpotifyWebApiOperation.CREATE_PLAYLIST,
+            "POST",
+            "/me/playlists",
+            json_body=body,
+        )
 
     def current_user(self) -> dict[str, Any]:
-        return self._request("GET", "/me", query={"fields": "id"})
+        return self._request(
+            SpotifyWebApiOperation.CURRENT_USER,
+            "GET",
+            "/me",
+            query={"fields": "id"},
+        )
 
     def playlist_details(self, playlist_id: str) -> dict[str, Any]:
         return self._request(
+            SpotifyWebApiOperation.PLAYLIST_DETAILS,
             "GET",
             f"/playlists/{playlist_id}",
             query={"fields": "id,name,owner(id)"},
@@ -81,6 +111,7 @@ class SpotifyClient:
         description: str,
     ) -> dict[str, Any]:
         return self._request(
+            SpotifyWebApiOperation.CHANGE_PLAYLIST_DETAILS,
             "PUT",
             f"/playlists/{playlist_id}",
             json_body={"name": name, "description": description},
@@ -93,6 +124,7 @@ class SpotifyClient:
         if len(encoded) > _SPOTIFY_COVER_MAX_PAYLOAD_BYTES:
             raise ValueError("playlist cover exceeds Spotify's 256 KiB encoded payload limit")
         return self._request(
+            SpotifyWebApiOperation.UPLOAD_PLAYLIST_COVER,
             "PUT",
             f"/playlists/{playlist_id}/images",
             raw_body=encoded,
@@ -107,7 +139,12 @@ class SpotifyClient:
             raise ValueError(
                 f"playlist replacement contains {invalid_count} invalid Spotify episode URI(s)"
             )
-        return self._request("PUT", f"/playlists/{playlist_id}/items", json_body={"uris": uris})
+        return self._request(
+            SpotifyWebApiOperation.REPLACE_PLAYLIST_ITEMS,
+            "PUT",
+            f"/playlists/{playlist_id}/items",
+            json_body={"uris": uris},
+        )
 
     def playlist_items(
         self, playlist_id: str, *, limit: int = 50, offset: int = 0
@@ -117,6 +154,7 @@ class SpotifyClient:
         if offset < 0:
             raise ValueError("playlist item offset must not be negative")
         return self._request(
+            SpotifyWebApiOperation.PLAYLIST_ITEMS,
             "GET",
             f"/playlists/{playlist_id}/items",
             query={
@@ -129,6 +167,7 @@ class SpotifyClient:
     def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
         """Read only the current playlist version identifier."""
         return self._request(
+            SpotifyWebApiOperation.PLAYLIST_SNAPSHOT,
             "GET",
             f"/playlists/{playlist_id}",
             query={"fields": "snapshot_id"},
@@ -142,6 +181,7 @@ class SpotifyClient:
 
     def _request(
         self,
+        operation: SpotifyWebApiOperation,
         method: str,
         path: str,
         *,
@@ -168,24 +208,53 @@ class SpotifyClient:
             with urllib.request.urlopen(request, timeout=30.0) as response:
                 payload = bytes(response.read())
         except urllib.error.HTTPError as exc:
+            quota_reason = _quota_reason(_bounded_http_error_body(exc))
+            self._record(
+                operation,
+                SpotifyRequestOutcome.HTTP_ERROR,
+                http_status=exc.code,
+                quota_reason=quota_reason,
+            )
             raise SpotifyApiError(
                 exc.code,
                 _safe_http_message(exc.code),
                 retry_after=_retry_after(exc.headers.get("Retry-After")),
+                quota_reason=quota_reason,
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            self._record(operation, SpotifyRequestOutcome.TRANSPORT_ERROR)
             raise SpotifyTransportError(
                 "Spotify API request failed due to a network error"
             ) from exc
         if not payload:
+            self._record(operation, SpotifyRequestOutcome.SUCCESS)
             return {}
         try:
             decoded = json.loads(payload)
         except json.JSONDecodeError as exc:
+            self._record(operation, SpotifyRequestOutcome.RESPONSE_ERROR)
             raise SpotifyApiError(502, "invalid JSON response") from exc
         if not isinstance(decoded, dict):
+            self._record(operation, SpotifyRequestOutcome.RESPONSE_ERROR)
             raise SpotifyApiError(502, "unexpected non-object JSON response")
+        self._record(operation, SpotifyRequestOutcome.SUCCESS)
         return cast(dict[str, Any], decoded)
+
+    def _record(
+        self,
+        operation: SpotifyWebApiOperation,
+        outcome: SpotifyRequestOutcome,
+        *,
+        http_status: int | None = None,
+        quota_reason: SpotifyQuotaReason | None = None,
+    ) -> None:
+        if self.metrics is not None:
+            self.metrics.record_web_api(
+                operation,
+                outcome,
+                http_status=http_status,
+                quota_reason=quota_reason,
+            )
 
 
 def _retry_after(value: str | None) -> int | None:
@@ -200,3 +269,23 @@ def _retry_after(value: str | None) -> int | None:
 def _safe_http_message(status: int) -> str:
     messages = {400: "bad request", 401: "unauthorized", 403: "forbidden", 429: "rate limited"}
     return messages.get(status, "request failed")
+
+
+def _bounded_http_error_body(error: urllib.error.HTTPError) -> bytes:
+    try:
+        return error.read(_MAX_ERROR_BODY_BYTES + 1)[:_MAX_ERROR_BODY_BYTES]
+    except OSError:
+        return b""
+
+
+def _quota_reason(body: bytes) -> SpotifyQuotaReason | None:
+    try:
+        decoded = json.loads(body)
+    except UnicodeDecodeError, json.JSONDecodeError:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    error = decoded.get("error")
+    if not isinstance(error, dict) or error.get("reason") != SpotifyQuotaReason.QUOTA_EXCEEDED:
+        return None
+    return SpotifyQuotaReason.QUOTA_EXCEEDED

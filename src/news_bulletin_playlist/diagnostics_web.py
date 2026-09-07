@@ -18,6 +18,10 @@ from news_bulletin_playlist.diagnostics import (
     DiagnosticSeverity,
 )
 from news_bulletin_playlist.engine import EngineCycleResult
+from news_bulletin_playlist.spotify_metrics import (
+    SpotifyRequestMetric,
+    SpotifyRequestMetricsSnapshot,
+)
 
 MAX_DIAGNOSTIC_FILTER_HOURS = 30 * 24
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]+$")
@@ -109,6 +113,7 @@ def render_diagnostics_page(
     filters: DiagnosticFilters,
     display_timezone: tzinfo = UTC,
     timezone_label: str = "UTC",
+    spotify_metrics: SpotifyRequestMetricsSnapshot | None = None,
 ) -> bytes:
     """Render authenticated diagnostics without raw provider/error data."""
     rows = "".join(_event_row(event, display_timezone=display_timezone) for event in events)
@@ -121,6 +126,7 @@ def render_diagnostics_page(
     playlist_value = "" if filters.playlist_id is None else filters.playlist_id
     hours_value = "all" if filters.hours is None else str(filters.hours)
     timezone_heading = html.escape(timezone_label)
+    metrics_section = _spotify_metrics_section(spotify_metrics)
 
     document = f"""<!doctype html>
 <html lang="en">
@@ -167,6 +173,7 @@ def render_diagnostics_page(
     <button type="submit">Apply filters</button>
   </form>
   <p><a href="{html.escape(export_href, quote=True)}">Download sanitized diagnostics ZIP</a></p>
+  {metrics_section}
   <table>
     <thead><tr>
       <th>Time ({timezone_heading})</th><th>Level</th><th>Component</th><th>Event</th>
@@ -191,6 +198,7 @@ def build_diagnostic_bundle(
     build_revision: str = "dev",
     filters: DiagnosticFilters | None = None,
     result_truncated: bool | None = False,
+    spotify_metrics: SpotifyRequestMetricsSnapshot | None = None,
 ) -> bytes:
     """Build an in-memory ZIP from sanitized models; never copy the SQLite file."""
     observed = _as_utc(generated_at)
@@ -223,6 +231,7 @@ def build_diagnostic_bundle(
             "playlist_id": effective_filters.playlist_id,
             "hours": effective_filters.hours,
         },
+        "spotify_request_metrics_last_24_hours": _spotify_metrics_document(spotify_metrics),
     }
     manifest = {
         "format": "news-bulletin-playlist-diagnostics-v1",
@@ -253,6 +262,74 @@ def _event_document(event: DiagnosticEvent) -> dict[str, object]:
         "playlist_id": event.playlist_id,
         "details": event.details,
     }
+
+
+def _spotify_metrics_document(
+    snapshot: SpotifyRequestMetricsSnapshot | None,
+) -> dict[str, object] | None:
+    if snapshot is None:
+        return None
+    counts = {
+        "web_api_requests": snapshot.web_api_requests,
+        "oauth_refreshes": snapshot.oauth_refreshes,
+        "http_429s": snapshot.http_rate_limits,
+        "quota_exceeded": snapshot.quota_exceeded,
+    }
+    return {
+        "coverage_complete": snapshot.coverage_complete,
+        **(counts if snapshot.coverage_complete else {key: None for key in counts}),
+        "recorded_counts": None if snapshot.coverage_complete else counts,
+        "breakdown": [
+            {
+                "surface": metric.surface,
+                "operation": metric.operation,
+                "outcome": metric.outcome.value,
+                "http_status": metric.http_status,
+                "quota_reason": None if metric.quota_reason is None else metric.quota_reason.value,
+                "request_count": metric.request_count,
+            }
+            for metric in snapshot.metrics
+        ],
+    }
+
+
+def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> str:
+    if snapshot is None:
+        return '<p class="muted">Spotify request metrics are unavailable.</p>'
+
+    def quota_reason(metric: SpotifyRequestMetric) -> str:
+        return "—" if metric.quota_reason is None else metric.quota_reason.value
+
+    rows = (
+        "".join(
+            "<tr>"
+            f"<td><code>{html.escape(metric.surface)}</code></td>"
+            f"<td><code>{html.escape(metric.operation)}</code></td>"
+            f"<td><code>{html.escape(metric.outcome.value)}</code></td>"
+            f"<td>{'—' if metric.http_status is None else metric.http_status}</td>"
+            f"<td><code>{quota_reason(metric)}</code></td>"
+            f"<td>{metric.request_count}</td>"
+            "</tr>"
+            for metric in snapshot.metrics
+        )
+        or '<tr><td colspan="6">No recorded Spotify HTTP attempts in this window.</td></tr>'
+    )
+    summary = (
+        f"Coverage: complete. Web API requests: {snapshot.web_api_requests}. "
+        f"OAuth refreshes: {snapshot.oauth_refreshes}. HTTP 429s: {snapshot.http_rate_limits}. "
+        f"QUOTA_EXCEEDED: {snapshot.quota_exceeded}."
+        if snapshot.coverage_complete
+        else (
+            "Coverage: incomplete. Totals are unavailable; "
+            "the rows below show only recorded attempts."
+        )
+    )
+    return f"""
+  <h2>Spotify request metrics (last 24 hours)</h2>
+  <p class="muted">{summary} These are local aggregates, not account quota.</p>
+  <table><thead><tr><th>Surface</th><th>Operation</th><th>Outcome</th><th>HTTP</th>
+    <th>Quota reason</th><th>Requests</th></tr></thead><tbody>{rows}</tbody></table>
+"""
 
 
 def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
