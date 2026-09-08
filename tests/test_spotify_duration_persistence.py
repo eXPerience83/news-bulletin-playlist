@@ -70,7 +70,7 @@ def test_schema_v2_database_migrates_duration_column_without_inventing_value(
     store = SQLiteStore(path)
     store.initialize()
 
-    assert store.schema_version() == LATEST_SCHEMA_VERSION == 4
+    assert store.schema_version() == LATEST_SCHEMA_VERSION == 5
     connection = sqlite3.connect(path)
     row = connection.execute(
         "SELECT spotify_duration_seconds FROM spotify_matches WHERE source_native_id='old'"

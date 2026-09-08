@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -15,7 +16,7 @@ from news_bulletin_playlist.desired_state import (
     build_playlist_desired_state,
 )
 from news_bulletin_playlist.models import OrderingPolicy, PlaylistDefinition, PlaylistId, SourceId
-from news_bulletin_playlist.persistence import EditionMatch, SQLiteStore
+from news_bulletin_playlist.persistence import EditionMatch, PersistenceError, SQLiteStore
 from news_bulletin_playlist.snapshot_pending import (
     PendingSnapshotConfirmation,
     PendingSnapshotJournal,
@@ -53,6 +54,21 @@ class SpotifyReconciliationError(RuntimeError):
     """Raised when Spotify playlist state cannot be read or verified safely."""
 
 
+class MutationOutcome(StrEnum):
+    NOT_ATTEMPTED = "not_attempted"
+    REJECTED = "rejected"
+    UNKNOWN = "unknown"
+    VERIFIED = "verified"
+
+
+@dataclass(slots=True)
+class ReconciliationEvidence:
+    """Observation only: survives exceptions without replacing their type or message."""
+
+    mutation_outcome: MutationOutcome = MutationOutcome.NOT_ATTEMPTED
+    remote_evidence_qualified: bool = False
+
+
 PlaylistMutationGuard = Callable[[], AbstractContextManager[None]]
 
 
@@ -66,6 +82,8 @@ class PlaylistReconciliationResult:
     error: str | None = None
     degraded_verification: bool = False
     warning: str | None = None
+    mutation_outcome: MutationOutcome = MutationOutcome.NOT_ATTEMPTED
+    remote_evidence_qualified: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +92,7 @@ class _PlaylistItemsReconciliationResult:
     degraded_verification: bool = False
     warning: str | None = None
     write_outcome: str = "verified"
+    remote_evidence_qualified: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,7 +189,9 @@ def _reconcile_playlist_items(
     logical_playlist_id: PlaylistId | None,
     attestation_updated_at: datetime | None,
     mutation_guard: PlaylistMutationGuard | None,
+    evidence: ReconciliationEvidence | None = None,
 ) -> _PlaylistItemsReconciliationResult:
+    evidence = evidence if evidence is not None else ReconciliationEvidence()
     desired = tuple(desired_uris)
     if len(desired) > _MANAGED_PLAYLIST_MAX_ITEMS:
         raise ValueError("playlist reconciliation is limited to 100 items")
@@ -278,10 +299,13 @@ def _reconcile_playlist_items(
     mutation_context = nullcontext() if mutation_guard is None else mutation_guard()
     with mutation_context:
         try:
+            evidence.mutation_outcome = MutationOutcome.UNKNOWN
             write_response = client.replace_playlist_items(playlist_id, list(desired))
         except SpotifyApiError as exc:
+            if exc.status < 500:
+                evidence.mutation_outcome = MutationOutcome.REJECTED
             if exc.status >= 500 and _ambiguous_write_applied(client, playlist_id, desired):
-                _attest_ambiguous_write(
+                qualified = _attest_ambiguous_write(
                     client,
                     playlist_id,
                     desired=desired,
@@ -294,6 +318,7 @@ def _reconcile_playlist_items(
                 return _PlaylistItemsReconciliationResult(
                     wrote=True,
                     write_outcome="verified",
+                    remote_evidence_qualified=qualified,
                 )
             raise SpotifyReconciliationError(
                 f"Spotify playlist write replace_items API failure (http_status={exc.status})"
@@ -301,7 +326,7 @@ def _reconcile_playlist_items(
             ) from exc
         except SpotifyTransportError as exc:
             if _ambiguous_write_applied(client, playlist_id, desired):
-                _attest_ambiguous_write(
+                qualified = _attest_ambiguous_write(
                     client,
                     playlist_id,
                     desired=desired,
@@ -314,6 +339,7 @@ def _reconcile_playlist_items(
                 return _PlaylistItemsReconciliationResult(
                     wrote=True,
                     write_outcome="verified",
+                    remote_evidence_qualified=qualified,
                 )
             raise SpotifyReconciliationError(
                 "Spotify playlist write replace_items transport failure (write_outcome=unknown)"
@@ -501,9 +527,9 @@ def _attest_ambiguous_write(
     logical_playlist_id: PlaylistId | None,
     updated_at: datetime | None,
     pending_journal: PendingSnapshotJournal | None,
-) -> None:
+) -> bool:
     if store is None or logical_playlist_id is None or updated_at is None:
-        return
+        return False
     try:
         snapshot_before = _read_current_snapshot(client, playlist_id, phase="readback")
         readback = _read_spotify_playlist(
@@ -516,18 +542,24 @@ def _attest_ambiguous_write(
     except SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError:
         # The preceding complete exact readback already proves the ambiguous mutation applied.
         # Attestation is optional and must never convert that verified result into a retry.
-        return
+        return False
     if readback.slots != tuple(desired) or snapshot_before != snapshot_after:
-        return
-    store.set_playlist_attestation(
-        logical_playlist_id,
-        destination_id=playlist_id,
-        snapshot_id=snapshot_after,
-        desired_fingerprint=desired_fingerprint,
-        updated_at=updated_at,
-    )
-    if pending_journal is not None:
-        pending_journal.clear(logical_playlist_id)
+        return False
+    try:
+        store.set_playlist_attestation(
+            logical_playlist_id,
+            destination_id=playlist_id,
+            snapshot_id=snapshot_after,
+            desired_fingerprint=desired_fingerprint,
+            updated_at=updated_at,
+        )
+        if pending_journal is not None:
+            pending_journal.clear(logical_playlist_id)
+    except PersistenceError:
+        # The earlier exact readback still proves the mutation applied. Failure to persist
+        # stronger skip evidence must not turn that provider result into a retry.
+        return False
+    return True
 
 
 def _resolve_pending_confirmation(
@@ -627,6 +659,7 @@ def reconcile_spotify_playlist(
     *,
     store: SQLiteStore | None = None,
     mutation_guard: PlaylistMutationGuard | None = None,
+    evidence: ReconciliationEvidence | None = None,
 ) -> PlaylistReconciliationResult:
     """Reconcile one Spotify destination; errors are left to the batch isolator."""
     if not playlist.enabled:
@@ -638,6 +671,7 @@ def reconcile_spotify_playlist(
             f"desired state {desired.playlist_id!s} does not belong to playlist {playlist.id!s}"
         )
 
+    evidence = evidence if evidence is not None else ReconciliationEvidence()
     reconciled = _reconcile_playlist_items(
         client,
         playlist.destination.external_id,
@@ -646,7 +680,13 @@ def reconcile_spotify_playlist(
         logical_playlist_id=playlist.id if store is not None else None,
         attestation_updated_at=desired.generated_at if store is not None else None,
         mutation_guard=mutation_guard,
+        evidence=evidence,
     )
+    evidence.remote_evidence_qualified = (
+        reconciled.remote_evidence_qualified and not reconciled.degraded_verification
+    )
+    if reconciled.wrote:
+        evidence.mutation_outcome = MutationOutcome.VERIFIED
     return PlaylistReconciliationResult(
         playlist_id=playlist.id,
         ok=True,
@@ -655,6 +695,8 @@ def reconcile_spotify_playlist(
         wrote=reconciled.wrote,
         degraded_verification=reconciled.degraded_verification,
         warning=reconciled.warning,
+        mutation_outcome=evidence.mutation_outcome,
+        remote_evidence_qualified=evidence.remote_evidence_qualified,
     )
 
 

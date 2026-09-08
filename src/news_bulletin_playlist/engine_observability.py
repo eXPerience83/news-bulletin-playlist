@@ -20,6 +20,7 @@ from news_bulletin_playlist.spotify_backoff import (
     SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX,
     SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE,
 )
+from news_bulletin_playlist.spotify_planner import PlannerReason
 
 Clock = Callable[[], datetime]
 _LONG_DURATION_DIAGNOSTIC_SECONDS = 20 * 60
@@ -202,6 +203,33 @@ class InstrumentedEngineCycleRunner:
                     playlist_id=str(playlist.playlist_id),
                     details=policy_details,
                 )
+
+        shadow = result.planner_shadow
+        if shadow is not None:
+            reason_set = set(shadow.reasons)
+            details = {
+                "planner_shadow_enabled": True,
+                "planner_would_need_spotify": shadow.would_need_spotify,
+                "planner_would_allow_local_skip": shadow.would_allow_local_skip,
+                "planner_matching_work_count": shadow.matching_work_count,
+                "planner_matching_source_count": shadow.matching_source_count,
+                "planner_dirty_destination_count": shadow.dirty_destination_count,
+                "planner_catalogue_audit_due_count": shadow.catalogue_audit_due_count,
+                "planner_destination_audit_due_count": shadow.destination_audit_due_count,
+                "planner_safety_blocker_count": shadow.safety_blocker_count,
+                "planner_state_available": shadow.state_available,
+            }
+            details.update(
+                {f"planner_reason_{reason.value}": reason in reason_set for reason in PlannerReason}
+            )
+            self.diagnostics.emit(
+                occurred_at=result.finished_at,
+                severity=DiagnosticSeverity.INFO,
+                component="spotify.planner",
+                event_name="spotify_planner_shadow_decision",
+                cycle_id=cycle_id,
+                details=details,
+            )
 
         duration_ms = max(
             round((result.finished_at - result.started_at).total_seconds() * 1000),

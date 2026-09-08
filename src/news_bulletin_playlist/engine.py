@@ -26,14 +26,18 @@ from news_bulletin_playlist.models import (
     EngineConfig,
     PlaylistDefinition,
     PlaylistId,
+    SourceDefinition,
     SourceId,
 )
-from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
+from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
+    MutationOutcome,
+    ReconciliationEvidence,
     SpotifyReconciliationError,
     build_desired_state_from_store,
     reconcile_spotify_playlist,
 )
+from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
@@ -43,6 +47,7 @@ from news_bulletin_playlist.spotify.client import (
 from news_bulletin_playlist.spotify.matcher import (
     MatchConfigurationError,
     MatchResponseError,
+    SourceMatchResult,
     match_source_editions,
 )
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
@@ -57,6 +62,21 @@ from news_bulletin_playlist.spotify_backoff import (
     is_spotify_rate_limit_suppressed,
 )
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
+from news_bulletin_playlist.spotify_planner import (
+    CatalogueState,
+    DestinationState,
+    DestinationVerificationContext,
+    PlannerReason,
+    PlannerShadowResult,
+    SpotifyPlannerJournal,
+    catalogue_context_fingerprint,
+    destination_context_fingerprint,
+    edition_input_fingerprint,
+    plan_shadow_cycle,
+    playlist_config_fingerprint,
+    stable_fingerprint,
+    unresolved_planning_reason,
+)
 
 DEFAULT_ENGINE_INTERVAL = timedelta(minutes=10)
 
@@ -127,6 +147,7 @@ class EngineCycleResult:
     sources: tuple[SourceCycleOutcome, ...]
     playlists: tuple[PlaylistCycleOutcome, ...]
     error: str | None = None
+    planner_shadow: PlannerShadowResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +222,9 @@ class EngineRunner:
         self.rate_limit_journal = SpotifyRateLimitJournal(store)
         self.request_metrics = request_metrics or SpotifyRequestMetrics(store.path)
         self.request_metrics.initialize()
+        self.planner_journal = SpotifyPlannerJournal(store)
+        self._planner_auth_reader = getattr(auth, "planner_authorization_context", None)
+        self._shadow_auth_context: str | None = None
         self.auth = SpotifyRateLimitGuardAuth(
             auth,
             self.rate_limit_journal,
@@ -224,6 +248,7 @@ class EngineRunner:
         # Operational diagnostics only: these observations intentionally reset on process restart.
         self._previous_desired_fingerprints: dict[PlaylistId, str] = {}
         self._playlist_failure_streaks: dict[PlaylistId, tuple[int, datetime]] = {}
+        self._planner_shadow = PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
 
     def run_cycle(self) -> EngineCycleResult:
         if not self._cycle_lock.acquire(blocking=False):
@@ -235,6 +260,7 @@ class EngineRunner:
 
     def _run_cycle(self) -> EngineCycleResult:
         started_at = _as_utc(self.clock())
+        self._planner_shadow = PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
         source_outcomes: dict[SourceId, SourceCycleOutcome] = {}
         playlist_outcomes: list[PlaylistCycleOutcome] = []
         unsafe_source_ids: set[SourceId] = set()
@@ -272,6 +298,9 @@ class EngineRunner:
                 )
         except PersistenceError as exc:
             return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
+
+        # Shadow-only: this result is never consulted to gate auth, matching, reads or writes.
+        self._planner_shadow = self._compute_shadow_plan(collected_at)
 
         try:
             access_token = self.auth.get_access_token(now=_as_utc(self.clock()))
@@ -313,6 +342,7 @@ class EngineRunner:
                     matched_count = sum(
                         outcome.spotify_episode_uri is not None for outcome in match_result.outcomes
                     )
+                    self._observe_matching_result(source, match_result, matching_now)
                 else:
                     matched_count = 0
                 current = source_outcomes.get(source.id)
@@ -407,6 +437,8 @@ class EngineRunner:
                 )
                 continue
 
+            evidence = ReconciliationEvidence()
+            verification_context = None
             try:
                 desired = build_desired_state_from_store(
                     self.store,
@@ -416,6 +448,8 @@ class EngineRunner:
                 )
                 desired_count = len(desired.items)
                 request_diagnostics = self._request_diagnostics(playlist.id, desired.uris)
+                verification_context = self._observe_desired_state(playlist, desired.uris)
+                self._begin_destination_verification(playlist.id)
                 mutation_guard = (
                     None
                     if self.playlist_mutation_guard is None
@@ -427,8 +461,16 @@ class EngineRunner:
                     desired,
                     store=self.store,
                     mutation_guard=mutation_guard,
+                    evidence=evidence,
                 )
                 playlist_finished_at = _as_utc(self.clock())
+                self._observe_destination_result(
+                    playlist,
+                    verified=evidence.remote_evidence_qualified,
+                    unknown=evidence.mutation_outcome is MutationOutcome.UNKNOWN,
+                    expected=verification_context,
+                    observed_at=playlist_finished_at,
+                )
                 self.store.record_playlist_run(
                     playlist.id,
                     started_at=playlist_started_at,
@@ -467,6 +509,12 @@ class EngineRunner:
                     if is_spotify_rate_limit_suppressed(exc)
                     else str(exc)
                 )
+                self._observe_destination_result(
+                    playlist,
+                    verified=False,
+                    unknown=evidence.mutation_outcome is MutationOutcome.UNKNOWN,
+                    observed_at=playlist_finished_at,
+                )
                 try:
                     self.store.record_playlist_run(
                         playlist.id,
@@ -504,7 +552,9 @@ class EngineRunner:
                         first_failure_at=first_failure_at,
                         last_failure_at=playlist_finished_at,
                         write_outcome=(
-                            "unknown" if "write_outcome=unknown" in error_message else None
+                            "unknown"
+                            if evidence.mutation_outcome is MutationOutcome.UNKNOWN
+                            else None
                         ),
                     )
                 )
@@ -539,6 +589,7 @@ class EngineRunner:
             sources=sources,
             playlists=playlists,
             error=error,
+            planner_shadow=self._planner_shadow,
         )
 
     def _authorization_failure(
@@ -608,6 +659,7 @@ class EngineRunner:
             ),
             playlists=tuple(playlist_outcomes),
             error=message,
+            planner_shadow=self._planner_shadow,
         )
 
     def _fatal_result(
@@ -624,7 +676,219 @@ class EngineRunner:
             sources=tuple(source_outcomes.values()),
             playlists=tuple(playlist_outcomes),
             error=str(error),
+            planner_shadow=self._planner_shadow,
         )
+
+    def _compute_shadow_plan(self, now: datetime) -> PlannerShadowResult:
+        self._shadow_auth_context = None
+        try:
+            if self._planner_auth_reader is None:
+                return PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
+            self._shadow_auth_context = self._planner_auth_reader()
+            if self._shadow_auth_context is None:
+                return PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
+            matching_cutoff = self._matching_cutoff(now)
+            source_reasons: list[tuple[str, PlannerReason]] = []
+            additional_reasons: set[PlannerReason] = set()
+            catalogue_states: list[CatalogueState | None] = []
+            for source in required_sources(self.config):
+                context = catalogue_context_fingerprint(source, self._shadow_auth_context)
+                state = self.planner_journal.get_catalogue(context)
+                if state is None:
+                    additional_reasons.add(PlannerReason.MISSING_EVIDENCE)
+                elif state.contract_fingerprint != context:
+                    additional_reasons.add(PlannerReason.INVALIDATED_CONTEXT)
+                    state = None
+                catalogue_states.append(state)
+                for edition in self.store.list_editions(source_id=source.id):
+                    if edition.published_at < matching_cutoff:
+                        break
+                    if edition.published_at > now:
+                        continue
+                    identity = f"{source.id!s}\0{edition.source_native_id}"
+                    match = self.store.get_match_state(source.id, edition.source_native_id)
+                    if match is None:
+                        source_reasons.append((identity, PlannerReason.NEW_MATCH))
+                        continue
+                    fingerprint = edition_input_fingerprint(edition)
+                    prior_input = self.planner_journal.get_match_input(
+                        str(source.id), edition.source_native_id
+                    )
+                    if prior_input is None or prior_input.input_fingerprint != fingerprint:
+                        source_reasons.append((identity, PlannerReason.INPUT_CHANGED))
+                        continue
+                    if match.status is MatchStatus.MATCHED:
+                        if (
+                            match.spotify_episode_uri is None
+                            or not is_spotify_episode_uri(match.spotify_episode_uri)
+                            or match.spotify_duration_seconds is None
+                        ):
+                            source_reasons.append((identity, PlannerReason.INPUT_CHANGED))
+                        continue
+                    retry = self.planner_journal.get_unresolved(
+                        str(source.id), edition.source_native_id
+                    )
+                    retry_reason = unresolved_planning_reason(
+                        retry, input_fingerprint=fingerprint, now=now
+                    )
+                    if retry_reason is PlannerReason.CLOCK_ROLLBACK:
+                        additional_reasons.add(retry_reason)
+                    elif retry_reason is not None:
+                        source_reasons.append((identity, retry_reason))
+
+            destinations: list[DestinationState] = []
+            pending_count = 0
+            auth_context = self._shadow_auth_context
+            pending_journal = PendingSnapshotJournal(self.store)
+            active_playlist_ids: list[str] = []
+            for playlist in self.config.playlists:
+                if not playlist.enabled:
+                    continue
+                active_playlist_ids.append(str(playlist.id))
+                desired = build_desired_state_from_store(
+                    self.store,
+                    playlist,
+                    now=now,
+                    source_timezones=self._source_timezones(),
+                )
+                previous_destination = self.planner_journal.get_destination(str(playlist.id))
+                destination_context = destination_context_fingerprint(playlist)
+                config_fingerprint = playlist_config_fingerprint(playlist)
+                if previous_destination is None:
+                    additional_reasons.add(PlannerReason.MISSING_EVIDENCE)
+                elif (
+                    previous_destination.destination_context_fingerprint != destination_context
+                    or previous_destination.config_fingerprint != config_fingerprint
+                    or previous_destination.auth_context_fingerprint != auth_context
+                ):
+                    additional_reasons.add(PlannerReason.INVALIDATED_CONTEXT)
+                destination_state = self.planner_journal.observe_destination(
+                    playlist_id=str(playlist.id),
+                    destination_context_fingerprint=destination_context,
+                    config_fingerprint=config_fingerprint,
+                    auth_context_fingerprint=auth_context,
+                    desired_fingerprint=stable_fingerprint(desired.uris),
+                )
+                destinations.append(destination_state)
+                if pending_journal.get(playlist.id) is not None:
+                    pending_count += 1
+            self.planner_journal.retain_contexts(
+                catalogue_contexts=(
+                    catalogue_context_fingerprint(source, auth_context)
+                    for source in required_sources(self.config)
+                ),
+                playlist_ids=active_playlist_ids,
+            )
+            return plan_shadow_cycle(
+                source_reasons=source_reasons,
+                destination_states=destinations,
+                catalogue_states=catalogue_states,
+                pending_verification_count=pending_count,
+                now=now,
+                additional_reasons=additional_reasons,
+            )
+        except Exception:
+            # Isolated shadow boundary: never mask the existing provider flow.
+            return PlannerShadowResult.unsafe()
+
+    def _observe_matching_result(
+        self,
+        source: SourceDefinition,
+        result: SourceMatchResult,
+        observed_at: datetime,
+    ) -> None:
+        try:
+            if self._shadow_auth_context is None:
+                return
+            contract = catalogue_context_fingerprint(source, self._shadow_auth_context)
+            if (
+                result.catalogue_calls
+                and result.catalogue_complete
+                and result.catalogue_candidate_count
+            ):
+                self.planner_journal.verify_catalogue(contract, contract, verified_at=observed_at)
+            for outcome in result.outcomes:
+                edition = outcome.edition
+                input_fingerprint = edition_input_fingerprint(edition)
+                if outcome.planner_input_evidence_qualified is True:
+                    self.planner_journal.observe_match_input(
+                        source_id=str(edition.source_id),
+                        source_native_id=edition.source_native_id,
+                        input_fingerprint=input_fingerprint,
+                        observed_at=observed_at,
+                    )
+                elif outcome.planner_input_evidence_qualified is False:
+                    self.planner_journal.clear_match_input(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                if outcome.status is MatchStatus.MATCHED:
+                    self.planner_journal.clear_unresolved(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                elif not outcome.from_cache:
+                    self.planner_journal.record_unresolved(
+                        source_id=str(edition.source_id),
+                        source_native_id=edition.source_native_id,
+                        input_fingerprint=input_fingerprint,
+                        status=outcome.status,
+                        attempted_at=observed_at,
+                    )
+        except Exception:
+            # Shadow evidence is fail-closed on its next read and cannot alter provider behavior.
+            self._planner_shadow = PlannerShadowResult.unsafe()
+
+    def _observe_destination_result(
+        self,
+        playlist: PlaylistDefinition,
+        *,
+        verified: bool,
+        unknown: bool,
+        observed_at: datetime,
+        expected: DestinationVerificationContext | None = None,
+    ) -> None:
+        try:
+            if unknown:
+                self.planner_journal.mark_destination_unknown(str(playlist.id))
+            elif (
+                verified
+                and expected is not None
+                and PendingSnapshotJournal(self.store).get(playlist.id) is None
+            ):
+                self.planner_journal.verify_destination(
+                    str(playlist.id), expected=expected, verified_at=observed_at
+                )
+        except Exception:
+            self._planner_shadow = PlannerShadowResult.unsafe()
+
+    def _begin_destination_verification(self, playlist_id: PlaylistId) -> None:
+        try:
+            self.planner_journal.begin_destination_verification(str(playlist_id))
+        except Exception:
+            self._planner_shadow = PlannerShadowResult.unsafe()
+
+    def _observe_desired_state(
+        self, playlist: PlaylistDefinition, desired_uris: tuple[str, ...]
+    ) -> DestinationVerificationContext | None:
+        try:
+            if self._shadow_auth_context is None:
+                return None
+            expected = DestinationVerificationContext(
+                stable_fingerprint(desired_uris),
+                destination_context_fingerprint(playlist),
+                playlist_config_fingerprint(playlist),
+                self._shadow_auth_context,
+            )
+            self.planner_journal.observe_destination(
+                playlist_id=str(playlist.id),
+                destination_context_fingerprint=expected.destination_context_fingerprint,
+                config_fingerprint=expected.config_fingerprint,
+                auth_context_fingerprint=expected.auth_context_fingerprint,
+                desired_fingerprint=expected.desired_fingerprint,
+            )
+            return expected
+        except Exception:
+            self._planner_shadow = PlannerShadowResult.unsafe()
+            return None
 
     def _prune_operational_history(self, now: datetime) -> None:
         self.store.prune_operational_history(

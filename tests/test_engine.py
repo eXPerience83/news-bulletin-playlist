@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -29,7 +30,7 @@ from news_bulletin_playlist.models import (
     SourceId,
     SourceSelection,
 )
-from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
+from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore
 from news_bulletin_playlist.spotify.auth import SpotifyReauthorizationRequired
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
@@ -43,6 +44,9 @@ class _Auth:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
         self.calls = 0
+
+    def planner_authorization_context(self) -> str:
+        return "a" * 64
 
     def get_access_token(self, *, now: datetime | None = None) -> str:
         assert now is not None
@@ -207,6 +211,42 @@ def test_cycle_fetches_shared_source_once_and_reconciles_two_playlists(tmp_path:
     ]
     assert all(outcome.desired_count == 1 for outcome in second.playlists)
     assert all(outcome.wrote is False for outcome in second.playlists)
+    assert second.planner_shadow is not None
+    assert second.planner_shadow.would_allow_local_skip
+    with sqlite3.connect(runner.store.path) as connection:
+        catalogue_states = connection.execute(
+            "SELECT COUNT(*) FROM spotify_planner_catalogue_state"
+        ).fetchone()[0]
+    assert catalogue_states == 1
+
+
+def test_shadow_planner_persistence_failure_does_not_change_spotify_behavior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spotify = _Spotify()
+    auth = _Auth()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    def fail_catalogue(_context: str) -> None:
+        raise PersistenceError("planner unavailable")
+
+    monkeypatch.setattr(runner.planner_journal, "get_catalogue", fail_catalogue)
+    result = runner.run_cycle()
+
+    assert result.ok
+    assert auth.calls == 1
+    assert spotify.show_calls == 1
+    assert spotify.playlist_reads
+    assert spotify.replacements == [("destination-first", (SER_URI,))]
+    assert result.planner_shadow is not None
+    assert not result.planner_shadow.state_available
 
 
 def test_source_failure_carries_forward_recent_durable_match(tmp_path: Path) -> None:

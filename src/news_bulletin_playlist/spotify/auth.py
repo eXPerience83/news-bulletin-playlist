@@ -373,6 +373,15 @@ class SpotifyAuthService:
         if isinstance(self.transport, SpotifyAccountsClient):
             self.transport.metrics = metrics
 
+    def planner_authorization_context(self) -> str | None:
+        """Read non-secret grant provenance without refreshing OAuth or contacting Spotify."""
+        from news_bulletin_playlist.spotify_planner import authorization_context_fingerprint
+
+        record = self.store.load()
+        if record is None or record.status is not CredentialStatus.ACTIVE:
+            return None
+        return authorization_context_fingerprint(record.authorized_at)
+
     def authorization_state(self) -> AuthorizationState:
         if self._reauthorization_required:
             return AuthorizationState.REAUTH_REQUIRED

@@ -60,6 +60,9 @@ class _Auth:
         self.calls += 1
         return "access-token"
 
+    def planner_authorization_context(self) -> str:
+        return "a" * 64
+
 
 class _Spotify:
     def __init__(
@@ -306,6 +309,44 @@ def test_engine_active_backoff_keeps_rss_collection_but_performs_zero_spotify_io
     assert result.sources[0].matching_ok is None
     assert result.playlists[0].wrote is None
     assert "rate-limit backoff active" in (result.playlists[0].error or "")
+
+
+def test_shadow_planner_keeps_retention_work_dirty_during_active_backoff(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    auth = _Auth()
+    spotify = _Spotify()
+    current = NOW
+    runner = EngineRunner(
+        _config((_source("one"),), (_playlist("one", "one"),)),
+        store,
+        auth,
+        fetcher=lambda _url: _rss("one"),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    calls_before = (
+        list(spotify.show_calls),
+        list(spotify.playlist_calls),
+        list(spotify.replace_calls),
+    )
+    SpotifyRateLimitJournal(store).activate(observed_at=NOW, retry_after_seconds=200_000)
+    current = NOW + timedelta(hours=49)
+
+    blocked = runner.run_cycle()
+
+    assert auth.calls == 1
+    assert (
+        spotify.show_calls,
+        spotify.playlist_calls,
+        spotify.replace_calls,
+    ) == calls_before
+    assert blocked.planner_shadow is not None
+    assert blocked.planner_shadow.would_need_spotify
+    assert not blocked.planner_shadow.would_allow_local_skip
+    assert blocked.planner_shadow.dirty_destination_count == 1
 
 
 def test_matching_429_stops_later_live_catalogue_requests(tmp_path: Path) -> None:
