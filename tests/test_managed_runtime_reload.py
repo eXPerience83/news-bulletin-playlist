@@ -6,11 +6,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from test_spotify_auth import _authorize, _service
+
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.engine_runtime import (
+    AuthSynchronization,
     ConfigurationSynchronization,
     ReloadingEngineCycleRunner,
     _load_runtime_config,
+    _LockedAuthProvider,
     _playlist_write_contract,
 )
 from news_bulletin_playlist.managed_state import (
@@ -75,6 +79,9 @@ class _Spotify:
     def __init__(self) -> None:
         self.items: list[str] = []
         self.replacements: list[tuple[str, tuple[str, ...]]] = []
+        self.show_calls = 0
+        self.playlist_reads = 0
+        self.snapshot_reads = 0
 
     def show_episodes(
         self,
@@ -85,6 +92,7 @@ class _Spotify:
     ) -> dict[str, Any]:
         assert show_id == "4EwwdoHHYmbt49UXODQMpi"
         assert offset == 0
+        self.show_calls += 1
         return {
             "items": [
                 {
@@ -105,6 +113,7 @@ class _Spotify:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
+        self.playlist_reads += 1
         selected = self.items[offset : offset + limit]
         return {
             "items": [{"item": {"uri": uri}} for uri in selected],
@@ -118,6 +127,7 @@ class _Spotify:
         return {"snapshot_id": "snapshot-write"}
 
     def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+        self.snapshot_reads += 1
         return {"snapshot_id": "snapshot-write"}
 
 
@@ -142,6 +152,83 @@ def _ser_rss() -> bytes:
         "<pubDate>Sun, 30 Aug 2026 09:05:00 +0000</pubDate>"
         "</item></channel></rss>"
     ).encode()
+
+
+def test_production_auth_wrapper_exposes_usable_shadow_context_without_extra_io(
+    tmp_path: Path,
+) -> None:
+    _, _, sqlite = _active_ser_state(tmp_path)
+    service, transport, _ = _service(tmp_path)
+    _authorize(service)
+    synchronization = AuthSynchronization()
+    auth = _LockedAuthProvider(service, synchronization)
+    spotify = _Spotify()
+    factory_tokens: list[str] = []
+
+    def client_factory(token: str) -> _Spotify:
+        factory_tokens.append(token)
+        return spotify
+
+    context = auth.planner_authorization_context()
+    assert context is not None
+    assert transport.refresh_calls == []
+    assert factory_tokens == []
+    assert spotify.show_calls == spotify.playlist_reads == spotify.snapshot_reads == 0
+
+    runner = ReloadingEngineCycleRunner(
+        tmp_path,
+        {},
+        sqlite,
+        auth,
+        fetcher=lambda _url: _ser_rss(),
+        client_factory=client_factory,
+        clock=lambda: NOW,
+    )
+    first = runner.run_cycle()
+    calls_after_first = (spotify.show_calls, spotify.playlist_reads, spotify.snapshot_reads)
+    second = runner.run_cycle()
+
+    assert first.ok and second.ok
+    assert second.planner_shadow is not None
+    assert second.planner_shadow.state_available
+    assert second.planner_shadow.would_allow_local_skip
+    assert transport.refresh_calls == []
+    assert len(factory_tokens) == 2
+    assert calls_after_first == (1, 2, 2)
+    assert (spotify.show_calls, spotify.playlist_reads, spotify.snapshot_reads) == (2, 3, 2)
+    assert spotify.replacements == [("managed-destination", (SER_URI,))]
+
+
+def test_production_auth_wrapper_uses_same_lock_for_context_and_token() -> None:
+    synchronization = AuthSynchronization()
+    token_entered = threading.Event()
+    release_token = threading.Event()
+    context_entered = threading.Event()
+
+    class Service:
+        def get_access_token(self, *, now: datetime | None = None) -> str:
+            del now
+            token_entered.set()
+            assert release_token.wait(timeout=2)
+            return "access-token"
+
+        def planner_authorization_context(self) -> str:
+            context_entered.set()
+            return "a" * 64
+
+    auth = _LockedAuthProvider(Service(), synchronization)  # type: ignore[arg-type]
+    token_thread = threading.Thread(target=auth.get_access_token)
+    context_thread = threading.Thread(target=auth.planner_authorization_context)
+    token_thread.start()
+    assert token_entered.wait(timeout=2)
+    context_thread.start()
+    assert not context_entered.wait(timeout=0.05)
+    release_token.set()
+    assert context_entered.wait(timeout=2)
+    token_thread.join(timeout=2)
+    context_thread.join(timeout=2)
+    assert not token_thread.is_alive()
+    assert not context_thread.is_alive()
 
 
 def test_reloading_runner_does_not_hold_configuration_lock_during_feed_io(

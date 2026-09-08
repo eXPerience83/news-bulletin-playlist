@@ -126,6 +126,11 @@ class _LockedAuthProvider:
         with self.synchronization.hold():
             return self.service.get_access_token(now=now)
 
+    def planner_authorization_context(self) -> str | None:
+        """Read non-secret grant provenance under the production auth lock."""
+        with self.synchronization.hold():
+            return self.service.planner_authorization_context()
+
 
 class _MutableOperationalStatus(OperationalStatus):
     """Keep historical cycle data while the managed scheduler switches on or off."""
