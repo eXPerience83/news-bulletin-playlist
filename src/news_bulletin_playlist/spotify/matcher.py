@@ -64,6 +64,8 @@ class SourceMatchResult:
     source_id: SourceId
     outcomes: tuple[MatchOutcome, ...]
     catalogue_calls: int
+    catalogue_complete: bool = False
+    catalogue_candidate_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +129,8 @@ def match_source_editions(
             source_id=source.id,
             outcomes=tuple(_require_outcome(outcome) for outcome in outcomes),
             catalogue_calls=0,
+            catalogue_complete=False,
+            catalogue_candidate_count=0,
         )
 
     show_id = _spotify_show_id(source)
@@ -186,6 +190,8 @@ def match_source_editions(
         source_id=source.id,
         outcomes=tuple(_require_outcome(outcome) for outcome in outcomes),
         catalogue_calls=catalogue_calls,
+        catalogue_complete=catalogue_complete,
+        catalogue_candidate_count=len(candidates),
     )
 
 
