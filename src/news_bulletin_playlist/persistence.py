@@ -13,7 +13,7 @@ from news_bulletin_playlist.models import CanonicalEdition, PlaylistId, SourceId
 DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
 DEFAULT_RETENTION_DAYS = 30
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
 
 
 class PersistenceError(RuntimeError):
@@ -214,6 +214,75 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 incomplete_at TEXT NOT NULL
             )
+            """,
+        ),
+    ),
+    (
+        5,
+        (
+            """
+            CREATE TABLE spotify_planner_catalogue_state (
+                context_key TEXT PRIMARY KEY,
+                contract_fingerprint TEXT NOT NULL,
+                last_verified_at TEXT,
+                next_audit_at TEXT,
+                CHECK (
+                    (last_verified_at IS NULL AND next_audit_at IS NULL)
+                    OR (last_verified_at IS NOT NULL AND next_audit_at IS NOT NULL)
+                )
+            )
+            """,
+            """
+            CREATE TABLE spotify_planner_destination_state (
+                playlist_id TEXT PRIMARY KEY,
+                destination_context_fingerprint TEXT NOT NULL,
+                config_fingerprint TEXT NOT NULL,
+                auth_context_fingerprint TEXT NOT NULL,
+                observed_desired_fingerprint TEXT NOT NULL,
+                confirmed_desired_fingerprint TEXT,
+                dirty INTEGER NOT NULL CHECK (dirty IN (0, 1)),
+                unknown INTEGER NOT NULL CHECK (unknown IN (0, 1)),
+                last_verified_at TEXT,
+                next_audit_at TEXT,
+                CHECK (
+                    (last_verified_at IS NULL AND next_audit_at IS NULL)
+                    OR (last_verified_at IS NOT NULL AND next_audit_at IS NOT NULL)
+                )
+            )
+            """,
+            """
+            CREATE TABLE spotify_planner_unresolved_state (
+                source_id TEXT NOT NULL,
+                source_native_id TEXT NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'ambiguous')),
+                reason TEXT NOT NULL CHECK (
+                    reason IN ('no_viable_candidate', 'multiple_candidates')
+                ),
+                first_unresolved_at TEXT NOT NULL,
+                last_attempt_at TEXT NOT NULL,
+                next_retry_at TEXT NOT NULL,
+                PRIMARY KEY (source_id, source_native_id),
+                FOREIGN KEY (source_id, source_native_id)
+                    REFERENCES canonical_editions (source_id, source_native_id)
+                    ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE spotify_planner_match_inputs (
+                source_id TEXT NOT NULL,
+                source_native_id TEXT NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                PRIMARY KEY (source_id, source_native_id),
+                FOREIGN KEY (source_id, source_native_id)
+                    REFERENCES canonical_editions (source_id, source_native_id)
+                    ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX spotify_planner_unresolved_retry_idx
+            ON spotify_planner_unresolved_state (next_retry_at)
             """,
         ),
     ),
