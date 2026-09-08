@@ -24,6 +24,7 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore
 from news_bulletin_playlist.spotify_planner import (
     AUDIT_INTERVAL,
+    DestinationVerificationContext,
     PlannerReason,
     SpotifyPlannerJournal,
     destination_context_fingerprint,
@@ -148,7 +149,11 @@ def test_dirty_and_audit_due_are_independent_and_verification_survives_restart(
     assert PlannerReason.DIRTY in dirty_result.reasons
     assert PlannerReason.CATALOGUE_AUDIT_DUE not in dirty_result.reasons
 
-    journal.verify_destination("playlist", verified_at=NOW)
+    journal.verify_destination(
+        "playlist",
+        expected=DestinationVerificationContext(SHA_A, SHA_A, SHA_A, SHA_A),
+        verified_at=NOW,
+    )
     restarted = SpotifyPlannerJournal(SQLiteStore(store.path))
     clean = restarted.get_destination("playlist")
     assert clean is not None
@@ -169,7 +174,11 @@ def test_local_observation_does_not_extend_audit_and_clock_rollback_is_due(
 ) -> None:
     journal = SpotifyPlannerJournal(_store(tmp_path))
     _observe(journal)
-    journal.verify_destination("playlist", verified_at=NOW)
+    journal.verify_destination(
+        "playlist",
+        expected=DestinationVerificationContext(SHA_A, SHA_A, SHA_A, SHA_A),
+        verified_at=NOW,
+    )
     observed = _observe(journal)
     assert observed.next_audit_at == NOW + AUDIT_INTERVAL
     rolled_back = plan_shadow_cycle(
@@ -185,7 +194,11 @@ def test_local_observation_does_not_extend_audit_and_clock_rollback_is_due(
 def test_unknown_a_to_b_to_a_never_revives_old_confirmation(tmp_path: Path) -> None:
     journal = SpotifyPlannerJournal(_store(tmp_path))
     _observe(journal, SHA_A)
-    journal.verify_destination("playlist", verified_at=NOW)
+    journal.verify_destination(
+        "playlist",
+        expected=DestinationVerificationContext(SHA_A, SHA_A, SHA_A, SHA_A),
+        verified_at=NOW,
+    )
     journal.begin_destination_verification("playlist")
     in_flight = journal.get_destination("playlist")
     assert in_flight is not None
@@ -209,7 +222,13 @@ def test_retention_change_in_desired_fingerprint_marks_destination_dirty(tmp_pat
         auth_context_fingerprint=SHA_A,
         desired_fingerprint=stable_fingerprint(("first", "expiring")),
     )
-    journal.verify_destination("playlist", verified_at=NOW)
+    journal.verify_destination(
+        "playlist",
+        expected=DestinationVerificationContext(
+            stable_fingerprint(("first", "expiring")), SHA_A, SHA_A, SHA_A
+        ),
+        verified_at=NOW,
+    )
     retained = journal.observe_destination(
         playlist_id="playlist",
         destination_context_fingerprint=SHA_A,
@@ -224,7 +243,11 @@ def test_retention_change_in_desired_fingerprint_marks_destination_dirty(tmp_pat
 def test_destination_or_configuration_context_change_invalidates_evidence(tmp_path: Path) -> None:
     journal = SpotifyPlannerJournal(_store(tmp_path))
     _observe(journal)
-    journal.verify_destination("playlist", verified_at=NOW)
+    journal.verify_destination(
+        "playlist",
+        expected=DestinationVerificationContext(SHA_A, SHA_A, SHA_A, SHA_A),
+        verified_at=NOW,
+    )
     changed = journal.observe_destination(
         playlist_id="playlist",
         destination_context_fingerprint=SHA_B,

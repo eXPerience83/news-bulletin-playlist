@@ -84,16 +84,27 @@ class _ConnectionContext:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        del exc_value, traceback
+        del traceback
+        db_error = exc_value if isinstance(exc_value, sqlite3.Error) else None
         try:
             if exc_type is None:
                 self.connection.commit()
             else:
                 self.connection.rollback()
-        except sqlite3.Error as db_exc:
-            raise PersistenceError(f"{self.operation} failed for {self.path}: {db_exc}") from db_exc
+        except sqlite3.Error as error:
+            if db_error is None:
+                db_error = error
         finally:
-            self.connection.close()
+            try:
+                self.connection.close()
+            except sqlite3.Error as error:
+                if db_error is None:
+                    db_error = error
+        # Preserve an unrelated body exception even when cleanup also failed.
+        if exc_value is not None and not isinstance(exc_value, sqlite3.Error):
+            return
+        if db_error is not None:
+            raise PersistenceError(f"{self.operation} failed") from db_error
 
 
 class PendingSnapshotJournal:

@@ -84,6 +84,14 @@ class DestinationState:
 
 
 @dataclass(frozen=True, slots=True)
+class DestinationVerificationContext:
+    desired_fingerprint: str
+    destination_context_fingerprint: str
+    config_fingerprint: str
+    auth_context_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
 class UnresolvedState:
     source_id: str
     source_native_id: str
@@ -124,12 +132,15 @@ class SpotifyPlannerJournal:
             ).fetchone()
         if row is None:
             return None
-        return CatalogueState(
+        state = CatalogueState(
             context_key=_text(row, "context_key"),
             contract_fingerprint=_fingerprint(row, "contract_fingerprint"),
             last_verified_at=_optional_timestamp(row["last_verified_at"]),
             next_audit_at=_optional_timestamp(row["next_audit_at"]),
         )
+
+        _validate_audit(state.last_verified_at, state.next_audit_at)
+        return state
 
     def verify_catalogue(
         self, context_key: str, contract_fingerprint: str, *, verified_at: datetime
@@ -168,7 +179,7 @@ class SpotifyPlannerJournal:
             ).fetchone()
         if row is None:
             return None
-        return DestinationState(
+        state = DestinationState(
             playlist_id=_text(row, "playlist_id"),
             destination_context_fingerprint=_fingerprint(row, "destination_context_fingerprint"),
             config_fingerprint=_fingerprint(row, "config_fingerprint"),
@@ -182,6 +193,9 @@ class SpotifyPlannerJournal:
             last_verified_at=_optional_timestamp(row["last_verified_at"]),
             next_audit_at=_optional_timestamp(row["next_audit_at"]),
         )
+
+        _validate_destination(state)
+        return state
 
     def observe_destination(
         self,
@@ -227,25 +241,31 @@ class SpotifyPlannerJournal:
         self._put_destination(state)
         return state
 
-    def verify_destination(self, playlist_id: str, *, verified_at: datetime) -> None:
-        current = self.get_destination(playlist_id)
-        if current is None:
-            raise PersistenceError("cannot verify missing Spotify planner destination state")
+    def verify_destination(
+        self, playlist_id: str, *, expected: DestinationVerificationContext, verified_at: datetime
+    ) -> None:
         verified = _as_utc(verified_at)
-        self._put_destination(
-            DestinationState(
-                playlist_id=current.playlist_id,
-                destination_context_fingerprint=current.destination_context_fingerprint,
-                config_fingerprint=current.config_fingerprint,
-                auth_context_fingerprint=current.auth_context_fingerprint,
-                observed_desired_fingerprint=current.observed_desired_fingerprint,
-                confirmed_desired_fingerprint=current.observed_desired_fingerprint,
-                dirty=False,
-                unknown=False,
-                last_verified_at=verified,
-                next_audit_at=verified + AUDIT_INTERVAL,
+        with self._connection("verify Spotify planner destination") as connection:
+            # Conditional UPDATE binds publication to the exact operation in one transaction.
+            cursor = connection.execute(
+                """UPDATE spotify_planner_destination_state
+                   SET confirmed_desired_fingerprint = observed_desired_fingerprint,
+                       dirty = 0, unknown = 0, last_verified_at = ?, next_audit_at = ?
+                   WHERE playlist_id = ? AND observed_desired_fingerprint = ?
+                     AND destination_context_fingerprint = ? AND config_fingerprint = ?
+                     AND auth_context_fingerprint = ?""",
+                (
+                    _timestamp(verified),
+                    _timestamp(verified + AUDIT_INTERVAL),
+                    playlist_id,
+                    expected.desired_fingerprint,
+                    expected.destination_context_fingerprint,
+                    expected.config_fingerprint,
+                    expected.auth_context_fingerprint,
+                ),
             )
-        )
+            if cursor.rowcount != 1:
+                raise PersistenceError("Spotify planner verification context changed or missing")
 
     def begin_destination_verification(self, playlist_id: str) -> None:
         """Invalidate confirmation before a reconciliation that may mutate remotely."""
@@ -316,7 +336,7 @@ class SpotifyPlannerJournal:
         )
         if reason is not expected_reason:
             raise PersistenceError("Spotify planner unresolved state has inconsistent reason")
-        return UnresolvedState(
+        state = UnresolvedState(
             source_id=_text(row, "source_id"),
             source_native_id=_text(row, "source_native_id"),
             input_fingerprint=_fingerprint(row, "input_fingerprint"),
@@ -326,6 +346,15 @@ class SpotifyPlannerJournal:
             last_attempt_at=_timestamp_value(row, "last_attempt_at"),
             next_retry_at=_timestamp_value(row, "next_retry_at"),
         )
+
+        if (
+            state.first_unresolved_at > state.last_attempt_at
+            or state.next_retry_at <= state.last_attempt_at
+            or state.next_retry_at - state.last_attempt_at
+            != unresolved_retry_interval(state.last_attempt_at - state.first_unresolved_at)
+        ):
+            raise PersistenceError("Spotify planner retry timestamps are inconsistent")
+        return state
 
     def get_match_input(self, source_id: str, source_native_id: str) -> MatchInputState | None:
         with self._connection("read Spotify planner match input") as connection:
@@ -370,6 +399,14 @@ class SpotifyPlannerJournal:
                     _require_fingerprint(input_fingerprint),
                     _timestamp(observed_at),
                 ),
+            )
+
+    def clear_match_input(self, source_id: str, source_native_id: str) -> None:
+        with self._connection("clear Spotify planner match input") as connection:
+            connection.execute(
+                """DELETE FROM spotify_planner_match_inputs
+                   WHERE source_id = ? AND source_native_id = ?""",
+                (source_id, source_native_id),
             )
 
     def record_unresolved(
@@ -638,7 +675,9 @@ def unresolved_planning_reason(
     state: UnresolvedState | None, *, input_fingerprint: str, now: datetime
 ) -> PlannerReason | None:
     observed = _as_utc(now)
-    if state is None or state.input_fingerprint != input_fingerprint:
+    if state is None:
+        return PlannerReason.MISSING_EVIDENCE
+    if state.input_fingerprint != input_fingerprint:
         return PlannerReason.INPUT_CHANGED
     if observed < state.last_attempt_at:
         return PlannerReason.CLOCK_ROLLBACK
@@ -784,3 +823,43 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Spotify planner timestamps must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def authorization_context_fingerprint(authorized_at: datetime, *, market: str | None = None) -> str:
+    market_context = "user-token/account" if market is None else f"explicit:{market}"
+    return stable_fingerprint(
+        ("spotify-authorization-v2", _timestamp(authorized_at), market_context)
+    )
+
+
+def catalogue_context_fingerprint(source: SourceDefinition, auth_context: str) -> str:
+    return stable_fingerprint(
+        (
+            "spotify-catalogue-v2",
+            source_contract_fingerprint(source),
+            _require_fingerprint(auth_context),
+            "page-size=50;max-pages=2",
+        )
+    )
+
+
+def _validate_audit(verified: datetime | None, deadline: datetime | None) -> None:
+    if (verified is None) != (deadline is None) or (
+        verified is not None and deadline is not None and deadline - verified != AUDIT_INTERVAL
+    ):
+        raise PersistenceError("Spotify planner audit timestamps are inconsistent")
+
+
+def _validate_destination(state: DestinationState) -> None:
+    _validate_audit(state.last_verified_at, state.next_audit_at)
+    if state.dirty and state.confirmed_desired_fingerprint is not None:
+        raise PersistenceError("Spotify planner dirty destination has confirmation")
+    if not state.dirty and (
+        state.unknown
+        or state.confirmed_desired_fingerprint is None
+        or state.confirmed_desired_fingerprint != state.observed_desired_fingerprint
+        or state.last_verified_at is None
+    ):
+        raise PersistenceError("Spotify planner clean destination is inconsistent")
+    if state.unknown and state.confirmed_desired_fingerprint is not None:
+        raise PersistenceError("Spotify planner unknown destination has confirmation")

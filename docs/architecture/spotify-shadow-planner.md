@@ -9,8 +9,8 @@ the same order as before. The planner runs alongside that flow and emits one bou
 
 Schema migration 5 adds four focused tables:
 
-- `spotify_planner_catalogue_state` stores one six-hour audit deadline per hashed source/show
-  matching context;
+- `spotify_planner_catalogue_state` stores one six-hour audit deadline per hashed source/show,
+  authorization-generation, market and pagination context;
 - `spotify_planner_match_inputs` stores the canonical semantic input fingerprint last covered by
   qualifying matching evidence;
 - `spotify_planner_unresolved_state` stores per-edition `PENDING`/`AMBIGUOUS` retry timing and a
@@ -21,8 +21,9 @@ Schema migration 5 adds four focused tables:
 
 Pending snapshot transitions remain authoritative in the existing #134 journal. They are read by
 the planner and are not duplicated. Catalogue and destination evidence is renewed only after a
-qualifying real verification. Local RSS cycles do not move audit deadlines. Empty or truncated
-catalogues do not qualify.
+qualifying real verification. Audit timestamps and clean/unknown/confirmed relationships are
+validated when loaded; a syntactically valid but contradictory row fails closed. Local RSS cycles
+do not move audit deadlines. Empty or truncated catalogues do not qualify.
 
 ## Fingerprint contracts
 
@@ -32,7 +33,8 @@ payloads are:
 - edition input: source ID, source-native identity, title, publication time, semantic edition
   time and provider duration;
 - source context: source ID, parser, timezone, Spotify release-delay policy and sorted external
-  catalogue references;
+  catalogue references, combined with authorization generation, market mode and bounded
+  pagination contract;
 - playlist configuration: logical ID, enabled state, ordered source selection, retention, item
   limit, ordering and duration policy;
 - destination context: adapter and destination identity;
@@ -42,19 +44,31 @@ RSS observation time (`last_seen_at`) is deliberately absent. Raw destination/sh
 lists are represented in planner tables only through their fingerprints. Edition identity remains
 the existing local durable key and does not add provider payload data.
 
-The auth-context fingerprint currently identifies the planner's Spotify auth contract version,
-not a token or credential. Destination synchronization evidence describes the same globally
-identified playlist regardless of which authorized session can access it; reconnecting OAuth does
-not by itself change that playlist's confirmed contents. No token, refresh token, client ID or
-other credential enters a fingerprint.
+The authorization-context fingerprint derives from the durable, non-secret `authorized_at`
+generation and market mode. A normal token refresh preserves that generation. Every new OAuth
+authorization changes it conservatively, even when the operator reconnects the same account. The
+default market mode records that availability comes from the user-token account; future explicit
+markets form different contexts. No token, refresh token, client ID or other credential enters a
+fingerprint, and reading this context performs no OAuth refresh or Web API request.
+
+A cached URI's presence in a complete catalogue proves existence, but does not by itself certify a
+changed semantic edition input. The matcher performs an additional pure evaluation over the
+catalogue it already fetched and publishes shadow input evidence only when the current input
+resolves uniquely to the same persisted mapping. This metadata changes neither the production
+match nor provider request sequence. A missing unresolved-retry row is reported as missing
+evidence; input-changed is reserved for a present row with a different fingerprint.
 
 ## Safety behavior
 
 Missing, corrupt or incompatible evidence requires hypothetical Spotify work and cannot authorize
 a local skip. A desired transition immediately clears its old confirmed fingerprint. An unknown
 mutation also clears confirmation, so `A -> B -> unknown -> A` cannot revive evidence for the
-first A. Confirmation is invalidated before every current reconciliation and restored only after a
-verified result, so a crash during a possibly mutating call leaves conservative durable state.
+first A. Confirmation is invalidated before every current reconciliation and restored only when
+the exact desired, destination, configuration and authorization context observed for that
+operation still matches the durable row. Mutation outcome and skip-quality remote evidence are
+separate: an exact readback may prove that an ambiguous write applied while a later unstable
+snapshot bracket still prevents planner confirmation. Pending/degraded verification likewise does
+not qualify. A crash during a possibly mutating call leaves conservative durable state.
 Clock rollback makes audits due and blocks unresolved retry eligibility without moving a retry
 earlier.
 

@@ -45,6 +45,9 @@ class _Auth:
         self.error = error
         self.calls = 0
 
+    def planner_authorization_context(self) -> str:
+        return "a" * 64
+
     def get_access_token(self, *, now: datetime | None = None) -> str:
         assert now is not None
         self.calls += 1

@@ -4,7 +4,7 @@ import re
 import unicodedata
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
@@ -57,6 +57,9 @@ class MatchOutcome:
     diagnostics: str
     spotify_duration_seconds: int | None = None
     from_cache: bool = False
+    # None means no semantic evaluation was possible in this call. False means the current
+    # catalogue actively disproved qualification and prior planner evidence must be cleared.
+    planner_input_evidence_qualified: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +188,33 @@ def match_source_editions(
             updated_at=observed_at,
         )
         outcomes[index] = outcome
+
+    # Shadow-only semantic qualification. Reuse the already-fetched candidates and the
+    # same pure evaluator; never modify the production mapping or issue another request.
+    for index, value in enumerate(outcomes):
+        outcome = _require_outcome(value)
+        qualified: bool | None = None
+        if not outcome.from_cache:
+            qualified = True
+        elif outcome.status is MatchStatus.MATCHED and catalogue_complete and candidates:
+            try:
+                evaluated = _resolve_outcome(
+                    outcome.edition,
+                    tuple(
+                        _evaluate_candidate(source, outcome.edition, item) for item in candidates
+                    ),
+                    candidate_count=len(candidates),
+                    catalogue_calls=catalogue_calls,
+                )
+                qualified = (
+                    evaluated.status is MatchStatus.MATCHED
+                    and evaluated.spotify_episode_uri == outcome.spotify_episode_uri
+                    and evaluated.spotify_duration_seconds == outcome.spotify_duration_seconds
+                )
+            except Exception:
+                # An optional shadow evaluation must not replace a cached provider outcome.
+                qualified = False
+        outcomes[index] = replace(outcome, planner_input_evidence_qualified=qualified)
 
     return SourceMatchResult(
         source_id=source.id,

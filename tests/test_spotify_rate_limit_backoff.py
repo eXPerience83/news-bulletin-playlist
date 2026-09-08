@@ -60,6 +60,9 @@ class _Auth:
         self.calls += 1
         return "access-token"
 
+    def planner_authorization_context(self) -> str:
+        return "a" * 64
+
 
 class _Spotify:
     def __init__(

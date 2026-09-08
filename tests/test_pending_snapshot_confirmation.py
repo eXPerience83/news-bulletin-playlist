@@ -20,6 +20,8 @@ from news_bulletin_playlist.models import (
 )
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.reconciliation import (
+    MutationOutcome,
+    ReconciliationEvidence,
     SpotifyReconciliationError,
     reconcile_spotify_playlist,
 )
@@ -112,35 +114,48 @@ def test_single_page_stale_snapshot_is_durable_across_restart(tmp_path: Path) ->
     client = _ExactLaggingSpotify()
     desired = _desired(count=35)
 
-    first = reconcile_spotify_playlist(client, _playlist(), desired, store=store)
+    first_evidence = ReconciliationEvidence()
+    first = reconcile_spotify_playlist(
+        client, _playlist(), desired, store=store, evidence=first_evidence
+    )
     pending = PendingSnapshotJournal(store).get(PLAYLIST_ID)
     assert first.wrote is True and first.degraded_verification
     assert pending is not None
     assert pending.baseline_snapshot_id == "snapshot-A"
     assert pending.expected_snapshot_id == "snapshot-B"
     assert store.get_playlist_attestation(PLAYLIST_ID) is None
+    assert first_evidence.mutation_outcome is MutationOutcome.VERIFIED
+    assert not first_evidence.remote_evidence_qualified
 
     restarted = SQLiteStore(store.path)
     restarted.initialize()
+    stale_evidence = ReconciliationEvidence()
     stale = reconcile_spotify_playlist(
         client,
         _playlist(),
         _desired(count=35, generated_at=NOW + timedelta(minutes=10)),
         store=restarted,
+        evidence=stale_evidence,
     )
     assert stale.wrote is False and stale.degraded_verification
     assert len(client.writes) == 1
+    assert stale_evidence.mutation_outcome is MutationOutcome.NOT_ATTEMPTED
+    assert not stale_evidence.remote_evidence_qualified
 
     client.visible_snapshot = "snapshot-B"
+    promoted_evidence = ReconciliationEvidence()
     promoted = reconcile_spotify_playlist(
         client,
         _playlist(),
         _desired(count=35, generated_at=NOW + timedelta(minutes=20)),
         store=restarted,
+        evidence=promoted_evidence,
     )
     assert promoted.wrote is False
     assert PendingSnapshotJournal(restarted).get(PLAYLIST_ID) is None
     assert restarted.get_playlist_attestation(PLAYLIST_ID).snapshot_id == "snapshot-B"  # type: ignore[union-attr]
+    assert promoted_evidence.mutation_outcome is MutationOutcome.NOT_ATTEMPTED
+    assert promoted_evidence.remote_evidence_qualified
 
 
 def test_single_page_pending_partial_read_stays_degraded_without_rewrite(tmp_path: Path) -> None:
