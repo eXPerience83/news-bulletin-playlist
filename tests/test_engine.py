@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -204,7 +205,8 @@ def test_cycle_fetches_shared_source_once_and_reconciles_two_playlists(tmp_path:
     assert first.ok
     assert second.ok
     assert calls == [SER_URL, SER_URL]
-    assert spotify.show_calls == 2
+    # The second stable cycle reuses durable match/audit evidence and does no catalogue I/O.
+    assert spotify.show_calls == 1
     assert spotify.replacements == [
         ("destination-first", (SER_URI,)),
         ("destination-second", (SER_URI,)),
@@ -218,6 +220,250 @@ def test_cycle_fetches_shared_source_once_and_reconciles_two_playlists(tmp_path:
             "SELECT COUNT(*) FROM spotify_planner_catalogue_state"
         ).fetchone()[0]
     assert catalogue_states == 1
+
+
+def test_valid_truncated_audit_renews_without_proving_absence(tmp_path: Path) -> None:
+    clock = [NOW]
+
+    class TruncatedSpotify(_Spotify):
+        truncated = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            if not self.truncated:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            self.show_calls += 1
+            return {
+                "items": [
+                    {
+                        "uri": SER_URI,
+                        "name": SER_TITLE,
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                        "duration_ms": 60_000,
+                    }
+                ],
+                "next": "more",
+            }
+
+    spotify = TruncatedSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+    assert runner.run_cycle().ok
+    spotify.truncated = True
+    clock[0] = NOW + timedelta(hours=6)
+    assert runner.run_cycle().ok
+    calls_after_audit = spotify.show_calls
+    clock[0] += timedelta(minutes=10)
+    assert runner.run_cycle().ok
+
+    assert calls_after_audit == 3
+    assert spotify.show_calls == calls_after_audit
+    assert runner.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+
+
+def test_valid_empty_audit_renews_and_preserves_mapping(tmp_path: Path) -> None:
+    clock = [NOW]
+
+    class EmptyAuditSpotify(_Spotify):
+        empty = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            if not self.empty:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            del show_id, limit, offset
+            self.show_calls += 1
+            return {"items": [], "next": None}
+
+    spotify = EmptyAuditSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+    assert runner.run_cycle().ok
+    spotify.empty = True
+    clock[0] = NOW + timedelta(hours=6)
+    assert runner.run_cycle().ok
+    calls_after_audit = spotify.show_calls
+    clock[0] += timedelta(minutes=10)
+    assert runner.run_cycle().ok
+
+    assert spotify.show_calls == calls_after_audit == 2
+    assert runner.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+
+
+@pytest.mark.parametrize("truncated", [False, True])
+def test_prewrite_absence_invalidates_only_with_complete_nonempty_catalogue(
+    tmp_path: Path, truncated: bool
+) -> None:
+    class MissingSpotify(_Spotify):
+        missing = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            if not self.missing:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            del show_id, limit
+            self.show_calls += 1
+            return {
+                "items": [
+                    {
+                        "uri": "spotify:episode:" + "2" * 22,
+                        "name": "unrelated",
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                        "duration_ms": 60_000,
+                    }
+                ],
+                "next": "more" if truncated else None,
+            }
+
+    spotify = MissingSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+    assert runner.run_cycle().ok
+    spotify.items["destination-first"] = []
+    spotify.missing = True
+    result = runner.run_cycle()
+
+    if truncated:
+        assert not result.ok
+        assert "destination preserved" in (result.playlists[0].error or "")
+        assert runner.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+    else:
+        assert result.ok
+        assert result.playlists[0].wrote is False
+        assert runner.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") is None
+    assert spotify.replacements == [("destination-first", (SER_URI,))]
+
+
+def test_truncated_catalogue_presence_is_sufficient_for_prewrite(tmp_path: Path) -> None:
+    class TruncatedPresenceSpotify(_Spotify):
+        truncated = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            if not self.truncated:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            del show_id, limit, offset
+            self.show_calls += 1
+            return {
+                "items": [
+                    {
+                        "uri": SER_URI,
+                        "name": SER_TITLE,
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                        "duration_ms": 60_000,
+                    }
+                ],
+                "next": "more",
+            }
+
+    spotify = TruncatedPresenceSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+    assert runner.run_cycle().ok
+    spotify.items["destination-first"] = []
+    spotify.truncated = True
+
+    result = runner.run_cycle()
+
+    assert result.ok
+    assert result.playlists[0].wrote
+    assert spotify.replacements == [
+        ("destination-first", (SER_URI,)),
+        ("destination-first", (SER_URI,)),
+    ]
+
+
+def test_adaptive_retry_is_active_and_does_not_fetch_inside_first_grace(tmp_path: Path) -> None:
+    clock = [NOW]
+
+    class InitiallyEmptySpotify(_Spotify):
+        available = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            if self.available:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            del show_id, limit, offset
+            self.show_calls += 1
+            return {"items": [], "next": None}
+
+    spotify = InitiallyEmptySpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+
+    assert runner.run_cycle().ok
+    assert spotify.show_calls == 1
+    spotify.available = True
+    clock[0] = NOW + timedelta(minutes=14, seconds=59)
+    assert runner.run_cycle().ok
+    assert spotify.show_calls == 1
+    clock[0] = NOW + timedelta(minutes=15)
+    assert runner.run_cycle().ok
+    assert spotify.show_calls == 2
+    assert runner.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+
+
+def test_compatible_source_definitions_share_one_catalogue_fetch(tmp_path: Path) -> None:
+    second_source = replace(
+        _source(),
+        id=SourceId("ser-secondary"),
+        endpoint_url="https://example.test/ser-secondary.xml",
+    )
+    playlist = replace(
+        _playlist("first"),
+        source_selection=SourceSelection((SourceId("ser"), SourceId("ser-secondary"))),
+    )
+    config = EngineConfig(
+        schema_version=1,
+        sources=(_source(), second_source),
+        playlists=(playlist,),
+    )
+    spotify = _Spotify()
+    runner = EngineRunner(
+        config,
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+
+    assert result.ok
+    assert spotify.show_calls == 1
+    assert {outcome.source_id for outcome in result.sources} == {
+        SourceId("ser"),
+        SourceId("ser-secondary"),
+    }
 
 
 def test_shadow_planner_persistence_failure_does_not_change_spotify_behavior(

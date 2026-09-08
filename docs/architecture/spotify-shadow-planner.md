@@ -1,9 +1,9 @@
 # Spotify shadow planner
 
-Issue #158 introduces a durable local planner without using its decisions to suppress Spotify
-work. The engine still obtains OAuth, matches every source, and reconciles every destination in
-the same order as before. The planner runs alongside that flow and emits one bounded
-`spotify_planner_shadow_decision` event per completed cycle.
+Issue #158 introduced the durable local planner and its bounded
+`spotify_planner_shadow_decision` event. Phase 3 consumes its catalogue and retry evidence to
+suppress unnecessary show-catalogue reads while retaining the existing OAuth/client lifecycle and
+reconciling every destination. Destination skip decisions remain shadow-only.
 
 ## Durable evidence
 
@@ -20,10 +20,12 @@ Schema migration 5 adds four focused tables:
   six-hour destination audit deadline.
 
 Pending snapshot transitions remain authoritative in the existing #134 journal. They are read by
-the planner and are not duplicated. Catalogue and destination evidence is renewed only after a
-qualifying real verification. Audit timestamps and clean/unknown/confirmed relationships are
-validated when loaded; a syntactically valid but contradictory row fails closed. Local RSS cycles
-do not move audit deadlines. Empty or truncated catalogues do not qualify.
+the planner and are not duplicated. Catalogue audit freshness records a successful structurally
+valid bounded inspection, so complete, truncated, and empty valid responses renew its six-hour
+deadline. This is separate from absence proof: only a complete, valid, non-empty result from the
+current cycle may prove a mapping absent. Completeness is not persisted. Audit timestamps and
+clean/unknown/confirmed relationships are validated when loaded; a syntactically valid but
+contradictory row fails closed. Local RSS cycles do not move audit deadlines.
 
 ## Fingerprint contracts
 
@@ -57,6 +59,28 @@ catalogue it already fetched and publishes shadow input evidence only when the c
 resolves uniquely to the same persisted mapping. This metadata changes neither the production
 match nor provider request sequence. A missing unresolved-retry row is reported as missing
 evidence; input-changed is reserved for a present row with a different fingerprint.
+
+## Phase 3 catalogue execution
+
+Matching now consumes the durable input and unresolved-retry evidence. Reusable `MATCHED`
+mappings with unchanged semantic input and a fresh catalogue audit require no show-catalogue
+request. New or changed inputs, due adaptive retries, due audits, and untrusted planner state
+trigger a bounded fetch. Retry intervals are 15 minutes below one hour of age, 30 minutes from one
+to three hours, one hour from three to six hours, and six hours thereafter. Only an actual local
+evaluation advances the durable attempt deadline.
+
+A cycle-scoped in-memory coordinator shares each bounded fetch by show, authorization context,
+market mode, pagination contract, and catalogue contract version. Parser, timezone, and release
+delay remain source-specific evaluation inputs rather than HTTP cache dimensions. Failed fetches
+are coalesced within the cycle. Candidates and completeness claims are never persisted.
+
+Playlist reconciliation still runs every cycle. Only after pending-snapshot handling and the
+existing unchanged/stability checks fail to avoid mutation does a pre-write barrier validate each
+selected mapping. Presence in a truncated result is positive evidence; absence in a truncated or
+empty result blocks the write. Complete non-empty absence permits invalidation and rematching. A
+changed desired state re-enters reconciliation from the beginning, and repeated fingerprints or
+an exhausted finite iteration bound fail closed. Phase 3 does not implement global lazy OAuth,
+destination local skips, or snapshot-first audits.
 
 ## Safety behavior
 

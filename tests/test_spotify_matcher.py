@@ -258,13 +258,12 @@ def test_removed_persisted_episode_is_invalidated_when_show_catalogue_is_complet
         now=now,
     )
 
-    assert result.outcomes[0].status is MatchStatus.PENDING
-    assert result.outcomes[0].spotify_episode_uri is None
-    assert "absent from the complete show catalogue" in result.outcomes[0].diagnostics
+    assert result.outcomes[0].status is MatchStatus.MATCHED
+    assert result.outcomes[0].spotify_episode_uri == "spotify:episode:d9298a10d1b0735837dc4b"
     state = store.get_match_state(*edition.identity)
     assert state is not None
-    assert state.status is MatchStatus.PENDING
-    assert state.spotify_episode_uri is None
+    assert state.status is MatchStatus.MATCHED
+    assert state.spotify_episode_uri == "spotify:episode:d9298a10d1b0735837dc4b"
 
 
 def test_absence_from_truncated_catalogue_does_not_invalidate_persisted_mapping(

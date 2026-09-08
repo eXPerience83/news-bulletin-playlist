@@ -195,7 +195,7 @@ def test_production_auth_wrapper_exposes_usable_shadow_context_without_extra_io(
     assert transport.refresh_calls == []
     assert len(factory_tokens) == 2
     assert calls_after_first == (1, 2, 2)
-    assert (spotify.show_calls, spotify.playlist_reads, spotify.snapshot_reads) == (2, 3, 2)
+    assert (spotify.show_calls, spotify.playlist_reads, spotify.snapshot_reads) == (1, 3, 2)
     assert spotify.replacements == [("managed-destination", (SER_URI,))]
 
 

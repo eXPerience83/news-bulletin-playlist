@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from functools import partial
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -70,6 +71,21 @@ class ReconciliationEvidence:
 
 
 PlaylistMutationGuard = Callable[[], AbstractContextManager[None]]
+PlaylistPrewritePreparation = Callable[[DesiredPlaylistState], DesiredPlaylistState]
+
+
+class _DesiredStateChanged(RuntimeError):
+    def __init__(self, desired: DesiredPlaylistState) -> None:
+        self.desired = desired
+
+
+def _desired_preparation_key(
+    desired: DesiredPlaylistState,
+) -> tuple[tuple[str, str, str], ...]:
+    return tuple(
+        (str(item.source_id), item.source_native_id, item.spotify_episode_uri)
+        for item in desired.items
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +205,8 @@ def _reconcile_playlist_items(
     logical_playlist_id: PlaylistId | None,
     attestation_updated_at: datetime | None,
     mutation_guard: PlaylistMutationGuard | None,
+    prepare_write: Callable[[], DesiredPlaylistState] | None = None,
+    prewrite_desired: DesiredPlaylistState | None = None,
     evidence: ReconciliationEvidence | None = None,
 ) -> _PlaylistItemsReconciliationResult:
     evidence = evidence if evidence is not None else ReconciliationEvidence()
@@ -283,6 +301,13 @@ def _reconcile_playlist_items(
                 # propagation after a subsequent write. The post-write path remains strict when
                 # the optional baseline is unavailable.
                 prewrite_snapshot = None
+
+    if prepare_write is not None:
+        prepared = prepare_write()
+        if prewrite_desired is None:
+            raise ValueError("prepare_write requires prewrite_desired")
+        if prepared.items != prewrite_desired.items:
+            raise _DesiredStateChanged(prepared)
 
     if store is not None and logical_playlist_id is not None and prewrite_snapshot is None:
         try:
@@ -659,6 +684,8 @@ def reconcile_spotify_playlist(
     *,
     store: SQLiteStore | None = None,
     mutation_guard: PlaylistMutationGuard | None = None,
+    prepare_write: PlaylistPrewritePreparation | None = None,
+    prewrite_iteration_limit: int | None = None,
     evidence: ReconciliationEvidence | None = None,
 ) -> PlaylistReconciliationResult:
     """Reconcile one Spotify destination; errors are left to the batch isolator."""
@@ -672,16 +699,47 @@ def reconcile_spotify_playlist(
         )
 
     evidence = evidence if evidence is not None else ReconciliationEvidence()
-    reconciled = _reconcile_playlist_items(
-        client,
-        playlist.destination.external_id,
-        desired.uris,
-        store=store,
-        logical_playlist_id=playlist.id if store is not None else None,
-        attestation_updated_at=desired.generated_at if store is not None else None,
-        mutation_guard=mutation_guard,
-        evidence=evidence,
-    )
+    current_desired = desired
+    seen = {_desired_preparation_key(current_desired)}
+    max_preparations = prewrite_iteration_limit or len(current_desired.items) + 1
+    if max_preparations < 1:
+        raise ValueError("prewrite_iteration_limit must be positive")
+    for _ in range(max_preparations):
+        prepared_callback = (
+            None if prepare_write is None else partial(prepare_write, current_desired)
+        )
+        try:
+            reconciled = _reconcile_playlist_items(
+                client,
+                playlist.destination.external_id,
+                current_desired.uris,
+                store=store,
+                logical_playlist_id=playlist.id if store is not None else None,
+                attestation_updated_at=(
+                    current_desired.generated_at if store is not None else None
+                ),
+                mutation_guard=mutation_guard,
+                prepare_write=prepared_callback,
+                prewrite_desired=current_desired,
+                evidence=evidence,
+            )
+            break
+        except _DesiredStateChanged as changed:
+            if changed.desired.playlist_id != playlist.id:
+                raise SpotifyReconciliationError(
+                    "Spotify prewrite preparation returned desired state for another playlist"
+                ) from None
+            changed_key = _desired_preparation_key(changed.desired)
+            if changed_key in seen:
+                raise SpotifyReconciliationError(
+                    "Spotify prewrite desired-state preparation made no monotonic progress"
+                ) from None
+            seen.add(changed_key)
+            current_desired = changed.desired
+    else:
+        raise SpotifyReconciliationError(
+            "Spotify prewrite desired-state preparation exceeded its bounded iterations"
+        )
     evidence.remote_evidence_qualified = (
         reconciled.remote_evidence_qualified and not reconciled.degraded_verification
     )
@@ -690,8 +748,8 @@ def reconcile_spotify_playlist(
     return PlaylistReconciliationResult(
         playlist_id=playlist.id,
         ok=True,
-        desired_count=len(desired.items),
-        applied_count=len(desired.items),
+        desired_count=len(current_desired.items),
+        applied_count=len(current_desired.items),
         wrote=reconciled.wrote,
         degraded_verification=reconciled.degraded_verification,
         warning=reconciled.warning,

@@ -190,6 +190,7 @@ def test_failed_semantic_disqualification_is_shadow_only(tmp_path, monkeypatch, 
         return page
 
     provider.show_episodes = ambiguous
+    runner.clock = lambda: NOW + timedelta(hours=6)
     monkeypatch.setattr(
         runner.planner_journal,
         "clear_match_input",
@@ -242,6 +243,7 @@ def test_failed_observation_never_certifies_old_a_after_writing_b(tmp_path, monk
         return page
 
     monkeypatch.setattr(provider, "show_episodes", removed)
+    runner.clock = lambda: NOW + timedelta(hours=6)
     with monkeypatch.context() as scope:
         scope.setattr(
             runner.planner_journal,
