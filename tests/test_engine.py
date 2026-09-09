@@ -34,6 +34,7 @@ from news_bulletin_playlist.models import (
     SourceSelection,
 )
 from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore
+from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
 from news_bulletin_playlist.spotify.auth import SpotifyReauthorizationRequired
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
@@ -200,6 +201,7 @@ def test_cycle_fetches_shared_source_once_and_reconciles_two_playlists(tmp_path:
         fetcher=fetcher,
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
 
     first = runner.run_cycle()
@@ -223,6 +225,113 @@ def test_cycle_fetches_shared_source_once_and_reconciles_two_playlists(tmp_path:
             "SELECT COUNT(*) FROM spotify_planner_catalogue_state"
         ).fetchone()[0]
     assert catalogue_states == 1
+
+
+def test_rss_failure_with_lkg_does_not_force_spotify(tmp_path: Path) -> None:
+    auth = _Auth()
+    spotify = _Spotify()
+    fail = False
+
+    def fetcher(_url: str) -> bytes:
+        if fail:
+            raise OSError("feed unavailable")
+        return _rss()
+
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=fetcher,
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+    assert runner.run_cycle().ok
+    provider_counts = (auth.calls, spotify.show_calls, len(spotify.playlist_reads))
+    fail = True
+
+    degraded = runner.run_cycle()
+
+    assert not degraded.ok
+    assert not degraded.sources[0].collection_ok
+    assert degraded.playlists[0].wrote is False
+    assert (auth.calls, spotify.show_calls, len(spotify.playlist_reads)) == provider_counts
+
+
+def test_dirty_destination_does_not_force_clean_sibling_remote_read(tmp_path: Path) -> None:
+    auth = _Auth()
+    spotify = _Spotify()
+    runner = EngineRunner(
+        _config("first", "second"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+    assert runner.run_cycle().ok
+    spotify.playlist_reads.clear()
+    runner.planner_journal.begin_destination_verification("first")
+
+    result = runner.run_cycle()
+
+    assert result.ok
+    assert set(spotify.playlist_reads) == {"destination-first"}
+    assert result.destinations_remote == 1
+    assert result.destinations_skipped == 1
+
+
+def test_destination_audit_is_due_exactly_at_six_hours(tmp_path: Path) -> None:
+    auth = _Auth()
+    spotify = _Spotify()
+    current = NOW
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    reads = len(spotify.playlist_reads)
+    current = NOW + timedelta(hours=6) - timedelta(microseconds=1)
+    assert runner.run_cycle().ok
+    assert len(spotify.playlist_reads) == reads
+    current = NOW + timedelta(hours=6)
+
+    due = runner.run_cycle()
+
+    assert due.ok
+    assert len(spotify.playlist_reads) > reads
+    assert due.destinations_remote == 1
+
+
+def test_unreadable_pending_snapshot_state_preserves_without_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth = _Auth()
+    spotify = _Spotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+    assert runner.run_cycle().ok
+    provider_counts = (auth.calls, spotify.show_calls, len(spotify.playlist_reads))
+    monkeypatch.setattr(
+        PendingSnapshotJournal,
+        "get",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PersistenceError("unreadable")),
+    )
+
+    blocked = runner.run_cycle()
+
+    assert not blocked.ok
+    assert blocked.playlists[0].wrote is None
+    assert (auth.calls, spotify.show_calls, len(spotify.playlist_reads)) == provider_counts
 
 
 @pytest.mark.parametrize(
@@ -270,6 +379,7 @@ def test_missing_match_input_evidence_preserves_valid_mapping(
         fetcher=lambda _url: _rss(),
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
     assert first.run_cycle().ok
     first.planner_journal.clear_match_input("ser", "ser-1")
@@ -285,6 +395,7 @@ def test_missing_match_input_evidence_preserves_valid_mapping(
         fetcher=lambda _url: _rss(),
         client_factory=lambda _token: spotify,
         clock=lambda: NOW + timedelta(minutes=10),
+        local_skips_enabled=False,
     )
     result = restarted.run_cycle()
 
@@ -332,6 +443,7 @@ def test_corrupt_catalogue_evidence_preserves_match_and_blocks_unsafe_write(
         fetcher=lambda _url: _rss(),
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
     assert runner.run_cycle().ok
     spotify.items["destination-first"] = []
@@ -386,6 +498,7 @@ def test_source_contract_change_requires_semantic_requalification(
         fetcher=lambda _url: _rss(),
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
     assert runner.run_cycle().ok
     spotify.truncated = True
@@ -411,6 +524,7 @@ def test_remote_confirmation_is_bound_to_reconciled_desired(
         fetcher=lambda _url: _rss(),
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
     assert runner.run_cycle().ok
     original = engine_module.reconcile_spotify_playlist
@@ -557,6 +671,7 @@ def test_prewrite_absence_invalidates_only_with_complete_nonempty_catalogue(
         fetcher=lambda _url: _rss(),
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
     assert runner.run_cycle().ok
     spotify.items["destination-first"] = []
@@ -607,6 +722,7 @@ def test_truncated_catalogue_presence_is_sufficient_for_prewrite(tmp_path: Path)
         fetcher=lambda _url: _rss(),
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
     assert runner.run_cycle().ok
     spotify.items["destination-first"] = []
@@ -704,6 +820,7 @@ def test_shadow_planner_persistence_failure_does_not_change_spotify_behavior(
         fetcher=lambda _url: _rss(),
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
 
     def fail_catalogue(_context: str) -> None:

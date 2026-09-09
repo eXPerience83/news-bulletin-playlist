@@ -71,6 +71,9 @@ SER_URI = "spotify:episode:0000000000000000000001"
 
 
 class _Auth:
+    def planner_authorization_context(self) -> str:
+        return "a" * 64
+
     def get_access_token(self, *, now: datetime | None = None) -> str:
         assert now is not None
         return "access-token"
@@ -158,10 +161,19 @@ def _ser_rss() -> bytes:
 
 def test_production_auth_wrapper_exposes_usable_shadow_context_without_extra_io(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     _, _, sqlite = _active_ser_state(tmp_path)
     service, transport, _ = _service(tmp_path)
     _authorize(service)
+    token_calls: list[datetime | None] = []
+    real_get_access_token = service.get_access_token
+
+    def get_access_token(*, now: datetime | None = None) -> str:
+        token_calls.append(now)
+        return real_get_access_token(now=now)
+
+    monkeypatch.setattr(service, "get_access_token", get_access_token)
     synchronization = AuthSynchronization()
     auth = _LockedAuthProvider(service, synchronization)
     spotify = _Spotify()
@@ -187,6 +199,7 @@ def test_production_auth_wrapper_exposes_usable_shadow_context_without_extra_io(
         clock=lambda: NOW,
     )
     first = runner.run_cycle()
+    token_calls_after_first = len(token_calls)
     calls_after_first = (spotify.show_calls, spotify.playlist_reads, spotify.snapshot_reads)
     second = runner.run_cycle()
 
@@ -195,10 +208,32 @@ def test_production_auth_wrapper_exposes_usable_shadow_context_without_extra_io(
     assert second.planner_shadow.state_available
     assert second.planner_shadow.would_allow_local_skip
     assert transport.refresh_calls == []
-    assert len(factory_tokens) == 2
+    assert token_calls_after_first == 1
+    assert len(token_calls) == token_calls_after_first
+    assert len(factory_tokens) == 1
     assert calls_after_first == (1, 2, 2)
-    assert (spotify.show_calls, spotify.playlist_reads, spotify.snapshot_reads) == (1, 3, 2)
+    assert (spotify.show_calls, spotify.playlist_reads, spotify.snapshot_reads) == calls_after_first
     assert spotify.replacements == [("managed-destination", (SER_URI,))]
+
+    def forbidden_factory(_token: str) -> _Spotify:
+        raise AssertionError("restart clean cycle must not construct a Spotify client")
+
+    restarted = ReloadingEngineCycleRunner(
+        tmp_path,
+        {},
+        SQLiteStore(sqlite.path),
+        _LockedAuthProvider(service, AuthSynchronization()),
+        fetcher=lambda _url: _ser_rss(),
+        client_factory=forbidden_factory,
+        clock=lambda: NOW,
+    )
+    restarted_result = restarted.run_cycle()
+    assert restarted_result.ok
+    assert not restarted_result.provider_work_planned
+    assert not restarted_result.provider_session_created
+    assert restarted_result.destinations_skipped == 1
+    assert len(token_calls) == token_calls_after_first
+    assert transport.refresh_calls == []
 
 
 def test_production_auth_wrapper_uses_same_lock_for_context_and_token() -> None:
@@ -258,6 +293,7 @@ def test_reloading_runner_does_not_hold_configuration_lock_during_feed_io(
         fetcher=fetcher,
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
     cycle = threading.Thread(target=lambda: results.append(runner.run_cycle()))
     cycle.start()
@@ -307,6 +343,7 @@ def test_reloading_runner_prevents_stale_write_after_playlist_is_paused(
         fetcher=fetcher,
         client_factory=lambda _token: spotify,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
     cycle = threading.Thread(target=lambda: results.append(runner.run_cycle()))
     cycle.start()

@@ -218,6 +218,11 @@ class InstrumentedEngineCycleRunner:
                 "planner_destination_audit_due_count": shadow.destination_audit_due_count,
                 "planner_safety_blocker_count": shadow.safety_blocker_count,
                 "planner_state_available": shadow.state_available,
+                "provider_work_planned": result.provider_work_planned,
+                "provider_session_created": result.provider_session_created,
+                "destinations_skipped": result.destinations_skipped,
+                "destinations_remote": result.destinations_remote,
+                "destinations_preserved": result.destinations_preserved,
             }
             details.update(
                 {f"planner_reason_{reason.value}": reason in reason_set for reason in PlannerReason}
