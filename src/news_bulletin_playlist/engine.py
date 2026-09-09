@@ -50,6 +50,7 @@ from news_bulletin_playlist.spotify.matcher import (
     DEFAULT_MAX_PAGES,
     DEFAULT_PAGE_SIZE,
     MatchConfigurationError,
+    MatchEvaluationIntent,
     MatchResponseError,
     SourceMatchResult,
     SpotifyCatalogueResult,
@@ -78,7 +79,7 @@ from news_bulletin_playlist.spotify_planner import (
     SpotifyPlannerJournal,
     catalogue_context_fingerprint,
     destination_context_fingerprint,
-    edition_input_fingerprint,
+    matching_input_fingerprint,
     plan_shadow_cycle,
     playlist_config_fingerprint,
     stable_fingerprint,
@@ -111,13 +112,13 @@ class EngineCycleAlreadyRunning(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class _SourceMatchingPlan:
-    evaluate_identities: frozenset[tuple[SourceId, str]]
+    evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent]
     catalogue_audit_due: bool
     conservative: bool = False
 
     @property
     def needs_catalogue(self) -> bool:
-        return bool(self.evaluate_identities) or self.catalogue_audit_due or self.conservative
+        return bool(self.evaluation_intents) or self.catalogue_audit_due or self.conservative
 
 
 class _CycleCatalogueCoordinator:
@@ -404,7 +405,7 @@ class EngineRunner:
                         editions,
                         now=matching_now,
                         catalogue=catalogue,
-                        evaluate_identities=plan.evaluate_identities,
+                        evaluation_intents=plan.evaluation_intents,
                         validate_cached=catalogue is not None,
                         catalogue_request_count=catalogue_request_count,
                     )
@@ -557,10 +558,19 @@ class EngineRunner:
                 request_diagnostics = self._request_diagnostics(playlist.id, desired.uris)
                 verification_context = self._observe_desired_state(playlist, desired.uris)
                 playlist_finished_at = _as_utc(self.clock())
+                reconciled_fingerprint = (
+                    None
+                    if reconciled.verified_desired_uris is None
+                    else stable_fingerprint(reconciled.verified_desired_uris)
+                )
                 self._observe_destination_result(
                     playlist,
-                    verified=evidence.remote_evidence_qualified,
-                    unknown=evidence.mutation_outcome is MutationOutcome.UNKNOWN,
+                    verified=(
+                        reconciled.remote_evidence_qualified
+                        and verification_context is not None
+                        and verification_context.desired_fingerprint == reconciled_fingerprint
+                    ),
+                    unknown=reconciled.mutation_outcome is MutationOutcome.UNKNOWN,
                     expected=verification_context,
                     observed_at=playlist_finished_at,
                 )
@@ -803,7 +813,7 @@ class EngineRunner:
                     if match is None:
                         source_reasons.append((identity, PlannerReason.NEW_MATCH))
                         continue
-                    fingerprint = edition_input_fingerprint(edition)
+                    fingerprint = matching_input_fingerprint(source, edition)
                     prior_input = self.planner_journal.get_match_input(
                         str(source.id), edition.source_native_id
                     )
@@ -904,19 +914,25 @@ class EngineRunner:
                 or now < catalogue.last_verified_at
                 or now >= catalogue.next_audit_at
             )
-            evaluate: set[tuple[SourceId, str]] = set()
+            intents: dict[tuple[SourceId, str], MatchEvaluationIntent] = {}
             for edition in editions:
                 match = self.store.get_match_state(source.id, edition.source_native_id)
-                fingerprint = edition_input_fingerprint(edition)
+                fingerprint = matching_input_fingerprint(source, edition)
                 prior_input = self.planner_journal.get_match_input(
                     str(source.id), edition.source_native_id
                 )
-                if (
-                    match is None
-                    or prior_input is None
-                    or prior_input.input_fingerprint != fingerprint
-                ):
-                    evaluate.add(edition.identity)
+                if match is None:
+                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    continue
+                if prior_input is None:
+                    intents[edition.identity] = (
+                        MatchEvaluationIntent.EVIDENCE_RECOVERY
+                        if match.status is MatchStatus.MATCHED
+                        else MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    )
+                    continue
+                if prior_input.input_fingerprint != fingerprint:
+                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
                     continue
                 if match.status is MatchStatus.MATCHED:
                     if (
@@ -924,7 +940,7 @@ class EngineRunner:
                         or not is_spotify_episode_uri(match.spotify_episode_uri)
                         or match.spotify_duration_seconds is None
                     ):
-                        evaluate.add(edition.identity)
+                        intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
                     continue
                 retry = self.planner_journal.get_unresolved(
                     str(source.id), edition.source_native_id
@@ -939,11 +955,11 @@ class EngineRunner:
                     PlannerReason.INPUT_CHANGED,
                     PlannerReason.RETRY_DUE,
                 }:
-                    evaluate.add(edition.identity)
-            return _SourceMatchingPlan(frozenset(evaluate), audit_due)
+                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+            return _SourceMatchingPlan(intents, audit_due)
         except Exception:
             return _SourceMatchingPlan(
-                frozenset(edition.identity for edition in editions),
+                {edition.identity: MatchEvaluationIntent.EVIDENCE_RECOVERY for edition in editions},
                 True,
                 conservative=True,
             )
@@ -1016,8 +1032,10 @@ class EngineRunner:
                     (edition,),
                     now=observed_at,
                     catalogue=catalogue,
-                    evaluate_identities=(edition.identity,),
-                    validate_cached=False,
+                    evaluation_intents={
+                        edition.identity: MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    },
+                    validate_cached=True,
                     catalogue_request_count=request_count,
                 )
                 self._observe_matching_result(source, result, observed_at)
@@ -1047,7 +1065,7 @@ class EngineRunner:
                 self.planner_journal.verify_catalogue(contract, contract, verified_at=observed_at)
             for outcome in result.outcomes:
                 edition = outcome.edition
-                input_fingerprint = edition_input_fingerprint(edition)
+                input_fingerprint = matching_input_fingerprint(source, edition)
                 if outcome.planner_input_evidence_qualified is True:
                     self.planner_journal.observe_match_input(
                         source_id=str(edition.source_id),

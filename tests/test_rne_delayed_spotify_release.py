@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from _spotify_catalogue import normalize_catalogue_page
+
 from news_bulletin_playlist.models import (
     AdapterId,
     CanonicalEdition,
@@ -42,8 +44,16 @@ class FakeCatalogClient:
         self.calls.append((show_id, limit, offset))
         page_number = offset // limit
         if page_number < len(self.pages):
-            return self.pages[page_number]
-        return {"items": [], "next": None}
+            last_items = self.pages[-1].get("items")
+            total = (len(self.pages) - 1) * limit + (
+                len(last_items) if isinstance(last_items, list) else 0
+            )
+            if self.pages[-1].get("next") is not None:
+                total += 1
+            return normalize_catalogue_page(
+                self.pages[page_number], offset=offset, limit=limit, total=total
+            )
+        return normalize_catalogue_page({"items": [], "next": None}, offset=offset, limit=limit)
 
 
 def _source(

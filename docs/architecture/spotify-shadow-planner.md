@@ -32,8 +32,8 @@ contradictory row fails closed. Local RSS cycles do not move audit deadlines.
 All fingerprints use canonical JSON with sorted keys, compact separators and SHA-256. Their
 payloads are:
 
-- edition input: source ID, source-native identity, title, publication time, semantic edition
-  time and provider duration;
+- matching input: the edition's source ID, source-native identity, title, publication time,
+  semantic edition time and provider duration, bound to the source evaluation contract fingerprint;
 - source context: source ID, parser, timezone, Spotify release-delay policy and sorted external
   catalogue references, combined with authorization generation, market mode and bounded
   pagination contract;
@@ -81,6 +81,22 @@ empty result blocks the write. Complete non-empty absence permits invalidation a
 changed desired state re-enters reconciliation from the beginning, and repeated fingerprints or
 an exhausted finite iteration bound fail closed. Phase 3 does not implement global lazy OAuth,
 destination local skips, or snapshot-first audits.
+
+Missing Phase-2 match-input evidence is recovery work rather than permission to discard the
+authoritative persisted mapping. Empty and truncated inspections preserve a valid `MATCHED` URI;
+they can recover semantic evidence only when local evaluation of observed candidates resolves
+uniquely to that same URI. Existing schema-5 edition fingerprints fail the versioned combined
+fingerprint comparison once, then converge when qualifying evidence becomes available.
+
+Remote destination evidence is bound to the immutable final desired returned by reconciliation.
+The engine separately observes the current SQLite desired after reconciliation and publishes a
+confirmation only when both fingerprints still match. A concurrent local change therefore remains
+dirty and cannot inherit evidence for the previously verified content.
+
+Catalogue completeness additionally requires a coherent Spotify paging envelope. Requested and
+returned limits and offsets must match, totals must remain stable, item counts must fit the page,
+and `next` must agree with observed progress. Any contradiction invalidates the whole inspection,
+renews no audit, and grants no absence proof.
 
 ## Safety behavior
 

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from _spotify_catalogue import catalogue_page
 from test_spotify_auth import _authorize, _service
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -93,8 +94,8 @@ class _Spotify:
         assert show_id == "4EwwdoHHYmbt49UXODQMpi"
         assert offset == 0
         self.show_calls += 1
-        return {
-            "items": [
+        return catalogue_page(
+            [
                 {
                     "uri": SER_URI,
                     "name": SER_TITLE,
@@ -103,8 +104,9 @@ class _Spotify:
                     "duration_ms": 60_000,
                 }
             ],
-            "next": None,
-        }
+            offset=offset,
+            limit=limit,
+        )
 
     def playlist_items(
         self,

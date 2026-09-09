@@ -4,6 +4,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from _spotify_catalogue import catalogue_page
 
 from news_bulletin_playlist.collection import normalize_rss_source
 from news_bulletin_playlist.models import (
@@ -86,9 +87,9 @@ def test_release_date_title_precision(
         def show_episodes(
             self, show_id: str, *, limit: int = 50, offset: int = 0
         ) -> dict[str, Any]:
-            del show_id, limit, offset
-            return {
-                "items": [
+            del show_id
+            return catalogue_page(
+                [
                     {
                         "uri": episode_uri,
                         "name": edition.title,
@@ -97,8 +98,9 @@ def test_release_date_title_precision(
                         "duration_ms": 60_000,
                     }
                 ],
-                "next": None,
-            }
+                offset=offset,
+                limit=limit,
+            )
 
     result = match_source_editions(
         Client(), store, source, (edition,), now=datetime(2026, 9, 4, 6, tzinfo=UTC)
@@ -127,9 +129,9 @@ def test_wave_one_release_date_title_sources_match_exact_title_and_day(
         def show_episodes(
             self, show_id: str, *, limit: int = 50, offset: int = 0
         ) -> dict[str, Any]:
-            del show_id, limit, offset
-            return {
-                "items": [
+            del show_id
+            return catalogue_page(
+                [
                     {
                         "uri": "spotify:episode:0000000000000000000010",
                         "name": edition.title,
@@ -140,8 +142,9 @@ def test_wave_one_release_date_title_sources_match_exact_title_and_day(
                         "duration_ms": 1_900_000,
                     }
                 ],
-                "next": None,
-            }
+                offset=offset,
+                limit=limit,
+            )
 
     result = match_source_editions(
         Client(), store, source, (edition,), now=datetime(2026, 9, 4, 13, tzinfo=UTC)
@@ -176,20 +179,21 @@ def test_cbc_same_title_same_day_remains_ambiguous(tmp_path: Path) -> None:
         def show_episodes(
             self, show_id: str, *, limit: int = 50, offset: int = 0
         ) -> dict[str, Any]:
-            del show_id, limit, offset
+            del show_id
             candidate = {
                 "name": edition.title,
                 "release_date": "2026-09-04",
                 "release_date_precision": "day",
                 "duration_ms": 608000,
             }
-            return {
-                "items": [
+            return catalogue_page(
+                [
                     {**candidate, "uri": "spotify:episode:0000000000000000000011"},
                     {**candidate, "uri": "spotify:episode:0000000000000000000012"},
                 ],
-                "next": None,
-            }
+                offset=offset,
+                limit=limit,
+            )
 
     result = match_source_editions(
         Client(), store, source, (edition,), now=datetime(2026, 9, 4, 13, tzinfo=UTC)

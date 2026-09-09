@@ -100,6 +100,7 @@ class PlaylistReconciliationResult:
     warning: str | None = None
     mutation_outcome: MutationOutcome = MutationOutcome.NOT_ATTEMPTED
     remote_evidence_qualified: bool = False
+    verified_desired_uris: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -755,6 +756,9 @@ def reconcile_spotify_playlist(
         warning=reconciled.warning,
         mutation_outcome=evidence.mutation_outcome,
         remote_evidence_qualified=evidence.remote_evidence_qualified,
+        verified_desired_uris=(
+            current_desired.uris if evidence.remote_evidence_qualified else None
+        ),
     )
 
 
