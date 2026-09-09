@@ -121,27 +121,6 @@ class SpotifyPlannerJournal:
     def __init__(self, store: SQLiteStore) -> None:
         self.path = store.path
 
-    def observe_clock(self, now: datetime) -> bool:
-        """Persist the maximum observed wall clock and report rollback against its prior value."""
-        observed = _as_utc(now)
-        with self._connection("observe Spotify planner clock") as connection:
-            row = connection.execute(
-                "SELECT last_observed_at FROM spotify_planner_clock_state WHERE singleton = 1"
-            ).fetchone()
-            if row is None:
-                raise PersistenceError("Spotify planner clock watermark is missing")
-            previous = _timestamp_value(row, "last_observed_at")
-            rollback = observed < previous
-            maximum = observed if observed > previous else previous
-            connection.execute(
-                """INSERT INTO spotify_planner_clock_state (singleton, last_observed_at)
-                   VALUES (1, ?)
-                   ON CONFLICT(singleton) DO UPDATE SET
-                       last_observed_at=excluded.last_observed_at""",
-                (_timestamp(maximum),),
-            )
-        return rollback
-
     def get_catalogue(self, context_key: str) -> CatalogueState | None:
         with self._connection("read Spotify planner catalogue state") as connection:
             row = connection.execute(

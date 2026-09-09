@@ -215,24 +215,39 @@ def test_production_auth_wrapper_exposes_usable_shadow_context_without_extra_io(
     assert (spotify.show_calls, spotify.playlist_reads, spotify.snapshot_reads) == calls_after_first
     assert spotify.replacements == [("managed-destination", (SER_URI,))]
 
-    def forbidden_factory(_token: str) -> _Spotify:
-        raise AssertionError("restart clean cycle must not construct a Spotify client")
-
     restarted = ReloadingEngineCycleRunner(
         tmp_path,
         {},
         SQLiteStore(sqlite.path),
         _LockedAuthProvider(service, AuthSynchronization()),
         fetcher=lambda _url: _ser_rss(),
-        client_factory=forbidden_factory,
+        client_factory=client_factory,
         clock=lambda: NOW,
     )
-    restarted_result = restarted.run_cycle()
-    assert restarted_result.ok
-    assert not restarted_result.provider_work_planned
-    assert not restarted_result.provider_session_created
-    assert restarted_result.destinations_skipped == 1
-    assert len(token_calls) == token_calls_after_first
+    restart_bootstrap = restarted.run_cycle()
+    calls_after_restart_bootstrap = (
+        spotify.show_calls,
+        spotify.playlist_reads,
+        spotify.snapshot_reads,
+    )
+    post_restart_stable = restarted.run_cycle()
+
+    assert restart_bootstrap.ok
+    assert restart_bootstrap.provider_work_planned
+    assert restart_bootstrap.provider_session_created
+    assert restart_bootstrap.destinations_remote == 1
+    assert calls_after_restart_bootstrap[0] == calls_after_first[0]
+    assert calls_after_restart_bootstrap[1:] > calls_after_first[1:]
+    assert post_restart_stable.ok
+    assert not post_restart_stable.provider_work_planned
+    assert not post_restart_stable.provider_session_created
+    assert post_restart_stable.destinations_skipped == 1
+    assert (
+        spotify.show_calls,
+        spotify.playlist_reads,
+        spotify.snapshot_reads,
+    ) == calls_after_restart_bootstrap
+    assert len(token_calls) == token_calls_after_first + 1
     assert transport.refresh_calls == []
 
 
@@ -266,6 +281,9 @@ def test_production_auth_wrapper_uses_same_lock_for_context_and_token() -> None:
     context_thread.join(timeout=2)
     assert not token_thread.is_alive()
     assert not context_thread.is_alive()
+    session = auth.acquire_provider_session(now=NOW)
+    assert session.access_token == "access-token"
+    assert session.authorization_context == "a" * 64
 
 
 def test_reloading_runner_does_not_hold_configuration_lock_during_feed_io(

@@ -5,8 +5,8 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -105,6 +105,7 @@ class EngineCycleRunner(Protocol):
 
 SpotifyClientFactory = Callable[[str], SpotifyEngineClient]
 Clock = Callable[[], datetime]
+MonotonicClock = Callable[[], float]
 
 
 class EngineCycleAlreadyRunning(RuntimeError):
@@ -126,6 +127,61 @@ class _SourceMatchingPlan:
 class _DestinationWorkPlan:
     needs_remote: bool
     state_available: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class _DestinationRuntimeLease:
+    context: DestinationVerificationContext
+    expires_at: float
+
+
+class DestinationRuntimeLeaseRegistry:
+    """Keep at most one exact-context destination verification lease per process."""
+
+    def __init__(self) -> None:
+        self._leases: dict[PlaylistId, _DestinationRuntimeLease] = {}
+        self._lock = threading.Lock()
+
+    def allows(
+        self,
+        playlist_id: PlaylistId,
+        expected: DestinationVerificationContext,
+        *,
+        monotonic_now: float,
+    ) -> bool:
+        with self._lock:
+            lease = self._leases.get(playlist_id)
+            if lease is None:
+                return False
+            if lease.context != expected or monotonic_now >= lease.expires_at:
+                self._leases.pop(playlist_id, None)
+                return False
+            return True
+
+    def publish(
+        self,
+        playlist_id: PlaylistId,
+        expected: DestinationVerificationContext,
+        *,
+        verified_monotonic: float,
+    ) -> None:
+        with self._lock:
+            self._leases[playlist_id] = _DestinationRuntimeLease(
+                expected,
+                verified_monotonic + timedelta(hours=6).total_seconds(),
+            )
+
+    def revoke(self, playlist_id: PlaylistId) -> None:
+        with self._lock:
+            self._leases.pop(playlist_id, None)
+
+    def revoke_unless(
+        self, playlist_id: PlaylistId, expected: DestinationVerificationContext
+    ) -> None:
+        with self._lock:
+            lease = self._leases.get(playlist_id)
+            if lease is not None and lease.context != expected:
+                self._leases.pop(playlist_id, None)
 
 
 class _CycleCatalogueCoordinator:
@@ -284,6 +340,8 @@ class EngineRunner:
         ) = None,
         request_metrics: SpotifyRequestMetrics | None = None,
         local_skips_enabled: bool = True,
+        destination_leases: DestinationRuntimeLeaseRegistry | None = None,
+        monotonic_clock: MonotonicClock = time.monotonic,
     ) -> None:
         self.config = config
         self.store = store
@@ -293,6 +351,8 @@ class EngineRunner:
         self.request_metrics = request_metrics or SpotifyRequestMetrics(store.path)
         self.request_metrics.initialize()
         self.local_skips_enabled = local_skips_enabled
+        self.destination_leases = destination_leases or DestinationRuntimeLeaseRegistry()
+        self.monotonic_clock = monotonic_clock
         self.planner_journal = SpotifyPlannerJournal(store)
         self._planner_auth_reader = getattr(auth, "planner_authorization_context", None)
         self._shadow_auth_context: str | None = None
@@ -320,7 +380,6 @@ class EngineRunner:
         self._previous_desired_fingerprints: dict[PlaylistId, str] = {}
         self._playlist_failure_streaks: dict[PlaylistId, tuple[int, datetime]] = {}
         self._planner_shadow = PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
-        self._clock_rollback = False
 
     def run_cycle(self) -> EngineCycleResult:
         if not self._cycle_lock.acquire(blocking=False):
@@ -374,58 +433,19 @@ class EngineRunner:
         self._planner_shadow = self._compute_shadow_plan(collected_at)
 
         matching_now = _as_utc(self.clock())
-        matching_cutoff = self._matching_cutoff(matching_now)
-        source_plans: dict[SourceId, _SourceMatchingPlan] = {}
-        source_editions: dict[SourceId, tuple[CanonicalEdition, ...]] = {}
-        for source in required_sources(self.config):
-            try:
-                editions = tuple(
-                    edition
-                    for edition in self.store.list_editions(source_id=source.id)
-                    if matching_cutoff <= edition.published_at <= matching_now
-                )
-                source_editions[source.id] = editions
-                source_plans[source.id] = self._source_matching_plan(source, editions, matching_now)
-            except PersistenceError as exc:
-                return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
+        try:
+            source_editions, source_plans = self._build_source_work(matching_now)
+        except PersistenceError as exc:
+            return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
 
         matching_work = any(
             plan.needs_catalogue and source_id not in unsafe_source_ids
             for source_id, plan in source_plans.items()
         )
-        preinvalidated: set[PlaylistId] = set()
-        persistence_blocked: set[PlaylistId] = set()
-        for playlist in self.config.playlists:
-            if not playlist.enabled or any(
-                source_id in unsafe_source_ids for source_id in playlist.source_selection.explicit
-            ):
-                continue
-            try:
-                provisional = build_desired_state_from_store(
-                    self.store,
-                    playlist,
-                    now=matching_now,
-                    source_timezones=self._source_timezones(),
-                )
-            except PersistenceError, DesiredStateError:
-                persistence_blocked.add(playlist.id)
-                continue
-            if self._observe_desired_state(playlist, provisional.uris) is None:
-                persistence_blocked.add(playlist.id)
-                continue
-            destination_plan = self._destination_work_plan(playlist, matching_now)
-            if not destination_plan.state_available:
-                persistence_blocked.add(playlist.id)
-                continue
-            if not destination_plan.needs_remote:
-                continue
-            try:
-                self._begin_destination_verification_required(playlist.id)
-            except PersistenceError:
-                persistence_blocked.add(playlist.id)
-            else:
-                preinvalidated.add(playlist.id)
-        destination_work = bool(preinvalidated)
+        destination_work_ids, persistence_blocked = self._plan_destinations(
+            matching_now, unsafe_source_ids
+        )
+        destination_work = bool(destination_work_ids)
         cannot_safely_use_provider = bool(persistence_blocked) and not destination_work
         if (
             not matching_work
@@ -441,7 +461,7 @@ class EngineRunner:
             )
 
         try:
-            access_token = self.auth.get_access_token(now=_as_utc(self.clock()))
+            authorization_session = self.auth.acquire_provider_session(now=_as_utc(self.clock()))
         except SpotifyAuthError as exc:
             return self._authorization_failure(
                 started_at,
@@ -450,10 +470,22 @@ class EngineRunner:
                 exc,
             )
 
-        client = self.client_factory(access_token)
+        if authorization_session.authorization_context != self._shadow_auth_context:
+            self._shadow_auth_context = authorization_session.authorization_context
+            for playlist in self.config.playlists:
+                self.destination_leases.revoke(playlist.id)
+            try:
+                source_editions, source_plans = self._build_source_work(matching_now)
+            except PersistenceError as exc:
+                return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
+            destination_work_ids, persistence_blocked = self._plan_destinations(
+                matching_now, unsafe_source_ids
+            )
+
+        client = self.client_factory(authorization_session.access_token)
         catalogue_coordinator = _CycleCatalogueCoordinator(
             client,
-            self._shadow_auth_context or "authorization-context-unavailable",
+            authorization_session.authorization_context,
         )
         remote_destination_ids: set[PlaylistId] = set()
         for source in required_sources(self.config):
@@ -622,7 +654,36 @@ class EngineRunner:
                 desired_count = len(desired.items)
                 request_diagnostics = self._request_diagnostics(playlist.id, desired.uris)
                 verification_context = self._observe_desired_state(playlist, desired.uris)
-                destination_plan = self._destination_work_plan(playlist, playlist_started_at)
+                if verification_context is None:
+                    self.destination_leases.revoke(playlist.id)
+                    error = (
+                        "destination preserved because final desired state could not be persisted"
+                    )
+                    self.store.record_playlist_run(
+                        playlist.id,
+                        started_at=playlist_started_at,
+                        finished_at=_as_utc(self.clock()),
+                        ok=False,
+                        desired_count=desired_count,
+                        applied_count=0,
+                        error=error,
+                    )
+                    playlist_outcomes.append(
+                        PlaylistCycleOutcome(
+                            playlist_id=playlist.id,
+                            ok=False,
+                            desired_count=desired_count,
+                            applied_count=None,
+                            wrote=None,
+                            last_success_at=None,
+                            error=error,
+                            write_outcome="not_attempted",
+                        )
+                    )
+                    continue
+                destination_plan = self._destination_work_plan(
+                    playlist, playlist_started_at, verification_context
+                )
                 if not destination_plan.state_available:
                     error = "destination preserved because planner persistence is unavailable"
                     self.store.record_playlist_run(
@@ -674,12 +735,19 @@ class EngineRunner:
                         )
                     )
                     continue
-                if playlist.id not in preinvalidated:
-                    self._begin_destination_verification_required(playlist.id)
-                mutation_guard = (
-                    None
-                    if self.playlist_mutation_guard is None
-                    else partial(self.playlist_mutation_guard, playlist)
+                if not self._authorization_context_matches(
+                    authorization_session.authorization_context
+                ):
+                    self.destination_leases.revoke(playlist.id)
+                    raise SpotifyReconciliationError(
+                        "Spotify authorization changed during cycle; destination preserved"
+                    )
+                self.destination_leases.revoke(playlist.id)
+                self._begin_destination_verification_required(playlist.id)
+                mutation_guard = partial(
+                    self._provider_mutation_guard,
+                    playlist,
+                    authorization_session.authorization_context,
                 )
                 remote_destination_ids.add(playlist.id)
                 reconciled = reconcile_spotify_playlist(
@@ -718,17 +786,28 @@ class EngineRunner:
                     if reconciled.verified_desired_uris is None
                     else stable_fingerprint(reconciled.verified_desired_uris)
                 )
-                self._observe_destination_result(
+                confirmed = self._observe_destination_result(
                     playlist,
                     verified=(
                         reconciled.remote_evidence_qualified
                         and verification_context is not None
                         and verification_context.desired_fingerprint == reconciled_fingerprint
+                        and self._authorization_context_matches(
+                            authorization_session.authorization_context
+                        )
                     ),
                     unknown=reconciled.mutation_outcome is MutationOutcome.UNKNOWN,
                     expected=verification_context,
                     observed_at=playlist_finished_at,
                 )
+                if confirmed and verification_context is not None:
+                    self.destination_leases.publish(
+                        playlist.id,
+                        verification_context,
+                        verified_monotonic=self.monotonic_clock(),
+                    )
+                else:
+                    self.destination_leases.revoke(playlist.id)
                 self.store.record_playlist_run(
                     playlist.id,
                     started_at=playlist_started_at,
@@ -773,6 +852,7 @@ class EngineRunner:
                     unknown=evidence.mutation_outcome is MutationOutcome.UNKNOWN,
                     observed_at=playlist_finished_at,
                 )
+                self.destination_leases.revoke(playlist.id)
                 try:
                     self.store.record_playlist_run(
                         playlist.id,
@@ -947,9 +1027,7 @@ class EngineRunner:
 
     def _compute_shadow_plan(self, now: datetime) -> PlannerShadowResult:
         self._shadow_auth_context = None
-        self._clock_rollback = False
         try:
-            self._clock_rollback = self.planner_journal.observe_clock(now)
             if self._planner_auth_reader is None:
                 return PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
             self._shadow_auth_context = self._planner_auth_reader()
@@ -1060,36 +1138,47 @@ class EngineRunner:
             return PlannerShadowResult.unsafe()
 
     def _destination_work_plan(
-        self, playlist: PlaylistDefinition, now: datetime
+        self,
+        playlist: PlaylistDefinition,
+        now: datetime,
+        expected: DestinationVerificationContext,
     ) -> _DestinationWorkPlan:
-        if self._clock_rollback or self._shadow_auth_context is None:
-            return _DestinationWorkPlan(needs_remote=True)
         try:
             state = self.planner_journal.get_destination(str(playlist.id))
             if state is None:
                 return _DestinationWorkPlan(needs_remote=True)
             if (
-                state.destination_context_fingerprint != destination_context_fingerprint(playlist)
-                or state.config_fingerprint != playlist_config_fingerprint(playlist)
-                or state.auth_context_fingerprint != self._shadow_auth_context
+                state.destination_context_fingerprint != expected.destination_context_fingerprint
+                or state.config_fingerprint != expected.config_fingerprint
+                or state.auth_context_fingerprint != expected.auth_context_fingerprint
+                or state.observed_desired_fingerprint != expected.desired_fingerprint
+                or state.confirmed_desired_fingerprint != expected.desired_fingerprint
                 or state.dirty
                 or state.unknown
-                or state.confirmed_desired_fingerprint != state.observed_desired_fingerprint
                 or state.last_verified_at is None
                 or state.next_audit_at is None
                 or now < state.last_verified_at
                 or now >= state.next_audit_at
             ):
                 return _DestinationWorkPlan(needs_remote=True)
+            if PendingSnapshotJournal(self.store).get(playlist.id) is not None:
+                self.destination_leases.revoke(playlist.id)
+                return _DestinationWorkPlan(needs_remote=True)
             return _DestinationWorkPlan(
-                needs_remote=PendingSnapshotJournal(self.store).get(playlist.id) is not None
+                needs_remote=not self.destination_leases.allows(
+                    playlist.id,
+                    expected,
+                    monotonic_now=self.monotonic_clock(),
+                )
             )
         except PersistenceError, ValueError:
+            self.destination_leases.revoke(playlist.id)
             self._planner_shadow = PlannerShadowResult.unsafe()
             return _DestinationWorkPlan(needs_remote=False, state_available=False)
 
     def _begin_destination_verification_required(self, playlist_id: PlaylistId) -> None:
         """Durably remove skip authority before reconciliation can reach a mutation."""
+        self.destination_leases.revoke(playlist_id)
         try:
             self.planner_journal.begin_destination_verification(str(playlist_id))
         except sqlite3.Error as exc:
@@ -1274,6 +1363,85 @@ class EngineRunner:
                 conservative=True,
             )
 
+    def _build_source_work(
+        self, now: datetime
+    ) -> tuple[
+        dict[SourceId, tuple[CanonicalEdition, ...]],
+        dict[SourceId, _SourceMatchingPlan],
+    ]:
+        matching_cutoff = self._matching_cutoff(now)
+        source_editions: dict[SourceId, tuple[CanonicalEdition, ...]] = {}
+        source_plans: dict[SourceId, _SourceMatchingPlan] = {}
+        for source in required_sources(self.config):
+            editions = tuple(
+                edition
+                for edition in self.store.list_editions(source_id=source.id)
+                if matching_cutoff <= edition.published_at <= now
+            )
+            source_editions[source.id] = editions
+            source_plans[source.id] = self._source_matching_plan(source, editions, now)
+        return source_editions, source_plans
+
+    def _plan_destinations(
+        self, now: datetime, unsafe_source_ids: set[SourceId]
+    ) -> tuple[set[PlaylistId], set[PlaylistId]]:
+        destination_work: set[PlaylistId] = set()
+        persistence_blocked: set[PlaylistId] = set()
+        for playlist in self.config.playlists:
+            if not playlist.enabled or any(
+                source_id in unsafe_source_ids for source_id in playlist.source_selection.explicit
+            ):
+                continue
+            try:
+                provisional = build_desired_state_from_store(
+                    self.store,
+                    playlist,
+                    now=now,
+                    source_timezones=self._source_timezones(),
+                )
+            except PersistenceError, DesiredStateError:
+                self.destination_leases.revoke(playlist.id)
+                persistence_blocked.add(playlist.id)
+                continue
+            expected = self._observe_desired_state(playlist, provisional.uris)
+            if expected is None:
+                persistence_blocked.add(playlist.id)
+                continue
+            plan = self._destination_work_plan(playlist, now, expected)
+            if not plan.state_available:
+                persistence_blocked.add(playlist.id)
+            elif plan.needs_remote:
+                destination_work.add(playlist.id)
+        return destination_work, persistence_blocked
+
+    def _authorization_context_matches(self, expected: str) -> bool:
+        reader = self._planner_auth_reader
+        if reader is None:
+            return False
+        try:
+            current = reader()
+            return isinstance(current, str) and current == expected
+        except Exception:
+            return False
+
+    @contextmanager
+    def _provider_mutation_guard(
+        self, playlist: PlaylistDefinition, authorization_context: str
+    ) -> Iterator[None]:
+        if not self._authorization_context_matches(authorization_context):
+            raise SpotifyReconciliationError(
+                "Spotify authorization changed during cycle; destination preserved"
+            )
+        if self.playlist_mutation_guard is None:
+            yield
+            return
+        with self.playlist_mutation_guard(playlist):
+            if not self._authorization_context_matches(authorization_context):
+                raise SpotifyReconciliationError(
+                    "Spotify authorization changed during cycle; destination preserved"
+                )
+            yield
+
     def _observe_catalogue_inspection(
         self, source: SourceDefinition, observed_at: datetime
     ) -> None:
@@ -1411,9 +1579,10 @@ class EngineRunner:
         unknown: bool,
         observed_at: datetime,
         expected: DestinationVerificationContext | None = None,
-    ) -> None:
+    ) -> bool:
         try:
             if unknown:
+                self.destination_leases.revoke(playlist.id)
                 self.planner_journal.mark_destination_unknown(str(playlist.id))
             elif (
                 verified
@@ -1423,8 +1592,11 @@ class EngineRunner:
                 self.planner_journal.verify_destination(
                     str(playlist.id), expected=expected, verified_at=observed_at
                 )
+                return True
         except Exception:
+            self.destination_leases.revoke(playlist.id)
             self._planner_shadow = PlannerShadowResult.unsafe()
+        return False
 
     def _begin_destination_verification(self, playlist_id: PlaylistId) -> None:
         try:
@@ -1444,6 +1616,7 @@ class EngineRunner:
                 playlist_config_fingerprint(playlist),
                 self._shadow_auth_context,
             )
+            self.destination_leases.revoke_unless(playlist.id, expected)
             self.planner_journal.observe_destination(
                 playlist_id=str(playlist.id),
                 destination_context_fingerprint=expected.destination_context_fingerprint,
@@ -1453,6 +1626,7 @@ class EngineRunner:
             )
             return expected
         except Exception:
+            self.destination_leases.revoke(playlist.id)
             self._planner_shadow = PlannerShadowResult.unsafe()
             return None
 

@@ -22,11 +22,10 @@ Schema migration 5 adds four focused tables:
   fingerprints, the observed and confirmed desired fingerprints, dirty/unknown flags, and the
   six-hour destination audit deadline.
 
-Schema migration 6 adds the singleton `spotify_planner_clock_state`. Each cycle compares the
-current wall clock with the previously persisted maximum before advancing that maximum. A rollback
-blocks time-based skips until the wall clock catches up. The migration conservatively clears all
-schema-5 destination confirmations and marks them dirty; the first Phase-4 cycle therefore obtains
-fresh remote evidence before any local skip can occur.
+Schema remains at version 5. Durable destination confirmation is historical evidence, but it is
+not sufficient by itself to authorize a local skip. The process owns an exact-context runtime
+lease for each playlist, measured with a monotonic clock. A restart deliberately loses all leases,
+so each destination receives one qualifying remote verification before that process may skip it.
 
 Pending snapshot transitions remain authoritative in the existing #134 journal. They are read by
 the planner and are not duplicated. Catalogue audit freshness records a successful structurally
@@ -119,8 +118,13 @@ operation still matches the durable row. Mutation outcome and skip-quality remot
 separate: an exact readback may prove that an ambiguous write applied while a later unstable
 snapshot bracket still prevents planner confirmation. Pending/degraded verification likewise does
 not qualify. A crash during a possibly mutating call leaves conservative durable state.
-Clock rollback makes audits due and blocks unresolved retry eligibility without moving a retry
-earlier.
+Each local skip requires both a fresh durable wall-clock deadline and a fresh process-local
+monotonic lease for the exact desired, destination, configuration and authorization context. A
+wall-clock jump forward can make an audit due early; a rollback cannot extend permission beyond
+the monotonic six-hour lease. Desired or context changes, pending or unknown state, failed safety
+persistence, and reconciliation revoke the playlist's sole lease, so an `A -> B -> A` transition
+cannot recover an older A lease. Remote evidence is published durably before a replacement lease
+is created. Unresolved retry rollback remains conservative and never moves a retry earlier.
 
 Planner observation remains fail-soft for reporting, while persistence required to invalidate
 destination evidence is fail-closed for mutations. If that invalidation cannot be committed, the
@@ -128,9 +132,8 @@ engine preserves the destination and never reaches a PUT. The exact desired, des
 configuration and authorization context remain conditions of the final confirmation update.
 
 The environment switch `NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS=0` disables local destination skips in
-the current binary without weakening strict invalidation or the shared 429 gate. It is an
-operational kill switch, not a database downgrade. A Phase-3/schema-5 image must not open a
-schema-6 database; reverting the image requires a coordinated database restore.
+the current binary without weakening strict invalidation or the shared 429 gate. Schema remains
+compatible with Phase 3; no database downgrade or restore is needed solely to revert this binary.
 
 Engine and managed Admin Web API operations share the same durable rate-limit journal and request
 lock. An active Web API cooldown is checked before token refresh needed for those operations, and

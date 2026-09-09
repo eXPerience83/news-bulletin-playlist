@@ -63,45 +63,6 @@ def test_initialize_creates_temporary_data_database_and_is_repeatable(tmp_path: 
     assert _count_rows(store.path, "schema_migrations") == LATEST_SCHEMA_VERSION
 
 
-def test_schema_six_bootstrap_invalidates_legacy_destination_confirmation(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    fingerprint = "a" * 64
-    with sqlite3.connect(store.path) as connection:
-        connection.execute(
-            """INSERT INTO spotify_planner_destination_state (
-                   playlist_id, destination_context_fingerprint, config_fingerprint,
-                   auth_context_fingerprint, observed_desired_fingerprint,
-                   confirmed_desired_fingerprint, dirty, unknown,
-                   last_verified_at, next_audit_at
-               ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)""",
-            (
-                "playlist",
-                fingerprint,
-                fingerprint,
-                fingerprint,
-                fingerprint,
-                fingerprint,
-                "2026-09-09T10:00:00Z",
-                "2026-09-09T16:00:00Z",
-            ),
-        )
-        connection.execute("DROP TABLE spotify_planner_clock_state")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 6")
-
-    SQLiteStore(store.path).initialize()
-
-    with sqlite3.connect(store.path) as connection:
-        row = connection.execute(
-            """SELECT confirmed_desired_fingerprint, dirty, last_verified_at, next_audit_at
-               FROM spotify_planner_destination_state WHERE playlist_id='playlist'"""
-        ).fetchone()
-        clock_table = connection.execute(
-            "SELECT name FROM sqlite_master WHERE name='spotify_planner_clock_state'"
-        ).fetchone()
-    assert row == (None, 1, None, None)
-    assert clock_table == ("spotify_planner_clock_state",)
-
-
 def test_canonical_edition_survives_restart_and_upsert_is_idempotent(tmp_path: Path) -> None:
     store = _store(tmp_path)
     edition = _edition("rne-asset-1")

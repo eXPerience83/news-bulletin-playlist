@@ -4,6 +4,7 @@ import html
 import os
 import signal
 import threading
+import time
 import urllib.parse
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -26,10 +27,12 @@ from news_bulletin_playlist.effective_config import (
 from news_bulletin_playlist.engine import (
     DEFAULT_ENGINE_INTERVAL,
     Clock,
+    DestinationRuntimeLeaseRegistry,
     EngineCycleResult,
     EngineCycleRunner,
     EngineRunner,
     EngineScheduler,
+    MonotonicClock,
     OperationalStatus,
     OperationalStatusSnapshot,
     SpotifyAuthProvider,
@@ -76,6 +79,7 @@ from news_bulletin_playlist.spotify.client import (
     SpotifyTransportError,
 )
 from news_bulletin_playlist.spotify_backoff import (
+    ProviderAuthorizationSession,
     SpotifyRateLimitBackoffActive,
     SpotifyRateLimitGuardAuth,
     SpotifyRateLimitGuardClient,
@@ -139,6 +143,17 @@ class _LockedAuthProvider:
         """Read non-secret grant provenance under the production auth lock."""
         with self.synchronization.hold():
             return self.service.planner_authorization_context()
+
+    def acquire_provider_session(
+        self, *, now: datetime | None = None
+    ) -> ProviderAuthorizationSession:
+        """Bind a token to its non-secret authorization generation under one auth lock."""
+        with self.synchronization.hold():
+            token = self.service.get_access_token(now=now)
+            context = self.service.planner_authorization_context()
+            if context is None:
+                raise SpotifyAuthError("Spotify authorization context is unavailable")
+            return ProviderAuthorizationSession(token, context)
 
 
 class _MutableOperationalStatus(OperationalStatus):
@@ -330,6 +345,7 @@ class ReloadingEngineCycleRunner:
         clock: Clock | None = None,
         request_metrics: SpotifyRequestMetrics | None = None,
         local_skips_enabled: bool = True,
+        monotonic_clock: MonotonicClock = time.monotonic,
     ) -> None:
         self.data_dir = data_dir
         self.environ = environ
@@ -341,6 +357,8 @@ class ReloadingEngineCycleRunner:
         self.clock = clock
         self.request_metrics = request_metrics
         self.local_skips_enabled = local_skips_enabled
+        self.destination_leases = DestinationRuntimeLeaseRegistry()
+        self.monotonic_clock = monotonic_clock
 
     def run_cycle(self) -> EngineCycleResult:
         started_at = datetime.now(UTC)
@@ -383,6 +401,8 @@ class ReloadingEngineCycleRunner:
             playlist_mutation_guard=playlist_mutation_guard,
             request_metrics=self.request_metrics,
             local_skips_enabled=self.local_skips_enabled,
+            destination_leases=self.destination_leases,
+            monotonic_clock=self.monotonic_clock,
         ).run_cycle()
 
     @contextmanager

@@ -193,32 +193,6 @@ def test_local_observation_does_not_extend_audit_and_clock_rollback_is_due(
     assert PlannerReason.DESTINATION_AUDIT_DUE in rolled_back.reasons
 
 
-def test_durable_clock_watermark_detects_rollback_before_updating(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    journal = SpotifyPlannerJournal(store)
-
-    assert not journal.observe_clock(NOW)
-    assert journal.observe_clock(NOW - timedelta(seconds=1))
-    restarted = SpotifyPlannerJournal(SQLiteStore(store.path))
-    assert restarted.observe_clock(NOW - timedelta(microseconds=1))
-    assert not restarted.observe_clock(NOW)
-    assert not restarted.observe_clock(NOW + timedelta(seconds=1))
-
-
-def test_missing_or_corrupt_clock_watermark_fails_closed(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    journal = SpotifyPlannerJournal(store)
-    assert not journal.observe_clock(NOW)
-    with sqlite3.connect(store.path) as connection:
-        connection.execute("DELETE FROM spotify_planner_clock_state")
-    with pytest.raises(PersistenceError):
-        SpotifyPlannerJournal(SQLiteStore(store.path)).observe_clock(NOW)
-    with sqlite3.connect(store.path) as connection:
-        connection.execute("INSERT INTO spotify_planner_clock_state VALUES (1, 'not-a-timestamp')")
-    with pytest.raises(PersistenceError):
-        SpotifyPlannerJournal(SQLiteStore(store.path)).observe_clock(NOW)
-
-
 def test_unknown_a_to_b_to_a_never_revives_old_confirmation(tmp_path: Path) -> None:
     journal = SpotifyPlannerJournal(_store(tmp_path))
     _observe(journal, SHA_A)

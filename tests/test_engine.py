@@ -13,6 +13,7 @@ from _spotify_catalogue import catalogue_page
 
 import news_bulletin_playlist.engine as engine_module
 from news_bulletin_playlist.engine import (
+    DestinationRuntimeLeaseRegistry,
     EngineCycleAlreadyRunning,
     EngineCycleResult,
     EngineRunner,
@@ -37,11 +38,30 @@ from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQ
 from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
 from news_bulletin_playlist.spotify.auth import SpotifyReauthorizationRequired
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
+from news_bulletin_playlist.spotify_backoff import ProviderAuthorizationSession
+from news_bulletin_playlist.spotify_planner import DestinationVerificationContext
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
 SER_URL = "https://example.test/ser.xml"
 SER_TITLE = "Las noticias de la SER, 11:00 (30/08/2026)"
 SER_URI = "spotify:episode:0000000000000000000001"
+
+
+def test_destination_runtime_lease_uses_exact_context_and_monotonic_expiry() -> None:
+    registry = DestinationRuntimeLeaseRegistry()
+    playlist_id = PlaylistId("first")
+    context_a = DestinationVerificationContext("a" * 64, "b" * 64, "c" * 64, "d" * 64)
+    context_b = replace(context_a, desired_fingerprint="e" * 64)
+
+    registry.publish(playlist_id, context_a, verified_monotonic=100.0)
+
+    assert registry.allows(playlist_id, context_a, monotonic_now=100.0)
+    assert registry.allows(playlist_id, context_a, monotonic_now=21_699.999)
+    assert not registry.allows(playlist_id, context_a, monotonic_now=21_700.0)
+    registry.publish(playlist_id, context_a, verified_monotonic=30_000.0)
+    registry.revoke_unless(playlist_id, context_b)
+    assert not registry.allows(playlist_id, context_a, monotonic_now=30_001.0)
+    assert not registry.allows(playlist_id, context_b, monotonic_now=30_001.0)
 
 
 class _Auth:
@@ -306,6 +326,35 @@ def test_destination_audit_is_due_exactly_at_six_hours(tmp_path: Path) -> None:
     assert due.destinations_remote == 1
 
 
+def test_wall_clock_rollback_cannot_extend_monotonic_destination_lease(tmp_path: Path) -> None:
+    wall = [NOW]
+    monotonic = [100.0]
+    spotify = _Spotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: wall[0],
+        monotonic_clock=lambda: monotonic[0],
+    )
+    assert runner.run_cycle().ok
+    reads = len(spotify.playlist_reads)
+
+    wall[0] = NOW + timedelta(hours=5)
+    monotonic[0] += timedelta(hours=5).total_seconds()
+    assert runner.run_cycle().ok
+    assert len(spotify.playlist_reads) == reads
+
+    wall[0] = NOW + timedelta(hours=4, minutes=30)
+    monotonic[0] += timedelta(hours=1).total_seconds()
+    due = runner.run_cycle()
+    assert due.ok
+    assert due.destinations_remote == 1
+    assert len(spotify.playlist_reads) > reads
+
+
 def test_unreadable_pending_snapshot_state_preserves_without_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -551,6 +600,146 @@ def test_remote_confirmation_is_bound_to_reconciled_desired(
     assert spotify.items["destination-first"] == [SER_URI]
     assert state is not None and state.dirty
     assert state.confirmed_desired_fingerprint != state.observed_desired_fingerprint
+
+
+def test_post_matching_desired_observation_failure_preserves_and_revokes_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spotify = _Spotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+    assert runner.run_cycle().ok
+    writes_before = tuple(spotify.replacements)
+    durable_a = runner.planner_journal.get_destination("first")
+    assert durable_a is not None
+    context_a = DestinationVerificationContext(
+        durable_a.observed_desired_fingerprint,
+        durable_a.destination_context_fingerprint,
+        durable_a.config_fingerprint,
+        durable_a.auth_context_fingerprint,
+    )
+    assert runner.destination_leases.allows(
+        PlaylistId("first"), context_a, monotonic_now=runner.monotonic_clock()
+    )
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    replacement_uri = "spotify:episode:" + "2" * 22
+    real_match = engine_module.match_source_editions
+
+    def match_then_change(*args: Any, **kwargs: Any):
+        result = real_match(*args, **kwargs)
+        runner.store.set_match_state(
+            SourceId("ser"),
+            "ser-1",
+            status=MatchStatus.MATCHED,
+            spotify_episode_uri=replacement_uri,
+            spotify_duration_seconds=60,
+            diagnostics="matching changed desired",
+            updated_at=NOW,
+        )
+        return result
+
+    real_observe = runner.planner_journal.observe_destination
+
+    def fail_only_for_b(**kwargs: Any):
+        if kwargs["desired_fingerprint"] != context_a.desired_fingerprint:
+            raise PersistenceError("simulated post-matching persistence failure")
+        return real_observe(**kwargs)
+
+    monkeypatch.setattr(engine_module, "match_source_editions", match_then_change)
+    monkeypatch.setattr(runner.planner_journal, "observe_destination", fail_only_for_b)
+
+    result = runner.run_cycle()
+
+    assert not result.ok
+    assert result.playlists[0].write_outcome == "not_attempted"
+    assert tuple(spotify.replacements) == writes_before
+    assert not runner.destination_leases.allows(
+        PlaylistId("first"), context_a, monotonic_now=runner.monotonic_clock()
+    )
+    durable_after = runner.planner_journal.get_destination("first")
+    assert durable_after is not None
+    assert durable_after.confirmed_desired_fingerprint == context_a.desired_fingerprint
+
+
+def test_provider_session_auth_change_replans_and_labels_evidence_with_session_context(
+    tmp_path: Path,
+) -> None:
+    class ReconnectingAuth(_Auth):
+        context = "a" * 64
+
+        def planner_authorization_context(self) -> str:
+            return self.context
+
+        def acquire_provider_session(
+            self, *, now: datetime | None = None
+        ) -> ProviderAuthorizationSession:
+            assert now is not None
+            self.calls += 1
+            self.context = "b" * 64
+            return ProviderAuthorizationSession("access-token", self.context)
+
+    auth = ReconnectingAuth()
+    spotify = _Spotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+    state = runner.planner_journal.get_destination("first")
+
+    assert result.ok
+    assert state is not None
+    assert state.auth_context_fingerprint == "b" * 64
+    assert state.confirmed_desired_fingerprint == state.observed_desired_fingerprint
+
+
+def test_auth_change_after_session_acquisition_blocks_mutation_and_confirmation(
+    tmp_path: Path,
+) -> None:
+    class ChangingAuth(_Auth):
+        reads = 0
+
+        def planner_authorization_context(self) -> str:
+            self.reads += 1
+            if self.reads >= 2:
+                return "c" * 64
+            return "b" * 64
+
+        def acquire_provider_session(
+            self, *, now: datetime | None = None
+        ) -> ProviderAuthorizationSession:
+            assert now is not None
+            self.calls += 1
+            return ProviderAuthorizationSession("access-token", "b" * 64)
+
+    spotify = _Spotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        ChangingAuth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+    state = runner.planner_journal.get_destination("first")
+
+    assert not result.ok
+    assert spotify.replacements == []
+    assert state is not None
+    assert state.confirmed_desired_fingerprint is None
 
 
 def test_valid_truncated_audit_renews_without_proving_absence(tmp_path: Path) -> None:
