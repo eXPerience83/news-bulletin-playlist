@@ -13,7 +13,7 @@ from news_bulletin_playlist.models import CanonicalEdition, PlaylistId, SourceId
 DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
 DEFAULT_RETENTION_DAYS = 30
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 6
 
 
 class PersistenceError(RuntimeError):
@@ -283,6 +283,28 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             """
             CREATE INDEX spotify_planner_unresolved_retry_idx
             ON spotify_planner_unresolved_state (next_retry_at)
+            """,
+        ),
+    ),
+    (
+        6,
+        (
+            """
+            CREATE TABLE spotify_planner_clock_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                last_observed_at TEXT NOT NULL
+            )
+            """,
+            """
+            INSERT INTO spotify_planner_clock_state (singleton, last_observed_at)
+            VALUES (1, '1970-01-01T00:00:00Z')
+            """,
+            """
+            UPDATE spotify_planner_destination_state
+            SET confirmed_desired_fingerprint = NULL,
+                dirty = 1,
+                last_verified_at = NULL,
+                next_audit_at = NULL
             """,
         ),
     ),
