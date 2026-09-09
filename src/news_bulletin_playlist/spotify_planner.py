@@ -700,6 +700,17 @@ def edition_input_fingerprint(edition: CanonicalEdition) -> str:
     )
 
 
+def matching_input_fingerprint(source: SourceDefinition, edition: CanonicalEdition) -> str:
+    """Bind an edition input to the source rules used to evaluate it."""
+    return stable_fingerprint(
+        (
+            "spotify-matching-input-v2",
+            source_contract_fingerprint(source),
+            edition_input_fingerprint(edition),
+        )
+    )
+
+
 def source_contract_fingerprint(source: SourceDefinition) -> str:
     references = sorted(
         (ref.system.casefold(), ref.resource_type.casefold(), ref.external_id)

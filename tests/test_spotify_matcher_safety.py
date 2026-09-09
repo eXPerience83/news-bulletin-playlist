@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from _spotify_catalogue import catalogue_page, normalize_catalogue_page
 
 from news_bulletin_playlist.models import (
     CanonicalEdition,
@@ -19,10 +20,13 @@ from news_bulletin_playlist.models import (
 )
 from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.registry import get_title_parser
-from news_bulletin_playlist.spotify.client import SpotifyTransportError
+from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 from news_bulletin_playlist.spotify.matcher import (
+    DEFAULT_MAX_PAGES,
+    DEFAULT_PAGE_SIZE,
     MatchConfigurationError,
     MatchResponseError,
+    fetch_show_catalogue,
     match_source_editions,
 )
 
@@ -75,7 +79,7 @@ class FailingCatalogClient:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        del show_id, limit, offset
+        del show_id
         raise SpotifyTransportError("simulated catalogue outage")
 
 
@@ -87,9 +91,9 @@ class WrongReleaseDateClient:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        del show_id, limit, offset
-        return {
-            "items": [
+        del show_id
+        return catalogue_page(
+            [
                 {
                     "uri": "spotify:episode:0000000000000000000006",
                     "name": "Las noticias de la SER, 10:00 (30/08/2026)",
@@ -97,8 +101,9 @@ class WrongReleaseDateClient:
                     "release_date_precision": "day",
                 }
             ],
-            "next": None,
-        }
+            offset=offset,
+            limit=limit,
+        )
 
 
 class CountingCatalogClient:
@@ -112,9 +117,9 @@ class CountingCatalogClient:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        del show_id, limit, offset
+        del show_id
         self.calls += 1
-        return {"items": [], "next": None}
+        return catalogue_page([], offset=offset, limit=limit)
 
 
 class MalformedCatalogClient:
@@ -140,8 +145,12 @@ class StaticPageCatalogClient:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        del show_id, limit, offset
-        return self.page
+        del show_id
+        if "next" not in self.page or not (
+            self.page["next"] is None or isinstance(self.page["next"], str)
+        ):
+            return self.page
+        return normalize_catalogue_page(self.page, offset=offset, limit=limit)
 
 
 def _prepared_store(tmp_path: Path, edition: CanonicalEdition) -> SQLiteStore:
@@ -166,6 +175,105 @@ def test_catalogue_failure_does_not_persist_false_pending_state(tmp_path: Path) 
         )
 
     assert store.get_match_state(edition.source_id, edition.source_native_id) is None
+
+
+@pytest.mark.parametrize(
+    ("page", "message"),
+    [
+        (catalogue_page([], offset=50), "offset"),
+        (catalogue_page([], limit=49), "limit"),
+        ({**catalogue_page([]), "offset": -1}, "offset"),
+        ({**catalogue_page([]), "total": -1}, "total"),
+        ({**catalogue_page([_valid_item()]), "total": 0}, "impossible paging"),
+        ({**catalogue_page([_valid_item()]), "total": 2}, "contradicted next"),
+        ({**catalogue_page([_valid_item()]), "next": "more"}, "contradicted next"),
+    ],
+)
+def test_catalogue_rejects_inconsistent_paging_envelope(page: dict[str, Any], message: str) -> None:
+    with pytest.raises(MatchResponseError, match=message):
+        fetch_show_catalogue(
+            StaticPageCatalogClient(page),
+            "show-ser",
+            page_size=DEFAULT_PAGE_SIZE,
+            max_pages=DEFAULT_MAX_PAGES,
+        )
+
+
+def test_catalogue_rejects_second_page_offset() -> None:
+    class Client:
+        def show_episodes(
+            self, show_id: str, *, limit: int = 50, offset: int = 0
+        ) -> dict[str, Any]:
+            del show_id
+            if offset == 0:
+                return catalogue_page([], limit=limit, next_url="more", total=51)
+            return catalogue_page([], offset=offset + 1, limit=limit, total=51)
+
+    with pytest.raises(MatchResponseError, match="offset"):
+        fetch_show_catalogue(
+            Client(), "show-ser", page_size=DEFAULT_PAGE_SIZE, max_pages=DEFAULT_MAX_PAGES
+        )
+
+
+def test_catalogue_rejects_total_change_between_pages() -> None:
+    class Client:
+        def show_episodes(
+            self, show_id: str, *, limit: int = 50, offset: int = 0
+        ) -> dict[str, Any]:
+            del show_id
+            if offset == 0:
+                return catalogue_page([], limit=limit, next_url="more", total=51)
+            return catalogue_page([_valid_item()], offset=offset, limit=limit, total=52)
+
+    with pytest.raises(MatchResponseError, match="total changed"):
+        fetch_show_catalogue(
+            Client(), "show-ser", page_size=DEFAULT_PAGE_SIZE, max_pages=DEFAULT_MAX_PAGES
+        )
+
+
+@pytest.mark.parametrize(
+    "second_page_error",
+    [
+        MatchResponseError("malformed second page"),
+        SpotifyApiError(503, "safe provider failure"),
+        SpotifyTransportError("safe transport failure"),
+    ],
+)
+def test_catalogue_second_page_failure_never_returns_partial_evidence(
+    second_page_error: Exception,
+) -> None:
+    class Client:
+        def show_episodes(
+            self, show_id: str, *, limit: int = 50, offset: int = 0
+        ) -> dict[str, Any]:
+            del show_id
+            if offset == 0:
+                return catalogue_page([], limit=limit, next_url="more", total=51)
+            raise second_page_error
+
+    with pytest.raises(type(second_page_error)):
+        fetch_show_catalogue(
+            Client(), "show-ser", page_size=DEFAULT_PAGE_SIZE, max_pages=DEFAULT_MAX_PAGES
+        )
+
+
+def test_catalogue_rejects_conflicting_duplicate_on_second_page() -> None:
+    first = _valid_item()
+    conflicting = {**first, "name": "different metadata"}
+
+    class Client:
+        def show_episodes(
+            self, show_id: str, *, limit: int = 50, offset: int = 0
+        ) -> dict[str, Any]:
+            del show_id
+            if offset == 0:
+                return catalogue_page([first], limit=limit, next_url="more", total=51)
+            return catalogue_page([conflicting], offset=offset, limit=limit, total=51)
+
+    with pytest.raises(MatchResponseError, match="conflicting metadata"):
+        fetch_show_catalogue(
+            Client(), "show-ser", page_size=DEFAULT_PAGE_SIZE, max_pages=DEFAULT_MAX_PAGES
+        )
 
 
 def test_matching_title_with_incompatible_release_date_stays_pending(tmp_path: Path) -> None:

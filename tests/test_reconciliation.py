@@ -603,5 +603,43 @@ def test_mutation_guard_covers_replace_only_and_not_spotify_reads() -> None:
 
     assert result.ok
     assert result.wrote is True
+    assert result.verified_desired_uris == ("spotify:episode:new",)
     assert guard_depth == 0
     assert client.writes == [("playlist", ["spotify:episode:new"])]
+
+
+def test_prewrite_rebuild_reenters_and_can_eliminate_write() -> None:
+    playlist = _playlist("playlist")
+    original = _desired(playlist, "spotify:episode:" + "1" * 22)
+    rebuilt = _desired(playlist)
+    client = _FakeSpotify({"playlist": []})
+    preparations: list[tuple[str, ...]] = []
+
+    result = reconcile_spotify_playlist(
+        client,
+        playlist,
+        original,
+        prepare_write=lambda value: (preparations.append(value.uris), rebuilt)[1],
+    )
+
+    assert not result.wrote
+    assert result.desired_count == 0
+    assert result.verified_desired_uris == ()
+    assert preparations == [original.uris]
+    assert client.writes == []
+    assert len(client.reads) == 2
+
+
+def test_prewrite_rebuild_is_bounded_when_desired_oscillates() -> None:
+    playlist = _playlist("playlist")
+    first = _desired(playlist, "spotify:episode:" + "1" * 22)
+    second = _desired(playlist, "spotify:episode:" + "2" * 22)
+    client = _FakeSpotify({"playlist": []})
+
+    def oscillate(value: DesiredPlaylistState) -> DesiredPlaylistState:
+        return second if value.uris == first.uris else first
+
+    with pytest.raises(SpotifyReconciliationError, match="monotonic progress"):
+        reconcile_spotify_playlist(client, playlist, first, prepare_write=oscillate)
+
+    assert client.writes == []

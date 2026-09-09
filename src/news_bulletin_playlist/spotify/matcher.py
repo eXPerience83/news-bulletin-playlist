@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
+from enum import StrEnum
 from typing import Any, Protocol
 
 from news_bulletin_playlist.models import CanonicalEdition, SourceDefinition, SourceId
@@ -49,6 +50,13 @@ class MatchResponseError(RuntimeError):
     """Raised when Spotify returns a structurally invalid catalogue response."""
 
 
+class MatchEvaluationIntent(StrEnum):
+    """Reason an existing mapping participates in catalogue evaluation."""
+
+    SEMANTIC_REEVALUATION = "semantic_reevaluation"
+    EVIDENCE_RECOVERY = "evidence_recovery"
+
+
 @dataclass(frozen=True, slots=True)
 class MatchOutcome:
     edition: CanonicalEdition
@@ -69,6 +77,29 @@ class SourceMatchResult:
     catalogue_calls: int
     catalogue_complete: bool = False
     catalogue_candidate_count: int = 0
+    catalogue_inspected: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SpotifyCatalogueResult:
+    """One structurally valid bounded show-catalogue inspection."""
+
+    candidates: tuple[_SpotifyEpisodeCandidate, ...]
+    request_count: int
+    complete: bool
+    structurally_valid: bool = True
+
+    @property
+    def empty(self) -> bool:
+        return not self.candidates
+
+    @property
+    def can_prove_absence(self) -> bool:
+        return self.structurally_valid and self.complete and not self.empty
+
+    @property
+    def candidate_uris(self) -> frozenset[str]:
+        return frozenset(candidate.uri for candidate in self.candidates)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +129,10 @@ def match_source_editions(
     page_size: int = DEFAULT_PAGE_SIZE,
     max_pages: int = DEFAULT_MAX_PAGES,
     retry_grace: timedelta = DEFAULT_RETRY_GRACE,
+    catalogue: SpotifyCatalogueResult | None = None,
+    evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent] | None = None,
+    validate_cached: bool = True,
+    catalogue_request_count: int | None = None,
 ) -> SourceMatchResult:
     """Match one source batch using persisted state before bounded Spotify catalogue reads."""
     if not 1 <= page_size <= 50:
@@ -110,6 +145,7 @@ def match_source_editions(
     observed_at = _as_utc(now)
     outcomes: list[MatchOutcome | None] = [None] * len(editions)
     unresolved: list[tuple[int, CanonicalEdition]] = []
+    selected = None if evaluation_intents is None else frozenset(evaluation_intents)
 
     for index, edition in enumerate(editions):
         if edition.source_id != source.id:
@@ -117,6 +153,14 @@ def match_source_editions(
                 f"edition source_id {edition.source_id!s} does not match source {source.id!s}"
             )
         cached = _cached_outcome(store, edition, now=observed_at, retry_grace=retry_grace)
+        if selected is not None and edition.identity not in selected and cached is None:
+            cached = _persisted_outcome(store, edition, now=observed_at)
+        if (
+            selected is not None
+            and edition.identity in selected
+            and (cached is None or cached.status is not MatchStatus.MATCHED)
+        ):
+            cached = None
         if cached is None:
             unresolved.append((index, edition))
         else:
@@ -127,7 +171,8 @@ def match_source_editions(
         for index, outcome in enumerate(outcomes)
         if outcome is not None and outcome.status is MatchStatus.MATCHED
     ]
-    if not unresolved and not cached_matched:
+    need_catalogue = bool(unresolved or (validate_cached and cached_matched))
+    if not need_catalogue and catalogue is None:
         return SourceMatchResult(
             source_id=source.id,
             outcomes=tuple(_require_outcome(outcome) for outcome in outcomes),
@@ -136,16 +181,21 @@ def match_source_editions(
             catalogue_candidate_count=0,
         )
 
-    show_id = _spotify_show_id(source)
-    candidates, catalogue_calls, catalogue_complete = _fetch_candidates(
-        client,
-        show_id,
-        page_size=page_size,
-        max_pages=max_pages,
-    )
-    candidate_uris = {candidate.uri for candidate in candidates}
+    if catalogue is None:
+        catalogue = fetch_show_catalogue(
+            client,
+            spotify_show_id(source),
+            page_size=page_size,
+            max_pages=max_pages,
+        )
+        catalogue_calls = catalogue.request_count
+    else:
+        catalogue_calls = 0 if catalogue_request_count is None else catalogue_request_count
+    candidates = catalogue.candidates
+    catalogue_complete = catalogue.complete
+    candidate_uris = catalogue.candidate_uris
 
-    if catalogue_complete and candidates:
+    if validate_cached and catalogue.can_prove_absence:
         for index, cached in cached_matched:
             uri = cached.spotify_episode_uri
             if uri is None or uri in candidate_uris:
@@ -167,6 +217,7 @@ def match_source_editions(
                 spotify_duration_seconds=None,
                 diagnostics=diagnostics,
             )
+            unresolved.append((index, cached.edition))
 
     for index, edition in unresolved:
         evaluations = tuple(
@@ -189,6 +240,33 @@ def match_source_editions(
         )
         outcomes[index] = outcome
 
+    if evaluation_intents is not None:
+        for index, value in enumerate(outcomes):
+            outcome = _require_outcome(value)
+            if (
+                outcome.status is not MatchStatus.MATCHED
+                or evaluation_intents.get(outcome.edition.identity)
+                is not MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                or outcome.spotify_episode_uri not in candidate_uris
+            ):
+                continue
+            evaluated = _resolve_outcome(
+                outcome.edition,
+                tuple(_evaluate_candidate(source, outcome.edition, item) for item in candidates),
+                candidate_count=len(candidates),
+                catalogue_calls=catalogue_calls,
+            )
+            store.set_match_state(
+                outcome.edition.source_id,
+                outcome.edition.source_native_id,
+                status=evaluated.status,
+                spotify_episode_uri=evaluated.spotify_episode_uri,
+                spotify_duration_seconds=evaluated.spotify_duration_seconds,
+                diagnostics=evaluated.diagnostics,
+                updated_at=observed_at,
+            )
+            outcomes[index] = evaluated
+
     # Shadow-only semantic qualification. Reuse the already-fetched candidates and the
     # same pure evaluator; never modify the production mapping or issue another request.
     for index, value in enumerate(outcomes):
@@ -196,7 +274,7 @@ def match_source_editions(
         qualified: bool | None = None
         if not outcome.from_cache:
             qualified = True
-        elif outcome.status is MatchStatus.MATCHED and catalogue_complete and candidates:
+        elif outcome.status is MatchStatus.MATCHED and candidates:
             try:
                 evaluated = _resolve_outcome(
                     outcome.edition,
@@ -222,6 +300,7 @@ def match_source_editions(
         catalogue_calls=catalogue_calls,
         catalogue_complete=catalogue_complete,
         catalogue_candidate_count=len(candidates),
+        catalogue_inspected=True,
     )
 
 
@@ -286,7 +365,43 @@ def _cached_outcome(
     return None
 
 
-def _spotify_show_id(source: SourceDefinition) -> str:
+def _persisted_outcome(
+    store: SQLiteStore,
+    edition: CanonicalEdition,
+    *,
+    now: datetime,
+) -> MatchOutcome | None:
+    """Return durable state without applying the legacy fixed retry grace."""
+    state = store.get_match_state(edition.source_id, edition.source_native_id)
+    if state is None:
+        return None
+    if state.status is MatchStatus.MATCHED:
+        if (
+            state.spotify_episode_uri is None
+            or not is_spotify_episode_uri(state.spotify_episode_uri)
+            or state.spotify_duration_seconds is None
+        ):
+            return None
+        return MatchOutcome(
+            edition=edition,
+            status=state.status,
+            spotify_episode_uri=state.spotify_episode_uri,
+            spotify_duration_seconds=state.spotify_duration_seconds,
+            diagnostics=state.diagnostics or "reused persisted Spotify mapping",
+            from_cache=True,
+        )
+    if state.status in {MatchStatus.PENDING, MatchStatus.AMBIGUOUS}:
+        return MatchOutcome(
+            edition=edition,
+            status=state.status,
+            spotify_episode_uri=None,
+            diagnostics=state.diagnostics or "reused persisted unresolved state",
+            from_cache=True,
+        )
+    return None
+
+
+def spotify_show_id(source: SourceDefinition) -> str:
     show_ids = {
         reference.external_id.strip()
         for reference in source.external_references
@@ -301,21 +416,23 @@ def _spotify_show_id(source: SourceDefinition) -> str:
     return next(iter(show_ids))
 
 
-def _fetch_candidates(
+def fetch_show_catalogue(
     client: SpotifyCatalogClient,
     show_id: str,
     *,
     page_size: int,
     max_pages: int,
-) -> tuple[tuple[_SpotifyEpisodeCandidate, ...], int, bool]:
+) -> SpotifyCatalogueResult:
     by_uri: dict[str, _SpotifyEpisodeCandidate] = {}
     calls = 0
     complete = False
+    expected_total: int | None = None
     for page_number in range(max_pages):
+        requested_offset = page_number * page_size
         page = client.show_episodes(
             show_id,
             limit=page_size,
-            offset=page_number * page_size,
+            offset=requested_offset,
         )
         calls += 1
         if not isinstance(page, dict):
@@ -328,6 +445,35 @@ def _fetch_candidates(
         next_page = page["next"]
         if next_page is not None and (not isinstance(next_page, str) or not next_page.strip()):
             raise MatchResponseError("Spotify show episodes response contained invalid next")
+        response_limit = page.get("limit")
+        response_offset = page.get("offset")
+        response_total = page.get("total")
+        if isinstance(response_limit, bool) or not isinstance(response_limit, int):
+            raise MatchResponseError("Spotify show episodes response contained invalid limit")
+        if response_limit != page_size:
+            raise MatchResponseError("Spotify show episodes response limit did not match request")
+        if (
+            isinstance(response_offset, bool)
+            or not isinstance(response_offset, int)
+            or response_offset < 0
+            or response_offset != requested_offset
+        ):
+            raise MatchResponseError("Spotify show episodes response contained invalid offset")
+        if (
+            isinstance(response_total, bool)
+            or not isinstance(response_total, int)
+            or response_total < 0
+        ):
+            raise MatchResponseError("Spotify show episodes response contained invalid total")
+        if expected_total is None:
+            expected_total = response_total
+        elif response_total != expected_total:
+            raise MatchResponseError("Spotify show episodes response total changed between pages")
+        if len(items) > response_limit or response_offset + len(items) > response_total:
+            raise MatchResponseError("Spotify show episodes response contained impossible paging")
+        has_more = response_offset + len(items) < response_total
+        if (next_page is not None) != has_more:
+            raise MatchResponseError("Spotify show episodes response paging contradicted next")
 
         for item in items:
             candidate = _candidate_from_item(item)
@@ -342,7 +488,7 @@ def _fetch_candidates(
         if next_page is None:
             complete = True
             break
-    return tuple(by_uri.values()), calls, complete
+    return SpotifyCatalogueResult(tuple(by_uri.values()), calls, complete)
 
 
 def _candidate_from_item(item: object) -> _SpotifyEpisodeCandidate:

@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from _spotify_catalogue import catalogue_page
 
 from news_bulletin_playlist.desired_state import DesiredPlaylistItem, DesiredPlaylistState
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
@@ -90,13 +91,12 @@ class _Spotify:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        del limit, offset
         self.show_calls.append(show_id)
         if show_id == self.fail_show:
             raise SpotifyApiError(429, "rate limited", retry_after=self.retry_after)
         source_id = show_id.removesuffix("-show")
-        return {
-            "items": [
+        return catalogue_page(
+            [
                 {
                     "uri": f"spotify:episode:{'0' * 21}{'1' if source_id == 'one' else '2'}",
                     "name": f"Bulletin {source_id}",
@@ -105,8 +105,9 @@ class _Spotify:
                     "duration_ms": 60_000,
                 }
             ],
-            "next": None,
-        }
+            offset=offset,
+            limit=limit,
+        )
 
     def playlist_items(
         self,

@@ -22,6 +22,7 @@ from news_bulletin_playlist.spotify_planner import (
     authorization_context_fingerprint,
     catalogue_context_fingerprint,
     edition_input_fingerprint,
+    matching_input_fingerprint,
     unresolved_planning_reason,
 )
 
@@ -187,9 +188,11 @@ def test_failed_semantic_disqualification_is_shadow_only(tmp_path, monkeypatch, 
     def ambiguous(*args, **kwargs):
         page = original(*args, **kwargs)
         page["items"].append({**page["items"][0], "uri": "spotify:episode:" + "2" * 22})
+        page["total"] = len(page["items"])
         return page
 
     provider.show_episodes = ambiguous
+    runner.clock = lambda: NOW + timedelta(hours=6)
     monkeypatch.setattr(
         runner.planner_journal,
         "clear_match_input",
@@ -242,6 +245,7 @@ def test_failed_observation_never_certifies_old_a_after_writing_b(tmp_path, monk
         return page
 
     monkeypatch.setattr(provider, "show_episodes", removed)
+    runner.clock = lambda: NOW + timedelta(hours=6)
     with monkeypatch.context() as scope:
         scope.setattr(
             runner.planner_journal,
@@ -388,6 +392,7 @@ def test_cached_input_requires_pure_semantic_qualification(tmp_path, change):
         value = old_show(*args, **kwargs)
         if change in {"ambiguous", "different"}:
             value["items"].append({**value["items"][0], "uri": "spotify:episode:" + "2" * 22})
+            value["total"] = len(value["items"])
         if change == "different":
             value["items"][0]["name"] = "unrelated"
         return value
@@ -407,10 +412,10 @@ def test_cached_input_requires_pure_semantic_qualification(tmp_path, change):
     )
     if change == "same":
         assert persisted is not None
-        assert persisted.input_fingerprint == edition_input_fingerprint(edition)
+        assert persisted.input_fingerprint == matching_input_fingerprint(_source(), edition)
     else:
-        assert persisted is None or persisted.input_fingerprint != edition_input_fingerprint(
-            edition
+        assert persisted is None or persisted.input_fingerprint != matching_input_fingerprint(
+            _source(), edition
         )
 
 

@@ -158,6 +158,27 @@ def test_single_page_stale_snapshot_is_durable_across_restart(tmp_path: Path) ->
     assert promoted_evidence.remote_evidence_qualified
 
 
+def test_pending_confirmation_runs_before_phase3_prewrite_preparation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    client = _ExactLaggingSpotify()
+    desired = _desired(count=35)
+    assert reconcile_spotify_playlist(client, _playlist(), desired, store=store).wrote
+
+    result = reconcile_spotify_playlist(
+        client,
+        _playlist(),
+        _desired(count=35, generated_at=NOW + timedelta(minutes=10)),
+        store=store,
+        prepare_write=lambda _desired: pytest.fail(
+            "prewrite preparation must not run when pending handling resolves the cycle"
+        ),
+    )
+
+    assert result.wrote is False
+    assert result.degraded_verification
+    assert len(client.writes) == 1
+
+
 def test_single_page_pending_partial_read_stays_degraded_without_rewrite(tmp_path: Path) -> None:
     store = _store(tmp_path)
     client = _ExactLaggingSpotify()

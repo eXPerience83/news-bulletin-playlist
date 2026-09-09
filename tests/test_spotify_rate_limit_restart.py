@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from _spotify_catalogue import catalogue_page
+
 from news_bulletin_playlist.engine import EngineRunner
 from news_bulletin_playlist.models import (
     AdapterId,
@@ -90,8 +92,8 @@ class _WorkingSpotify:
         assert limit == 50
         assert offset == 0
         self.show_calls += 1
-        return {
-            "items": [
+        return catalogue_page(
+            [
                 {
                     "uri": URI,
                     "name": TITLE,
@@ -100,8 +102,9 @@ class _WorkingSpotify:
                     "duration_ms": 60_000,
                 }
             ],
-            "next": None,
-        }
+            offset=offset,
+            limit=limit,
+        )
 
     def playlist_items(
         self,

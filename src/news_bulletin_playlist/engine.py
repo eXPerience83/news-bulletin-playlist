@@ -19,10 +19,12 @@ from news_bulletin_playlist.collection import (
     required_sources,
 )
 from news_bulletin_playlist.desired_state import (
+    DesiredPlaylistState,
     DesiredStateError,
     DurationEligibilityDecision,
 )
 from news_bulletin_playlist.models import (
+    CanonicalEdition,
     EngineConfig,
     PlaylistDefinition,
     PlaylistId,
@@ -45,10 +47,16 @@ from news_bulletin_playlist.spotify.client import (
     SpotifyTransportError,
 )
 from news_bulletin_playlist.spotify.matcher import (
+    DEFAULT_MAX_PAGES,
+    DEFAULT_PAGE_SIZE,
     MatchConfigurationError,
+    MatchEvaluationIntent,
     MatchResponseError,
     SourceMatchResult,
+    SpotifyCatalogueResult,
+    fetch_show_catalogue,
     match_source_editions,
+    spotify_show_id,
 )
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 from news_bulletin_playlist.spotify_backoff import (
@@ -71,7 +79,7 @@ from news_bulletin_playlist.spotify_planner import (
     SpotifyPlannerJournal,
     catalogue_context_fingerprint,
     destination_context_fingerprint,
-    edition_input_fingerprint,
+    matching_input_fingerprint,
     plan_shadow_cycle,
     playlist_config_fingerprint,
     stable_fingerprint,
@@ -79,6 +87,7 @@ from news_bulletin_playlist.spotify_planner import (
 )
 
 DEFAULT_ENGINE_INTERVAL = timedelta(minutes=10)
+_CATALOGUE_CONTRACT_VERSION = 1
 
 
 class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
@@ -99,6 +108,54 @@ Clock = Callable[[], datetime]
 
 class EngineCycleAlreadyRunning(RuntimeError):
     """Raised when a second cycle is requested while one is still executing."""
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceMatchingPlan:
+    evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent]
+    catalogue_audit_due: bool
+    conservative: bool = False
+
+    @property
+    def needs_catalogue(self) -> bool:
+        return bool(self.evaluation_intents) or self.catalogue_audit_due or self.conservative
+
+
+class _CycleCatalogueCoordinator:
+    """Share one bounded show inspection across compatible consumers in a cycle."""
+
+    def __init__(self, client: SpotifyEngineClient, auth_context: str) -> None:
+        self.client = client
+        self.auth_context = auth_context
+        self._cache: dict[tuple[str, str, str, int, int, int], object] = {}
+
+    def get(self, source: SourceDefinition) -> tuple[SpotifyCatalogueResult, int]:
+        show_id = spotify_show_id(source)
+        key = (
+            show_id,
+            self.auth_context,
+            "user-token/account",
+            DEFAULT_PAGE_SIZE,
+            DEFAULT_MAX_PAGES,
+            _CATALOGUE_CONTRACT_VERSION,
+        )
+        cached = self._cache.get(key)
+        if isinstance(cached, Exception):
+            raise cached
+        if isinstance(cached, SpotifyCatalogueResult):
+            return cached, 0
+        try:
+            result = fetch_show_catalogue(
+                self.client,
+                show_id,
+                page_size=DEFAULT_PAGE_SIZE,
+                max_pages=DEFAULT_MAX_PAGES,
+            )
+        except (MatchResponseError, SpotifyApiError, SpotifyTransportError) as exc:
+            self._cache[key] = exc
+            raise
+        self._cache[key] = result
+        return result, result.request_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +370,10 @@ class EngineRunner:
             )
 
         client = self.client_factory(access_token)
+        catalogue_coordinator = _CycleCatalogueCoordinator(
+            client,
+            self._shadow_auth_context or "authorization-context-unavailable",
+        )
         matching_now = _as_utc(self.clock())
         matching_cutoff = self._matching_cutoff(matching_now)
         for source in required_sources(self.config):
@@ -331,6 +392,11 @@ class EngineRunner:
                     is not None
                     for edition in editions
                 )
+                plan = self._source_matching_plan(source, editions, matching_now)
+                catalogue = None
+                catalogue_request_count = 0
+                if plan.needs_catalogue:
+                    catalogue, catalogue_request_count = catalogue_coordinator.get(source)
                 if editions:
                     match_result = match_source_editions(
                         client,
@@ -338,6 +404,10 @@ class EngineRunner:
                         source,
                         editions,
                         now=matching_now,
+                        catalogue=catalogue,
+                        evaluation_intents=plan.evaluation_intents,
+                        validate_cached=catalogue is not None,
+                        catalogue_request_count=catalogue_request_count,
                     )
                     matched_count = sum(
                         outcome.spotify_episode_uri is not None for outcome in match_result.outcomes
@@ -345,6 +415,8 @@ class EngineRunner:
                     self._observe_matching_result(source, match_result, matching_now)
                 else:
                     matched_count = 0
+                    if catalogue is not None:
+                        self._observe_catalogue_inspection(source, matching_now)
                 current = source_outcomes.get(source.id)
                 if current is not None:
                     source_outcomes[source.id] = replace(
@@ -461,13 +533,44 @@ class EngineRunner:
                     desired,
                     store=self.store,
                     mutation_guard=mutation_guard,
+                    prepare_write=partial(
+                        self._prepare_playlist_write,
+                        playlist,
+                        catalogue_coordinator,
+                        playlist_started_at,
+                    ),
+                    prewrite_iteration_limit=(
+                        sum(
+                            len(self.store.list_editions(source_id=source_id))
+                            for source_id in playlist.source_selection.explicit
+                        )
+                        + 1
+                    ),
                     evidence=evidence,
                 )
+                desired = build_desired_state_from_store(
+                    self.store,
+                    playlist,
+                    now=playlist_started_at,
+                    source_timezones=self._source_timezones(),
+                )
+                desired_count = len(desired.items)
+                request_diagnostics = self._request_diagnostics(playlist.id, desired.uris)
+                verification_context = self._observe_desired_state(playlist, desired.uris)
                 playlist_finished_at = _as_utc(self.clock())
+                reconciled_fingerprint = (
+                    None
+                    if reconciled.verified_desired_uris is None
+                    else stable_fingerprint(reconciled.verified_desired_uris)
+                )
                 self._observe_destination_result(
                     playlist,
-                    verified=evidence.remote_evidence_qualified,
-                    unknown=evidence.mutation_outcome is MutationOutcome.UNKNOWN,
+                    verified=(
+                        reconciled.remote_evidence_qualified
+                        and verification_context is not None
+                        and verification_context.desired_fingerprint == reconciled_fingerprint
+                    ),
+                    unknown=reconciled.mutation_outcome is MutationOutcome.UNKNOWN,
                     expected=verification_context,
                     observed_at=playlist_finished_at,
                 )
@@ -710,7 +813,7 @@ class EngineRunner:
                     if match is None:
                         source_reasons.append((identity, PlannerReason.NEW_MATCH))
                         continue
-                    fingerprint = edition_input_fingerprint(edition)
+                    fingerprint = matching_input_fingerprint(source, edition)
                     prior_input = self.planner_journal.get_match_input(
                         str(source.id), edition.source_native_id
                     )
@@ -791,6 +894,163 @@ class EngineRunner:
             # Isolated shadow boundary: never mask the existing provider flow.
             return PlannerShadowResult.unsafe()
 
+    def _source_matching_plan(
+        self,
+        source: SourceDefinition,
+        editions: tuple[CanonicalEdition, ...],
+        now: datetime,
+    ) -> _SourceMatchingPlan:
+        """Turn Phase-2 evidence into conservative Phase-3 catalogue work."""
+        try:
+            if self._shadow_auth_context is None:
+                raise PersistenceError("Spotify planner authorization context unavailable")
+            contract = catalogue_context_fingerprint(source, self._shadow_auth_context)
+            catalogue = self.planner_journal.get_catalogue(contract)
+            audit_due = (
+                catalogue is None
+                or catalogue.contract_fingerprint != contract
+                or catalogue.last_verified_at is None
+                or catalogue.next_audit_at is None
+                or now < catalogue.last_verified_at
+                or now >= catalogue.next_audit_at
+            )
+            intents: dict[tuple[SourceId, str], MatchEvaluationIntent] = {}
+            for edition in editions:
+                match = self.store.get_match_state(source.id, edition.source_native_id)
+                fingerprint = matching_input_fingerprint(source, edition)
+                prior_input = self.planner_journal.get_match_input(
+                    str(source.id), edition.source_native_id
+                )
+                if match is None:
+                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    continue
+                if prior_input is None:
+                    intents[edition.identity] = (
+                        MatchEvaluationIntent.EVIDENCE_RECOVERY
+                        if match.status is MatchStatus.MATCHED
+                        else MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    )
+                    continue
+                if prior_input.input_fingerprint != fingerprint:
+                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    continue
+                if match.status is MatchStatus.MATCHED:
+                    if (
+                        match.spotify_episode_uri is None
+                        or not is_spotify_episode_uri(match.spotify_episode_uri)
+                        or match.spotify_duration_seconds is None
+                    ):
+                        intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    continue
+                retry = self.planner_journal.get_unresolved(
+                    str(source.id), edition.source_native_id
+                )
+                reason = unresolved_planning_reason(
+                    retry,
+                    input_fingerprint=fingerprint,
+                    now=now,
+                )
+                if reason in {
+                    PlannerReason.MISSING_EVIDENCE,
+                    PlannerReason.INPUT_CHANGED,
+                    PlannerReason.RETRY_DUE,
+                }:
+                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+            return _SourceMatchingPlan(intents, audit_due)
+        except Exception:
+            return _SourceMatchingPlan(
+                {edition.identity: MatchEvaluationIntent.EVIDENCE_RECOVERY for edition in editions},
+                True,
+                conservative=True,
+            )
+
+    def _observe_catalogue_inspection(
+        self, source: SourceDefinition, observed_at: datetime
+    ) -> None:
+        try:
+            if self._shadow_auth_context is None:
+                return
+            contract = catalogue_context_fingerprint(source, self._shadow_auth_context)
+            self.planner_journal.verify_catalogue(contract, contract, verified_at=observed_at)
+        except Exception:
+            self._planner_shadow = PlannerShadowResult.unsafe()
+
+    def _prepare_playlist_write(
+        self,
+        playlist: PlaylistDefinition,
+        catalogue_coordinator: _CycleCatalogueCoordinator,
+        observed_at: datetime,
+        desired: DesiredPlaylistState,
+    ) -> DesiredPlaylistState:
+        """Validate every mapping selected for a possible mutation, then rebuild desired."""
+        sources = {source.id: source for source in required_sources(self.config)}
+        catalogues: dict[SourceId, tuple[SpotifyCatalogueResult, int]] = {}
+        try:
+            for item in desired.items:
+                source = sources.get(item.source_id)
+                if source is None:
+                    raise SpotifyReconciliationError(
+                        "Spotify prewrite validation could not resolve a configured source"
+                    )
+                current = self.store.get_match_state(item.source_id, item.source_native_id)
+                if (
+                    current is None
+                    or current.status is not MatchStatus.MATCHED
+                    or current.spotify_episode_uri != item.spotify_episode_uri
+                ):
+                    return build_desired_state_from_store(
+                        self.store,
+                        playlist,
+                        now=observed_at,
+                        source_timezones=self._source_timezones(),
+                    )
+
+                cached_catalogue = catalogues.get(source.id)
+                if cached_catalogue is None:
+                    cached_catalogue = catalogue_coordinator.get(source)
+                    catalogues[source.id] = cached_catalogue
+                    self._observe_catalogue_inspection(source, observed_at)
+                catalogue, request_count = cached_catalogue
+                if item.spotify_episode_uri in catalogue.candidate_uris:
+                    continue
+                if not catalogue.can_prove_absence:
+                    raise SpotifyReconciliationError(
+                        "Spotify prewrite validation could not establish mapping presence; "
+                        "destination preserved"
+                    )
+
+                edition = self.store.get_edition(item.source_id, item.source_native_id)
+                if edition is None:
+                    raise SpotifyReconciliationError(
+                        "Spotify prewrite validation lost its canonical edition; "
+                        "destination preserved"
+                    )
+                result = match_source_editions(
+                    catalogue_coordinator.client,
+                    self.store,
+                    source,
+                    (edition,),
+                    now=observed_at,
+                    catalogue=catalogue,
+                    evaluation_intents={
+                        edition.identity: MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    },
+                    validate_cached=True,
+                    catalogue_request_count=request_count,
+                )
+                self._observe_matching_result(source, result, observed_at)
+
+            return build_desired_state_from_store(
+                self.store,
+                playlist,
+                now=observed_at,
+                source_timezones=self._source_timezones(),
+            )
+        except (PersistenceError, MatchConfigurationError, MatchResponseError) as exc:
+            raise SpotifyReconciliationError(
+                "Spotify prewrite mapping validation failed; destination preserved"
+            ) from exc
+
     def _observe_matching_result(
         self,
         source: SourceDefinition,
@@ -801,15 +1061,11 @@ class EngineRunner:
             if self._shadow_auth_context is None:
                 return
             contract = catalogue_context_fingerprint(source, self._shadow_auth_context)
-            if (
-                result.catalogue_calls
-                and result.catalogue_complete
-                and result.catalogue_candidate_count
-            ):
+            if result.catalogue_inspected:
                 self.planner_journal.verify_catalogue(contract, contract, verified_at=observed_at)
             for outcome in result.outcomes:
                 edition = outcome.edition
-                input_fingerprint = edition_input_fingerprint(edition)
+                input_fingerprint = matching_input_fingerprint(source, edition)
                 if outcome.planner_input_evidence_qualified is True:
                     self.planner_journal.observe_match_input(
                         source_id=str(edition.source_id),

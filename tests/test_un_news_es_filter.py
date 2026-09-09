@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _spotify_catalogue import catalogue_page
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.collection import normalize_rss_source
@@ -67,8 +68,8 @@ def test_un_news_es_uses_existing_release_date_title_matching(tmp_path: Path) ->
             self, show_id: str, *, limit: int = 50, offset: int = 0
         ) -> dict[str, Any]:
             assert show_id == "77hGWK2o0NYsdS8WuXiLo6"
-            return {
-                "items": [
+            return catalogue_page(
+                [
                     {
                         "uri": "spotify:episode:0000000000000000000004",
                         "name": edition.title,
@@ -77,8 +78,9 @@ def test_un_news_es_uses_existing_release_date_title_matching(tmp_path: Path) ->
                         "duration_ms": 400000,
                     }
                 ],
-                "next": None,
-            }
+                offset=offset,
+                limit=limit,
+            )
 
     result = match_source_editions(
         Client(), store, source, (edition,), now=datetime(2026, 5, 28, 18, tzinfo=UTC)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -29,6 +30,7 @@ from news_bulletin_playlist.spotify_planner import (
     SpotifyPlannerJournal,
     destination_context_fingerprint,
     edition_input_fingerprint,
+    matching_input_fingerprint,
     plan_shadow_cycle,
     playlist_config_fingerprint,
     source_contract_fingerprint,
@@ -341,6 +343,12 @@ def test_semantic_fingerprints_ignore_observation_time_and_invalidate_real_contr
         _edition(title="Changed")
     )
     assert source_contract_fingerprint(_source()) != source_contract_fingerprint(_source("other"))
+    assert matching_input_fingerprint(_source(), edition) != matching_input_fingerprint(
+        replace(_source(), spotify_release_delay_days=1), edition
+    )
+    assert matching_input_fingerprint(_source(), edition) != matching_input_fingerprint(
+        replace(_source(), timezone=ZoneInfo("UTC")), edition
+    )
     assert playlist_config_fingerprint(_playlist()) != playlist_config_fingerprint(
         _playlist(retention=24)
     )
