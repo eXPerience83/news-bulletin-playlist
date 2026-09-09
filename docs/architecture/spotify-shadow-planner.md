@@ -2,8 +2,11 @@
 
 Issue #158 introduced the durable local planner and its bounded
 `spotify_planner_shadow_decision` event. Phase 3 consumes its catalogue and retry evidence to
-suppress unnecessary show-catalogue reads while retaining the existing OAuth/client lifecycle and
-reconciling every destination. Destination skip decisions remain shadow-only.
+suppress unnecessary show-catalogue reads. Phase 4 uses the same evidence for operational
+destination decisions: after RSS and local persistence, a completely clean cycle returns before
+OAuth token acquisition, client construction, or Web API access. If shared matching work exists,
+the engine acquires one provider session, rebuilds desired state, and still reconciles only the
+destinations whose own evidence requires remote work.
 
 ## Durable evidence
 
@@ -18,6 +21,12 @@ Schema migration 5 adds four focused tables:
 - `spotify_planner_destination_state` stores configuration, destination and auth-contract
   fingerprints, the observed and confirmed desired fingerprints, dirty/unknown flags, and the
   six-hour destination audit deadline.
+
+Schema migration 6 adds the singleton `spotify_planner_clock_state`. Each cycle compares the
+current wall clock with the previously persisted maximum before advancing that maximum. A rollback
+blocks time-based skips until the wall clock catches up. The migration conservatively clears all
+schema-5 destination confirmations and marks them dirty; the first Phase-4 cycle therefore obtains
+fresh remote evidence before any local skip can occur.
 
 Pending snapshot transitions remain authoritative in the existing #134 journal. They are read by
 the planner and are not duplicated. Catalogue audit freshness records a successful structurally
@@ -74,7 +83,8 @@ market mode, pagination contract, and catalogue contract version. Parser, timezo
 delay remain source-specific evaluation inputs rather than HTTP cache dimensions. Failed fetches
 are coalesced within the cycle. Candidates and completeness claims are never persisted.
 
-Playlist reconciliation still runs every cycle. Only after pending-snapshot handling and the
+Playlist reconciliation runs only for destinations that are dirty, unknown, pending, due for a
+six-hour audit, or missing compatible evidence. Only after pending-snapshot handling and the
 existing unchanged/stability checks fail to avoid mutation does a pre-write barrier validate each
 selected mapping. Presence in a truncated result is positive evidence; absence in a truncated or
 empty result blocks the write. Complete non-empty absence permits invalidation and rematching. A
@@ -100,8 +110,8 @@ renews no audit, and grants no absence proof.
 
 ## Safety behavior
 
-Missing, corrupt or incompatible evidence requires hypothetical Spotify work and cannot authorize
-a local skip. A desired transition immediately clears its old confirmed fingerprint. An unknown
+Missing, corrupt or incompatible evidence requires Spotify work and cannot authorize a local
+skip. A desired transition immediately clears its old confirmed fingerprint. An unknown
 mutation also clears confirmation, so `A -> B -> unknown -> A` cannot revive evidence for the
 first A. Confirmation is invalidated before every current reconciliation and restored only when
 the exact desired, destination, configuration and authorization context observed for that
@@ -112,9 +122,19 @@ not qualify. A crash during a possibly mutating call leaves conservative durable
 Clock rollback makes audits due and blocks unresolved retry eligibility without moving a retry
 earlier.
 
-Planner persistence and evaluation are fail-closed for a future skip, but fail-soft for this
-shadow integration. A planner failure produces `state_available=false`, `would_need_spotify=true`
-and `would_allow_local_skip=false`; the existing provider flow continues unchanged.
-When a later phase activates planner decisions, successful persistence of the pre-reconciliation
-invalidation must become a prerequisite for any remote mutation; #158 deliberately does not add
-that behavior-changing gate.
+Planner observation remains fail-soft for reporting, while persistence required to invalidate
+destination evidence is fail-closed for mutations. If that invalidation cannot be committed, the
+engine preserves the destination and never reaches a PUT. The exact desired, destination,
+configuration and authorization context remain conditions of the final confirmation update.
+
+The environment switch `NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS=0` disables local destination skips in
+the current binary without weakening strict invalidation or the shared 429 gate. It is an
+operational kill switch, not a database downgrade. A Phase-3/schema-5 image must not open a
+schema-6 database; reverting the image requires a coordinated database restore.
+
+Engine and managed Admin Web API operations share the same durable rate-limit journal and request
+lock. An active Web API cooldown is checked before token refresh needed for those operations, and
+a 429 from either surface suppresses the other. The interactive OAuth callback remains outside
+this Web API gate because code exchange uses the Spotify Accounts endpoint. Admin metadata and
+cover operations do not invalidate ordered-item evidence because they do not change the item list
+or destination identity.

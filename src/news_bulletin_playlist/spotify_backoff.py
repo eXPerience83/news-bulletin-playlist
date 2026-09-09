@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
-from typing import Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
@@ -337,7 +337,7 @@ class SpotifyRateLimitGuardClient:
 
     def __init__(
         self,
-        client: SpotifyBackoffClient,
+        client: Any,
         journal: SpotifyRateLimitJournal,
         *,
         clock: Clock,
@@ -374,6 +374,31 @@ class SpotifyRateLimitGuardClient:
 
     def playlist_snapshot(self, playlist_id: str) -> dict[str, object]:
         return self._call(lambda: self.client.playlist_snapshot(playlist_id))
+
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, object]:
+        return self._call(
+            lambda: self.client.create_playlist(name, public=public, description=description)
+        )
+
+    def current_user(self) -> dict[str, object]:
+        return self._call(self.client.current_user)
+
+    def playlist_details(self, playlist_id: str) -> dict[str, object]:
+        return self._call(lambda: self.client.playlist_details(playlist_id))
+
+    def change_playlist_details(
+        self, playlist_id: str, *, name: str, description: str
+    ) -> dict[str, object]:
+        return self._call(
+            lambda: self.client.change_playlist_details(
+                playlist_id, name=name, description=description
+            )
+        )
+
+    def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, object]:
+        return self._call(lambda: self.client.upload_playlist_cover(playlist_id, jpeg_bytes))
 
     def _call(self, operation: Callable[[], T]) -> T:
         with self.journal._request_lock:

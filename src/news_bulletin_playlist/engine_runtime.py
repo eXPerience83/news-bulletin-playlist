@@ -40,6 +40,7 @@ from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runti
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
     ManagedAdminService,
+    PlaylistProvisioningClient,
     SpotifyPlaylistSyncError,
 )
 from news_bulletin_playlist.managed_admin_web import (
@@ -74,9 +75,17 @@ from news_bulletin_playlist.spotify.client import (
     SpotifyClient,
     SpotifyTransportError,
 )
+from news_bulletin_playlist.spotify_backoff import (
+    SpotifyRateLimitBackoffActive,
+    SpotifyRateLimitGuardAuth,
+    SpotifyRateLimitGuardClient,
+    SpotifyRateLimitJournal,
+    SpotifyRateLimitStateUnavailable,
+)
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
 _INTERVAL_SECONDS_ENV = "NEWS_PLAYLIST_INTERVAL_SECONDS"
+_SPOTIFY_LOCAL_SKIPS_ENV = "NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS"
 _MIN_RUNTIME_INTERVAL = timedelta(minutes=1)
 _SCHEDULER_SHUTDOWN_WAIT_SECONDS = 10.0
 _BUNDLED_COVER_DIR = Path("/opt/news-bulletin-playlist/covers")
@@ -320,6 +329,7 @@ class ReloadingEngineCycleRunner:
         client_factory: SpotifyClientFactory | None = None,
         clock: Clock | None = None,
         request_metrics: SpotifyRequestMetrics | None = None,
+        local_skips_enabled: bool = True,
     ) -> None:
         self.data_dir = data_dir
         self.environ = environ
@@ -330,6 +340,7 @@ class ReloadingEngineCycleRunner:
         self.client_factory = client_factory
         self.clock = clock
         self.request_metrics = request_metrics
+        self.local_skips_enabled = local_skips_enabled
 
     def run_cycle(self) -> EngineCycleResult:
         started_at = datetime.now(UTC)
@@ -371,6 +382,7 @@ class ReloadingEngineCycleRunner:
             clock=self.clock,
             playlist_mutation_guard=playlist_mutation_guard,
             request_metrics=self.request_metrics,
+            local_skips_enabled=self.local_skips_enabled,
         ).run_cycle()
 
     @contextmanager
@@ -791,6 +803,18 @@ class OperationalHealthHandler(LanAdminHandler):
         except ManagedAdminError as exc:
             self._managed_error(HTTPStatus.CONFLICT, str(exc))
             return
+        except SpotifyRateLimitBackoffActive:
+            self._managed_error(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "Spotify Web API cooldown is active; retry after the displayed deadline",
+            )
+            return
+        except SpotifyRateLimitStateUnavailable:
+            self._managed_error(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "Spotify Web API cooldown state is unavailable; no request was sent",
+            )
+            return
         except SpotifyAuthError:
             self._managed_error(
                 HTTPStatus.SERVICE_UNAVAILABLE,
@@ -980,11 +1004,13 @@ def serve(
     admin_security, spotify_auth = build_engine_runtime_auth(data_dir, environ=env)
     if spotify_auth is not None:
         spotify_auth.set_request_metrics(request_metrics)
+    rate_limit_journal = SpotifyRateLimitJournal(store)
     managed_admin_service = _build_managed_admin_service(
         data_dir,
         env,
         spotify_auth=spotify_auth,
         request_metrics=request_metrics,
+        rate_limit_journal=rate_limit_journal,
     )
     if managed_admin_service is not None:
         managed_admin_service.finalize_known_provisioning()
@@ -1002,6 +1028,16 @@ def serve(
     auth_provider = (
         None if spotify_auth is None else _LockedAuthProvider(spotify_auth, auth_synchronization)
     )
+    managed_admin_auth = (
+        None
+        if auth_provider is None
+        else SpotifyRateLimitGuardAuth(
+            auth_provider,
+            rate_limit_journal,
+            clock=lambda: datetime.now(UTC),
+            diagnostics=diagnostics,
+        )
+    )
     lifecycle: EngineLifecycleController | None = None
     if auth_provider is not None:
         base_runner = ReloadingEngineCycleRunner(
@@ -1011,6 +1047,7 @@ def serve(
             auth_provider,
             configuration_synchronization,
             request_metrics=request_metrics,
+            local_skips_enabled=_local_skips_enabled(env),
         )
         runner = InstrumentedEngineCycleRunner(base_runner, diagnostics)
         lifecycle = EngineLifecycleController(
@@ -1033,7 +1070,7 @@ def serve(
     OperationalHealthHandler.auth_synchronization = auth_synchronization
     OperationalHealthHandler.configuration_synchronization = configuration_synchronization
     OperationalHealthHandler.managed_admin_service = managed_admin_service
-    OperationalHealthHandler.managed_admin_auth = auth_provider
+    OperationalHealthHandler.managed_admin_auth = managed_admin_auth
     OperationalHealthHandler.diagnostic_store = diagnostic_store
     OperationalHealthHandler.operational_diagnostics = diagnostics
     OperationalHealthHandler.spotify_request_metrics = request_metrics
@@ -1105,6 +1142,7 @@ def _build_managed_admin_service(
     *,
     spotify_auth: SpotifyAuthService | None,
     request_metrics: SpotifyRequestMetrics | None = None,
+    rate_limit_journal: SpotifyRateLimitJournal | None = None,
 ) -> ManagedAdminService | None:
     if spotify_auth is None:
         return None
@@ -1114,16 +1152,20 @@ def _build_managed_admin_service(
     legacy_path = data_dir / DEFAULT_CONFIG_FILENAME
     if legacy_path.is_symlink() or legacy_path.exists():
         return None
+
+    def client_factory(access_token: str) -> PlaylistProvisioningClient:
+        client = SpotifyClient(access_token=access_token, metrics=request_metrics)
+        if rate_limit_journal is None:
+            return client
+        return SpotifyRateLimitGuardClient(
+            client,
+            rate_limit_journal,
+            clock=lambda: datetime.now(UTC),
+        )
+
     return ManagedAdminService(
         ManagedStateStore(data_dir / MANAGED_STATE_FILENAME),
-        client_factory=(
-            SpotifyClient
-            if request_metrics is None
-            else lambda access_token: SpotifyClient(
-                access_token=access_token,
-                metrics=request_metrics,
-            )
-        ),
+        client_factory=client_factory,
         cover_loader=_load_bundled_cover,
     )
 
@@ -1159,6 +1201,15 @@ def _runtime_interval(environ: Mapping[str, str]) -> timedelta:
     if interval < _MIN_RUNTIME_INTERVAL:
         raise RuntimeError(f"{_INTERVAL_SECONDS_ENV} must be at least 60 seconds")
     return interval
+
+
+def _local_skips_enabled(environ: Mapping[str, str]) -> bool:
+    value = environ.get(_SPOTIFY_LOCAL_SKIPS_ENV, "1").strip().casefold()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{_SPOTIFY_LOCAL_SKIPS_ENV} must be a boolean value")
 
 
 def _operational_status_page(
