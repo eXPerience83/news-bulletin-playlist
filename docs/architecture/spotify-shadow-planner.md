@@ -2,8 +2,11 @@
 
 Issue #158 introduced the durable local planner and its bounded
 `spotify_planner_shadow_decision` event. Phase 3 consumes its catalogue and retry evidence to
-suppress unnecessary show-catalogue reads while retaining the existing OAuth/client lifecycle and
-reconciling every destination. Destination skip decisions remain shadow-only.
+suppress unnecessary show-catalogue reads. Phase 4 uses the same evidence for operational
+destination decisions: after RSS and local persistence, a completely clean cycle returns before
+OAuth token acquisition, client construction, or Web API access. If shared matching work exists,
+the engine acquires one provider session, rebuilds desired state, and still reconciles only the
+destinations whose own evidence requires remote work.
 
 ## Durable evidence
 
@@ -18,6 +21,11 @@ Schema migration 5 adds four focused tables:
 - `spotify_planner_destination_state` stores configuration, destination and auth-contract
   fingerprints, the observed and confirmed desired fingerprints, dirty/unknown flags, and the
   six-hour destination audit deadline.
+
+Schema remains at version 5. Durable destination confirmation is historical evidence, but it is
+not sufficient by itself to authorize a local skip. The process owns an exact-context runtime
+lease for each playlist, measured with a monotonic clock. A restart deliberately loses all leases,
+so each destination receives one qualifying remote verification before that process may skip it.
 
 Pending snapshot transitions remain authoritative in the existing #134 journal. They are read by
 the planner and are not duplicated. Catalogue audit freshness records a successful structurally
@@ -74,7 +82,8 @@ market mode, pagination contract, and catalogue contract version. Parser, timezo
 delay remain source-specific evaluation inputs rather than HTTP cache dimensions. Failed fetches
 are coalesced within the cycle. Candidates and completeness claims are never persisted.
 
-Playlist reconciliation still runs every cycle. Only after pending-snapshot handling and the
+Playlist reconciliation runs only for destinations that are dirty, unknown, pending, due for a
+six-hour audit, or missing compatible evidence. Only after pending-snapshot handling and the
 existing unchanged/stability checks fail to avoid mutation does a pre-write barrier validate each
 selected mapping. Presence in a truncated result is positive evidence; absence in a truncated or
 empty result blocks the write. Complete non-empty absence permits invalidation and rematching. A
@@ -100,8 +109,8 @@ renews no audit, and grants no absence proof.
 
 ## Safety behavior
 
-Missing, corrupt or incompatible evidence requires hypothetical Spotify work and cannot authorize
-a local skip. A desired transition immediately clears its old confirmed fingerprint. An unknown
+Missing, corrupt or incompatible evidence requires Spotify work and cannot authorize a local
+skip. A desired transition immediately clears its old confirmed fingerprint. An unknown
 mutation also clears confirmation, so `A -> B -> unknown -> A` cannot revive evidence for the
 first A. Confirmation is invalidated before every current reconciliation and restored only when
 the exact desired, destination, configuration and authorization context observed for that
@@ -109,12 +118,26 @@ operation still matches the durable row. Mutation outcome and skip-quality remot
 separate: an exact readback may prove that an ambiguous write applied while a later unstable
 snapshot bracket still prevents planner confirmation. Pending/degraded verification likewise does
 not qualify. A crash during a possibly mutating call leaves conservative durable state.
-Clock rollback makes audits due and blocks unresolved retry eligibility without moving a retry
-earlier.
+Each local skip requires both a fresh durable wall-clock deadline and a fresh process-local
+monotonic lease for the exact desired, destination, configuration and authorization context. A
+wall-clock jump forward can make an audit due early; a rollback cannot extend permission beyond
+the monotonic six-hour lease. Desired or context changes, pending or unknown state, failed safety
+persistence, and reconciliation revoke the playlist's sole lease, so an `A -> B -> A` transition
+cannot recover an older A lease. Remote evidence is published durably before a replacement lease
+is created. Unresolved retry rollback remains conservative and never moves a retry earlier.
 
-Planner persistence and evaluation are fail-closed for a future skip, but fail-soft for this
-shadow integration. A planner failure produces `state_available=false`, `would_need_spotify=true`
-and `would_allow_local_skip=false`; the existing provider flow continues unchanged.
-When a later phase activates planner decisions, successful persistence of the pre-reconciliation
-invalidation must become a prerequisite for any remote mutation; #158 deliberately does not add
-that behavior-changing gate.
+Planner observation remains fail-soft for reporting, while persistence required to invalidate
+destination evidence is fail-closed for mutations. If that invalidation cannot be committed, the
+engine preserves the destination and never reaches a PUT. The exact desired, destination,
+configuration and authorization context remain conditions of the final confirmation update.
+
+The environment switch `NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS=0` disables local destination skips in
+the current binary without weakening strict invalidation or the shared 429 gate. Schema remains
+compatible with Phase 3; no database downgrade or restore is needed solely to revert this binary.
+
+Engine and managed Admin Web API operations share the same durable rate-limit journal and request
+lock. An active Web API cooldown is checked before token refresh needed for those operations, and
+a 429 from either surface suppresses the other. The interactive OAuth callback remains outside
+this Web API gate because code exchange uses the Spotify Accounts endpoint. Admin metadata and
+cover operations do not invalidate ordered-item evidence because they do not change the item list
+or destination identity.

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
-from typing import Protocol, TypeVar
+from typing import Any, Protocol, TypeVar, cast
 
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
@@ -59,6 +59,12 @@ class SpotifyBackoffClient(SpotifyCatalogClient, SpotifyPlaylistClient, Protocol
 
 class SpotifyBackoffAuthProvider(Protocol):
     def get_access_token(self, *, now: datetime | None = None) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAuthorizationSession:
+    access_token: str
+    authorization_context: str
 
 
 class SpotifyRateLimitBackoffActive(SpotifyAuthError):
@@ -331,13 +337,37 @@ class SpotifyRateLimitGuardAuth:
                 raise SpotifyRateLimitBackoffActive(_active_message(state))
             return self.provider.get_access_token(now=now)
 
+    def acquire_provider_session(
+        self, *, now: datetime | None = None
+    ) -> ProviderAuthorizationSession:
+        with self.journal._request_lock:
+            observed = _as_utc(self.clock() if now is None else now)
+            try:
+                state = self.journal.active(now=observed)
+            except PersistenceError as exc:
+                raise SpotifyRateLimitStateUnavailable(
+                    "Spotify rate-limit state is unavailable"
+                ) from exc
+            if state is not None:
+                _emit_backoff(self.diagnostics, state, backoff_state="active", occurred_at=observed)
+                raise SpotifyRateLimitBackoffActive(_active_message(state))
+            acquire = getattr(self.provider, "acquire_provider_session", None)
+            if callable(acquire):
+                return cast(ProviderAuthorizationSession, acquire(now=now))
+            token = self.provider.get_access_token(now=now)
+            context_reader = getattr(self.provider, "planner_authorization_context", None)
+            context = context_reader() if callable(context_reader) else None
+            if not isinstance(context, str) or not context:
+                raise SpotifyAuthError("Spotify authorization context is unavailable")
+            return ProviderAuthorizationSession(token, context)
+
 
 class SpotifyRateLimitGuardClient:
     """Persist the first live 429 and suppress every later Spotify request in that cycle."""
 
     def __init__(
         self,
-        client: SpotifyBackoffClient,
+        client: Any,
         journal: SpotifyRateLimitJournal,
         *,
         clock: Clock,
@@ -374,6 +404,31 @@ class SpotifyRateLimitGuardClient:
 
     def playlist_snapshot(self, playlist_id: str) -> dict[str, object]:
         return self._call(lambda: self.client.playlist_snapshot(playlist_id))
+
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, object]:
+        return self._call(
+            lambda: self.client.create_playlist(name, public=public, description=description)
+        )
+
+    def current_user(self) -> dict[str, object]:
+        return self._call(self.client.current_user)
+
+    def playlist_details(self, playlist_id: str) -> dict[str, object]:
+        return self._call(lambda: self.client.playlist_details(playlist_id))
+
+    def change_playlist_details(
+        self, playlist_id: str, *, name: str, description: str
+    ) -> dict[str, object]:
+        return self._call(
+            lambda: self.client.change_playlist_details(
+                playlist_id, name=name, description=description
+            )
+        )
+
+    def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, object]:
+        return self._call(lambda: self.client.upload_playlist_cover(playlist_id, jpeg_bytes))
 
     def _call(self, operation: Callable[[], T]) -> T:
         with self.journal._request_lock:

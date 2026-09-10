@@ -12,6 +12,7 @@ from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
     ManagedAdminService,
     PlaylistProvisioningRecoveryRequired,
+    SpotifyAdminCooldownError,
     SpotifyPlaylistCreationUncertainError,
     SpotifyPlaylistProvisioningError,
 )
@@ -23,6 +24,7 @@ from news_bulletin_playlist.managed_provisioning import (
 )
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
+from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitSuppressed
 
 
 class _Client:
@@ -150,6 +152,20 @@ def test_request_journal_failure_prevents_remote_create(tmp_path: Path) -> None:
     with pytest.raises(ProvisioningJournalError):
         _activate(_service(tmp_path, client, journal=journal))
     assert client.create_calls == []
+
+
+def test_locally_suppressed_create_does_not_leave_unknown_provisioning(tmp_path: Path) -> None:
+    journal = ProvisioningJournal(tmp_path / "provisioning.json")
+    service = _service(
+        tmp_path,
+        _Client([SpotifyRateLimitSuppressed("cooldown")]),
+        journal=journal,
+    )
+
+    with pytest.raises(SpotifyAdminCooldownError, match="no provider request was sent"):
+        _activate(service)
+
+    assert journal.load() is None
 
 
 def test_restart_after_request_started_before_remote_create_blocks_duplicate_create(

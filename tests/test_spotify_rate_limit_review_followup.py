@@ -74,6 +74,7 @@ def test_sqlite_error_inside_backoff_context_fails_closed_without_escaping_engin
         auth,
         client_factory=client_factory,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     )
 
     def fail_select(_connection: sqlite3.Connection) -> None:
@@ -114,6 +115,7 @@ def test_corrupt_persisted_backoff_state_fails_closed_before_auth_or_client(
         auth,
         client_factory=client_factory,
         clock=lambda: NOW,
+        local_skips_enabled=False,
     ).run_cycle()
 
     assert not result.ok

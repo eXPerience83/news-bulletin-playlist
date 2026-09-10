@@ -24,6 +24,7 @@ from news_bulletin_playlist.engine_runtime import (
     OperationalHealthHandler,
     ReloadingEngineCycleRunner,
     _load_runtime_config,
+    _local_skips_enabled,
     _operational_status_page,
     _runtime_interval,
     serve,
@@ -151,6 +152,14 @@ def test_runtime_interval_rejects_tight_retry_values() -> None:
         _runtime_interval({"NEWS_PLAYLIST_INTERVAL_SECONDS": "59"})
     with pytest.raises(RuntimeError, match="must be an integer"):
         _runtime_interval({"NEWS_PLAYLIST_INTERVAL_SECONDS": "fast"})
+
+
+def test_local_skip_kill_switch_defaults_on_and_parses_explicit_values() -> None:
+    assert _local_skips_enabled({})
+    assert _local_skips_enabled({"NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS": "yes"})
+    assert not _local_skips_enabled({"NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS": "0"})
+    with pytest.raises(RuntimeError, match="must be a boolean"):
+        _local_skips_enabled({"NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS": "sometimes"})
 
 
 def test_runtime_config_is_optional_until_production_file_exists(tmp_path: Path) -> None:

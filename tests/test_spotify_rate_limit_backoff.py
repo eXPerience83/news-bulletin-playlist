@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import threading
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -273,6 +274,81 @@ def test_durable_active_backoff_blocks_auth_then_expires(tmp_path: Path) -> None
     assert resumed.get_access_token(now=NOW + timedelta(minutes=11)) == "access-token"
     assert auth.calls == 1
     assert SpotifyRateLimitJournal(store).get() is None
+
+
+def test_admin_web_api_429_blocks_waiting_engine_before_token_work(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    journal = SpotifyRateLimitJournal(store)
+    entered = threading.Event()
+    release = threading.Event()
+
+    class AdminClient:
+        calls = 0
+
+        def current_user(self) -> dict[str, object]:
+            self.calls += 1
+            entered.set()
+            assert release.wait(timeout=2)
+            raise SpotifyApiError(429, "rate limited", retry_after=300)
+
+    delegate = AdminClient()
+    admin = SpotifyRateLimitGuardClient(delegate, journal, clock=lambda: NOW)
+    engine_auth_delegate = _Auth()
+    engine_auth = SpotifyRateLimitGuardAuth(
+        engine_auth_delegate,
+        SpotifyRateLimitJournal(store),
+        clock=lambda: NOW,
+    )
+    results: list[BaseException] = []
+
+    def admin_call() -> None:
+        try:
+            admin.current_user()
+        except BaseException as exc:
+            results.append(exc)
+
+    def engine_call() -> None:
+        try:
+            engine_auth.get_access_token(now=NOW)
+        except BaseException as exc:
+            results.append(exc)
+
+    first = threading.Thread(target=admin_call)
+    second = threading.Thread(target=engine_call)
+    first.start()
+    assert entered.wait(timeout=2)
+    second.start()
+    release.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert delegate.calls == 1
+    assert engine_auth_delegate.calls == 0
+    assert any(isinstance(exc, SpotifyApiError) for exc in results)
+    assert any(isinstance(exc, SpotifyRateLimitBackoffActive) for exc in results)
+
+
+def test_active_engine_cooldown_suppresses_admin_web_api_locally(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    journal = SpotifyRateLimitJournal(store)
+    journal.activate(observed_at=NOW, retry_after_seconds=300)
+
+    class AdminClient:
+        calls = 0
+
+        def create_playlist(
+            self, name: str, *, public: bool = True, description: str = ""
+        ) -> dict[str, object]:
+            del name, public, description
+            self.calls += 1
+            return {"id": "unexpected"}
+
+    delegate = AdminClient()
+    admin = SpotifyRateLimitGuardClient(delegate, journal, clock=lambda: NOW)
+    with pytest.raises(SpotifyRateLimitSuppressed):
+        admin.create_playlist("Playlist")
+    assert delegate.calls == 0
 
 
 def test_engine_active_backoff_keeps_rss_collection_but_performs_zero_spotify_io(

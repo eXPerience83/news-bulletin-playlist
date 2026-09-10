@@ -170,8 +170,19 @@ def test_all_shadow_boundaries_preserve_actual_calls(tmp_path, monkeypatch, meth
     baseline.run_cycle()
     expected = provider.trace
     runner, provider, auth, factories = setup(tmp_path / "failure", playlists=("first", "second"))
+    runner.local_skips_enabled = False
     monkeypatch.setattr(runner.planner_journal, method, Mock(side_effect=error("injected")))
     result = runner.run_cycle()
+    if method in {"observe_destination", "begin_destination_verification"}:
+        assert not result.ok
+        assert auth.calls == len(factories) == 1
+        assert [entry[0] for entry in provider.trace] == ["catalogue"]
+        assert result.planner_shadow is not None
+        assert result.planner_shadow.would_need_spotify
+        assert not result.planner_shadow.would_allow_local_skip
+        if method == "observe_destination":
+            assert not result.planner_shadow.state_available
+        return
     assert result.ok
     assert auth.calls == len(factories) == 1
     assert provider.trace == expected
@@ -236,6 +247,7 @@ def test_verification_requires_exact_operation_context_after_restart(tmp_path, f
 
 def test_failed_observation_never_certifies_old_a_after_writing_b(tmp_path, monkeypatch):
     runner, provider, _, _ = setup(tmp_path)
+    runner.local_skips_enabled = False
     runner.run_cycle()
     old_show = provider.show_episodes
 
@@ -253,11 +265,12 @@ def test_failed_observation_never_certifies_old_a_after_writing_b(tmp_path, monk
             Mock(side_effect=PersistenceError("transient")),
         )
         result = runner.run_cycle()
-    assert result.ok and provider.items["destination-first"] == []
+    assert not result.ok
+    assert provider.items["destination-first"] == [SER_URI]
     assert_unsafe(result)
     journal = SpotifyPlannerJournal(runner.store)
     state = journal.get_destination("first")
-    assert state.dirty and state.confirmed_desired_fingerprint is None
+    assert not state.dirty and state.confirmed_desired_fingerprint is not None
     runner.store.set_match_state(
         _source().id,
         "ser-1",
@@ -323,6 +336,7 @@ def test_ambiguous_result_and_qualified_evidence_are_independent(
 
 def test_normal_write_and_unchanged_read_publish_structured_evidence(tmp_path, monkeypatch):
     runner, _, _, _ = setup(tmp_path)
+    runner.local_skips_enabled = False
     captured = []
     import news_bulletin_playlist.engine as engine
 

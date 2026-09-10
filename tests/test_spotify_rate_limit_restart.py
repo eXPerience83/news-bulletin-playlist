@@ -42,6 +42,9 @@ class _Auth:
         self.calls += 1
         return "access-token"
 
+    def planner_authorization_context(self) -> str:
+        return "a" * 64
+
 
 class _RateLimitedCatalogue:
     def __init__(self) -> None:
@@ -268,6 +271,7 @@ def test_engine_restart_keeps_cooldown_then_resumes_after_deadline(tmp_path: Pat
         fetcher=fetcher,
         client_factory=lambda _token: working,
         clock=lambda: NOW + timedelta(minutes=6),
+        local_skips_enabled=False,
     ).run_cycle()
 
     assert third.ok

@@ -56,6 +56,9 @@ class _SecretAuth:
         self.calls += 1
         return self.access_token
 
+    def planner_authorization_context(self) -> str:
+        return "non-secret-test-authorization-context"
+
 
 class _RateLimitedSpotify:
     def show_episodes(

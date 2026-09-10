@@ -33,6 +33,7 @@ from news_bulletin_playlist.spotify.client import (
     SpotifyClient,
     SpotifyTransportError,
 )
+from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitSuppressed
 
 MAX_PLAYLIST_NAME_LENGTH = 100
 SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT = 300
@@ -82,6 +83,13 @@ class SpotifyPlaylistCreationUncertainError(ManagedAdminError):
             "Spotify playlist creation outcome is unknown because Spotify did not confirm the "
             "result; inspect Spotify for a newly created playlist before retrying"
         )
+
+
+class SpotifyAdminCooldownError(ManagedAdminError):
+    """Report a Web API operation suppressed locally before transport."""
+
+    def __init__(self) -> None:
+        super().__init__("Spotify Web API cooldown is active; no provider request was sent")
 
 
 class PlaylistProvisioningRecoveryRequired(ManagedAdminError):
@@ -213,6 +221,9 @@ class ManagedAdminService:
             # Provision only the durable destination identity. Metadata and cover are explicit
             # follow-up operations so their provider behavior can never block activation.
             response = client.create_playlist(intent.display_name, public=True)
+        except SpotifyRateLimitSuppressed as exc:
+            self.provisioning_journal.clear()
+            raise SpotifyAdminCooldownError() from exc
         except SpotifyApiError as exc:
             if exc.status < 500:
                 self.provisioning_journal.clear()
@@ -504,6 +515,8 @@ def _safe_spotify_operation_error(
 ) -> str:
     if isinstance(error, SpotifyApiError):
         return f"HTTP {error.status}"
+    if isinstance(error, SpotifyRateLimitSuppressed):
+        return "cooldown active"
     return "network error"
 
 
