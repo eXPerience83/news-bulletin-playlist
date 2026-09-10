@@ -451,7 +451,8 @@ def _reconcile_playlist_items(
                         )
                     else:
                         raise SpotifyReconciliationError(
-                            "Spotify playlist snapshot advanced outside the expected write transition"
+                            "Spotify playlist snapshot advanced outside the expected write "
+                            "transition"
                         )
         if store is not None and logical_playlist_id is not None:
             assert attestation_updated_at is not None
