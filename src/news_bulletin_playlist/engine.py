@@ -106,6 +106,7 @@ class EngineCycleRunner(Protocol):
 SpotifyClientFactory = Callable[[str], SpotifyEngineClient]
 Clock = Callable[[], datetime]
 MonotonicClock = Callable[[], float]
+PlaylistSkipGuard = Callable[[PlaylistDefinition], bool]
 
 
 class EngineCycleAlreadyRunning(RuntimeError):
@@ -342,6 +343,7 @@ class EngineRunner:
         local_skips_enabled: bool = True,
         destination_leases: DestinationRuntimeLeaseRegistry | None = None,
         monotonic_clock: MonotonicClock = time.monotonic,
+        playlist_skip_guard: PlaylistSkipGuard | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -353,6 +355,7 @@ class EngineRunner:
         self.local_skips_enabled = local_skips_enabled
         self.destination_leases = destination_leases or DestinationRuntimeLeaseRegistry()
         self.monotonic_clock = monotonic_clock
+        self.playlist_skip_guard = playlist_skip_guard
         self.planner_journal = SpotifyPlannerJournal(store)
         self._planner_auth_reader = getattr(auth, "planner_authorization_context", None)
         self._shadow_auth_context: str | None = None
@@ -709,31 +712,59 @@ class EngineRunner:
                     )
                     continue
                 if self.local_skips_enabled and not destination_plan.needs_remote:
-                    playlist_finished_at = _as_utc(self.clock())
-                    self.store.record_playlist_run(
-                        playlist.id,
-                        started_at=playlist_started_at,
-                        finished_at=playlist_finished_at,
-                        ok=True,
-                        desired_count=desired_count,
-                        applied_count=desired_count,
-                    )
-                    playlist_state = self.store.get_playlist_state(playlist.id)
-                    playlist_outcomes.append(
-                        PlaylistCycleOutcome(
-                            playlist_id=playlist.id,
+                    if self._local_skip_still_authorized(playlist, verification_context):
+                        playlist_finished_at = _as_utc(self.clock())
+                        self.store.record_playlist_run(
+                            playlist.id,
+                            started_at=playlist_started_at,
+                            finished_at=playlist_finished_at,
                             ok=True,
                             desired_count=desired_count,
                             applied_count=desired_count,
-                            wrote=False,
-                            last_success_at=(
-                                None if playlist_state is None else playlist_state.last_success_at
-                            ),
-                            duration_decisions=desired.duration_decisions,
-                            **request_diagnostics,
-                            write_outcome="skipped",
                         )
-                    )
+                        playlist_state = self.store.get_playlist_state(playlist.id)
+                        playlist_outcomes.append(
+                            PlaylistCycleOutcome(
+                                playlist_id=playlist.id,
+                                ok=True,
+                                desired_count=desired_count,
+                                applied_count=desired_count,
+                                wrote=False,
+                                last_success_at=(
+                                    None
+                                    if playlist_state is None
+                                    else playlist_state.last_success_at
+                                ),
+                                duration_decisions=desired.duration_decisions,
+                                **request_diagnostics,
+                                write_outcome="skipped",
+                            )
+                        )
+                    else:
+                        error = "destination preserved because local skip authority changed"
+                        self.store.record_playlist_run(
+                            playlist.id,
+                            started_at=playlist_started_at,
+                            finished_at=_as_utc(self.clock()),
+                            ok=False,
+                            desired_count=desired_count,
+                            applied_count=0,
+                            error=error,
+                        )
+                        playlist_outcomes.append(
+                            PlaylistCycleOutcome(
+                                playlist_id=playlist.id,
+                                ok=False,
+                                desired_count=desired_count,
+                                applied_count=None,
+                                wrote=None,
+                                last_success_at=None,
+                                error=error,
+                                duration_decisions=desired.duration_decisions,
+                                **request_diagnostics,
+                                write_outcome="not_attempted",
+                            )
+                        )
                     continue
                 if not self._authorization_context_matches(
                     authorization_session.authorization_context
@@ -1232,6 +1263,12 @@ class EngineRunner:
                         "destination preserved because no last-known-good state is available "
                         "for source(s): " + ", ".join(str(value) for value in unsafe)
                     )
+                elif not self._local_skip_still_authorized(
+                    playlist,
+                    self._destination_verification_context(playlist, desired.uris),
+                ):
+                    error = "destination preserved because local skip authority changed"
+                    ok = False
                 finished = _as_utc(self.clock())
                 self.store.record_playlist_run(
                     playlist.id,
@@ -1424,6 +1461,38 @@ class EngineRunner:
         except Exception:
             return False
 
+    def _destination_verification_context(
+        self, playlist: PlaylistDefinition, desired_uris: tuple[str, ...]
+    ) -> DestinationVerificationContext | None:
+        if self._shadow_auth_context is None:
+            return None
+        return DestinationVerificationContext(
+            stable_fingerprint(desired_uris),
+            destination_context_fingerprint(playlist),
+            playlist_config_fingerprint(playlist),
+            self._shadow_auth_context,
+        )
+
+    def _local_skip_still_authorized(
+        self,
+        playlist: PlaylistDefinition,
+        expected: DestinationVerificationContext | None,
+    ) -> bool:
+        if expected is None or not self._authorization_context_matches(
+            expected.auth_context_fingerprint
+        ):
+            self.destination_leases.revoke(playlist.id)
+            return False
+        guard = self.playlist_skip_guard
+        try:
+            config_matches = guard is None or guard(playlist)
+        except Exception:
+            config_matches = False
+        if not config_matches:
+            self.destination_leases.revoke(playlist.id)
+            return False
+        return True
+
     @contextmanager
     def _provider_mutation_guard(
         self, playlist: PlaylistDefinition, authorization_context: str
@@ -1608,14 +1677,9 @@ class EngineRunner:
         self, playlist: PlaylistDefinition, desired_uris: tuple[str, ...]
     ) -> DestinationVerificationContext | None:
         try:
-            if self._shadow_auth_context is None:
+            expected = self._destination_verification_context(playlist, desired_uris)
+            if expected is None:
                 return None
-            expected = DestinationVerificationContext(
-                stable_fingerprint(desired_uris),
-                destination_context_fingerprint(playlist),
-                playlist_config_fingerprint(playlist),
-                self._shadow_auth_context,
-            )
             self.destination_leases.revoke_unless(playlist.id, expected)
             self.planner_journal.observe_destination(
                 playlist_id=str(playlist.id),

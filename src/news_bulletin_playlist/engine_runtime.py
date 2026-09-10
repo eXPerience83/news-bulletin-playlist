@@ -391,6 +391,9 @@ class ReloadingEngineCycleRunner:
         playlist_mutation_guard = (
             None if synchronization is None else partial(self._playlist_mutation_guard, config)
         )
+        playlist_skip_guard = (
+            None if synchronization is None else partial(self._playlist_skip_guard, config)
+        )
         return EngineRunner(
             config,
             self.store,
@@ -403,7 +406,30 @@ class ReloadingEngineCycleRunner:
             local_skips_enabled=self.local_skips_enabled,
             destination_leases=self.destination_leases,
             monotonic_clock=self.monotonic_clock,
+            playlist_skip_guard=playlist_skip_guard,
         ).run_cycle()
+
+    def _playlist_skip_guard(
+        self,
+        expected_config: EngineConfig,
+        expected_playlist: PlaylistDefinition,
+    ) -> bool:
+        """Confirm the current item contract before a local skip uses this cycle's snapshot."""
+        synchronization = self.configuration_synchronization
+        if synchronization is None:
+            return False
+        expected_contract = _playlist_write_contract(expected_config, expected_playlist.id)
+        with synchronization.hold():
+            try:
+                current_config = _load_runtime_config(self.data_dir, self.environ)
+            except RuntimeError:
+                return False
+            current_contract = (
+                None
+                if current_config is None
+                else _playlist_write_contract(current_config, expected_playlist.id)
+            )
+        return current_contract == expected_contract
 
     @contextmanager
     def _playlist_mutation_guard(
