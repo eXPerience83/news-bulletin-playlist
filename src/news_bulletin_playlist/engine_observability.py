@@ -14,7 +14,10 @@ from news_bulletin_playlist.desired_state import (
 )
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
 from news_bulletin_playlist.engine import EngineCycleResult, EngineCycleRunner
-from news_bulletin_playlist.reconciliation_diagnostics import classify_reconciliation_failure
+from news_bulletin_playlist.reconciliation_diagnostics import (
+    classify_reconciliation_failure,
+    classify_reconciliation_warning,
+)
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics, cycle_id_for
 from news_bulletin_playlist.spotify_backoff import (
     SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX,
@@ -140,6 +143,9 @@ class InstrumentedEngineCycleRunner:
                     )
                 if playlist.error is not None:
                     details["verification_outcome"] = "degraded"
+                    warning_reason = classify_reconciliation_warning(playlist.error)
+                    if warning_reason is not None:
+                        details["failure_reason"] = warning_reason
             elif _destination_was_preserved(playlist.error):
                 event_name = "destination_preserved"
                 severity = DiagnosticSeverity.WARNING

@@ -8,13 +8,15 @@ import json
 import re
 import urllib.parse
 import zipfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.diagnostics import (
+    MAX_DIAGNOSTIC_EXPORT_EVENTS,
     MAX_DIAGNOSTIC_QUERY_LIMIT,
     DiagnosticEvent,
+    DiagnosticRetentionStatus,
     DiagnosticSeverity,
 )
 from news_bulletin_playlist.engine import EngineCycleResult
@@ -40,7 +42,7 @@ class DiagnosticFilters:
         observed = _as_utc(now)
         return None if self.hours is None else observed - timedelta(hours=self.hours)
 
-    def query_string(self) -> str:
+    def query_string(self, *, include_limit: bool = True) -> str:
         pairs: list[tuple[str, str]] = []
         if self.severity is not None:
             pairs.append(("severity", self.severity.value))
@@ -49,7 +51,8 @@ class DiagnosticFilters:
         if self.playlist_id is not None:
             pairs.append(("playlist", self.playlist_id))
         pairs.append(("hours", "all" if self.hours is None else str(self.hours)))
-        pairs.append(("limit", str(self.limit)))
+        if include_limit:
+            pairs.append(("limit", str(self.limit)))
         return urllib.parse.urlencode(pairs)
 
 
@@ -119,8 +122,7 @@ def render_diagnostics_page(
     rows = "".join(_event_row(event, display_timezone=display_timezone) for event in events)
     if not rows:
         rows = '<tr><td colspan="8">No diagnostic events match these filters.</td></tr>'
-    export_filters = replace(filters, limit=MAX_DIAGNOSTIC_QUERY_LIMIT)
-    export_href = "/admin/diagnostics/export.zip?" + export_filters.query_string()
+    export_href = "/admin/diagnostics/export.zip?" + filters.query_string(include_limit=False)
     severity_value = "" if filters.severity is None else filters.severity.value
     source_value = "" if filters.source_id is None else filters.source_id
     playlist_value = "" if filters.playlist_id is None else filters.playlist_id
@@ -172,6 +174,7 @@ def render_diagnostics_page(
     </label>
     <button type="submit">Apply filters</button>
   </form>
+  <p class="muted">UI limit={MAX_DIAGNOSTIC_QUERY_LIMIT}; ZIP export uses a separate bounded capacity.</p>
   <p><a href="{html.escape(export_href, quote=True)}">Download sanitized diagnostics ZIP</a></p>
   {metrics_section}
   <table>
@@ -199,6 +202,8 @@ def build_diagnostic_bundle(
     filters: DiagnosticFilters | None = None,
     result_truncated: bool | None = False,
     spotify_metrics: SpotifyRequestMetricsSnapshot | None = None,
+    retention_status: DiagnosticRetentionStatus | None = None,
+    export_limit: int | None = None,
 ) -> bytes:
     """Build an in-memory ZIP from sanitized models; never copy the SQLite file."""
     observed = _as_utc(generated_at)
@@ -209,15 +214,36 @@ def build_diagnostic_bundle(
     )
     readable = "".join(_event_text(document) for document in event_documents)
     effective_filters = filters or DiagnosticFilters()
+    requested_limit = effective_filters.limit if export_limit is None else export_limit
+    allowed_limit = (
+        MAX_DIAGNOSTIC_QUERY_LIMIT
+        if export_limit is None
+        else MAX_DIAGNOSTIC_EXPORT_EVENTS
+    )
+    oldest = None if retention_status is None else retention_status.oldest_occurred_at
+    newest = None if retention_status is None else retention_status.newest_occurred_at
     runtime = {
         "generated_at": _timestamp(observed),
         "version": __version__,
         "build_revision": build_revision,
         "diagnostic_retention_days": retention_days,
         "diagnostic_store_max_events": max_events,
+        "diagnostic_store_event_count": (
+            None if retention_status is None else retention_status.event_count
+        ),
+        "diagnostic_store_oldest_occurred_at": (
+            None if oldest is None else _timestamp(oldest)
+        ),
+        "diagnostic_store_newest_occurred_at": (
+            None if newest is None else _timestamp(newest)
+        ),
+        "diagnostic_store_capacity_limit_reached": (
+            None if retention_status is None else retention_status.capacity_limit_reached
+        ),
+        "ui_max_query_limit": MAX_DIAGNOSTIC_QUERY_LIMIT,
         "exported_event_count": len(events),
-        "export_requested_limit": effective_filters.limit,
-        "export_max_allowed_limit": MAX_DIAGNOSTIC_QUERY_LIMIT,
+        "export_requested_limit": requested_limit,
+        "export_max_allowed_limit": allowed_limit,
         "export_result_truncated": result_truncated,
         "export_first_event_id": events[0].event_id if events else None,
         "export_last_event_id": events[-1].event_id if events else None,

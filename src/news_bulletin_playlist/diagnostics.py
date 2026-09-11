@@ -13,9 +13,10 @@ from pathlib import Path
 from news_bulletin_playlist.persistence import DEFAULT_DB_PATH, PersistenceError
 
 DEFAULT_DIAGNOSTIC_RETENTION_DAYS = 30
-DEFAULT_DIAGNOSTIC_MAX_EVENTS = 10_000
+DEFAULT_DIAGNOSTIC_MAX_EVENTS = 100_000
 DEFAULT_DIAGNOSTIC_QUERY_LIMIT = 200
 MAX_DIAGNOSTIC_QUERY_LIMIT = 500
+MAX_DIAGNOSTIC_EXPORT_EVENTS = 10_000
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _ALLOWED_DETAIL_KEYS = frozenset(
@@ -33,6 +34,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "edition_count",
         "excluded_count",
         "failure_class",
+        "failure_reason",
         "gt_30m",
         "http_status",
         "provider",
@@ -116,6 +118,30 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "snapshot_error",
             "transport_error",
             "unavailable_media",
+            "verification_mismatch",
+        }
+    ),
+    "failure_reason": frozenset(
+        {
+            "authorization_context_changed",
+            "configuration_invalid",
+            "desired_state_invalid",
+            "local_skip_authority_changed",
+            "playlist_items_api_error",
+            "playlist_items_transport_error",
+            "playlist_pagination_invalid",
+            "playlist_pagination_truncated",
+            "prewrite_desired_iteration_limit",
+            "prewrite_mapping_validation_failed",
+            "replace_items_api_error",
+            "replace_items_transport_error",
+            "response_shape_invalid",
+            "snapshot_api_error",
+            "snapshot_mismatch",
+            "snapshot_propagation_pending",
+            "snapshot_transport_error",
+            "unavailable_media",
+            "unknown_reconciliation_error",
             "verification_mismatch",
         }
     ),
@@ -243,6 +269,14 @@ class DiagnosticRetentionResult:
     @property
     def total_deleted(self) -> int:
         return self.age_deleted + self.overflow_deleted
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticRetentionStatus:
+    event_count: int
+    oldest_occurred_at: datetime | None
+    newest_occurred_at: datetime | None
+    capacity_limit_reached: bool
 
 
 _SCHEMA_SQL = """
@@ -409,11 +443,53 @@ class DiagnosticEventStore:
         playlist_id: str | None = None,
         limit: int = DEFAULT_DIAGNOSTIC_QUERY_LIMIT,
     ) -> tuple[tuple[DiagnosticEvent, ...], bool]:
-        """Return one bounded event snapshot and whether it contained an additional row."""
-        if not 1 <= limit <= MAX_DIAGNOSTIC_QUERY_LIMIT:
-            raise ValueError(
-                f"diagnostic query limit must be between 1 and {MAX_DIAGNOSTIC_QUERY_LIMIT}"
-            )
+        """Return one UI-bounded event snapshot and whether it contained an additional row."""
+        return self._list_events_with_truncation(
+            since=since,
+            severity=severity,
+            source_id=source_id,
+            playlist_id=playlist_id,
+            limit=limit,
+            maximum=MAX_DIAGNOSTIC_QUERY_LIMIT,
+            operation="list diagnostic events with truncation",
+            label="diagnostic query limit",
+        )
+
+    def list_events_for_export_with_truncation(
+        self,
+        *,
+        since: datetime | None = None,
+        severity: DiagnosticSeverity | None = None,
+        source_id: str | None = None,
+        playlist_id: str | None = None,
+        limit: int = MAX_DIAGNOSTIC_EXPORT_EVENTS,
+    ) -> tuple[tuple[DiagnosticEvent, ...], bool]:
+        """Return a larger sanitized export snapshot without changing the bounded UI query."""
+        return self._list_events_with_truncation(
+            since=since,
+            severity=severity,
+            source_id=source_id,
+            playlist_id=playlist_id,
+            limit=limit,
+            maximum=MAX_DIAGNOSTIC_EXPORT_EVENTS,
+            operation="list diagnostic events for export",
+            label="diagnostic export limit",
+        )
+
+    def _list_events_with_truncation(
+        self,
+        *,
+        since: datetime | None,
+        severity: DiagnosticSeverity | None,
+        source_id: str | None,
+        playlist_id: str | None,
+        limit: int,
+        maximum: int,
+        operation: str,
+        label: str,
+    ) -> tuple[tuple[DiagnosticEvent, ...], bool]:
+        if not 1 <= limit <= maximum:
+            raise ValueError(f"{label} must be between 1 and {maximum}")
         clauses, values = _event_filter_query(
             since=since,
             severity=severity,
@@ -428,7 +504,7 @@ class DiagnosticEventStore:
             "ORDER BY occurred_at DESC, event_id DESC LIMIT ?"
         )
         values.append(limit + 1)
-        with self._connection("list diagnostic events with truncation") as connection:
+        with self._connection(operation) as connection:
             rows = connection.execute(query, values).fetchall()
         return tuple(_event_from_row(row) for row in rows[:limit]), len(rows) > limit
 
@@ -456,6 +532,31 @@ class DiagnosticEventStore:
         if not isinstance(count, int):
             raise PersistenceError("count diagnostic events returned an invalid result")
         return count
+
+    def retention_status(self) -> DiagnosticRetentionStatus:
+        """Describe effective stored coverage and whether the emergency row cap is saturated."""
+        with self._connection("read diagnostic retention status") as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS event_count,
+                       MIN(occurred_at) AS oldest_occurred_at,
+                       MAX(occurred_at) AS newest_occurred_at
+                FROM diagnostic_events
+                """
+            ).fetchone()
+        if row is None or not isinstance(row["event_count"], int):
+            raise PersistenceError("diagnostic retention status returned an invalid result")
+        event_count = int(row["event_count"])
+        oldest_raw = row["oldest_occurred_at"]
+        newest_raw = row["newest_occurred_at"]
+        oldest = None if oldest_raw is None else _parse_timestamp(str(oldest_raw))
+        newest = None if newest_raw is None else _parse_timestamp(str(newest_raw))
+        return DiagnosticRetentionStatus(
+            event_count=event_count,
+            oldest_occurred_at=oldest,
+            newest_occurred_at=newest,
+            capacity_limit_reached=event_count >= self.max_events,
+        )
 
     def prune(
         self,
