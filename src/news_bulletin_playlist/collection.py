@@ -24,9 +24,8 @@ from news_bulletin_playlist.registry import get_collection_filter, get_title_par
 
 FeedFetcher = Callable[[str], bytes]
 
-_USER_AGENT = (
-    f"news-bulletin-playlist/{__version__} (+https://github.com/eXPerience83/news-bulletin-playlist)"
-)
+_PROJECT_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
+_USER_AGENT = f"news-bulletin-playlist/{__version__} (+{_PROJECT_URL})"
 _MAX_FEED_BYTES = 10 * 1024 * 1024
 _GZIP_MAGIC = b"\x1f\x8b"
 
