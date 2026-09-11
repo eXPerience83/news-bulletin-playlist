@@ -11,6 +11,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
+from news_bulletin_playlist import __version__
 from news_bulletin_playlist.models import (
     CanonicalEdition,
     EngineConfig,
@@ -24,7 +25,7 @@ from news_bulletin_playlist.registry import get_collection_filter, get_title_par
 FeedFetcher = Callable[[str], bytes]
 
 _USER_AGENT = (
-    "news-bulletin-playlist/0.0.1 (+https://github.com/eXPerience83/news-bulletin-playlist)"
+    f"news-bulletin-playlist/{__version__} (+https://github.com/eXPerience83/news-bulletin-playlist)"
 )
 _MAX_FEED_BYTES = 10 * 1024 * 1024
 _GZIP_MAGIC = b"\x1f\x8b"
