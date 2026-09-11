@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist import __version__, engine_runtime
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
-from news_bulletin_playlist.diagnostics import DiagnosticEvent
+from news_bulletin_playlist.diagnostics import MAX_DIAGNOSTIC_EXPORT_EVENTS, DiagnosticEvent
 from news_bulletin_playlist.diagnostics_web import (
     DiagnosticFilters,
     build_diagnostic_bundle,
@@ -159,12 +159,17 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if store is None:
             self._diagnostic_history_unavailable()
             return
+        generated_at = datetime.now(UTC)
         try:
-            filters, events, result_truncated = self._diagnostic_events(query)
+            filters, events, result_truncated = self._diagnostic_export_events(
+                query,
+                observed_at=generated_at,
+            )
+            retention_status = store.retention_status()
         except ValueError:
             self._invalid_diagnostic_filters()
             return
-        except RuntimeError:
+        except RuntimeError, PersistenceError:
             self._diagnostic_history_unavailable()
             return
 
@@ -173,7 +178,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         last_cycle = None if snapshot is None else snapshot.last_cycle
         payload = build_diagnostic_bundle(
             events=events,
-            generated_at=datetime.now(UTC),
+            generated_at=generated_at,
             last_cycle=last_cycle,
             retention_days=store.retention_days,
             max_events=store.max_events,
@@ -181,6 +186,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             filters=filters,
             result_truncated=result_truncated,
             spotify_metrics=self._spotify_metrics(),
+            retention_status=retention_status,
+            export_limit=MAX_DIAGNOSTIC_EXPORT_EVENTS,
         )
         self._reply(
             HTTPStatus.OK,
@@ -208,6 +215,29 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 source_id=filters.source_id,
                 playlist_id=filters.playlist_id,
                 limit=filters.limit,
+            )
+        except PersistenceError as exc:
+            raise RuntimeError("diagnostic store unavailable") from exc
+        return filters, events, result_truncated
+
+    def _diagnostic_export_events(
+        self,
+        query: str,
+        *,
+        observed_at: datetime,
+    ) -> tuple[DiagnosticFilters, tuple[DiagnosticEvent, ...], bool]:
+        store = self.diagnostic_store
+        if store is None:
+            raise RuntimeError("diagnostic store unavailable")
+        filters = parse_diagnostic_filters(query)
+        since = filters.since(now=observed_at)
+        try:
+            events, result_truncated = store.list_events_for_export_with_truncation(
+                since=since,
+                severity=filters.severity,
+                source_id=filters.source_id,
+                playlist_id=filters.playlist_id,
+                limit=MAX_DIAGNOSTIC_EXPORT_EVENTS,
             )
         except PersistenceError as exc:
             raise RuntimeError("diagnostic store unavailable") from exc
