@@ -383,6 +383,7 @@ class EngineRunner:
         self.client_factory = guarded_client_factory
         self.playlist_mutation_guard = playlist_mutation_guard
         self._cycle_lock = threading.Lock()
+        # Operational diagnostics only: these observations intentionally reset on process restart.
         self._previous_desired_fingerprints: dict[PlaylistId, str] = {}
         self._playlist_failure_streaks: dict[PlaylistId, tuple[int, datetime]] = {}
         self._planner_shadow = PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
@@ -1178,6 +1179,7 @@ class EngineRunner:
                 additional_reasons=additional_reasons,
             )
         except Exception:
+            # Isolated shadow boundary: never mask the existing provider flow.
             return PlannerShadowResult.unsafe()
 
     def _destination_work_plan(
@@ -1215,7 +1217,7 @@ class EngineRunner:
                     monotonic_now=self.monotonic_clock(),
                 )
             )
-        except (PersistenceError, ValueError):
+        except PersistenceError, ValueError:
             self.destination_leases.revoke(playlist.id)
             self._planner_shadow = PlannerShadowResult.unsafe()
             return _DestinationWorkPlan(needs_remote=False, state_available=False)
@@ -1449,7 +1451,7 @@ class EngineRunner:
                     now=now,
                     source_timezones=self._source_timezones(),
                 )
-            except (PersistenceError, DesiredStateError):
+            except PersistenceError, DesiredStateError:
                 self.destination_leases.revoke(playlist.id)
                 persistence_blocked.add(playlist.id)
                 continue
@@ -1650,6 +1652,7 @@ class EngineRunner:
                         attempted_at=observed_at,
                     )
         except Exception:
+            # Shadow evidence is fail-closed on its next read and cannot alter provider behavior.
             self._planner_shadow = PlannerShadowResult.unsafe()
 
     def _observe_destination_result(
@@ -1796,7 +1799,7 @@ class EngineScheduler:
             self.status.begin_cycle()
             try:
                 result = self.runner.run_cycle()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - keep the long-lived scheduler alive safely
                 observed_at = _as_utc(self.clock())
                 result = EngineCycleResult(
                     started_at=observed_at,
