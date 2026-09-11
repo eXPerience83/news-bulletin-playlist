@@ -105,7 +105,6 @@ def test_classifies_readback_mismatch_and_unavailable_media() -> None:
         "failure_class": "unavailable_media",
         "failure_reason": "unavailable_media",
         "phase": "readback",
-        "operation": "playlist_items",
         "offset": 50,
         "unavailable_count": 1,
         "verification_outcome": "unavailable",
