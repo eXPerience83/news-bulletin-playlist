@@ -174,7 +174,8 @@ def render_diagnostics_page(
     </label>
     <button type="submit">Apply filters</button>
   </form>
-  <p class="muted">UI limit={MAX_DIAGNOSTIC_QUERY_LIMIT}; ZIP export uses a separate bounded capacity.</p>
+  <p class="muted">UI limit={MAX_DIAGNOSTIC_QUERY_LIMIT};
+     ZIP export uses a separate bounded capacity.</p>
   <p><a href="{html.escape(export_href, quote=True)}">Download sanitized diagnostics ZIP</a></p>
   {metrics_section}
   <table>
