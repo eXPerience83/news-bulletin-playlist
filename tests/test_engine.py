@@ -301,8 +301,17 @@ def test_dirty_destination_does_not_force_clean_sibling_remote_read(tmp_path: Pa
 
 
 def test_destination_audit_is_due_exactly_at_six_hours(tmp_path: Path) -> None:
+    class SnapshotCountingSpotify(_Spotify):
+        def __init__(self) -> None:
+            super().__init__()
+            self.snapshot_reads = 0
+
+        def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+            self.snapshot_reads += 1
+            return super().playlist_snapshot(playlist_id)
+
     auth = _Auth()
-    spotify = _Spotify()
+    spotify = SnapshotCountingSpotify()
     current = NOW
     runner = EngineRunner(
         _config("first"),
@@ -313,17 +322,20 @@ def test_destination_audit_is_due_exactly_at_six_hours(tmp_path: Path) -> None:
         clock=lambda: current,
     )
     assert runner.run_cycle().ok
-    reads = len(spotify.playlist_reads)
+    item_reads = len(spotify.playlist_reads)
+    snapshot_reads = spotify.snapshot_reads
     current = NOW + timedelta(hours=6) - timedelta(microseconds=1)
     assert runner.run_cycle().ok
-    assert len(spotify.playlist_reads) == reads
+    assert len(spotify.playlist_reads) == item_reads
+    assert spotify.snapshot_reads == snapshot_reads
     current = NOW + timedelta(hours=6)
 
     due = runner.run_cycle()
 
     assert due.ok
-    assert len(spotify.playlist_reads) > reads
     assert due.destinations_remote == 1
+    assert len(spotify.playlist_reads) == item_reads
+    assert spotify.snapshot_reads == snapshot_reads + 1
 
 
 def test_wall_clock_rollback_cannot_extend_monotonic_destination_lease(tmp_path: Path) -> None:
