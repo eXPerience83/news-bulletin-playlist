@@ -169,7 +169,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except ValueError:
             self._invalid_diagnostic_filters()
             return
-        except (RuntimeError, PersistenceError):
+        except RuntimeError, PersistenceError:
             self._diagnostic_history_unavailable()
             return
 
