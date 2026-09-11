@@ -111,7 +111,9 @@ def audit_spotify_playlist_snapshot_first(
 def _read_snapshot(client: SpotifyPlaylistClient, playlist_id: str) -> str:
     response = client.playlist_snapshot(playlist_id)
     if not isinstance(response, dict):
-        raise SpotifyReconciliationError("Spotify playlist audit snapshot response was not an object")
+        raise SpotifyReconciliationError(
+            "Spotify playlist audit snapshot response was not an object"
+        )
     value = response.get("snapshot_id")
     if not isinstance(value, str) or not value.strip():
         raise SpotifyReconciliationError(
