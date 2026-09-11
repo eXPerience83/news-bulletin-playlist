@@ -70,6 +70,9 @@ from news_bulletin_playlist.spotify_backoff import (
     SpotifyRateLimitJournal,
     is_spotify_rate_limit_suppressed,
 )
+from news_bulletin_playlist.spotify_destination_audit import (
+    audit_spotify_playlist_snapshot_first,
+)
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 from news_bulletin_playlist.spotify_planner import (
     CatalogueState,
@@ -128,6 +131,7 @@ class _SourceMatchingPlan:
 class _DestinationWorkPlan:
     needs_remote: bool
     state_available: bool = True
+    audit_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,7 +383,6 @@ class EngineRunner:
         self.client_factory = guarded_client_factory
         self.playlist_mutation_guard = playlist_mutation_guard
         self._cycle_lock = threading.Lock()
-        # Operational diagnostics only: these observations intentionally reset on process restart.
         self._previous_desired_fingerprints: dict[PlaylistId, str] = {}
         self._playlist_failure_streaks: dict[PlaylistId, tuple[int, datetime]] = {}
         self._planner_shadow = PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
@@ -774,34 +777,44 @@ class EngineRunner:
                         "Spotify authorization changed during cycle; destination preserved"
                     )
                 self.destination_leases.revoke(playlist.id)
-                self._begin_destination_verification_required(playlist.id)
-                mutation_guard = partial(
-                    self._provider_mutation_guard,
-                    playlist,
-                    authorization_session.authorization_context,
-                )
                 remote_destination_ids.add(playlist.id)
-                reconciled = reconcile_spotify_playlist(
-                    client,
-                    playlist,
-                    desired,
-                    store=self.store,
-                    mutation_guard=mutation_guard,
-                    prepare_write=partial(
-                        self._prepare_playlist_write,
+                reconciled = None
+                if destination_plan.audit_only:
+                    reconciled = audit_spotify_playlist_snapshot_first(
+                        client,
                         playlist,
-                        catalogue_coordinator,
-                        playlist_started_at,
-                    ),
-                    prewrite_iteration_limit=(
-                        sum(
-                            len(self.store.list_editions(source_id=source_id))
-                            for source_id in playlist.source_selection.explicit
-                        )
-                        + 1
-                    ),
-                    evidence=evidence,
-                )
+                        desired,
+                        store=self.store,
+                        observed_at=playlist_started_at,
+                    )
+                if reconciled is None:
+                    self._begin_destination_verification_required(playlist.id)
+                    mutation_guard = partial(
+                        self._provider_mutation_guard,
+                        playlist,
+                        authorization_session.authorization_context,
+                    )
+                    reconciled = reconcile_spotify_playlist(
+                        client,
+                        playlist,
+                        desired,
+                        store=self.store,
+                        mutation_guard=mutation_guard,
+                        prepare_write=partial(
+                            self._prepare_playlist_write,
+                            playlist,
+                            catalogue_coordinator,
+                            playlist_started_at,
+                        ),
+                        prewrite_iteration_limit=(
+                            sum(
+                                len(self.store.list_editions(source_id=source_id))
+                                for source_id in playlist.source_selection.explicit
+                            )
+                            + 1
+                        ),
+                        evidence=evidence,
+                    )
                 desired = build_desired_state_from_store(
                     self.store,
                     playlist,
@@ -1165,7 +1178,6 @@ class EngineRunner:
                 additional_reasons=additional_reasons,
             )
         except Exception:
-            # Isolated shadow boundary: never mask the existing provider flow.
             return PlannerShadowResult.unsafe()
 
     def _destination_work_plan(
@@ -1189,12 +1201,13 @@ class EngineRunner:
                 or state.last_verified_at is None
                 or state.next_audit_at is None
                 or now < state.last_verified_at
-                or now >= state.next_audit_at
             ):
                 return _DestinationWorkPlan(needs_remote=True)
             if PendingSnapshotJournal(self.store).get(playlist.id) is not None:
                 self.destination_leases.revoke(playlist.id)
                 return _DestinationWorkPlan(needs_remote=True)
+            if now >= state.next_audit_at:
+                return _DestinationWorkPlan(needs_remote=True, audit_only=True)
             return _DestinationWorkPlan(
                 needs_remote=not self.destination_leases.allows(
                     playlist.id,
@@ -1202,7 +1215,7 @@ class EngineRunner:
                     monotonic_now=self.monotonic_clock(),
                 )
             )
-        except PersistenceError, ValueError:
+        except (PersistenceError, ValueError):
             self.destination_leases.revoke(playlist.id)
             self._planner_shadow = PlannerShadowResult.unsafe()
             return _DestinationWorkPlan(needs_remote=False, state_available=False)
@@ -1436,7 +1449,7 @@ class EngineRunner:
                     now=now,
                     source_timezones=self._source_timezones(),
                 )
-            except PersistenceError, DesiredStateError:
+            except (PersistenceError, DesiredStateError):
                 self.destination_leases.revoke(playlist.id)
                 persistence_blocked.add(playlist.id)
                 continue
@@ -1637,7 +1650,6 @@ class EngineRunner:
                         attempted_at=observed_at,
                     )
         except Exception:
-            # Shadow evidence is fail-closed on its next read and cannot alter provider behavior.
             self._planner_shadow = PlannerShadowResult.unsafe()
 
     def _observe_destination_result(
@@ -1784,7 +1796,7 @@ class EngineScheduler:
             self.status.begin_cycle()
             try:
                 result = self.runner.run_cycle()
-            except Exception as exc:  # noqa: BLE001 - keep the long-lived scheduler alive safely
+            except Exception as exc:
                 observed_at = _as_utc(self.clock())
                 result = EngineCycleResult(
                     started_at=observed_at,
