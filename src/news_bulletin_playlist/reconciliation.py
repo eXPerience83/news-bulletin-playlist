@@ -402,30 +402,7 @@ def _reconcile_playlist_items(
                 phase="readback",
             )
             if current_snapshot != write_snapshot:
-                stable_readback = _read_spotify_playlist(
-                    client,
-                    playlist_id,
-                    allow_unavailable=False,
-                    phase="readback",
-                )
-                if stable_readback.slots != desired:
-                    raise SpotifyReconciliationError(
-                        "Spotify playlist snapshot changed because content changed "
-                        "during exact snapshot recheck"
-                    )
-                stable_snapshot = _read_current_snapshot(
-                    client,
-                    playlist_id,
-                    phase="readback",
-                )
-                if stable_snapshot == write_snapshot:
-                    pass
-                elif stable_snapshot == current_snapshot:
-                    if prewrite_snapshot is None or stable_snapshot != prewrite_snapshot:
-                        raise SpotifyReconciliationError(
-                            "Spotify playlist snapshot did not match the known prewrite baseline "
-                            "during exact readback verification"
-                        )
+                if prewrite_snapshot is not None and current_snapshot == prewrite_snapshot:
                     if (
                         pending_journal is None
                         or logical_playlist_id is None
@@ -447,9 +424,36 @@ def _reconcile_playlist_items(
                     snapshot_warning = _SNAPSHOT_PROPAGATION_WARNING
                     write_snapshot = None
                 else:
-                    raise SpotifyReconciliationError(
-                        "Spotify playlist snapshot advanced outside the expected write transition"
+                    # A third/unexpected snapshot still requires the stronger stability proof.
+                    # Only the known stale A -> B transition may defer confirmation immediately.
+                    stable_readback = _read_spotify_playlist(
+                        client,
+                        playlist_id,
+                        allow_unavailable=False,
+                        phase="readback",
                     )
+                    if stable_readback.slots != desired:
+                        raise SpotifyReconciliationError(
+                            "Spotify playlist snapshot changed because content changed "
+                            "during exact snapshot recheck"
+                        )
+                    stable_snapshot = _read_current_snapshot(
+                        client,
+                        playlist_id,
+                        phase="readback",
+                    )
+                    if stable_snapshot == write_snapshot:
+                        pass
+                    elif stable_snapshot == current_snapshot:
+                        raise SpotifyReconciliationError(
+                            "Spotify playlist snapshot did not match the known prewrite baseline "
+                            "during exact readback verification"
+                        )
+                    else:
+                        raise SpotifyReconciliationError(
+                            "Spotify playlist snapshot advanced outside the expected write "
+                            "transition"
+                        )
         if store is not None and logical_playlist_id is not None:
             assert attestation_updated_at is not None
             if pending_confirmation is not None:
