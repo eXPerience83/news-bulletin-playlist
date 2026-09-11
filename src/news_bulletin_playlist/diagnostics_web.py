@@ -217,9 +217,7 @@ def build_diagnostic_bundle(
     effective_filters = filters or DiagnosticFilters()
     requested_limit = effective_filters.limit if export_limit is None else export_limit
     allowed_limit = (
-        MAX_DIAGNOSTIC_QUERY_LIMIT
-        if export_limit is None
-        else MAX_DIAGNOSTIC_EXPORT_EVENTS
+        MAX_DIAGNOSTIC_QUERY_LIMIT if export_limit is None else MAX_DIAGNOSTIC_EXPORT_EVENTS
     )
     oldest = None if retention_status is None else retention_status.oldest_occurred_at
     newest = None if retention_status is None else retention_status.newest_occurred_at
@@ -232,12 +230,8 @@ def build_diagnostic_bundle(
         "diagnostic_store_event_count": (
             None if retention_status is None else retention_status.event_count
         ),
-        "diagnostic_store_oldest_occurred_at": (
-            None if oldest is None else _timestamp(oldest)
-        ),
-        "diagnostic_store_newest_occurred_at": (
-            None if newest is None else _timestamp(newest)
-        ),
+        "diagnostic_store_oldest_occurred_at": (None if oldest is None else _timestamp(oldest)),
+        "diagnostic_store_newest_occurred_at": (None if newest is None else _timestamp(newest)),
         "diagnostic_store_capacity_limit_reached": (
             None if retention_status is None else retention_status.capacity_limit_reached
         ),
