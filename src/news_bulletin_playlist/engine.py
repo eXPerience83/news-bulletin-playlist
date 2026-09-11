@@ -70,6 +70,9 @@ from news_bulletin_playlist.spotify_backoff import (
     SpotifyRateLimitJournal,
     is_spotify_rate_limit_suppressed,
 )
+from news_bulletin_playlist.spotify_destination_audit import (
+    audit_spotify_playlist_snapshot_first,
+)
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 from news_bulletin_playlist.spotify_planner import (
     CatalogueState,
@@ -128,6 +131,7 @@ class _SourceMatchingPlan:
 class _DestinationWorkPlan:
     needs_remote: bool
     state_available: bool = True
+    audit_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -774,34 +778,44 @@ class EngineRunner:
                         "Spotify authorization changed during cycle; destination preserved"
                     )
                 self.destination_leases.revoke(playlist.id)
-                self._begin_destination_verification_required(playlist.id)
-                mutation_guard = partial(
-                    self._provider_mutation_guard,
-                    playlist,
-                    authorization_session.authorization_context,
-                )
                 remote_destination_ids.add(playlist.id)
-                reconciled = reconcile_spotify_playlist(
-                    client,
-                    playlist,
-                    desired,
-                    store=self.store,
-                    mutation_guard=mutation_guard,
-                    prepare_write=partial(
-                        self._prepare_playlist_write,
+                reconciled = None
+                if destination_plan.audit_only:
+                    reconciled = audit_spotify_playlist_snapshot_first(
+                        client,
                         playlist,
-                        catalogue_coordinator,
-                        playlist_started_at,
-                    ),
-                    prewrite_iteration_limit=(
-                        sum(
-                            len(self.store.list_editions(source_id=source_id))
-                            for source_id in playlist.source_selection.explicit
-                        )
-                        + 1
-                    ),
-                    evidence=evidence,
-                )
+                        desired,
+                        store=self.store,
+                        observed_at=playlist_started_at,
+                    )
+                if reconciled is None:
+                    self._begin_destination_verification_required(playlist.id)
+                    mutation_guard = partial(
+                        self._provider_mutation_guard,
+                        playlist,
+                        authorization_session.authorization_context,
+                    )
+                    reconciled = reconcile_spotify_playlist(
+                        client,
+                        playlist,
+                        desired,
+                        store=self.store,
+                        mutation_guard=mutation_guard,
+                        prepare_write=partial(
+                            self._prepare_playlist_write,
+                            playlist,
+                            catalogue_coordinator,
+                            playlist_started_at,
+                        ),
+                        prewrite_iteration_limit=(
+                            sum(
+                                len(self.store.list_editions(source_id=source_id))
+                                for source_id in playlist.source_selection.explicit
+                            )
+                            + 1
+                        ),
+                        evidence=evidence,
+                    )
                 desired = build_desired_state_from_store(
                     self.store,
                     playlist,
@@ -1189,12 +1203,13 @@ class EngineRunner:
                 or state.last_verified_at is None
                 or state.next_audit_at is None
                 or now < state.last_verified_at
-                or now >= state.next_audit_at
             ):
                 return _DestinationWorkPlan(needs_remote=True)
             if PendingSnapshotJournal(self.store).get(playlist.id) is not None:
                 self.destination_leases.revoke(playlist.id)
                 return _DestinationWorkPlan(needs_remote=True)
+            if now >= state.next_audit_at:
+                return _DestinationWorkPlan(needs_remote=True, audit_only=True)
             return _DestinationWorkPlan(
                 needs_remote=not self.destination_leases.allows(
                     playlist.id,
