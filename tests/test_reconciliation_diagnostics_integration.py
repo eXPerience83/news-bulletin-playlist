@@ -135,6 +135,7 @@ def test_live_shape_failure_is_safe_in_store_ui_and_zip(tmp_path: Path) -> None:
     assert playlist_event.details == {
         "desired_count": 80,
         "failure_class": "pagination_error",
+        "failure_reason": "playlist_pagination_truncated",
         "phase": "prewrite",
         "operation": "playlist_items",
         "offset": 50,
@@ -152,6 +153,7 @@ def test_live_shape_failure_is_safe_in_store_ui_and_zip(tmp_path: Path) -> None:
         filters=DiagnosticFilters(hours=24, limit=200),
     )
     assert b"failure_class=pagination_error" in page
+    assert b"failure_reason=playlist_pagination_truncated" in page
     assert b"phase=prewrite" in page
     assert b"operation=playlist_items" in page
     assert SECRET.encode() not in page
@@ -166,6 +168,7 @@ def test_live_shape_failure_is_safe_in_store_ui_and_zip(tmp_path: Path) -> None:
     with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
         combined = b"\n".join(archive.read(name) for name in archive.namelist())
     assert b'"failure_class":"pagination_error"' in combined
+    assert b'"failure_reason":"playlist_pagination_truncated"' in combined
     assert b'"operation":"playlist_items"' in combined
     assert b'"offset":50' in combined
     assert SECRET.encode() not in combined
@@ -255,6 +258,7 @@ def test_ambiguous_502_request_metrics_are_sanitized_in_store_ui_and_zip(
     assert event.details["operation"] == "replace_items"
     assert event.details["phase"] == "write"
     assert event.details["failure_class"] == "api_error"
+    assert event.details["failure_reason"] == "replace_items_api_error"
     assert event.details["write_outcome"] == "unknown"
     assert event.details["request_item_count"] == 41
     assert event.details["valid_uri_count"] == 41
