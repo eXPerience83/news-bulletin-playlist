@@ -9,7 +9,10 @@ on:
       - "src/news_bulletin_playlist/registry.py"
       - ".github/workflows/provider-watch.yml"
   schedule:
-    - cron: "17 */6 * * *"
+    # Private-development phase: run once daily to conserve GitHub Actions minutes.
+    # Reconsider restoring the previous 6-hour cadence (`17 */6 * * *`) when the
+    # repository is public again and provider monitoring becomes production-facing.
+    - cron: "17 5 * * *"
   workflow_dispatch:
 
 permissions:
