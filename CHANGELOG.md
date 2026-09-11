@@ -1,79 +1,72 @@
 # Changelog
 
-All notable product and runtime changes are recorded here. The project is still pre-release, so the
-current work remains under **Unreleased** until a stable release is cut.
+All notable product and runtime changes are recorded here. The project remains pre-1.0; unreleased
+work stays under **Unreleased**, while reviewed development milestones are recorded below.
 
 ## [Unreleased]
 
+No user-visible changes yet.
+
+## [0.1.0] - 2026-09-11
+
 ### Added
 
-- Managed per-playlist **maximum episode duration** in `/admin/`, persisted in
-  `/data/managed-state.json` and editable without reconnecting Spotify or rewriting playlist
-  metadata.
-- Initial multi-playlist catalog using the bundled covers:
-  - `Noticias en Español`;
-  - `INT · ES`;
-  - `INT · EN`;
-  - `INT · FR`;
-  - `INT · DE`;
-  - `INT · PL`.
-- Runtime source support for **ABC — Las Noticias de ABC**, **UN News Today**,
-  **RFI — Journal Monde**, **Deutschlandfunk — Die Nachrichten** and **RMF FM — Fakty**.
-- Generic deterministic `release_date_title` matching strategy for feeds whose titles do not expose a
-  trustworthy semantic edition timestamp: the engine matches exact normalized title + compatible
-  Spotify release date inside the configured show identity.
-- Source editorial-scope metadata and three-axis source classification:
-  **`ORIGIN · SCOPE · LANGUAGE`**, separating provider country from actual news coverage and language.
-- Admin source labels/table now expose country, scope and language. For example, CNN 5 Cosas is
-  represented as `US · INT · es-ES`, so its US origin is not confused with US-only editorial coverage.
-- Plain-text project attribution appended to Spotify playlist descriptions on metadata creation/sync:
-  `Proyecto / Project: https://github.com/eXPerience83/news-bulletin-playlist`.
-- Sanitized per-source/per-playlist duration histograms in diagnostics, plus explicit events for
-  accepted editions >=20 minutes and duration exclusions, to support the evidence review in #132.
-- Source-selection documentation that rejects predominantly long-form products even when individual
-  episodes fit below a playlist hard limit.
-- Runtime support for Reuters World News, ONU en minutos, N+ Univision 24-7 and DW Actualidad en
-  análisis. ONU's broad UN Spanish audio feed is filtered fail-closed to dated ONU-en-minutos
-  editions. CBC World Report remains verified research but is withheld from the runtime catalogue
-  because its official RSS did not meet the production provider-watch fetch contract.
-- Durable runtime-wide Spotify 429 backoff state with sanitized `Retry-After` diagnostics. The engine
-  keeps its ordinary RSS collection cadence while Spotify Web API activity is suppressed until the
-  persisted retry deadline expires, including across process/container restarts.
+- Authenticated managed-playlist administration backed by installation-owned managed state, with
+  built-in playlist/source catalog data shipped by the image.
+- Initial managed playlist templates for Spain/Spanish plus international news in Spanish, English,
+  French, German and Polish, with bundled Spotify cover assets.
+- Managed per-playlist maximum episode duration, persisted locally and editable without reconnecting
+  Spotify or forcing playlist metadata writes.
+- Runtime source support for SER, RNE, Onda Cero, ABC, CNN 5 Cosas, UN News Today, Reuters World
+  News, ONU en minutos, N+ Univision 24-7, DW Actualidad en análisis, RFI Journal Monde,
+  Deutschlandfunk Die Nachrichten and RMF FM Fakty.
+- Three-axis source classification (`ORIGIN · SCOPE · LANGUAGE`) so provider country, editorial scope
+  and spoken language/locale remain independent.
+- Sanitized structured diagnostics with bounded retention, authenticated filtering/export and
+  actionable reconciliation failure context.
+- Spotify Web API quota observability, durable destination-planner evidence and process-local
+  verification leases.
+- Snapshot-first periodic destination audits for settled managed playlists, allowing an eligible
+  audit to verify with one snapshot request and no item read or write when the attested snapshot is
+  unchanged.
 
 ### Changed
 
-- Current general/default episode ceiling increased from **8 minutes / 480 seconds** to
-  **30 minutes / 1800 seconds**. It remains configurable per managed playlist. The long-term default
-  will be selected from production duration evidence under #132.
-- The legacy schema-v1 YAML path now inherits the same shared 30-minute default when a duration-policy
-  object omits `default_max_seconds`; an explicit YAML value still overrides it.
-- `Noticias España` product naming becomes **Noticias en Español**, matching its existing cover and
-  reflecting that the playlist combines Spain sources with selected genuinely global Spanish news.
-- `Noticias en Español` defaults to SER, RNE, Onda Cero and ABC.
-- `INT · ES` starts with **CNN 5 Cosas** as a genuinely global Spanish source. Region-specific
-  products such as RFI Noticias de América remain research candidates rather than global defaults.
-- `INT · EN` uses concise **UN News Today** and **Reuters World News** instead of the predominantly
-  long-form BBC Global News Podcast candidate.
-- RFI Journal Monde, Deutschlandfunk and RMF Fakty seed the first FR/DE/PL playlist experiments while
-  source classification remains honest about `INT` versus `MIX` editorial scope.
-- Spain-origin sources carry `es-ES` language metadata where the Spain variant is known; CNN is also
-  explicitly `es-ES` by listening confirmation while remaining `US · INT` in origin/scope.
+- Playlist chronology and 48-hour eligibility prefer semantic bulletin `edition_at` over RSS
+  publication time, with `published_at` retained as the fallback and for source diagnostics.
+- General/default maximum episode duration increased from 8 minutes to a provisional configurable
+  30 minutes while production evidence is gathered for the long-term product policy.
+- `Noticias España` evolved into **Noticias en Español**, while source classification now keeps Spain,
+  Latin-American and international Spanish products conceptually separate.
+- Spotify work is now planner-driven and local-first: unchanged cycles can avoid OAuth refresh,
+  Spotify client construction and Web API calls when qualified process-local evidence allows it.
+- Periodic destination verification runs on the six-hour audit model, with snapshot-first verification
+  used only for clean `audit_only` work; dirty, unknown, pending or incompatible states still use the
+  conservative reconciler.
+- Playlist descriptions include plain-text project attribution when Spotify accepts it, without
+  making cosmetic metadata a provisioning dependency.
 
 ### Fixed
 
-- Avoided the old 8-minute default silently dropping useful ordinary editions such as the observed
-  **RNE 10:05 / 605-second** bulletin from production diagnostics on build `71788836ea1e`.
-- Spotify description attribution remains outside editable managed state, preventing duplicate project
-  URLs across repeated metadata updates while staying within the playlist description length limit.
-- Spotify HTTP 429 no longer causes fixed ten-minute Web API retry loops. A valid provider
-  `Retry-After` is honored (or a conservative 30-minute fallback is used), a later existing deadline
-  is never shortened, and the first 429 suppresses every subsequent Spotify request in that engine
-  cycle without weakening destination verification or reconnecting Spotify.
+- Spotify HTTP 429 now establishes a durable runtime-wide cooldown that survives restarts, honors
+  valid `Retry-After` values and suppresses further Spotify I/O without stopping ordinary RSS/local
+  work.
+- Persisted Spotify episode mappings are revalidated before playlist writes so stale `MATCHED` state
+  cannot authorize destructive reconciliation.
+- Successful writes whose exact items are already visible while Spotify still exposes an older
+  snapshot are kept as durable pending snapshot confirmations instead of triggering duplicate writes.
+- Partial/unavailable playlist observations, ambiguous writes and unexpected snapshot transitions stay
+  fail-closed and cannot create false strong attestations.
+- Periodic audit verification no longer performs unnecessary multi-page item reads when a settled
+  attested snapshot is unchanged.
+- Diagnostics preserve actionable failure reasons and keep retention/export limits meaningful instead
+  of collapsing useful provider/reconciliation detail.
 
 ### Validation / follow-up
 
-- #129 tracks configurable duration policy implementation.
-- #130 is the reviewed multi-playlist/dev-candidate PR.
-- #132 tracks production log review and the eventual default hard-duration decision.
-- #140 tracks the durable Spotify 429 / `Retry-After` recovery behavior.
-- #53 remains the living source research catalog; #44 remains the playlist rollout matrix.
+- Spotify quota optimization phases are tracked under #156; Phase 5 snapshot-first destination audits
+  merged in #171 and are awaiting natural production-audit confirmation before #161 is marked
+  production-validated.
+- #132 continues to own production duration evidence and the eventual concise-vs-long product
+  decision.
+- #53 remains the living source research catalog and #44 remains the playlist rollout matrix.
