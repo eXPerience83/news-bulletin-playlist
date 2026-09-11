@@ -9,6 +9,7 @@ def test_classifies_safe_spotify_api_and_transport_failures() -> None:
     api = classify_reconciliation_failure("Spotify API 503: request failed")
     assert api.details() == {
         "failure_class": "api_error",
+        "failure_reason": "unknown_reconciliation_error",
         "phase": "reconciliation",
         "http_status": 503,
         "verification_outcome": "failed",
@@ -17,6 +18,7 @@ def test_classifies_safe_spotify_api_and_transport_failures() -> None:
     transport = classify_reconciliation_failure("Spotify API request failed due to a network error")
     assert transport.details() == {
         "failure_class": "transport_error",
+        "failure_reason": "unknown_reconciliation_error",
         "phase": "reconciliation",
         "verification_outcome": "failed",
     }
@@ -28,6 +30,7 @@ def test_classifies_exact_spotify_operation_phase_without_provider_text() -> Non
     )
     assert prewrite.details() == {
         "failure_class": "api_error",
+        "failure_reason": "playlist_items_api_error",
         "phase": "prewrite",
         "operation": "playlist_items",
         "http_status": 503,
@@ -40,6 +43,7 @@ def test_classifies_exact_spotify_operation_phase_without_provider_text() -> Non
     )
     assert write.details() == {
         "failure_class": "transport_error",
+        "failure_reason": "replace_items_transport_error",
         "phase": "write",
         "operation": "replace_items",
         "verification_outcome": "failed",
@@ -51,6 +55,7 @@ def test_classifies_exact_spotify_operation_phase_without_provider_text() -> Non
     )
     assert snapshot.details() == {
         "failure_class": "api_error",
+        "failure_reason": "snapshot_api_error",
         "phase": "readback",
         "operation": "snapshot",
         "http_status": 502,
@@ -66,6 +71,7 @@ def test_classifies_pagination_context_without_retaining_next_url() -> None:
 
     assert diagnostic.details() == {
         "failure_class": "pagination_error",
+        "failure_reason": "playlist_pagination_truncated",
         "phase": "prewrite",
         "operation": "playlist_items",
         "offset": 50,
@@ -84,6 +90,7 @@ def test_classifies_readback_mismatch_and_unavailable_media() -> None:
     )
     assert mismatch.details() == {
         "failure_class": "verification_mismatch",
+        "failure_reason": "verification_mismatch",
         "phase": "readback",
         "operation": "playlist_items",
         "returned_count": 73,
@@ -96,6 +103,7 @@ def test_classifies_readback_mismatch_and_unavailable_media() -> None:
     )
     assert unavailable.details() == {
         "failure_class": "unavailable_media",
+        "failure_reason": "unavailable_media",
         "phase": "readback",
         "operation": "playlist_items",
         "offset": 50,
@@ -110,6 +118,7 @@ def test_unknown_error_collapses_to_generic_classification_without_secret() -> N
 
     assert diagnostic.details() == {
         "failure_class": "reconciliation_error",
+        "failure_reason": "unknown_reconciliation_error",
         "phase": "reconciliation",
         "verification_outcome": "failed",
     }
