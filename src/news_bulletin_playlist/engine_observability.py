@@ -98,6 +98,34 @@ class InstrumentedEngineCycleRunner:
                     "edition_count": source.edition_count,
                     "matched_count": source.matched_count,
                     "phase": phase,
+                    "matching_work_count": source.matching_diagnostics.matching_work_count,
+                    "matching_reason_new_match_count": (
+                        source.matching_diagnostics.matching_reason_new_match_count
+                    ),
+                    "matching_reason_input_changed_count": (
+                        source.matching_diagnostics.matching_reason_input_changed_count
+                    ),
+                    "matching_reason_retry_due_count": (
+                        source.matching_diagnostics.matching_reason_retry_due_count
+                    ),
+                    "matching_reason_evidence_recovery_count": (
+                        source.matching_diagnostics.matching_reason_evidence_recovery_count
+                    ),
+                    "matching_reason_missing_evidence_count": (
+                        source.matching_diagnostics.matching_reason_missing_evidence_count
+                    ),
+                    "unresolved_relevant_count": (
+                        source.matching_diagnostics.unresolved_relevant_count
+                    ),
+                    "catalogue_audit_due": source.matching_diagnostics.catalogue_audit_due,
+                    "matching_plan_conservative": (
+                        source.matching_diagnostics.matching_plan_conservative
+                    ),
+                    "catalogue_requested": source.matching_diagnostics.catalogue_requested,
+                    "catalogue_inspected": source.matching_diagnostics.catalogue_inspected,
+                    "catalogue_request_count": (
+                        source.matching_diagnostics.catalogue_request_count
+                    ),
                 },
             )
 

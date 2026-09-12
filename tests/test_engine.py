@@ -1519,3 +1519,458 @@ def test_missing_spotify_duration_preserves_existing_destination_without_write(
     assert spotify.items["destination-first"] == [existing_uri]
     assert spotify.playlist_reads == []
     assert spotify.replacements == []
+
+
+class _EmptyCatalogueSpotify(_Spotify):
+    def show_episodes(
+        self,
+        show_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        assert show_id == "ser-show"
+        self.show_calls += 1
+        return catalogue_page([], offset=offset, limit=limit)
+
+
+class _FailingCatalogueSpotify(_Spotify):
+    def show_episodes(
+        self,
+        show_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        assert show_id == "ser-show"
+        self.show_calls += 1
+        raise SpotifyTransportError("catalogue failure sentinel")
+
+
+class _TwoPageSpotify(_Spotify):
+    def show_episodes(
+        self,
+        show_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        assert show_id == "ser-show"
+        self.show_calls += 1
+        items = [
+            {
+                "uri": SER_URI,
+                "name": SER_TITLE,
+                "release_date": "2026-08-30",
+                "release_date_precision": "day",
+                "duration_ms": 60_000,
+            }
+        ]
+        items.extend(
+            {
+                "uri": f"spotify:episode:{index:022d}",
+                "name": f"Other {index}",
+                "release_date": "2026-08-30",
+                "release_date_precision": "day",
+                "duration_ms": 60_000,
+            }
+            for index in range(2, 52)
+        )
+        page_items = items[offset : offset + limit]
+        next_url = (
+            "https://api.spotify.test/catalogue?offset=50" if offset + limit < len(items) else None
+        )
+        return catalogue_page(
+            page_items,
+            offset=offset,
+            limit=limit,
+            next_url=next_url,
+            total=len(items),
+        )
+
+
+def _rss_two() -> bytes:
+    return (
+        "<rss><channel>"
+        "<item><guid>ser-1</guid>"
+        f"<title>{SER_TITLE}</title>"
+        "<pubDate>Sun, 30 Aug 2026 09:05:00 +0000</pubDate></item>"
+        "<item><guid>ser-2</guid>"
+        "<title>Las noticias de la SER, 10:00 (30/08/2026)</title>"
+        "<pubDate>Sun, 30 Aug 2026 08:05:00 +0000</pubDate></item>"
+        "</channel></rss>"
+    ).encode()
+
+
+def _rss_changed() -> bytes:
+    return (
+        b"<rss><channel><item>"
+        b"<guid>ser-1</guid>"
+        b"<title>Las noticias de la SER, 10:30 (30/08/2026)</title>"
+        b"<pubDate>Sun, 30 Aug 2026 09:05:00 +0000</pubDate>"
+        b"</item></channel></rss>"
+    )
+
+
+def test_source_matching_diagnostics_stable_local_only(tmp_path: Path) -> None:
+    auth = _Auth()
+    spotify = _Spotify()
+    current = NOW
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    first = runner.run_cycle()
+    first_auth_calls = auth.calls
+    first_show_calls = spotify.show_calls
+    assert first.ok
+
+    current = NOW + timedelta(minutes=10)
+    second = runner.run_cycle()
+
+    assert second.ok
+    assert second.provider_session_created is False
+    assert auth.calls == first_auth_calls
+    assert spotify.show_calls == first_show_calls
+    diagnostic = second.sources[0].matching_diagnostics
+    assert diagnostic.matching_work_count == 0
+    assert diagnostic.catalogue_audit_due is False
+    assert diagnostic.catalogue_requested is False
+    assert diagnostic.catalogue_inspected is False
+    assert diagnostic.catalogue_request_count == 0
+
+
+def test_source_matching_diagnostics_one_retry_due(tmp_path: Path) -> None:
+    spotify = _EmptyCatalogueSpotify()
+    current = NOW
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    calls = spotify.show_calls
+    current = NOW + timedelta(minutes=15)
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_work_count == 1
+    assert diagnostic.matching_reason_retry_due_count == 1
+    assert diagnostic.unresolved_relevant_count == 1
+    assert diagnostic.catalogue_audit_due is False
+    assert diagnostic.catalogue_requested is True
+    assert diagnostic.catalogue_inspected is True
+    assert diagnostic.catalogue_request_count == 1
+    assert spotify.show_calls == calls + 1
+
+
+def test_source_matching_diagnostics_two_retries_share_one_catalogue(tmp_path: Path) -> None:
+    spotify = _EmptyCatalogueSpotify()
+    current = NOW
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss_two(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    calls = spotify.show_calls
+    current = NOW + timedelta(minutes=15)
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_work_count == 2
+    assert diagnostic.matching_reason_retry_due_count == 2
+    assert diagnostic.unresolved_relevant_count == 2
+    assert diagnostic.catalogue_request_count == 1
+    assert spotify.show_calls == calls + 1
+
+
+def test_source_matching_diagnostics_new_and_retry_share_catalogue(tmp_path: Path) -> None:
+    spotify = _EmptyCatalogueSpotify()
+    current = NOW
+    two = False
+
+    def fetcher(_url: str) -> bytes:
+        return _rss_two() if two else _rss()
+
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=fetcher,
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    calls = spotify.show_calls
+    two = True
+    current = NOW + timedelta(minutes=15)
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_work_count == 2
+    assert diagnostic.matching_reason_new_match_count == 1
+    assert diagnostic.matching_reason_retry_due_count == 1
+    assert diagnostic.catalogue_request_count == 1
+    assert spotify.show_calls == calls + 1
+
+
+def test_source_matching_diagnostics_input_changed(tmp_path: Path) -> None:
+    spotify = _EmptyCatalogueSpotify()
+    current = NOW
+    changed = False
+
+    def fetcher(_url: str) -> bytes:
+        return _rss_changed() if changed else _rss()
+
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=fetcher,
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    calls = spotify.show_calls
+    changed = True
+    current = NOW + timedelta(minutes=5)
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_work_count == 1
+    assert diagnostic.matching_reason_input_changed_count == 1
+    assert diagnostic.matching_reason_retry_due_count == 0
+    assert diagnostic.catalogue_request_count == 1
+    assert spotify.show_calls == calls + 1
+
+
+def test_source_matching_diagnostics_catalogue_audit_only(tmp_path: Path) -> None:
+    spotify = _Spotify()
+    current = NOW
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    calls = spotify.show_calls
+    current = NOW + timedelta(hours=6)
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_work_count == 0
+    assert diagnostic.catalogue_audit_due is True
+    assert diagnostic.catalogue_requested is True
+    assert diagnostic.catalogue_inspected is True
+    assert diagnostic.catalogue_request_count == 1
+    assert spotify.show_calls == calls + 1
+
+
+def test_source_matching_diagnostics_two_page_catalogue(tmp_path: Path) -> None:
+    spotify = _TwoPageSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_reason_new_match_count == 1
+    assert diagnostic.catalogue_requested is True
+    assert diagnostic.catalogue_inspected is True
+    assert diagnostic.catalogue_request_count == 2
+    assert spotify.show_calls == 2
+
+
+def test_source_matching_diagnostics_active_cooldown_preserves_plan_without_calls(
+    tmp_path: Path,
+) -> None:
+    auth = _Auth()
+    spotify = _EmptyCatalogueSpotify()
+    current = NOW
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    show_calls = spotify.show_calls
+    auth_calls = auth.calls
+    current = NOW + timedelta(minutes=15)
+    runner.rate_limit_journal.activate(observed_at=current, retry_after_seconds=600)
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_reason_retry_due_count == 1
+    assert diagnostic.catalogue_requested is False
+    assert diagnostic.catalogue_inspected is False
+    assert diagnostic.catalogue_request_count == 0
+    assert spotify.show_calls == show_calls
+    assert auth.calls == auth_calls
+    assert result.provider_session_created is False
+
+
+def test_source_matching_diagnostics_catalogue_error_counts_real_delegation(
+    tmp_path: Path,
+) -> None:
+    spotify = _FailingCatalogueSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_reason_new_match_count == 1
+    assert diagnostic.catalogue_requested is True
+    assert diagnostic.catalogue_inspected is False
+    assert diagnostic.catalogue_request_count == 1
+    assert spotify.show_calls == 1
+    assert result.sources[0].matching_ok is False
+
+
+def test_source_matching_diagnostics_include_prewrite_catalogue_without_double_count(
+    tmp_path: Path,
+) -> None:
+    spotify = _Spotify()
+    current = NOW
+    runner = EngineRunner(
+        _config("first", "second"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    calls = spotify.show_calls
+    current = NOW + timedelta(minutes=10)
+    spotify.items["destination-first"] = []
+    spotify.items["destination-second"] = []
+    runner.planner_journal.begin_destination_verification("first")
+    runner.planner_journal.begin_destination_verification("second")
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_work_count == 0
+    assert diagnostic.catalogue_audit_due is False
+    assert diagnostic.catalogue_requested is True
+    assert diagnostic.catalogue_inspected is True
+    assert diagnostic.catalogue_request_count == 1
+    assert spotify.show_calls == calls + 1
+
+
+class _FailingSecondPageSpotify(_TwoPageSpotify):
+    def show_episodes(
+        self,
+        show_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if offset == 50:
+            assert show_id == "ser-show"
+            self.show_calls += 1
+            raise SpotifyTransportError("second catalogue page failure sentinel")
+        return super().show_episodes(show_id, limit=limit, offset=offset)
+
+
+def test_source_matching_diagnostics_second_page_failure_counts_both_delegations(
+    tmp_path: Path,
+) -> None:
+    spotify = _FailingSecondPageSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert result.sources[0].matching_ok is False
+    assert diagnostic.matching_reason_new_match_count == 1
+    assert diagnostic.catalogue_requested is True
+    assert diagnostic.catalogue_inspected is False
+    assert diagnostic.catalogue_request_count == 2
+    assert spotify.show_calls == 2
+
+
+def test_source_matching_diagnostics_prewrite_survive_fatal_persistence_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spotify = _Spotify()
+    store = _store(tmp_path)
+    current = NOW
+    runner = EngineRunner(
+        _config("first"),
+        store,
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    prior_show_calls = spotify.show_calls
+
+    current = NOW + timedelta(minutes=10)
+    spotify.items["destination-first"] = []
+    runner.planner_journal.begin_destination_verification("first")
+    original_record_playlist_run = store.record_playlist_run
+
+    def fail_after_prewrite(*args: Any, **kwargs: Any) -> None:
+        if spotify.show_calls > prior_show_calls:
+            raise PersistenceError("post-prewrite persistence failure")
+        original_record_playlist_run(*args, **kwargs)
+
+    monkeypatch.setattr(store, "record_playlist_run", fail_after_prewrite)
+
+    result = runner.run_cycle()
+
+    diagnostic = result.sources[0].matching_diagnostics
+    assert result.ok is False
+    assert result.error == "post-prewrite persistence failure"
+    assert diagnostic.matching_work_count == 0
+    assert diagnostic.catalogue_audit_due is False
+    assert diagnostic.catalogue_requested is True
+    assert diagnostic.catalogue_inspected is True
+    assert diagnostic.catalogue_request_count == 1
+    assert spotify.show_calls == prior_show_calls + 1

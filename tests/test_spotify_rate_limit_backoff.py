@@ -615,3 +615,24 @@ def test_expired_backoff_emits_one_recovery_event(tmp_path: Path) -> None:
         "backoff_state": "expired",
         "write_decision": "retry",
     }
+
+
+def test_show_episode_delegation_counter_excludes_locally_suppressed_calls(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    delegate = _Spotify(fail_show="one-show", retry_after=60)
+    client = SpotifyRateLimitGuardClient(
+        delegate,
+        SpotifyRateLimitJournal(store),
+        clock=lambda: NOW,
+    )
+
+    assert client.show_episodes_delegated_count == 0
+    with pytest.raises(SpotifyApiError, match="429"):
+        client.show_episodes("one-show")
+    assert client.show_episodes_delegated_count == 1
+    with pytest.raises(SpotifyRateLimitSuppressed):
+        client.show_episodes("two-show")
+    assert client.show_episodes_delegated_count == 1
+    assert delegate.show_calls == ["one-show"]
