@@ -12,6 +12,7 @@ from news_bulletin_playlist.spotify.matcher import SpotifyCatalogueResult, match
 from news_bulletin_playlist.spotify_planner import (
     catalogue_context_fingerprint,
     matching_input_fingerprint,
+    unresolved_retry_interval,
 )
 
 _AUTH_CONTEXT = "a" * 64
@@ -77,6 +78,26 @@ def _persist_unresolved(
     )
 
 
+def _evaluate(
+    runner: EngineRunner,
+    editions: tuple[CanonicalEdition, ...],
+    *,
+    now: datetime,
+) -> None:
+    plan = runner._source_matching_plan(_source(), editions, now)
+    result = match_source_editions(
+        _Spotify(),
+        runner.store,
+        _source(),
+        editions,
+        now=now,
+        catalogue=SpotifyCatalogueResult((), 1, True),
+        evaluation_intents=plan.evaluation_intents,
+        catalogue_request_count=1,
+    )
+    runner._observe_matching_result(_source(), result, now)
+
+
 def test_due_retry_coalesces_non_due_unresolved_without_new_trigger(tmp_path: Path) -> None:
     runner = _runner(tmp_path)
     due = _edition("due", minutes_old=30)
@@ -138,7 +159,7 @@ def test_clock_rollback_unresolved_is_not_opportunistically_coalesced(tmp_path: 
     assert plan.diagnostics.matching_reason_coalesced_unresolved_count == 0
 
 
-def test_coalesced_attempt_preserves_age_and_never_advances_deadline(tmp_path: Path) -> None:
+def test_coalesced_attempt_preserves_age_and_reschedules_from_actual_attempt(tmp_path: Path) -> None:
     runner = _runner(tmp_path)
     due = _edition("due", minutes_old=30)
     non_due = _edition("non-due", minutes_old=5)
@@ -148,22 +169,49 @@ def test_coalesced_attempt_preserves_age_and_never_advances_deadline(tmp_path: P
         non_due,
         attempted_at=NOW - timedelta(minutes=5),
     )
-    plan = runner._source_matching_plan(_source(), (due, non_due), NOW)
 
-    result = match_source_editions(
-        _Spotify(),
-        runner.store,
-        _source(),
-        (due, non_due),
-        now=NOW,
-        catalogue=SpotifyCatalogueResult((), 1, True),
-        evaluation_intents=plan.evaluation_intents,
-        catalogue_request_count=1,
-    )
-    runner._observe_matching_result(_source(), result, NOW)
+    _evaluate(runner, (due, non_due), now=NOW)
     after = runner.planner_journal.get_unresolved(str(non_due.source_id), non_due.source_native_id)
 
     assert after is not None
     assert after.first_unresolved_at == before.first_unresolved_at
     assert after.last_attempt_at == NOW
+    assert after.next_retry_at == NOW + unresolved_retry_interval(
+        NOW - before.first_unresolved_at
+    )
     assert after.next_retry_at >= before.next_retry_at
+
+
+def test_repeated_coalesced_attempts_align_deadline_to_latest_real_check(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    first_trigger = _edition("first-trigger", minutes_old=30)
+    non_due = _edition("non-due", minutes_old=5)
+    _persist_unresolved(runner, first_trigger, attempted_at=NOW - timedelta(minutes=20))
+    before = _persist_unresolved(
+        runner,
+        non_due,
+        attempted_at=NOW - timedelta(minutes=5),
+    )
+
+    _evaluate(runner, (first_trigger, non_due), now=NOW)
+    first = runner.planner_journal.get_unresolved(str(non_due.source_id), non_due.source_native_id)
+    assert first is not None
+
+    second_now = NOW + timedelta(minutes=10)
+    second_trigger = CanonicalEdition(
+        source_id=_source().id,
+        source_native_id="second-trigger",
+        title="unresolved second-trigger",
+        published_at=NOW - timedelta(minutes=30),
+        edition_at=NOW - timedelta(minutes=30),
+    )
+    _evaluate(runner, (second_trigger, non_due), now=second_now)
+    second = runner.planner_journal.get_unresolved(str(non_due.source_id), non_due.source_native_id)
+
+    assert second is not None
+    assert second.first_unresolved_at == before.first_unresolved_at
+    assert second.last_attempt_at == second_now
+    assert second.next_retry_at == second_now + unresolved_retry_interval(
+        second_now - before.first_unresolved_at
+    )
+    assert second.next_retry_at > first.next_retry_at
