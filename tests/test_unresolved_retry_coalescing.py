@@ -178,9 +178,7 @@ def test_coalesced_attempt_preserves_age_and_reschedules_from_actual_attempt(
     assert after is not None
     assert after.first_unresolved_at == before.first_unresolved_at
     assert after.last_attempt_at == NOW
-    assert after.next_retry_at == NOW + unresolved_retry_interval(
-        NOW - before.first_unresolved_at
-    )
+    assert after.next_retry_at == NOW + unresolved_retry_interval(NOW - before.first_unresolved_at)
     assert after.next_retry_at >= before.next_retry_at
 
 
