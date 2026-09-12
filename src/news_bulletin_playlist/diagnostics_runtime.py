@@ -400,7 +400,7 @@ def _safe_source_rows(cycle: EngineCycleResult | None) -> str:
             f"<td><code>{html.escape(str(source.source_id))}</code></td>"
             f"<td>{result}</td>"
             f"<td>{_format_optional_time(source.last_success_at)}</td>"
-            f"<td>{source.edition_count} fetched / {source.matched_count} matched</td>"
+            f"<td>{source.edition_count} canonical / {source.matched_count} matched</td>"
             "</tr>"
         )
     return "".join(rows)

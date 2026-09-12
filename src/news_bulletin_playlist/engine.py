@@ -14,6 +14,7 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.collection import (
+    CollectionDiagnostics,
     FeedFetcher,
     collect_required_sources,
     fetch_feed,
@@ -119,6 +120,7 @@ class EngineCycleAlreadyRunning(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class SourceMatchingDiagnostics:
     matching_work_count: int = 0
+    matching_evaluated_count: int = 0
     matching_reason_new_match_count: int = 0
     matching_reason_input_changed_count: int = 0
     matching_reason_retry_due_count: int = 0
@@ -304,6 +306,7 @@ class SourceCycleOutcome:
     matching_diagnostics: SourceMatchingDiagnostics = field(
         default_factory=SourceMatchingDiagnostics
     )
+    collection_diagnostics: CollectionDiagnostics = field(default_factory=CollectionDiagnostics)
 
     @property
     def ok(self) -> bool:
@@ -471,6 +474,7 @@ class EngineRunner:
         source_outcomes: dict[SourceId, SourceCycleOutcome] = {}
         playlist_outcomes: list[PlaylistCycleOutcome] = []
         unsafe_source_ids: set[SourceId] = set()
+        matching_evaluated_counts: dict[SourceId, int] = {}
 
         try:
             collection = collect_required_sources(self.config, fetcher=self.fetcher)
@@ -502,6 +506,7 @@ class EngineRunner:
                         None if source_state is None else source_state.last_success_at
                     ),
                     error=result.error,
+                    collection_diagnostics=result.collection_diagnostics,
                 )
         except PersistenceError as exc:
             return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
@@ -594,6 +599,11 @@ class EngineRunner:
                         evaluation_intents=plan.evaluation_intents,
                         validate_cached=catalogue is not None,
                         catalogue_request_count=catalogue_request_count,
+                        on_fresh_evaluation=partial(
+                            self._record_matching_evaluation,
+                            matching_evaluated_counts,
+                            source.id,
+                        ),
                     )
                     matched_count = sum(
                         outcome.spotify_episode_uri is not None for outcome in match_result.outcomes
@@ -632,15 +642,27 @@ class EngineRunner:
                         ),
                     )
             except PersistenceError as exc:
+                self._apply_source_catalogue_diagnostics(
+                    source_outcomes,
+                    source_plans,
+                    catalogue_coordinator,
+                    matching_evaluated_counts,
+                )
                 return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
 
         self._apply_source_catalogue_diagnostics(
-            source_outcomes, source_plans, catalogue_coordinator
+            source_outcomes,
+            source_plans,
+            catalogue_coordinator,
+            matching_evaluated_counts,
         )
 
         def fatal_playlist_result(error: PersistenceError) -> EngineCycleResult:
             self._apply_source_catalogue_diagnostics(
-                source_outcomes, source_plans, catalogue_coordinator
+                source_outcomes,
+                source_plans,
+                catalogue_coordinator,
+                matching_evaluated_counts,
             )
             return self._fatal_result(started_at, source_outcomes, playlist_outcomes, error)
 
@@ -881,6 +903,7 @@ class EngineRunner:
                             self._prepare_playlist_write,
                             playlist,
                             catalogue_coordinator,
+                            matching_evaluated_counts,
                             playlist_started_at,
                         ),
                         prewrite_iteration_limit=(
@@ -1016,7 +1039,10 @@ class EngineRunner:
                 return fatal_playlist_result(exc)
 
         self._apply_source_catalogue_diagnostics(
-            source_outcomes, source_plans, catalogue_coordinator
+            source_outcomes,
+            source_plans,
+            catalogue_coordinator,
+            matching_evaluated_counts,
         )
         finished_at = _as_utc(self.clock())
         try:
@@ -1550,10 +1576,19 @@ class EngineRunner:
                 source_outcomes[source_id] = replace(current, matching_diagnostics=plan.diagnostics)
 
     @staticmethod
+    def _record_matching_evaluation(
+        counts: dict[SourceId, int],
+        source_id: SourceId,
+        _outcome: Any,
+    ) -> None:
+        counts[source_id] = counts.get(source_id, 0) + 1
+
+    @staticmethod
     def _apply_source_catalogue_diagnostics(
         source_outcomes: dict[SourceId, SourceCycleOutcome],
         source_plans: Mapping[SourceId, _SourceMatchingPlan],
         coordinator: _CycleCatalogueCoordinator,
+        matching_evaluated_counts: Mapping[SourceId, int],
     ) -> None:
         for source_id, plan in source_plans.items():
             current = source_outcomes.get(source_id)
@@ -1564,6 +1599,7 @@ class EngineRunner:
                 current,
                 matching_diagnostics=replace(
                     plan.diagnostics,
+                    matching_evaluated_count=matching_evaluated_counts.get(source_id, 0),
                     catalogue_requested=observation.requested,
                     catalogue_inspected=observation.inspected,
                     catalogue_request_count=observation.request_count,
@@ -1696,6 +1732,7 @@ class EngineRunner:
         self,
         playlist: PlaylistDefinition,
         catalogue_coordinator: _CycleCatalogueCoordinator,
+        matching_evaluated_counts: dict[SourceId, int],
         observed_at: datetime,
         desired: DesiredPlaylistState,
     ) -> DesiredPlaylistState:
@@ -1754,6 +1791,11 @@ class EngineRunner:
                     },
                     validate_cached=True,
                     catalogue_request_count=request_count,
+                    on_fresh_evaluation=partial(
+                        self._record_matching_evaluation,
+                        matching_evaluated_counts,
+                        source.id,
+                    ),
                 )
                 self._observe_matching_result(source, result, observed_at)
 

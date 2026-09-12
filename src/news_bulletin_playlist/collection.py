@@ -6,9 +6,10 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import (
@@ -22,6 +23,15 @@ from news_bulletin_playlist.providers.release_date_title import RELEASE_DATE_TIT
 from news_bulletin_playlist.registry import get_collection_filter, get_title_parser
 
 FeedFetcher = Callable[[str], bytes]
+type CollectionFailureReason = Literal[
+    "missing_endpoint",
+    "fetch_error",
+    "xml_parse_error",
+    "no_rss_items",
+    "no_canonical_editions",
+    "configuration_error",
+    "normalization_error",
+]
 
 _USER_AGENT = (
     "news-bulletin-playlist/0.0.1 (+https://github.com/eXPerience83/news-bulletin-playlist)"
@@ -31,12 +41,29 @@ _GZIP_MAGIC = b"\x1f\x8b"
 
 
 @dataclass(frozen=True, slots=True)
+class CollectionDiagnostics:
+    """Bounded, provider-value-free observations from one collection attempt."""
+
+    rss_item_count: int | None = None
+    rss_missing_required_fields_count: int | None = None
+    rss_filter_rejected_count: int | None = None
+    rss_duplicate_native_id_count: int | None = None
+    rss_invalid_published_at_count: int | None = None
+    rss_title_parser_rejected_count: int | None = None
+    rss_native_id_guid_count: int | None = None
+    rss_native_id_enclosure_count: int | None = None
+    rss_native_id_link_count: int | None = None
+    failure_reason: CollectionFailureReason | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCollectionResult:
     """Outcome for one source during a shared collection cycle."""
 
     source_id: SourceId
     editions: tuple[CanonicalEdition, ...] = ()
     error: str | None = None
+    collection_diagnostics: CollectionDiagnostics = field(default_factory=CollectionDiagnostics)
 
     @property
     def ok(self) -> bool:
@@ -52,6 +79,13 @@ class CollectionCycleResult:
     @property
     def editions(self) -> tuple[CanonicalEdition, ...]:
         return tuple(edition for result in self.sources for edition in result.editions)
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizedSource:
+    editions: tuple[CanonicalEdition, ...]
+    diagnostics: CollectionDiagnostics
+    error: Exception | None = None
 
 
 def required_sources(config: EngineConfig) -> tuple[SourceDefinition, ...]:
@@ -121,11 +155,14 @@ def collect_required_sources(
 
 def _collect_source(source: SourceDefinition, fetcher: FeedFetcher) -> SourceCollectionResult:
     if source.endpoint_url is None:
-        return SourceCollectionResult(source.id, error="required source has no endpoint_url")
+        return SourceCollectionResult(
+            source.id,
+            error="required source has no endpoint_url",
+            collection_diagnostics=CollectionDiagnostics(failure_reason="missing_endpoint"),
+        )
 
     try:
         payload = fetcher(source.endpoint_url)
-        editions = normalize_rss_source(source, payload)
     except (
         OSError,
         TimeoutError,
@@ -135,8 +172,47 @@ def _collect_source(source: SourceDefinition, fetcher: FeedFetcher) -> SourceCol
         KeyError,
     ) as exc:
         detail = str(exc).strip() or type(exc).__name__
-        return SourceCollectionResult(source.id, error=detail)
-    return SourceCollectionResult(source.id, editions=editions)
+        return SourceCollectionResult(
+            source.id,
+            error=detail,
+            collection_diagnostics=CollectionDiagnostics(failure_reason="fetch_error"),
+        )
+
+    try:
+        normalized = _normalize_rss_source_observed(source, payload)
+    except ET.ParseError as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        return SourceCollectionResult(
+            source.id,
+            error=detail,
+            collection_diagnostics=CollectionDiagnostics(failure_reason="xml_parse_error"),
+        )
+    except (
+        OSError,
+        TimeoutError,
+        urllib.error.URLError,
+        ValueError,
+        KeyError,
+    ) as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        return SourceCollectionResult(
+            source.id,
+            error=detail,
+            collection_diagnostics=CollectionDiagnostics(failure_reason="normalization_error"),
+        )
+
+    if normalized.error is not None:
+        detail = str(normalized.error).strip() or type(normalized.error).__name__
+        return SourceCollectionResult(
+            source.id,
+            error=detail,
+            collection_diagnostics=normalized.diagnostics,
+        )
+    return SourceCollectionResult(
+        source.id,
+        editions=normalized.editions,
+        collection_diagnostics=normalized.diagnostics,
+    )
 
 
 def normalize_rss_source(
@@ -145,79 +221,203 @@ def normalize_rss_source(
 ) -> tuple[CanonicalEdition, ...]:
     """Normalize one RSS payload into source-native canonical bulletin editions."""
 
+    normalized = _normalize_rss_source_observed(source, payload)
+    if normalized.error is not None:
+        raise normalized.error
+    return normalized.editions
+
+
+def _normalize_rss_source_observed(
+    source: SourceDefinition,
+    payload: bytes,
+) -> _NormalizedSource:
     root = ET.fromstring(payload)
     items = [element for element in root.iter() if _local_name(element.tag) == "item"]
+    item_count = len(items)
     if not items:
-        raise ValueError("feed contained no RSS items")
+        error = ValueError("feed contained no RSS items")
+        return _NormalizedSource(
+            (),
+            CollectionDiagnostics(
+                rss_item_count=0,
+                rss_missing_required_fields_count=0,
+                rss_filter_rejected_count=0,
+                rss_duplicate_native_id_count=0,
+                rss_invalid_published_at_count=0,
+                rss_title_parser_rejected_count=0,
+                rss_native_id_guid_count=0,
+                rss_native_id_enclosure_count=0,
+                rss_native_id_link_count=0,
+                failure_reason="no_rss_items",
+            ),
+            error,
+        )
 
     parser_id = str(source.parser_id)
-    parser = None if parser_id == RELEASE_DATE_TITLE_PARSER_ID else get_title_parser(parser_id)
-    collection_filter = (
-        None
-        if source.collection_filter_id is None
-        else get_collection_filter(source.collection_filter_id)
-    )
+    try:
+        parser = None if parser_id == RELEASE_DATE_TITLE_PARSER_ID else get_title_parser(parser_id)
+        collection_filter = (
+            None
+            if source.collection_filter_id is None
+            else get_collection_filter(source.collection_filter_id)
+        )
+    except KeyError as exc:
+        return _NormalizedSource(
+            (),
+            CollectionDiagnostics(
+                rss_item_count=item_count,
+                failure_reason="configuration_error",
+            ),
+            exc,
+        )
+    except (OSError, TimeoutError, urllib.error.URLError, ET.ParseError, ValueError) as exc:
+        return _NormalizedSource(
+            (),
+            CollectionDiagnostics(
+                rss_item_count=item_count,
+                failure_reason="normalization_error",
+            ),
+            exc,
+        )
+
     editions: list[CanonicalEdition] = []
     seen_native_ids: set[str] = set()
+    missing_required_fields_count = 0
+    filter_rejected_count = 0
+    duplicate_native_id_count = 0
+    invalid_published_at_count = 0
+    title_parser_rejected_count = 0
+    native_id_guid_count = 0
+    native_id_enclosure_count = 0
+    native_id_link_count = 0
 
-    for item in items:
-        title = _child_text(item, "title")
-        source_native_id = _source_native_id(item)
-        published_text = _first_child_text(item, ("pubdate", "published", "date"))
-        if title is None or source_native_id is None or published_text is None:
-            continue
-        if collection_filter is not None and not collection_filter.accepts(title):
-            continue
-        if source_native_id in seen_native_ids:
-            continue
+    try:
+        for item in items:
+            title = _child_text(item, "title")
+            source_native_id, native_id_origin = _source_native_id_with_origin(item)
+            if native_id_origin == "guid":
+                native_id_guid_count += 1
+            elif native_id_origin == "enclosure":
+                native_id_enclosure_count += 1
+            elif native_id_origin == "link":
+                native_id_link_count += 1
 
-        try:
-            published_at = _parse_published_at(published_text, source.timezone)
-        except ValueError:
-            continue
-
-        edition_at = None
-        if parser is not None:
-            parsed = parser.parse(title)
-            if parsed is None:
+            published_text = _first_child_text(item, ("pubdate", "published", "date"))
+            if title is None or source_native_id is None or published_text is None:
+                missing_required_fields_count += 1
                 continue
-            edition_at = _apply_source_timezone(parsed, source.timezone)
+            if collection_filter is not None and not collection_filter.accepts(title):
+                filter_rejected_count += 1
+                continue
+            if source_native_id in seen_native_ids:
+                duplicate_native_id_count += 1
+                continue
 
-        editions.append(
-            CanonicalEdition(
-                source_id=source.id,
-                source_native_id=source_native_id,
-                title=title,
-                published_at=published_at,
-                edition_at=edition_at,
-                duration_seconds=_duration_seconds(item),
+            try:
+                published_at = _parse_published_at(published_text, source.timezone)
+            except ValueError:
+                invalid_published_at_count += 1
+                continue
+
+            edition_at = None
+            if parser is not None:
+                parsed = parser.parse(title)
+                if parsed is None:
+                    title_parser_rejected_count += 1
+                    continue
+                edition_at = _apply_source_timezone(parsed, source.timezone)
+
+            editions.append(
+                CanonicalEdition(
+                    source_id=source.id,
+                    source_native_id=source_native_id,
+                    title=title,
+                    published_at=published_at,
+                    edition_at=edition_at,
+                    duration_seconds=_duration_seconds(item),
+                )
             )
+            seen_native_ids.add(source_native_id)
+    except (
+        OSError,
+        TimeoutError,
+        urllib.error.URLError,
+        ET.ParseError,
+        ValueError,
+        KeyError,
+    ) as exc:
+        return _NormalizedSource(
+            (),
+            CollectionDiagnostics(
+                rss_item_count=item_count,
+                rss_missing_required_fields_count=missing_required_fields_count,
+                rss_filter_rejected_count=filter_rejected_count,
+                rss_duplicate_native_id_count=duplicate_native_id_count,
+                rss_invalid_published_at_count=invalid_published_at_count,
+                rss_title_parser_rejected_count=title_parser_rejected_count,
+                rss_native_id_guid_count=native_id_guid_count,
+                rss_native_id_enclosure_count=native_id_enclosure_count,
+                rss_native_id_link_count=native_id_link_count,
+                failure_reason="normalization_error",
+            ),
+            exc,
         )
-        seen_native_ids.add(source_native_id)
 
+    diagnostics = CollectionDiagnostics(
+        rss_item_count=item_count,
+        rss_missing_required_fields_count=missing_required_fields_count,
+        rss_filter_rejected_count=filter_rejected_count,
+        rss_duplicate_native_id_count=duplicate_native_id_count,
+        rss_invalid_published_at_count=invalid_published_at_count,
+        rss_title_parser_rejected_count=title_parser_rejected_count,
+        rss_native_id_guid_count=native_id_guid_count,
+        rss_native_id_enclosure_count=native_id_enclosure_count,
+        rss_native_id_link_count=native_id_link_count,
+    )
     if not editions:
-        raise ValueError("feed contained no canonical bulletin editions")
-    return tuple(editions)
+        error = ValueError("feed contained no canonical bulletin editions")
+        return _NormalizedSource(
+            (),
+            CollectionDiagnostics(
+                rss_item_count=diagnostics.rss_item_count,
+                rss_missing_required_fields_count=(diagnostics.rss_missing_required_fields_count),
+                rss_filter_rejected_count=diagnostics.rss_filter_rejected_count,
+                rss_duplicate_native_id_count=diagnostics.rss_duplicate_native_id_count,
+                rss_invalid_published_at_count=diagnostics.rss_invalid_published_at_count,
+                rss_title_parser_rejected_count=diagnostics.rss_title_parser_rejected_count,
+                rss_native_id_guid_count=diagnostics.rss_native_id_guid_count,
+                rss_native_id_enclosure_count=diagnostics.rss_native_id_enclosure_count,
+                rss_native_id_link_count=diagnostics.rss_native_id_link_count,
+                failure_reason="no_canonical_editions",
+            ),
+            error,
+        )
+    return _NormalizedSource(tuple(editions), diagnostics)
 
 
 def _source_native_id(item: ET.Element) -> str | None:
+    value, _origin = _source_native_id_with_origin(item)
+    return value
+
+
+def _source_native_id_with_origin(item: ET.Element) -> tuple[str | None, str | None]:
     for name in ("guid", "id"):
         value = _child_text(item, name)
         if value is not None:
-            return value
+            return value, "guid"
 
     enclosure = _child(item, "enclosure")
     if enclosure is not None:
         value = _nonempty(enclosure.attrib.get("url"))
         if value is not None:
-            return value
+            return value, "enclosure"
 
     link = _child(item, "link")
     if link is not None:
         value = _element_text(link) or _nonempty(link.attrib.get("href"))
         if value is not None:
-            return value
-    return None
+            return value, "link"
+    return None, None
 
 
 def _parse_published_at(value: str, source_timezone: ZoneInfo) -> datetime:

@@ -13,7 +13,7 @@ from news_bulletin_playlist.desired_state import (
     DurationEligibilityDecision,
 )
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
-from news_bulletin_playlist.engine import EngineCycleResult, EngineCycleRunner
+from news_bulletin_playlist.engine import EngineCycleResult, EngineCycleRunner, SourceCycleOutcome
 from news_bulletin_playlist.reconciliation_diagnostics import (
     classify_reconciliation_failure,
     classify_reconciliation_warning,
@@ -94,42 +94,7 @@ class InstrumentedEngineCycleRunner:
                 event_name=event_name,
                 cycle_id=cycle_id,
                 source_id=str(source.source_id),
-                details={
-                    "edition_count": source.edition_count,
-                    "matched_count": source.matched_count,
-                    "phase": phase,
-                    "matching_work_count": source.matching_diagnostics.matching_work_count,
-                    "matching_reason_new_match_count": (
-                        source.matching_diagnostics.matching_reason_new_match_count
-                    ),
-                    "matching_reason_input_changed_count": (
-                        source.matching_diagnostics.matching_reason_input_changed_count
-                    ),
-                    "matching_reason_retry_due_count": (
-                        source.matching_diagnostics.matching_reason_retry_due_count
-                    ),
-                    "matching_reason_coalesced_unresolved_count": (
-                        source.matching_diagnostics.matching_reason_coalesced_unresolved_count
-                    ),
-                    "matching_reason_evidence_recovery_count": (
-                        source.matching_diagnostics.matching_reason_evidence_recovery_count
-                    ),
-                    "matching_reason_missing_evidence_count": (
-                        source.matching_diagnostics.matching_reason_missing_evidence_count
-                    ),
-                    "unresolved_relevant_count": (
-                        source.matching_diagnostics.unresolved_relevant_count
-                    ),
-                    "catalogue_audit_due": source.matching_diagnostics.catalogue_audit_due,
-                    "matching_plan_conservative": (
-                        source.matching_diagnostics.matching_plan_conservative
-                    ),
-                    "catalogue_requested": source.matching_diagnostics.catalogue_requested,
-                    "catalogue_inspected": source.matching_diagnostics.catalogue_inspected,
-                    "catalogue_request_count": (
-                        source.matching_diagnostics.catalogue_request_count
-                    ),
-                },
+                details=_source_diagnostic_details(source, phase=phase),
             )
 
         for playlist in result.playlists:
@@ -359,6 +324,54 @@ class InstrumentedEngineCycleRunner:
                     **buckets,
                 },
             )
+
+
+def _source_diagnostic_details(
+    source: SourceCycleOutcome,
+    *,
+    phase: str,
+) -> dict[str, str | int | bool | None]:
+    matching = source.matching_diagnostics
+    details: dict[str, str | int | bool | None] = {
+        "edition_count": source.edition_count,
+        "matched_count": source.matched_count,
+        "phase": phase,
+        "matching_work_count": matching.matching_work_count,
+        "matching_evaluated_count": matching.matching_evaluated_count,
+        "matching_reason_new_match_count": matching.matching_reason_new_match_count,
+        "matching_reason_input_changed_count": matching.matching_reason_input_changed_count,
+        "matching_reason_retry_due_count": matching.matching_reason_retry_due_count,
+        "matching_reason_coalesced_unresolved_count": (
+            matching.matching_reason_coalesced_unresolved_count
+        ),
+        "matching_reason_evidence_recovery_count": (
+            matching.matching_reason_evidence_recovery_count
+        ),
+        "matching_reason_missing_evidence_count": matching.matching_reason_missing_evidence_count,
+        "unresolved_relevant_count": matching.unresolved_relevant_count,
+        "catalogue_audit_due": matching.catalogue_audit_due,
+        "matching_plan_conservative": matching.matching_plan_conservative,
+        "catalogue_requested": matching.catalogue_requested,
+        "catalogue_inspected": matching.catalogue_inspected,
+        "catalogue_request_count": matching.catalogue_request_count,
+    }
+    collection = source.collection_diagnostics
+    optional_collection_details = {
+        "rss_item_count": collection.rss_item_count,
+        "rss_missing_required_fields_count": collection.rss_missing_required_fields_count,
+        "rss_filter_rejected_count": collection.rss_filter_rejected_count,
+        "rss_duplicate_native_id_count": collection.rss_duplicate_native_id_count,
+        "rss_invalid_published_at_count": collection.rss_invalid_published_at_count,
+        "rss_title_parser_rejected_count": collection.rss_title_parser_rejected_count,
+        "rss_native_id_guid_count": collection.rss_native_id_guid_count,
+        "rss_native_id_enclosure_count": collection.rss_native_id_enclosure_count,
+        "rss_native_id_link_count": collection.rss_native_id_link_count,
+        "collection_failure_reason": collection.failure_reason,
+    }
+    details.update(
+        (key, value) for key, value in optional_collection_details.items() if value is not None
+    )
+    return details
 
 
 def _destination_was_preserved(error: str | None) -> bool:

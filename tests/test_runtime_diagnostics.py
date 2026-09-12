@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from news_bulletin_playlist.collection import CollectionDiagnostics
 from news_bulletin_playlist.desired_state import (
     DURATION_EXCEEDS_DEFAULT_MAX,
     DURATION_EXCEPTION,
@@ -82,6 +83,18 @@ def test_instrumented_runner_records_correlated_source_playlist_and_cycle_events
                 edition_count=6,
                 matched_count=5,
                 last_success_at=NOW,
+                matching_diagnostics=SourceMatchingDiagnostics(matching_evaluated_count=2),
+                collection_diagnostics=CollectionDiagnostics(
+                    rss_item_count=9,
+                    rss_missing_required_fields_count=1,
+                    rss_filter_rejected_count=1,
+                    rss_duplicate_native_id_count=1,
+                    rss_invalid_published_at_count=0,
+                    rss_title_parser_rejected_count=0,
+                    rss_native_id_guid_count=7,
+                    rss_native_id_enclosure_count=1,
+                    rss_native_id_link_count=0,
+                ),
             ),
             SourceCycleOutcome(
                 source_id=SourceId("ser"),
@@ -91,6 +104,18 @@ def test_instrumented_runner_records_correlated_source_playlist_and_cycle_events
                 matched_count=0,
                 last_success_at=None,
                 error="provider-body-sentinel",
+                collection_diagnostics=CollectionDiagnostics(
+                    rss_item_count=0,
+                    rss_missing_required_fields_count=0,
+                    rss_filter_rejected_count=0,
+                    rss_duplicate_native_id_count=0,
+                    rss_invalid_published_at_count=0,
+                    rss_title_parser_rejected_count=0,
+                    rss_native_id_guid_count=0,
+                    rss_native_id_enclosure_count=0,
+                    rss_native_id_link_count=0,
+                    failure_reason="no_rss_items",
+                ),
             ),
         ),
         playlists=(
@@ -136,6 +161,7 @@ def test_instrumented_runner_records_correlated_source_playlist_and_cycle_events
         "catalogue_requested": False,
         "edition_count": 6,
         "matched_count": 5,
+        "matching_evaluated_count": 2,
         "matching_plan_conservative": False,
         "matching_reason_coalesced_unresolved_count": 0,
         "matching_reason_evidence_recovery_count": 0,
@@ -145,8 +171,21 @@ def test_instrumented_runner_records_correlated_source_playlist_and_cycle_events
         "matching_reason_retry_due_count": 0,
         "matching_work_count": 0,
         "phase": "complete",
+        "rss_duplicate_native_id_count": 1,
+        "rss_filter_rejected_count": 1,
+        "rss_invalid_published_at_count": 0,
+        "rss_item_count": 9,
+        "rss_missing_required_fields_count": 1,
+        "rss_native_id_enclosure_count": 1,
+        "rss_native_id_guid_count": 7,
+        "rss_native_id_link_count": 0,
+        "rss_title_parser_rejected_count": 0,
         "unresolved_relevant_count": 0,
     }
+    ser = next(event for event in events if event.source_id == "ser")
+    assert ser.details["collection_failure_reason"] == "no_rss_items"
+    assert ser.details["rss_item_count"] == 0
+    assert "error" not in ser.details
     preserved = next(event for event in events if event.event_name == "destination_preserved")
     assert preserved.details == {
         "desired_count": 42,
@@ -226,6 +265,24 @@ def test_runtime_emitter_rejects_unsafe_allowed_field_without_leaking_it(tmp_pat
         component="spotify.auth",
         event_name="authorization_failed",
         details={"phase": sentinel},
+    )
+
+    assert store.list_events() == ()
+    rendered = output.getvalue()
+    assert "diagnostic_persistence_failed" in rendered
+    assert sentinel not in rendered
+
+
+def test_runtime_emitter_rejects_unknown_collection_failure_reason(tmp_path: Path) -> None:
+    diagnostics, store, output = _diagnostics(tmp_path)
+    sentinel = "provider-body-sentinel-never-log"
+
+    diagnostics.emit(
+        occurred_at=NOW,
+        severity=DiagnosticSeverity.ERROR,
+        component="source",
+        event_name="source_collection_failed",
+        details={"collection_failure_reason": sentinel},
     )
 
     assert store.list_events() == ()
@@ -388,6 +445,7 @@ def test_source_matching_diagnostics_emit_only_fixed_schema_counts_and_booleans(
                 last_success_at=NOW,
                 matching_diagnostics=SourceMatchingDiagnostics(
                     matching_work_count=4,
+                    matching_evaluated_count=3,
                     matching_reason_new_match_count=1,
                     matching_reason_retry_due_count=2,
                     matching_reason_coalesced_unresolved_count=1,
@@ -395,6 +453,17 @@ def test_source_matching_diagnostics_emit_only_fixed_schema_counts_and_booleans(
                     catalogue_requested=True,
                     catalogue_inspected=True,
                     catalogue_request_count=2,
+                ),
+                collection_diagnostics=CollectionDiagnostics(
+                    rss_item_count=12,
+                    rss_missing_required_fields_count=1,
+                    rss_filter_rejected_count=1,
+                    rss_duplicate_native_id_count=1,
+                    rss_invalid_published_at_count=0,
+                    rss_title_parser_rejected_count=1,
+                    rss_native_id_guid_count=9,
+                    rss_native_id_enclosure_count=2,
+                    rss_native_id_link_count=1,
                 ),
             ),
         ),
@@ -407,12 +476,18 @@ def test_source_matching_diagnostics_emit_only_fixed_schema_counts_and_booleans(
     event = next(item for item in store.list_events() if item.component == "source")
     assert event.source_id == "ser"
     assert event.details["matching_work_count"] == 4
+    assert event.details["matching_evaluated_count"] == 3
     assert event.details["matching_reason_new_match_count"] == 1
     assert event.details["matching_reason_retry_due_count"] == 2
     assert event.details["matching_reason_coalesced_unresolved_count"] == 1
     assert event.details["catalogue_requested"] is True
     assert event.details["catalogue_inspected"] is True
     assert event.details["catalogue_request_count"] == 2
+    assert event.details["rss_item_count"] == 12
+    assert event.details["rss_native_id_guid_count"] == 9
+    assert event.details["rss_native_id_enclosure_count"] == 2
+    assert event.details["rss_native_id_link_count"] == 1
+    assert "collection_failure_reason" not in event.details
     rendered = output.getvalue()
     assert sentinel not in rendered
     assert sentinel not in repr(event.details)

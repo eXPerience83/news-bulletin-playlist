@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
@@ -133,6 +134,7 @@ def match_source_editions(
     evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent] | None = None,
     validate_cached: bool = True,
     catalogue_request_count: int | None = None,
+    on_fresh_evaluation: Callable[[MatchOutcome], None] | None = None,
 ) -> SourceMatchResult:
     """Match one source batch using persisted state before bounded Spotify catalogue reads."""
     if not 1 <= page_size <= 50:
@@ -146,6 +148,7 @@ def match_source_editions(
     outcomes: list[MatchOutcome | None] = [None] * len(editions)
     unresolved: list[tuple[int, CanonicalEdition]] = []
     selected = None if evaluation_intents is None else frozenset(evaluation_intents)
+    notified_fresh_indices: set[int] = set()
 
     for index, edition in enumerate(editions):
         if edition.source_id != source.id:
@@ -229,6 +232,12 @@ def match_source_editions(
             candidate_count=len(candidates),
             catalogue_calls=catalogue_calls,
         )
+        _notify_fresh_evaluation(
+            on_fresh_evaluation,
+            outcome,
+            index=index,
+            notified_indices=notified_fresh_indices,
+        )
         store.set_match_state(
             edition.source_id,
             edition.source_native_id,
@@ -255,6 +264,12 @@ def match_source_editions(
                 tuple(_evaluate_candidate(source, outcome.edition, item) for item in candidates),
                 candidate_count=len(candidates),
                 catalogue_calls=catalogue_calls,
+            )
+            _notify_fresh_evaluation(
+                on_fresh_evaluation,
+                evaluated,
+                index=index,
+                notified_indices=notified_fresh_indices,
             )
             store.set_match_state(
                 outcome.edition.source_id,
@@ -302,6 +317,23 @@ def match_source_editions(
         catalogue_candidate_count=len(candidates),
         catalogue_inspected=True,
     )
+
+
+def _notify_fresh_evaluation(
+    callback: Callable[[MatchOutcome], None] | None,
+    outcome: MatchOutcome,
+    *,
+    index: int,
+    notified_indices: set[int],
+) -> None:
+    if index in notified_indices:
+        return
+    notified_indices.add(index)
+    if callback is None:
+        return
+    # Observability must never change matching or persistence semantics.
+    with suppress(Exception):
+        callback(outcome)
 
 
 def _cached_outcome(

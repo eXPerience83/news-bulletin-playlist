@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
+import news_bulletin_playlist.collection as collection_module
 from news_bulletin_playlist.collection import collect_required_sources
 from news_bulletin_playlist.models import (
     AdapterId,
@@ -26,6 +27,7 @@ def _source(
     endpoint_url: str | None,
     *,
     timezone: str = "Europe/Madrid",
+    collection_filter_id: str | None = None,
 ) -> SourceDefinition:
     return SourceDefinition(
         id=SourceId(source_id),
@@ -35,6 +37,7 @@ def _source(
         timezone=ZoneInfo(timezone),
         enabled=True,
         parser_id=ParserId(parser_id),
+        collection_filter_id=collection_filter_id,
         endpoint_url=endpoint_url,
     )
 
@@ -80,6 +83,22 @@ def _item(
         f"<item{namespace}>{guid_xml}<title>{title}</title>"
         f"<pubDate>{published}</pubDate>{duration_xml}</item>"
     )
+
+
+def _raw_item(
+    *,
+    title: str | None,
+    published: str | None,
+    guid: str | None = None,
+    enclosure: str | None = None,
+    link: str | None = None,
+) -> str:
+    title_xml = "" if title is None else f"<title>{title}</title>"
+    published_xml = "" if published is None else f"<pubDate>{published}</pubDate>"
+    guid_xml = "" if guid is None else f"<guid>{guid}</guid>"
+    enclosure_xml = "" if enclosure is None else f'<enclosure url="{enclosure}" />'
+    link_xml = "" if link is None else f"<link>{link}</link>"
+    return f"<item>{guid_xml}{enclosure_xml}{link_xml}{title_xml}{published_xml}</item>"
 
 
 def test_shared_source_is_fetched_once_across_playlists() -> None:
@@ -188,6 +207,7 @@ def test_duplicate_native_id_is_not_emitted_twice() -> None:
 
     assert len(result.editions) == 1
     assert result.editions[0].source_native_id == "asset-a"
+    assert result.sources[0].collection_diagnostics.rss_duplicate_native_id_count == 1
 
 
 def test_published_at_and_edition_at_remain_distinct_and_duration_is_preserved() -> None:
@@ -226,6 +246,86 @@ def test_source_timezone_is_authoritative_for_parsed_edition_time() -> None:
     assert result.editions[0].edition_at == datetime(2026, 8, 30, 11, 0, tzinfo=UTC)
 
 
+def test_collection_diagnostics_count_one_bounded_normalization_funnel(monkeypatch) -> None:
+    class _Filter:
+        def accepts(self, title: str) -> bool:
+            return title != "reject by filter"
+
+    monkeypatch.setattr(collection_module, "get_collection_filter", lambda _filter_id: _Filter())
+    ser = _source("ser", "ser", SER_URL, collection_filter_id="test_filter")
+    config = _config((ser,), (_playlist("first", "ser"),))
+    valid = "Las noticias de la SER, 11:00 (30/08/2026)"
+    payload = _rss(
+        _raw_item(
+            guid="asset-a",
+            enclosure="https://example.test/ignored.mp3",
+            link="https://example.test/ignored",
+            title=valid,
+            published="Sun, 30 Aug 2026 09:05:00 +0000",
+        ),
+        _raw_item(
+            title=valid,
+            published="Sun, 30 Aug 2026 09:05:00 +0000",
+        ),
+        _raw_item(
+            guid="filtered",
+            title="reject by filter",
+            published="Sun, 30 Aug 2026 09:05:00 +0000",
+        ),
+        _raw_item(
+            guid="asset-a",
+            title=valid,
+            published="Sun, 30 Aug 2026 09:05:00 +0000",
+        ),
+        _raw_item(
+            guid="invalid-date",
+            title=valid,
+            published="definitely-not-a-date",
+        ),
+        _raw_item(
+            guid="parser-rejected",
+            title="Hoy por Hoy: noticias 11:00",
+            published="Sun, 30 Aug 2026 09:05:00 +0000",
+        ),
+        _raw_item(
+            enclosure="https://example.test/enclosure.mp3",
+            title=valid,
+            published="Sun, 30 Aug 2026 09:05:00 +0000",
+        ),
+        _raw_item(
+            link="https://example.test/editorial-link",
+            title=valid,
+            published="Sun, 30 Aug 2026 09:05:00 +0000",
+        ),
+    )
+
+    result = collect_required_sources(config, fetcher=lambda _url: payload)
+    source_result = result.sources[0]
+    diagnostics = source_result.collection_diagnostics
+
+    assert source_result.ok
+    assert len(source_result.editions) == 3
+    assert diagnostics.failure_reason is None
+    assert diagnostics.rss_item_count == 8
+    assert diagnostics.rss_missing_required_fields_count == 1
+    assert diagnostics.rss_filter_rejected_count == 1
+    assert diagnostics.rss_duplicate_native_id_count == 1
+    assert diagnostics.rss_invalid_published_at_count == 1
+    assert diagnostics.rss_title_parser_rejected_count == 1
+    assert diagnostics.rss_native_id_guid_count == 5
+    assert diagnostics.rss_native_id_enclosure_count == 1
+    assert diagnostics.rss_native_id_link_count == 1
+    assert diagnostics.rss_item_count == len(source_result.editions) + sum(
+        (
+            diagnostics.rss_missing_required_fields_count or 0,
+            diagnostics.rss_filter_rejected_count or 0,
+            diagnostics.rss_duplicate_native_id_count or 0,
+            diagnostics.rss_invalid_published_at_count or 0,
+            diagnostics.rss_title_parser_rejected_count or 0,
+        )
+    )
+
+
 def test_one_source_failure_does_not_abort_unrelated_sources() -> None:
     ser = _source("ser", "ser", SER_URL)
     rne = _source("rne", "rne", RNE_URL)
@@ -248,6 +348,8 @@ def test_one_source_failure_does_not_abort_unrelated_sources() -> None:
 
     assert not by_source[SourceId("ser")].ok
     assert "SER unavailable" in (by_source[SourceId("ser")].error or "")
+    assert by_source[SourceId("ser")].collection_diagnostics.failure_reason == "fetch_error"
+    assert by_source[SourceId("ser")].collection_diagnostics.rss_item_count is None
     assert by_source[SourceId("rne")].ok
     assert len(by_source[SourceId("rne")].editions) == 1
 
@@ -260,6 +362,28 @@ def test_malformed_feed_is_failure_not_empty_success() -> None:
 
     assert not result.sources[0].ok
     assert result.sources[0].editions == ()
+    diagnostics = result.sources[0].collection_diagnostics
+    assert diagnostics.failure_reason == "xml_parse_error"
+    assert diagnostics.rss_item_count is None
+
+
+def test_feed_without_rss_items_retains_known_zero_funnel() -> None:
+    ser = _source("ser", "ser", SER_URL)
+    config = _config((ser,), (_playlist("first", "ser"),))
+
+    result = collect_required_sources(
+        config,
+        fetcher=lambda _url: b"<rss><channel><title>empty</title></channel></rss>",
+    )
+
+    source_result = result.sources[0]
+    diagnostics = source_result.collection_diagnostics
+    assert not source_result.ok
+    assert source_result.error == "feed contained no RSS items"
+    assert diagnostics.failure_reason == "no_rss_items"
+    assert diagnostics.rss_item_count == 0
+    assert diagnostics.rss_missing_required_fields_count == 0
+    assert diagnostics.rss_native_id_guid_count == 0
 
 
 def test_unrecognized_or_identity_less_feed_is_failure_not_empty_success() -> None:
@@ -283,6 +407,33 @@ def test_unrecognized_or_identity_less_feed_is_failure_not_empty_success() -> No
     assert not result.sources[0].ok
     assert result.sources[0].editions == ()
     assert result.sources[0].error == "feed contained no canonical bulletin editions"
+    diagnostics = result.sources[0].collection_diagnostics
+    assert diagnostics.failure_reason == "no_canonical_editions"
+    assert diagnostics.rss_item_count == 2
+    assert diagnostics.rss_missing_required_fields_count == 1
+    assert diagnostics.rss_title_parser_rejected_count == 1
+    assert diagnostics.rss_native_id_guid_count == 1
+
+
+def test_unknown_collection_configuration_keeps_only_safely_known_item_count() -> None:
+    ser = _source("ser", "ser", SER_URL, collection_filter_id="unknown-filter")
+    config = _config((ser,), (_playlist("first", "ser"),))
+    payload = _rss(
+        _item(
+            guid="asset-a",
+            title="Las noticias de la SER, 11:00 (30/08/2026)",
+            published="Sun, 30 Aug 2026 09:05:00 +0000",
+        )
+    )
+
+    result = collect_required_sources(config, fetcher=lambda _url: payload)
+
+    diagnostics = result.sources[0].collection_diagnostics
+    assert not result.sources[0].ok
+    assert diagnostics.failure_reason == "configuration_error"
+    assert diagnostics.rss_item_count == 1
+    assert diagnostics.rss_missing_required_fields_count is None
+    assert diagnostics.rss_native_id_guid_count is None
 
 
 def test_required_source_without_endpoint_is_reported_without_fetching() -> None:
@@ -300,3 +451,6 @@ def test_required_source_without_endpoint_is_reported_without_fetching() -> None
     assert not called
     assert not result.sources[0].ok
     assert result.sources[0].error == "required source has no endpoint_url"
+    diagnostics = result.sources[0].collection_diagnostics
+    assert diagnostics.failure_reason == "missing_endpoint"
+    assert diagnostics.rss_item_count is None
