@@ -6,7 +6,7 @@ from news_bulletin_playlist.models import ParsedEdition
 from news_bulletin_playlist.providers.common import MADRID, aware_datetime
 
 _PATTERN = re.compile(
-    r"^NOTICIAS\s+RNE\s*-?\s*"
+    r"^(?:NOTICIAS\s+RNE|RNE\s+NOTICIAS)\s*-?\s*"
     r"(?P<date>\d{1,2}\.\d{1,2}\.\d{4}|\d{6}|\d{8})\s*-\s*"
     r"(?P<time>\d{1,2}(?:[\.,]\d{2})?|\d{3,4})\s*H?$",
     re.IGNORECASE,
