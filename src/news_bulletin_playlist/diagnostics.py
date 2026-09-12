@@ -31,6 +31,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "catalogue_inspected",
         "catalogue_requested",
         "catalogue_request_count",
+        "collection_failure_reason",
         "desired_count",
         "duration_ms",
         "duration_seconds",
@@ -63,6 +64,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "m8_lt10",
         "match_reason",
         "matched_count",
+        "matching_evaluated_count",
         "matching_plan_conservative",
         "matching_reason_coalesced_unresolved_count",
         "matching_reason_evidence_recovery_count",
@@ -108,6 +110,15 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "retry_after_seconds",
         "retry_not_before",
         "returned_count",
+        "rss_duplicate_native_id_count",
+        "rss_filter_rejected_count",
+        "rss_invalid_published_at_count",
+        "rss_item_count",
+        "rss_missing_required_fields_count",
+        "rss_native_id_enclosure_count",
+        "rss_native_id_guid_count",
+        "rss_native_id_link_count",
+        "rss_title_parser_rejected_count",
         "sample_count",
         "total",
         "unavailable_count",
@@ -120,6 +131,17 @@ _ALLOWED_DETAIL_KEYS = frozenset(
 _ALLOWED_DETAIL_STRING_VALUES = {
     "backoff_source": frozenset({"fallback", "spotify_header"}),
     "backoff_state": frozenset({"activated", "active", "expired"}),
+    "collection_failure_reason": frozenset(
+        {
+            "configuration_error",
+            "fetch_error",
+            "missing_endpoint",
+            "no_canonical_editions",
+            "no_rss_items",
+            "normalization_error",
+            "xml_parse_error",
+        }
+    ),
     "failure_class": frozenset(
         {
             "api_error",
