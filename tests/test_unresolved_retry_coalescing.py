@@ -159,7 +159,9 @@ def test_clock_rollback_unresolved_is_not_opportunistically_coalesced(tmp_path: 
     assert plan.diagnostics.matching_reason_coalesced_unresolved_count == 0
 
 
-def test_coalesced_attempt_preserves_age_and_reschedules_from_actual_attempt(tmp_path: Path) -> None:
+def test_coalesced_attempt_preserves_age_and_reschedules_from_actual_attempt(
+    tmp_path: Path,
+) -> None:
     runner = _runner(tmp_path)
     due = _edition("due", minutes_old=30)
     non_due = _edition("non-due", minutes_old=5)
