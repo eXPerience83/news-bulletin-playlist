@@ -205,6 +205,7 @@ def test_repeated_coalesced_attempts_align_deadline_to_latest_real_check(tmp_pat
         published_at=NOW - timedelta(minutes=30),
         edition_at=NOW - timedelta(minutes=30),
     )
+    _persist_unresolved(runner, second_trigger, attempted_at=NOW - timedelta(minutes=20))
     _evaluate(runner, (second_trigger, non_due), now=second_now)
     second = runner.planner_journal.get_unresolved(str(non_due.source_id), non_due.source_native_id)
 
