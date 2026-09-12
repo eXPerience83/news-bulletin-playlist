@@ -64,6 +64,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "match_reason",
         "matched_count",
         "matching_plan_conservative",
+        "matching_reason_coalesced_unresolved_count",
         "matching_reason_evidence_recovery_count",
         "matching_reason_input_changed_count",
         "matching_reason_missing_evidence_count",

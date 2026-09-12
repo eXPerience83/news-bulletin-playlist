@@ -122,6 +122,7 @@ class SourceMatchingDiagnostics:
     matching_reason_new_match_count: int = 0
     matching_reason_input_changed_count: int = 0
     matching_reason_retry_due_count: int = 0
+    matching_reason_coalesced_unresolved_count: int = 0
     matching_reason_evidence_recovery_count: int = 0
     matching_reason_missing_evidence_count: int = 0
     unresolved_relevant_count: int = 0
@@ -1439,6 +1440,7 @@ class EngineRunner:
                 or now >= catalogue.next_audit_at
             )
             intents: dict[tuple[SourceId, str], MatchEvaluationIntent] = {}
+            coalescing_candidates: list[tuple[SourceId, str]] = []
             new_match_count = 0
             input_changed_count = 0
             retry_due_count = 0
@@ -1495,11 +1497,23 @@ class EngineRunner:
                 elif reason is PlannerReason.RETRY_DUE:
                     intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
                     retry_due_count += 1
+                elif reason is None:
+                    coalescing_candidates.append(edition.identity)
+
+            primary_needs_catalogue = bool(intents) or audit_due
+            if primary_needs_catalogue:
+                for identity in coalescing_candidates:
+                    intents[identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+            coalesced_unresolved_count = (
+                len(coalescing_candidates) if primary_needs_catalogue else 0
+            )
+
             diagnostics = SourceMatchingDiagnostics(
                 matching_work_count=len(intents),
                 matching_reason_new_match_count=new_match_count,
                 matching_reason_input_changed_count=input_changed_count,
                 matching_reason_retry_due_count=retry_due_count,
+                matching_reason_coalesced_unresolved_count=coalesced_unresolved_count,
                 matching_reason_evidence_recovery_count=evidence_recovery_count,
                 matching_reason_missing_evidence_count=missing_evidence_count,
                 unresolved_relevant_count=unresolved_relevant_count,

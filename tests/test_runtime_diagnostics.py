@@ -137,6 +137,7 @@ def test_instrumented_runner_records_correlated_source_playlist_and_cycle_events
         "edition_count": 6,
         "matched_count": 5,
         "matching_plan_conservative": False,
+        "matching_reason_coalesced_unresolved_count": 0,
         "matching_reason_evidence_recovery_count": 0,
         "matching_reason_input_changed_count": 0,
         "matching_reason_missing_evidence_count": 0,
@@ -386,9 +387,10 @@ def test_source_matching_diagnostics_emit_only_fixed_schema_counts_and_booleans(
                 matched_count=5,
                 last_success_at=NOW,
                 matching_diagnostics=SourceMatchingDiagnostics(
-                    matching_work_count=3,
+                    matching_work_count=4,
                     matching_reason_new_match_count=1,
                     matching_reason_retry_due_count=2,
+                    matching_reason_coalesced_unresolved_count=1,
                     unresolved_relevant_count=4,
                     catalogue_requested=True,
                     catalogue_inspected=True,
@@ -404,9 +406,10 @@ def test_source_matching_diagnostics_emit_only_fixed_schema_counts_and_booleans(
 
     event = next(item for item in store.list_events() if item.component == "source")
     assert event.source_id == "ser"
-    assert event.details["matching_work_count"] == 3
+    assert event.details["matching_work_count"] == 4
     assert event.details["matching_reason_new_match_count"] == 1
     assert event.details["matching_reason_retry_due_count"] == 2
+    assert event.details["matching_reason_coalesced_unresolved_count"] == 1
     assert event.details["catalogue_requested"] is True
     assert event.details["catalogue_inspected"] is True
     assert event.details["catalogue_request_count"] == 2

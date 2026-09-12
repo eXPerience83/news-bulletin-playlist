@@ -108,6 +108,9 @@ class InstrumentedEngineCycleRunner:
                     "matching_reason_retry_due_count": (
                         source.matching_diagnostics.matching_reason_retry_due_count
                     ),
+                    "matching_reason_coalesced_unresolved_count": (
+                        source.matching_diagnostics.matching_reason_coalesced_unresolved_count
+                    ),
                     "matching_reason_evidence_recovery_count": (
                         source.matching_diagnostics.matching_reason_evidence_recovery_count
                     ),

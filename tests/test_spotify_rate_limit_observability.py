@@ -135,6 +135,7 @@ def test_same_cycle_backoff_reports_deferred_matching_and_preserved_later_destin
         "edition_count": 1,
         "matched_count": 0,
         "matching_plan_conservative": False,
+        "matching_reason_coalesced_unresolved_count": 0,
         "matching_reason_evidence_recovery_count": 0,
         "matching_reason_input_changed_count": 0,
         "matching_reason_missing_evidence_count": 0,
