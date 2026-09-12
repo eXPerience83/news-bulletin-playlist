@@ -23,6 +23,7 @@ from news_bulletin_playlist.engine import (
     EngineCycleResult,
     PlaylistCycleOutcome,
     SourceCycleOutcome,
+    SourceMatchingDiagnostics,
 )
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
 from news_bulletin_playlist.engine_runtime import serve
@@ -129,9 +130,21 @@ def test_instrumented_runner_records_correlated_source_playlist_and_cycle_events
     assert cycle_ids == {"cycle-20260902T100000000000Z"}
     rne = next(event for event in events if event.source_id == "rne")
     assert rne.details == {
+        "catalogue_audit_due": False,
+        "catalogue_inspected": False,
+        "catalogue_request_count": 0,
+        "catalogue_requested": False,
         "edition_count": 6,
         "matched_count": 5,
+        "matching_plan_conservative": False,
+        "matching_reason_evidence_recovery_count": 0,
+        "matching_reason_input_changed_count": 0,
+        "matching_reason_missing_evidence_count": 0,
+        "matching_reason_new_match_count": 0,
+        "matching_reason_retry_due_count": 0,
+        "matching_work_count": 0,
         "phase": "complete",
+        "unresolved_relevant_count": 0,
     }
     preserved = next(event for event in events if event.event_name == "destination_preserved")
     assert preserved.details == {
@@ -353,3 +366,50 @@ def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: P
     assert "must-not-be-persisted" not in rendered
     assert "also-not-persisted" not in rendered
     assert "short-not-persisted" not in rendered
+
+
+def test_source_matching_diagnostics_emit_only_fixed_schema_counts_and_booleans(
+    tmp_path: Path,
+) -> None:
+    diagnostics, store, output = _diagnostics(tmp_path)
+    sentinel = "spotify:episode:secret-guid-url-token-sentinel"
+    result = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=1),
+        ok=True,
+        sources=(
+            SourceCycleOutcome(
+                source_id=SourceId("ser"),
+                collection_ok=True,
+                matching_ok=True,
+                edition_count=8,
+                matched_count=5,
+                last_success_at=NOW,
+                matching_diagnostics=SourceMatchingDiagnostics(
+                    matching_work_count=3,
+                    matching_reason_new_match_count=1,
+                    matching_reason_retry_due_count=2,
+                    unresolved_relevant_count=4,
+                    catalogue_requested=True,
+                    catalogue_inspected=True,
+                    catalogue_request_count=2,
+                ),
+            ),
+        ),
+        playlists=(),
+    )
+    runner = InstrumentedEngineCycleRunner(_Runner(result), diagnostics, clock=lambda: NOW)
+
+    assert runner.run_cycle() is result
+
+    event = next(item for item in store.list_events() if item.component == "source")
+    assert event.source_id == "ser"
+    assert event.details["matching_work_count"] == 3
+    assert event.details["matching_reason_new_match_count"] == 1
+    assert event.details["matching_reason_retry_due_count"] == 2
+    assert event.details["catalogue_requested"] is True
+    assert event.details["catalogue_inspected"] is True
+    assert event.details["catalogue_request_count"] == 2
+    rendered = output.getvalue()
+    assert sentinel not in rendered
+    assert sentinel not in repr(event.details)

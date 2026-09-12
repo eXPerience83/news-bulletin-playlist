@@ -378,6 +378,11 @@ class SpotifyRateLimitGuardClient:
         self.clock = clock
         self.diagnostics = journal.diagnostics if diagnostics is None else diagnostics
         self._cycle_limited: SpotifyRateLimitState | None = None
+        self._show_episodes_delegated_count = 0
+
+    @property
+    def show_episodes_delegated_count(self) -> int:
+        return self._show_episodes_delegated_count
 
     def show_episodes(
         self,
@@ -386,7 +391,14 @@ class SpotifyRateLimitGuardClient:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, object]:
-        return self._call(lambda: self.client.show_episodes(show_id, limit=limit, offset=offset))
+        def delegated() -> dict[str, object]:
+            self._show_episodes_delegated_count += 1
+            return cast(
+                dict[str, object],
+                self.client.show_episodes(show_id, limit=limit, offset=offset),
+            )
+
+        return self._call(delegated)
 
     def playlist_items(
         self,

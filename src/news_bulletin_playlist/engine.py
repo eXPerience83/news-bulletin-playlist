@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Protocol
@@ -117,10 +117,27 @@ class EngineCycleAlreadyRunning(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class SourceMatchingDiagnostics:
+    matching_work_count: int = 0
+    matching_reason_new_match_count: int = 0
+    matching_reason_input_changed_count: int = 0
+    matching_reason_retry_due_count: int = 0
+    matching_reason_evidence_recovery_count: int = 0
+    matching_reason_missing_evidence_count: int = 0
+    unresolved_relevant_count: int = 0
+    catalogue_audit_due: bool = False
+    matching_plan_conservative: bool = False
+    catalogue_requested: bool = False
+    catalogue_inspected: bool = False
+    catalogue_request_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class _SourceMatchingPlan:
     evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent]
     catalogue_audit_due: bool
     conservative: bool = False
+    diagnostics: SourceMatchingDiagnostics = field(default_factory=SourceMatchingDiagnostics)
 
     @property
     def needs_catalogue(self) -> bool:
@@ -189,6 +206,13 @@ class DestinationRuntimeLeaseRegistry:
                 self._leases.pop(playlist_id, None)
 
 
+@dataclass(frozen=True, slots=True)
+class _CatalogueObservation:
+    requested: bool = False
+    inspected: bool = False
+    request_count: int = 0
+
+
 class _CycleCatalogueCoordinator:
     """Share one bounded show inspection across compatible consumers in a cycle."""
 
@@ -196,6 +220,7 @@ class _CycleCatalogueCoordinator:
         self.client = client
         self.auth_context = auth_context
         self._cache: dict[tuple[str, str, str, int, int, int], object] = {}
+        self._observations: dict[SourceId, _CatalogueObservation] = {}
 
     def get(self, source: SourceDefinition) -> tuple[SpotifyCatalogueResult, int]:
         show_id = spotify_show_id(source)
@@ -211,7 +236,10 @@ class _CycleCatalogueCoordinator:
         if isinstance(cached, Exception):
             raise cached
         if isinstance(cached, SpotifyCatalogueResult):
+            self._record_observation(source.id, request_count=0, inspected=True)
             return cached, 0
+
+        delegated_before = self._delegated_show_episodes_count()
         try:
             result = fetch_show_catalogue(
                 self.client,
@@ -220,10 +248,47 @@ class _CycleCatalogueCoordinator:
                 max_pages=DEFAULT_MAX_PAGES,
             )
         except (MatchResponseError, SpotifyApiError, SpotifyTransportError) as exc:
+            self._record_observation(
+                source.id,
+                request_count=self._delegated_delta(delegated_before),
+                inspected=False,
+            )
             self._cache[key] = exc
             raise
+        request_count = self._delegated_delta(delegated_before)
+        if request_count is None:
+            request_count = result.request_count
+        self._record_observation(source.id, request_count=request_count, inspected=True)
         self._cache[key] = result
         return result, result.request_count
+
+    def observation(self, source_id: SourceId) -> _CatalogueObservation:
+        return self._observations.get(source_id, _CatalogueObservation())
+
+    def _delegated_show_episodes_count(self) -> int | None:
+        value = getattr(self.client, "show_episodes_delegated_count", None)
+        return value if isinstance(value, int) and value >= 0 else None
+
+    def _delegated_delta(self, before: int | None) -> int | None:
+        after = self._delegated_show_episodes_count()
+        if before is None or after is None or after < before:
+            return None
+        return after - before
+
+    def _record_observation(
+        self,
+        source_id: SourceId,
+        *,
+        request_count: int | None,
+        inspected: bool,
+    ) -> None:
+        current = self.observation(source_id)
+        count = 0 if request_count is None else max(request_count, 0)
+        self._observations[source_id] = _CatalogueObservation(
+            requested=current.requested or count > 0,
+            inspected=current.inspected or inspected,
+            request_count=current.request_count + count,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +300,9 @@ class SourceCycleOutcome:
     matched_count: int
     last_success_at: datetime | None
     error: str | None = None
+    matching_diagnostics: SourceMatchingDiagnostics = field(
+        default_factory=SourceMatchingDiagnostics
+    )
 
     @property
     def ok(self) -> bool:
@@ -444,6 +512,7 @@ class EngineRunner:
             source_editions, source_plans = self._build_source_work(matching_now)
         except PersistenceError as exc:
             return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
+        self._apply_source_plan_diagnostics(source_outcomes, source_plans)
 
         matching_work = any(
             plan.needs_catalogue and source_id not in unsafe_source_ids
@@ -485,6 +554,7 @@ class EngineRunner:
                 source_editions, source_plans = self._build_source_work(matching_now)
             except PersistenceError as exc:
                 return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
+            self._apply_source_plan_diagnostics(source_outcomes, source_plans)
             destination_work_ids, persistence_blocked = self._plan_destinations(
                 matching_now, unsafe_source_ids
             )
@@ -563,6 +633,16 @@ class EngineRunner:
             except PersistenceError as exc:
                 return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
 
+        self._apply_source_catalogue_diagnostics(
+            source_outcomes, source_plans, catalogue_coordinator
+        )
+
+        def fatal_playlist_result(error: PersistenceError) -> EngineCycleResult:
+            self._apply_source_catalogue_diagnostics(
+                source_outcomes, source_plans, catalogue_coordinator
+            )
+            return self._fatal_result(started_at, source_outcomes, playlist_outcomes, error)
+
         for playlist in self.config.playlists:
             if not playlist.enabled:
                 continue
@@ -628,12 +708,7 @@ class EngineRunner:
                     )
                     playlist_state = self.store.get_playlist_state(playlist.id)
                 except PersistenceError as exc:
-                    return self._fatal_result(
-                        started_at,
-                        source_outcomes,
-                        playlist_outcomes,
-                        exc,
-                    )
+                    return fatal_playlist_result(exc)
                 playlist_outcomes.append(
                     PlaylistCycleOutcome(
                         playlist_id=playlist.id,
@@ -910,12 +985,7 @@ class EngineRunner:
                     )
                     playlist_state = self.store.get_playlist_state(playlist.id)
                 except PersistenceError as persistence_exc:
-                    return self._fatal_result(
-                        started_at,
-                        source_outcomes,
-                        playlist_outcomes,
-                        persistence_exc,
-                    )
+                    return fatal_playlist_result(persistence_exc)
                 failure_count, first_failure_at = self._record_failure(
                     playlist.id, playlist_finished_at
                 )
@@ -942,8 +1012,11 @@ class EngineRunner:
                     )
                 )
             except PersistenceError as exc:
-                return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
+                return fatal_playlist_result(exc)
 
+        self._apply_source_catalogue_diagnostics(
+            source_outcomes, source_plans, catalogue_coordinator
+        )
         finished_at = _as_utc(self.clock())
         try:
             self._prune_operational_history(finished_at)
@@ -1366,6 +1439,12 @@ class EngineRunner:
                 or now >= catalogue.next_audit_at
             )
             intents: dict[tuple[SourceId, str], MatchEvaluationIntent] = {}
+            new_match_count = 0
+            input_changed_count = 0
+            retry_due_count = 0
+            evidence_recovery_count = 0
+            missing_evidence_count = 0
+            unresolved_relevant_count = 0
             for edition in editions:
                 match = self.store.get_match_state(source.id, edition.source_native_id)
                 fingerprint = matching_input_fingerprint(source, edition)
@@ -1374,16 +1453,21 @@ class EngineRunner:
                 )
                 if match is None:
                     intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    new_match_count += 1
                     continue
+                if match.status is not MatchStatus.MATCHED:
+                    unresolved_relevant_count += 1
                 if prior_input is None:
-                    intents[edition.identity] = (
-                        MatchEvaluationIntent.EVIDENCE_RECOVERY
-                        if match.status is MatchStatus.MATCHED
-                        else MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                    )
+                    if match.status is MatchStatus.MATCHED:
+                        intents[edition.identity] = MatchEvaluationIntent.EVIDENCE_RECOVERY
+                        evidence_recovery_count += 1
+                    else:
+                        intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                        missing_evidence_count += 1
                     continue
                 if prior_input.input_fingerprint != fingerprint:
                     intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    input_changed_count += 1
                     continue
                 if match.status is MatchStatus.MATCHED:
                     if (
@@ -1392,6 +1476,7 @@ class EngineRunner:
                         or match.spotify_duration_seconds is None
                     ):
                         intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                        missing_evidence_count += 1
                     continue
                 retry = self.planner_journal.get_unresolved(
                     str(source.id), edition.source_native_id
@@ -1401,18 +1486,74 @@ class EngineRunner:
                     input_fingerprint=fingerprint,
                     now=now,
                 )
-                if reason in {
-                    PlannerReason.MISSING_EVIDENCE,
-                    PlannerReason.INPUT_CHANGED,
-                    PlannerReason.RETRY_DUE,
-                }:
+                if reason is PlannerReason.MISSING_EVIDENCE:
                     intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-            return _SourceMatchingPlan(intents, audit_due)
-        except Exception:
+                    missing_evidence_count += 1
+                elif reason is PlannerReason.INPUT_CHANGED:
+                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    input_changed_count += 1
+                elif reason is PlannerReason.RETRY_DUE:
+                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    retry_due_count += 1
+            diagnostics = SourceMatchingDiagnostics(
+                matching_work_count=len(intents),
+                matching_reason_new_match_count=new_match_count,
+                matching_reason_input_changed_count=input_changed_count,
+                matching_reason_retry_due_count=retry_due_count,
+                matching_reason_evidence_recovery_count=evidence_recovery_count,
+                matching_reason_missing_evidence_count=missing_evidence_count,
+                unresolved_relevant_count=unresolved_relevant_count,
+                catalogue_audit_due=audit_due,
+            )
             return _SourceMatchingPlan(
-                {edition.identity: MatchEvaluationIntent.EVIDENCE_RECOVERY for edition in editions},
+                intents,
+                audit_due,
+                diagnostics=diagnostics,
+            )
+        except Exception:
+            intents = {
+                edition.identity: MatchEvaluationIntent.EVIDENCE_RECOVERY for edition in editions
+            }
+            return _SourceMatchingPlan(
+                intents,
                 True,
                 conservative=True,
+                diagnostics=SourceMatchingDiagnostics(
+                    matching_work_count=len(intents),
+                    catalogue_audit_due=True,
+                    matching_plan_conservative=True,
+                ),
+            )
+
+    @staticmethod
+    def _apply_source_plan_diagnostics(
+        source_outcomes: dict[SourceId, SourceCycleOutcome],
+        source_plans: Mapping[SourceId, _SourceMatchingPlan],
+    ) -> None:
+        for source_id, plan in source_plans.items():
+            current = source_outcomes.get(source_id)
+            if current is not None:
+                source_outcomes[source_id] = replace(current, matching_diagnostics=plan.diagnostics)
+
+    @staticmethod
+    def _apply_source_catalogue_diagnostics(
+        source_outcomes: dict[SourceId, SourceCycleOutcome],
+        source_plans: Mapping[SourceId, _SourceMatchingPlan],
+        coordinator: _CycleCatalogueCoordinator,
+    ) -> None:
+        for source_id, plan in source_plans.items():
+            current = source_outcomes.get(source_id)
+            if current is None:
+                continue
+            observation = coordinator.observation(source_id)
+            source_outcomes[source_id] = replace(
+                current,
+                matching_diagnostics=replace(
+                    plan.diagnostics,
+                    catalogue_requested=observation.requested,
+                    catalogue_inspected=observation.inspected,
+                    catalogue_request_count=observation.request_count,
+                ),
             )
 
     def _build_source_work(

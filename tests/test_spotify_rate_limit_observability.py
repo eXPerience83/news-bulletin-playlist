@@ -128,9 +128,21 @@ def test_same_cycle_backoff_reports_deferred_matching_and_preserved_later_destin
     source_event = next(event for event in events if event.component == "source")
     assert source_event.severity is DiagnosticSeverity.WARNING
     assert source_event.details == {
+        "catalogue_audit_due": False,
+        "catalogue_inspected": False,
+        "catalogue_request_count": 0,
+        "catalogue_requested": False,
         "edition_count": 1,
         "matched_count": 0,
+        "matching_plan_conservative": False,
+        "matching_reason_evidence_recovery_count": 0,
+        "matching_reason_input_changed_count": 0,
+        "matching_reason_missing_evidence_count": 0,
+        "matching_reason_new_match_count": 0,
+        "matching_reason_retry_due_count": 0,
+        "matching_work_count": 0,
         "phase": "matching",
+        "unresolved_relevant_count": 0,
     }
     playlist_event = next(event for event in events if event.component == "playlist")
     assert playlist_event.severity is DiagnosticSeverity.WARNING
