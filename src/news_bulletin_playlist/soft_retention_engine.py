@@ -12,7 +12,6 @@ from news_bulletin_playlist.desired_state import DesiredPlaylistState, DesiredSt
 from news_bulletin_playlist.engine import (
     EngineCycleResult,
     EngineRunner,
-    PlannerShadowResult,
     _DestinationWorkPlan,
 )
 from news_bulletin_playlist.models import PlaylistDefinition, PlaylistId, SourceDefinition, SourceId
@@ -25,6 +24,7 @@ from news_bulletin_playlist.spotify_destination_audit import playlist_attestatio
 from news_bulletin_playlist.spotify_planner import (
     DestinationState,
     DestinationVerificationContext,
+    PlannerShadowResult,
     SpotifyPlannerJournal,
     destination_context_fingerprint,
     matching_input_fingerprint,
