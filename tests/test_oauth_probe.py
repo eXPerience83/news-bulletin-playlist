@@ -15,7 +15,7 @@ from news_bulletin_playlist.spotify import oauth_probe
 
 
 def callback(query: str) -> str:
-    return f"http://127.0.0.1:8787/callback?{query}"
+    return f"{oauth_probe.REDIRECT_URI}?{query}"
 
 
 def test_verifier_is_valid_pkce_length_and_ascii() -> None:
@@ -49,6 +49,7 @@ def test_authorize_url_uses_registered_redirect_and_requested_scopes() -> None:
         "client", state="state", challenge="challenge", scopes=oauth_probe.scopes_for_mode(False)
     )
     params = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    assert oauth_probe.REDIRECT_URI == "http://127.0.0.1:8787/admin/spotify/callback"
     assert params["redirect_uri"] == [oauth_probe.REDIRECT_URI]
     assert params["scope"] == ["user-read-playback-position user-read-private"]
 
@@ -133,12 +134,13 @@ def test_callback_rejects_sensitive_parameter_errors(query: str, message: str) -
 @pytest.mark.parametrize(
     "url",
     [
-        "https://127.0.0.1:8787/callback?code=code&state=expected",
-        "http://localhost:8787/callback?code=code&state=expected",
-        "http://127.0.0.1:9999/callback?code=code&state=expected",
+        "https://127.0.0.1:8787/admin/spotify/callback?code=code&state=expected",
+        "http://localhost:8787/admin/spotify/callback?code=code&state=expected",
+        "http://127.0.0.1:9999/admin/spotify/callback?code=code&state=expected",
+        "http://127.0.0.1:8787/callback?code=code&state=expected",
         "http://127.0.0.1:8787/wrong?code=code&state=expected",
-        "http://user@127.0.0.1:8787/callback?code=code&state=expected",
-        "http://127.0.0.1:8787/callback?code=code&state=expected#fragment",
+        "http://user@127.0.0.1:8787/admin/spotify/callback?code=code&state=expected",
+        "http://127.0.0.1:8787/admin/spotify/callback?code=code&state=expected#fragment",
         "not a URL",
     ],
 )

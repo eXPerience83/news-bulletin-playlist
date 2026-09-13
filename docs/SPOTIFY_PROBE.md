@@ -50,12 +50,15 @@ The callback URL entered in manual mode is read with no-echo terminal input.
 ## Redirect URI rule
 
 Spotify currently requires HTTPS except for explicit loopback IP literals. `localhost` is not
-accepted. The local PKCE helper uses exactly:
+accepted. The local PKCE helper deliberately reuses the same canonical callback path as the
+LAN/admin Spotify authorization flow and uses exactly:
 
-`http://127.0.0.1:8787/callback`
+`http://127.0.0.1:8787/admin/spotify/callback`
 
-A TrueNAS-hosted/admin-web callback will instead need a real HTTPS URL; a browser on another device
-cannot use the server's `127.0.0.1`.
+Register that exact loopback URI in the Spotify Developer App used for the probe. Do not add a
+second `/callback` redirect merely for LAB work. A TrueNAS-hosted/admin-web callback exposed beyond
+loopback will instead need its normal externally valid URL; a browser on another device cannot use
+the server's `127.0.0.1`.
 
 ## Recommended local / Codex path
 
@@ -89,9 +92,10 @@ python -m news_bulletin_playlist.spotify.oauth_probe \
 
 The helper prints only the path `/tmp/spotify-authorization-url`, not the URL itself. Deliberately
 retrieve/open the file outside retained application/container logs. Spotify will redirect the user's
-browser to `http://127.0.0.1:8787/callback?...`; a browser connection failure is expected in this
-remote-container setup. Copy the complete callback URL from the browser address bar and paste it
-into the probe's no-echo terminal prompt. The callback is validated locally, including `state`.
+browser to `http://127.0.0.1:8787/admin/spotify/callback?...`; a browser connection failure is
+expected in this remote-container setup. Copy the complete callback URL from the browser address bar
+and paste it into the probe's no-echo terminal prompt. The callback is validated locally, including
+`state`.
 
 Delete the one-time URL file after the handoff:
 
