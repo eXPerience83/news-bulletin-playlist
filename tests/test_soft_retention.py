@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.desired_state import DesiredPlaylistItem, DesiredPlaylistState
 from news_bulletin_playlist.models import (
@@ -50,7 +49,10 @@ def _item(native_id: str, *, age: timedelta, uri_suffix: str | None = None) -> D
     )
 
 
-def _state(*items: DesiredPlaylistItem, generated_at: datetime | None = None) -> DesiredPlaylistState:
+def _state(
+    *items: DesiredPlaylistItem,
+    generated_at: datetime | None = None,
+) -> DesiredPlaylistState:
     return DesiredPlaylistState(
         playlist_id=PLAYLIST_ID,
         generated_at=NOW - timedelta(hours=1) if generated_at is None else generated_at,
@@ -106,7 +108,7 @@ def test_cleanup_is_forced_after_48_plus_8_hours() -> None:
         now=NOW,
     )
 
-    assert SOFT_RETENTION_GRACE == timedelta(hours=8)
+    assert timedelta(hours=8) == SOFT_RETENTION_GRACE
     assert decision.disposition is SoftRetentionDisposition.FORCE_HARD_EXPIRY
     assert decision.expiry_only
     assert decision.force_cleanup
