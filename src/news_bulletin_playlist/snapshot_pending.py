@@ -25,9 +25,11 @@ CREATE TABLE IF NOT EXISTS spotify_pending_snapshot_confirmations (
     expected_snapshot_id TEXT NOT NULL,
     desired_fingerprint TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
+    expires_at TEXT NOT NULL,
+    readback_exact INTEGER NOT NULL DEFAULT 0 CHECK (readback_exact IN (0, 1))
 )
 """
+_READBACK_EXACT_COLUMN = "readback_exact"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +41,7 @@ class PendingSnapshotConfirmation:
     desired_fingerprint: str
     created_at: datetime
     expires_at: datetime
+    readback_exact: bool = False
 
     def __post_init__(self) -> None:
         if not self.destination_id.strip():
@@ -55,6 +58,8 @@ class PendingSnapshotConfirmation:
             raise ValueError(
                 "pending snapshot desired_fingerprint must be a sha256 hex digest"
             ) from exc
+        if not isinstance(self.readback_exact, bool):
+            raise ValueError("pending snapshot readback_exact must be a boolean")
         created = _as_utc(self.created_at)
         expires = _as_utc(self.expires_at)
         if expires <= created:
@@ -119,7 +124,7 @@ class PendingSnapshotJournal:
             row = connection.execute(
                 """
                 SELECT playlist_id, destination_id, baseline_snapshot_id, expected_snapshot_id,
-                       desired_fingerprint, created_at, expires_at
+                       desired_fingerprint, created_at, expires_at, readback_exact
                 FROM spotify_pending_snapshot_confirmations
                 WHERE playlist_id = ?
                 """,
@@ -135,6 +140,7 @@ class PendingSnapshotJournal:
             desired_fingerprint=str(row["desired_fingerprint"]),
             created_at=_parse_timestamp(str(row["created_at"])),
             expires_at=_parse_timestamp(str(row["expires_at"])),
+            readback_exact=_parse_readback_exact(row["readback_exact"]),
         )
 
     def set(self, confirmation: PendingSnapshotConfirmation) -> None:
@@ -144,15 +150,16 @@ class PendingSnapshotJournal:
                 """
                 INSERT INTO spotify_pending_snapshot_confirmations (
                     playlist_id, destination_id, baseline_snapshot_id, expected_snapshot_id,
-                    desired_fingerprint, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    desired_fingerprint, created_at, expires_at, readback_exact
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(playlist_id) DO UPDATE SET
                     destination_id = excluded.destination_id,
                     baseline_snapshot_id = excluded.baseline_snapshot_id,
                     expected_snapshot_id = excluded.expected_snapshot_id,
                     desired_fingerprint = excluded.desired_fingerprint,
                     created_at = excluded.created_at,
-                    expires_at = excluded.expires_at
+                    expires_at = excluded.expires_at,
+                    readback_exact = excluded.readback_exact
                 """,
                 (
                     str(confirmation.playlist_id),
@@ -162,6 +169,7 @@ class PendingSnapshotJournal:
                     confirmation.desired_fingerprint,
                     _format_timestamp(confirmation.created_at),
                     _format_timestamp(confirmation.expires_at),
+                    int(confirmation.readback_exact),
                 ),
             )
 
@@ -176,6 +184,18 @@ class PendingSnapshotJournal:
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
         connection.execute(_TABLE_SQL)
+        columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(spotify_pending_snapshot_confirmations)"
+            ).fetchall()
+        }
+        if _READBACK_EXACT_COLUMN not in columns:
+            connection.execute(
+                "ALTER TABLE spotify_pending_snapshot_confirmations "
+                "ADD COLUMN readback_exact INTEGER NOT NULL DEFAULT 0 "
+                "CHECK (readback_exact IN (0, 1))"
+            )
 
     def _connection(self, operation: str) -> _ConnectionContext:
         try:
@@ -201,6 +221,12 @@ def _parse_timestamp(value: str) -> datetime:
     except ValueError as exc:
         raise PersistenceError("pending Spotify snapshot contained an invalid timestamp") from exc
     return _as_utc(parsed)
+
+
+def _parse_readback_exact(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, int) or value not in {0, 1}:
+        raise PersistenceError("pending Spotify snapshot contained an invalid readback_exact flag")
+    return bool(value)
 
 
 def _as_utc(value: datetime) -> datetime:

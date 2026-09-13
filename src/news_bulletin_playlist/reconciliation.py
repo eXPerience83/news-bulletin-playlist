@@ -219,17 +219,48 @@ def _reconcile_playlist_items(
     if store is not None and attestation_updated_at is None:
         raise ValueError("playlist attestation requires an update timestamp")
 
+    desired_fingerprint = _desired_fingerprint(desired)
+    pending_journal = PendingSnapshotJournal(store) if store is not None else None
+    pending_confirmation: PendingSnapshotConfirmation | None = None
+    pending_snapshot: str | None = None
+    if (
+        pending_journal is not None
+        and store is not None
+        and logical_playlist_id is not None
+        and attestation_updated_at is not None
+    ):
+        pending_confirmation = pending_journal.get(logical_playlist_id)
+        if pending_confirmation is not None:
+            if (
+                pending_confirmation.destination_id != playlist_id
+                or pending_confirmation.desired_fingerprint != desired_fingerprint
+                or attestation_updated_at >= pending_confirmation.expires_at
+            ):
+                pending_journal.clear(logical_playlist_id)
+                pending_confirmation = None
+            elif pending_confirmation.readback_exact:
+                pending_snapshot = _read_current_snapshot(client, playlist_id, phase="prewrite")
+                if pending_snapshot == pending_confirmation.expected_snapshot_id:
+                    store.set_playlist_attestation(
+                        logical_playlist_id,
+                        destination_id=playlist_id,
+                        snapshot_id=pending_confirmation.expected_snapshot_id,
+                        desired_fingerprint=desired_fingerprint,
+                        updated_at=attestation_updated_at,
+                    )
+                    pending_journal.clear(logical_playlist_id)
+                    return _PlaylistItemsReconciliationResult(wrote=False)
+
     current = _read_spotify_playlist(
         client,
         playlist_id,
         allow_unavailable=True,
         phase="prewrite",
     )
-    desired_fingerprint = _desired_fingerprint(desired)
-    pending_journal = PendingSnapshotJournal(store) if store is not None else None
 
     if (
-        pending_journal is not None
+        pending_confirmation is not None
+        and pending_journal is not None
         and store is not None
         and logical_playlist_id is not None
         and attestation_updated_at is not None
@@ -244,6 +275,8 @@ def _reconcile_playlist_items(
             logical_playlist_id=logical_playlist_id,
             now=attestation_updated_at,
             journal=pending_journal,
+            pending=pending_confirmation,
+            current_snapshot=pending_snapshot,
         )
         if pending_result is not None:
             return pending_result
@@ -386,7 +419,7 @@ def _reconcile_playlist_items(
 
     if not readback.had_unavailable_item:
         write_snapshot = _optional_snapshot(write_response)
-        pending_confirmation: PendingSnapshotConfirmation | None = None
+        pending_confirmation_after_write: PendingSnapshotConfirmation | None = None
         degraded_verification = False
         snapshot_warning: str | None = None
         if len(readback.slots) > _SPOTIFY_PLAYLIST_PAGE_SIZE or (
@@ -411,7 +444,7 @@ def _reconcile_playlist_items(
                         raise SpotifyReconciliationError(
                             "Spotify playlist exact stale snapshot lacked durable pending storage"
                         )
-                    pending_confirmation = PendingSnapshotConfirmation(
+                    pending_confirmation_after_write = PendingSnapshotConfirmation(
                         playlist_id=logical_playlist_id,
                         destination_id=playlist_id,
                         baseline_snapshot_id=prewrite_snapshot,
@@ -419,6 +452,7 @@ def _reconcile_playlist_items(
                         desired_fingerprint=desired_fingerprint,
                         created_at=attestation_updated_at,
                         expires_at=attestation_updated_at + _PENDING_SNAPSHOT_TTL,
+                        readback_exact=True,
                     )
                     degraded_verification = True
                     snapshot_warning = _SNAPSHOT_PROPAGATION_WARNING
@@ -456,9 +490,9 @@ def _reconcile_playlist_items(
                         )
         if store is not None and logical_playlist_id is not None:
             assert attestation_updated_at is not None
-            if pending_confirmation is not None:
+            if pending_confirmation_after_write is not None:
                 assert pending_journal is not None
-                pending_journal.set(pending_confirmation)
+                pending_journal.set(pending_confirmation_after_write)
             else:
                 if pending_journal is not None:
                     pending_journal.clear(logical_playlist_id)
@@ -502,6 +536,7 @@ def _reconcile_playlist_items(
                     desired_fingerprint=desired_fingerprint,
                     created_at=attestation_updated_at,
                     expires_at=attestation_updated_at + _PENDING_SNAPSHOT_TTL,
+                    readback_exact=False,
                 )
             )
             return _PlaylistItemsReconciliationResult(
@@ -603,11 +638,9 @@ def _resolve_pending_confirmation(
     logical_playlist_id: PlaylistId,
     now: datetime,
     journal: PendingSnapshotJournal,
+    pending: PendingSnapshotConfirmation,
+    current_snapshot: str | None = None,
 ) -> _PlaylistItemsReconciliationResult | None:
-    pending = journal.get(logical_playlist_id)
-    if pending is None:
-        return None
-
     if (
         pending.destination_id != playlist_id
         or pending.desired_fingerprint != desired_fingerprint
@@ -622,9 +655,10 @@ def _resolve_pending_confirmation(
         journal.clear(logical_playlist_id)
         return None
 
-    # The pending transition itself is now the safety boundary. Ambiguous snapshot I/O must
-    # propagate and produce zero writes rather than falling through to a replace.
-    current_snapshot = _read_current_snapshot(client, playlist_id, phase="prewrite")
+    # Exact pending state may have read the snapshot before item verification so the B fast path
+    # can avoid item calls. Reuse that observation for A/C instead of issuing a duplicate read.
+    if current_snapshot is None:
+        current_snapshot = _read_current_snapshot(client, playlist_id, phase="prewrite")
     if current_snapshot == pending.expected_snapshot_id:
         store.set_playlist_attestation(
             logical_playlist_id,
