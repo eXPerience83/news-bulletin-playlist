@@ -251,10 +251,11 @@ python -m news_bulletin_playlist.spotify.oauth_probe \
 
 Do not add `--write` until the read-only output has been reviewed. The probe creates the URL file as
 a new mode-`0600` file and prints only its path. Inspect/open it deliberately outside retained
-application logs. Manual mode redirects to `http://127.0.0.1:8787/callback`; on a remote container a
-browser connection error is expected. Copy the complete loopback callback into the no-echo terminal
-prompt, then remove `/tmp/spotify-authorization-url`. This remains a **P0 diagnostic path only**, not
-normal production authorization.
+application logs. Manual mode redirects to
+`http://127.0.0.1:8787/admin/spotify/callback`; on a remote container a browser connection error is
+expected. Copy the complete loopback callback into the no-echo terminal prompt, then remove
+`/tmp/spotify-authorization-url`. This is the same canonical callback path as the admin flow and
+remains a **P0 diagnostic path only**, not normal production authorization.
 
 ## Runtime design
 

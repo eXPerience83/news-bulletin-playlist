@@ -19,10 +19,11 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, cast
 
+from news_bulletin_playlist.spotify.auth import SPOTIFY_CALLBACK_PATH
 from news_bulletin_playlist.spotify.client import SpotifyClient
 from news_bulletin_playlist.spotify.probe import run_catalog_probe, run_write_probe
 
-REDIRECT_URI = "http://127.0.0.1:8787/callback"
+REDIRECT_URI = f"http://127.0.0.1:8787{SPOTIFY_CALLBACK_PATH}"
 _AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
 _TOKEN_URL = "https://accounts.spotify.com/api/token"
 _LOCAL_CALLBACK_TIMEOUT_SECONDS = 180.0
@@ -102,7 +103,7 @@ def parse_callback_url(callback_url: str, *, expected_state: str) -> str:
         parsed.scheme != "http"
         or parsed.hostname != "127.0.0.1"
         or port != 8787
-        or parsed.path != "/callback"
+        or parsed.path != SPOTIFY_CALLBACK_PATH
         or parsed.username is not None
         or parsed.password is not None
         or parsed.fragment
@@ -292,7 +293,7 @@ def present_authorization_url(
 
 def _print_manual_instructions() -> None:
     print(
-        "After authorizing, Spotify will try http://127.0.0.1:8787/callback. "
+        f"After authorizing, Spotify will try {REDIRECT_URI}. "
         "A browser connection error is expected when this helper runs in a remote container."
     )
     print("Copy the complete callback URL from the browser address bar and paste it below.")
