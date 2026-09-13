@@ -392,9 +392,7 @@ def test_metadata_snapshot_audit_does_not_move_deferred_baseline_timestamp(
     )
     client = _Spotify(baseline.uris, ["snapshot-c", "snapshot-c"])
 
-    with bind_soft_retention_audit_resolver(
-        lambda *_args: baseline
-    ):
+    with bind_soft_retention_audit_resolver(lambda *_args: baseline):
         result = audit_spotify_playlist_snapshot_first(
             client,
             playlist,
