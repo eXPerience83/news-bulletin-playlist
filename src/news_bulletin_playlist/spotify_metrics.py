@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -89,6 +92,74 @@ class SpotifyRequestMetricsSnapshot:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SpotifyRequestScopeSnapshot:
+    """Process-local request counts for one explicitly scoped unit of work."""
+
+    web_api: tuple[tuple[SpotifyWebApiOperation, int], ...] = ()
+    oauth: tuple[tuple[SpotifyOAuthOperation, int], ...] = ()
+    http_rate_limits: int = 0
+    quota_exceeded: int = 0
+
+    @property
+    def web_api_requests(self) -> int:
+        return sum(count for _operation, count in self.web_api)
+
+    @property
+    def oauth_requests(self) -> int:
+        return sum(count for _operation, count in self.oauth)
+
+    @property
+    def total_requests(self) -> int:
+        return self.web_api_requests + self.oauth_requests
+
+    def web_api_count(self, operation: SpotifyWebApiOperation) -> int:
+        return next((count for candidate, count in self.web_api if candidate is operation), 0)
+
+    def oauth_count(self, operation: SpotifyOAuthOperation) -> int:
+        return next((count for candidate, count in self.oauth if candidate is operation), 0)
+
+
+class SpotifyRequestScope:
+    """Mutable process-local accumulator exposed only through immutable snapshots."""
+
+    def __init__(self) -> None:
+        self._web_api: Counter[SpotifyWebApiOperation] = Counter()
+        self._oauth: Counter[SpotifyOAuthOperation] = Counter()
+        self._http_rate_limits = 0
+        self._quota_exceeded = 0
+        self._lock = threading.Lock()
+
+    def record(
+        self,
+        *,
+        surface: str,
+        operation: str,
+        http_status: int | None,
+        quota_reason: SpotifyQuotaReason | None,
+    ) -> None:
+        with self._lock:
+            if surface == "web_api":
+                self._web_api[SpotifyWebApiOperation(operation)] += 1
+                if http_status == 429:
+                    self._http_rate_limits += 1
+                if quota_reason is SpotifyQuotaReason.QUOTA_EXCEEDED:
+                    self._quota_exceeded += 1
+            elif surface == "oauth":
+                self._oauth[SpotifyOAuthOperation(operation)] += 1
+            else:
+                raise ValueError("invalid Spotify request metric surface")
+
+    def snapshot(self) -> SpotifyRequestScopeSnapshot:
+        with self._lock:
+            return SpotifyRequestScopeSnapshot(
+                web_api=tuple(sorted(self._web_api.items(), key=lambda item: item[0].value)),
+                oauth=tuple(sorted(self._oauth.items(), key=lambda item: item[0].value)),
+                http_rate_limits=self._http_rate_limits,
+                quota_exceeded=self._quota_exceeded,
+            )
+
+
 class SpotifyRequestMetrics:
     """Persist minute-level aggregates without letting observability alter provider behavior."""
 
@@ -97,12 +168,32 @@ class SpotifyRequestMetrics:
         self._clock = _utc_now if clock is None else clock
         self._pending_incomplete_at: datetime | None = None
         self._lock = threading.Lock()
+        self._active_scope: ContextVar[SpotifyRequestScope | None] = ContextVar(
+            f"spotify_request_scope_{id(self)}",
+            default=None,
+        )
 
     def initialize(self) -> None:
         try:
             SQLiteStore(self.path).initialize()
         except PersistenceError, ValueError:
             self._mark_incomplete(_as_utc(self._clock()))
+
+    @contextmanager
+    def request_scope(self) -> Iterator[SpotifyRequestScope]:
+        """Count requests in this execution context without capturing concurrent admin traffic."""
+        current = self._active_scope.get()
+        if current is not None:
+            # Nested instrumentation belongs to the same unit of work. Sharing the accumulator
+            # avoids double counting while keeping nesting harmless to provider behavior.
+            yield current
+            return
+        scope = SpotifyRequestScope()
+        token = self._active_scope.set(scope)
+        try:
+            yield scope
+        finally:
+            self._active_scope.reset(token)
 
     def record_web_api(
         self,
@@ -189,6 +280,12 @@ class SpotifyRequestMetrics:
         quota_reason: SpotifyQuotaReason | None,
         occurred_at: datetime | None,
     ) -> None:
+        self._record_active_scope(
+            surface=surface,
+            operation=operation,
+            http_status=http_status,
+            quota_reason=quota_reason,
+        )
         if http_status is not None and not 100 <= http_status <= 599:
             self._mark_incomplete(_as_utc(occurred_at or self._clock()))
             return
@@ -230,6 +327,28 @@ class SpotifyRequestMetrics:
             self._clear_persisted_pending(persisted_pending)
         except PersistenceError:
             self._mark_incomplete(observed)
+
+    def _record_active_scope(
+        self,
+        *,
+        surface: str,
+        operation: str,
+        http_status: int | None,
+        quota_reason: SpotifyQuotaReason | None,
+    ) -> None:
+        scope = self._active_scope.get()
+        if scope is None:
+            return
+        try:
+            scope.record(
+                surface=surface,
+                operation=operation,
+                http_status=http_status,
+                quota_reason=quota_reason,
+            )
+        except TypeError, ValueError:
+            # Cycle accounting is observability only and may never alter provider behavior.
+            return
 
     def _connection(self, operation: str) -> _MetricsConnection:
         return _MetricsConnection(self.path, operation)

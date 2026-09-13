@@ -23,6 +23,10 @@ from news_bulletin_playlist.spotify_backoff import (
     SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX,
     SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE,
 )
+from news_bulletin_playlist.spotify_metrics import (
+    SpotifyRequestMetrics,
+    SpotifyRequestScopeSnapshot,
+)
 from news_bulletin_playlist.spotify_planner import PlannerReason
 
 Clock = Callable[[], datetime]
@@ -38,10 +42,21 @@ class InstrumentedEngineCycleRunner:
         diagnostics: OperationalDiagnostics,
         *,
         clock: Clock | None = None,
+        request_metrics: SpotifyRequestMetrics | None = None,
     ) -> None:
         self.runner = runner
         self.diagnostics = diagnostics
         self.clock = clock or _utc_now
+        discovered_metrics = getattr(runner, "request_metrics", None)
+        self.request_metrics = (
+            request_metrics
+            if request_metrics is not None
+            else (
+                discovered_metrics
+                if isinstance(discovered_metrics, SpotifyRequestMetrics)
+                else None
+            )
+        )
 
     def run_cycle(self) -> EngineCycleResult:
         observed_start = _as_utc(self.clock())
@@ -53,23 +68,54 @@ class InstrumentedEngineCycleRunner:
             event_name="cycle_started",
             cycle_id=cycle_id,
         )
-        try:
-            result = self.runner.run_cycle()
-        except Exception:  # noqa: BLE001 - preserve scheduler isolation; never log exception text
-            self.diagnostics.emit(
-                occurred_at=_as_utc(self.clock()),
-                severity=DiagnosticSeverity.ERROR,
-                component="engine",
-                event_name="cycle_unexpected_failure",
-                cycle_id=cycle_id,
-                details={"phase": "scheduler"},
-            )
-            raise
 
-        self._emit_result(result, cycle_id)
+        request_metrics = self.request_metrics
+        if request_metrics is None:
+            try:
+                result = self.runner.run_cycle()
+            except Exception:  # noqa: BLE001 - preserve scheduler isolation; never log exception text
+                self.diagnostics.emit(
+                    occurred_at=_as_utc(self.clock()),
+                    severity=DiagnosticSeverity.ERROR,
+                    component="engine",
+                    event_name="cycle_unexpected_failure",
+                    cycle_id=cycle_id,
+                    details={"phase": "scheduler"},
+                )
+                raise
+            request_snapshot = None
+        else:
+            with request_metrics.request_scope() as request_scope:
+                try:
+                    result = self.runner.run_cycle()
+                except Exception:  # noqa: BLE001 - preserve scheduler isolation; never log exception text
+                    occurred_at = _as_utc(self.clock())
+                    self._emit_spotify_request_scope(
+                        request_scope.snapshot(),
+                        cycle_id=cycle_id,
+                        occurred_at=occurred_at,
+                    )
+                    self.diagnostics.emit(
+                        occurred_at=occurred_at,
+                        severity=DiagnosticSeverity.ERROR,
+                        component="engine",
+                        event_name="cycle_unexpected_failure",
+                        cycle_id=cycle_id,
+                        details={"phase": "scheduler"},
+                    )
+                    raise
+                request_snapshot = request_scope.snapshot()
+
+        self._emit_result(result, cycle_id, request_snapshot=request_snapshot)
         return result
 
-    def _emit_result(self, result: EngineCycleResult, cycle_id: str) -> None:
+    def _emit_result(
+        self,
+        result: EngineCycleResult,
+        cycle_id: str,
+        *,
+        request_snapshot: SpotifyRequestScopeSnapshot | None = None,
+    ) -> None:
         for source in result.sources:
             if not source.collection_ok:
                 event_name = "source_collection_failed"
@@ -238,6 +284,13 @@ class InstrumentedEngineCycleRunner:
                 details=details,
             )
 
+        if request_snapshot is not None:
+            self._emit_spotify_request_scope(
+                request_snapshot,
+                cycle_id=cycle_id,
+                occurred_at=result.finished_at,
+            )
+
         duration_ms = max(
             round((result.finished_at - result.started_at).total_seconds() * 1000),
             0,
@@ -266,6 +319,81 @@ class InstrumentedEngineCycleRunner:
                 "total": len(result.sources) + len(result.playlists),
             },
         )
+
+    def _emit_spotify_request_scope(
+        self,
+        snapshot: SpotifyRequestScopeSnapshot,
+        *,
+        cycle_id: str,
+        occurred_at: datetime,
+    ) -> None:
+        """Emit bounded per-cycle aggregates; never one event per provider request."""
+        self.diagnostics.emit(
+            occurred_at=occurred_at,
+            severity=DiagnosticSeverity.INFO,
+            component="spotify.requests",
+            event_name="cycle_request_accounting",
+            cycle_id=cycle_id,
+            details={"total": snapshot.total_requests},
+        )
+        if snapshot.web_api_requests:
+            self.diagnostics.emit(
+                occurred_at=occurred_at,
+                severity=DiagnosticSeverity.INFO,
+                component="spotify.requests",
+                event_name="cycle_request_web_api_total",
+                cycle_id=cycle_id,
+                details={"total": snapshot.web_api_requests},
+            )
+        for web_operation, count in snapshot.web_api:
+            if count <= 0:
+                continue
+            self.diagnostics.emit(
+                occurred_at=occurred_at,
+                severity=DiagnosticSeverity.INFO,
+                component="spotify.requests",
+                event_name=f"cycle_request_web_api_{web_operation.value}",
+                cycle_id=cycle_id,
+                details={"total": count},
+            )
+        if snapshot.oauth_requests:
+            self.diagnostics.emit(
+                occurred_at=occurred_at,
+                severity=DiagnosticSeverity.INFO,
+                component="spotify.requests",
+                event_name="cycle_request_oauth_total",
+                cycle_id=cycle_id,
+                details={"total": snapshot.oauth_requests},
+            )
+        for oauth_operation, count in snapshot.oauth:
+            if count <= 0:
+                continue
+            self.diagnostics.emit(
+                occurred_at=occurred_at,
+                severity=DiagnosticSeverity.INFO,
+                component="spotify.requests",
+                event_name=f"cycle_request_oauth_{oauth_operation.value}",
+                cycle_id=cycle_id,
+                details={"total": count},
+            )
+        if snapshot.http_rate_limits:
+            self.diagnostics.emit(
+                occurred_at=occurred_at,
+                severity=DiagnosticSeverity.WARNING,
+                component="spotify.requests",
+                event_name="cycle_request_http_429",
+                cycle_id=cycle_id,
+                details={"total": snapshot.http_rate_limits},
+            )
+        if snapshot.quota_exceeded:
+            self.diagnostics.emit(
+                occurred_at=occurred_at,
+                severity=DiagnosticSeverity.WARNING,
+                component="spotify.requests",
+                event_name="cycle_request_quota_exceeded",
+                cycle_id=cycle_id,
+                details={"total": snapshot.quota_exceeded},
+            )
 
     def _emit_duration_profiles(
         self,
