@@ -355,6 +355,26 @@ def _source_diagnostic_details(
         "catalogue_inspected": matching.catalogue_inspected,
         "catalogue_request_count": matching.catalogue_request_count,
     }
+    if matching.catalogue_request_count > 0:
+        if matching.matching_work_count > 0:
+            matching_requests = matching.catalogue_request_count
+            audit_requests = 0
+            prewrite_requests = 0
+        elif matching.catalogue_audit_due or matching.matching_plan_conservative:
+            matching_requests = 0
+            audit_requests = matching.catalogue_request_count
+            prewrite_requests = 0
+        else:
+            matching_requests = 0
+            audit_requests = 0
+            prewrite_requests = matching.catalogue_request_count
+        details.update(
+            {
+                "catalogue_matching_request_count": matching_requests,
+                "catalogue_audit_request_count": audit_requests,
+                "catalogue_prewrite_request_count": prewrite_requests,
+            }
+        )
     collection = source.collection_diagnostics
     optional_collection_details = {
         "rss_item_count": collection.rss_item_count,
