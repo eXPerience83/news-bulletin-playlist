@@ -84,7 +84,7 @@ def classify_soft_retention(
     oldest_age = observed_at - oldest_time
     disposition = (
         SoftRetentionDisposition.FORCE_HARD_EXPIRY
-        if oldest_age > timedelta(hours=playlist.retention_hours) + SOFT_RETENTION_GRACE
+        if oldest_age >= timedelta(hours=playlist.retention_hours) + SOFT_RETENTION_GRACE
         else SoftRetentionDisposition.DEFER
     )
     return SoftRetentionDecision(
