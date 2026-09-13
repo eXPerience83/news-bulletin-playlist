@@ -115,7 +115,7 @@ def test_cleanup_is_forced_after_48_plus_8_hours() -> None:
     assert not decision.should_defer
 
 
-def test_exact_56_hour_boundary_remains_inside_grace() -> None:
+def test_exact_56_hour_boundary_forces_cleanup() -> None:
     current = _item("current", age=timedelta(hours=1))
     expired = _item("expired", age=timedelta(hours=56))
 
@@ -126,7 +126,9 @@ def test_exact_56_hour_boundary_remains_inside_grace() -> None:
         now=NOW,
     )
 
-    assert decision.should_defer
+    assert decision.disposition is SoftRetentionDisposition.FORCE_HARD_EXPIRY
+    assert decision.force_cleanup
+    assert not decision.should_defer
 
 
 def test_new_episode_plus_expiry_is_not_expiry_only() -> None:
