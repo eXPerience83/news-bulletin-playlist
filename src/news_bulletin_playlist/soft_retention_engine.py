@@ -72,8 +72,7 @@ def resolve_soft_retention_evidence(
             or destination.dirty
             or destination.unknown
             or destination.confirmed_desired_fingerprint is None
-            or destination.confirmed_desired_fingerprint
-            != destination.observed_desired_fingerprint
+            or destination.confirmed_desired_fingerprint != destination.observed_desired_fingerprint
             or destination.destination_context_fingerprint
             != destination_context_fingerprint(playlist)
             or destination.config_fingerprint != playlist_config_fingerprint(playlist)
@@ -117,9 +116,8 @@ def resolve_soft_retention_evidence(
             ):
                 return None
             match_input = journal.get_match_input(str(item.source_id), item.source_native_id)
-            if (
-                match_input is None
-                or match_input.input_fingerprint != matching_input_fingerprint(source, edition)
+            if match_input is None or match_input.input_fingerprint != matching_input_fingerprint(
+                source, edition
             ):
                 return None
 
@@ -132,7 +130,7 @@ def resolve_soft_retention_evidence(
         if not decision.expiry_only:
             return None
         return SoftRetentionEvidence(baseline, decision)
-    except (DesiredStateError, PersistenceError, ValueError):
+    except DesiredStateError, PersistenceError, ValueError:
         return None
 
 
@@ -204,7 +202,7 @@ class SoftRetentionEngineRunner(EngineRunner):
                 now=now,
                 source_timezones=self._source_timezones(),
             )
-        except (DesiredStateError, PersistenceError, ValueError):
+        except DesiredStateError, PersistenceError, ValueError:
             return plan
         evidence = self._soft_retention_evidence(playlist, logical_desired, now=now)
         if evidence is None or not evidence.decision.should_defer:
@@ -255,7 +253,7 @@ class SoftRetentionEngineRunner(EngineRunner):
                 now=now,
                 source_timezones=self._source_timezones(),
             )
-        except (DesiredStateError, PersistenceError, ValueError):
+        except DesiredStateError, PersistenceError, ValueError:
             return requested_fingerprint
         if stable_fingerprint(logical_desired.uris) != requested_fingerprint:
             return requested_fingerprint
