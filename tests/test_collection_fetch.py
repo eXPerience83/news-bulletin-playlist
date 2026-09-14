@@ -83,11 +83,7 @@ def _install_opener(
 
     def build_opener(*handlers: object) -> _Opener:
         redirect_handler = next(
-            (
-                handler
-                for handler in handlers
-                if isinstance(handler, collection._RedirectCounter)
-            ),
+            (handler for handler in handlers if isinstance(handler, collection._RedirectCounter)),
             None,
         )
         opener = _Opener(
