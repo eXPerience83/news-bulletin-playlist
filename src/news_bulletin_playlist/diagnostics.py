@@ -114,6 +114,8 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "retry_not_before",
         "returned_count",
         "rss_duplicate_native_id_count",
+        "rss_fetch_duration_ms",
+        "rss_fetch_failure_kind",
         "rss_filter_rejected_count",
         "rss_invalid_published_at_count",
         "rss_item_count",
@@ -121,6 +123,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "rss_native_id_enclosure_count",
         "rss_native_id_guid_count",
         "rss_native_id_link_count",
+        "rss_redirect_count",
         "rss_title_parser_rejected_count",
         "sample_count",
         "total",
@@ -249,6 +252,20 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "scheduler",
             "verification",
             "write",
+        }
+    ),
+    "rss_fetch_failure_kind": frozenset(
+        {
+            "connection",
+            "dns",
+            "http_4xx",
+            "http_5xx",
+            "invalid_gzip",
+            "other_io",
+            "payload_too_large",
+            "redirect_error",
+            "timeout",
+            "tls",
         }
     ),
     "verification_outcome": frozenset(
