@@ -154,8 +154,17 @@ class _RedirectCounter(urllib.request.HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> urllib.request.Request | None:
-        self.redirect_count += 1
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+
+        visited = getattr(req, "redirect_dict", {})
+        if (
+            visited.get(newurl, 0) < self.max_repeats
+            and len(visited) < self.max_redirections
+        ):
+            self.redirect_count += 1
+        return redirected
 
 
 def required_sources(config: EngineConfig) -> tuple[SourceDefinition, ...]:
