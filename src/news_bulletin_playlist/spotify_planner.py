@@ -40,6 +40,10 @@ class UnresolvedReason(StrEnum):
     MULTIPLE_CANDIDATES = "multiple_candidates"
 
 
+class MatchedRecoveryReason(StrEnum):
+    INCONCLUSIVE_CATALOGUE = "inconclusive_catalogue"
+
+
 _REASON_ORDER = tuple(PlannerReason)
 
 
@@ -109,6 +113,17 @@ class MatchInputState:
     source_native_id: str
     input_fingerprint: str
     observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MatchedRecoveryState:
+    source_id: str
+    source_native_id: str
+    input_fingerprint: str
+    reason: MatchedRecoveryReason
+    first_attempt_at: datetime
+    last_attempt_at: datetime
+    next_retry_at: datetime
 
 
 class SpotifyPlannerJournal:
@@ -322,6 +337,101 @@ class SpotifyPlannerJournal:
         ):
             raise PersistenceError("Spotify planner retry timestamps are inconsistent")
         return state
+
+    def get_matched_recovery(
+        self, source_id: str, source_native_id: str
+    ) -> MatchedRecoveryState | None:
+        with self._connection("read Spotify planner matched recovery state") as connection:
+            row = connection.execute(
+                """
+                SELECT source_id, source_native_id, input_fingerprint, reason,
+                       first_attempt_at, last_attempt_at, next_retry_at
+                FROM spotify_planner_matched_recovery_state
+                WHERE source_id = ? AND source_native_id = ?
+                """,
+                (source_id, source_native_id),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            reason = MatchedRecoveryReason(_text(row, "reason"))
+        except ValueError as exc:
+            raise PersistenceError("Spotify planner matched recovery has invalid reason") from exc
+        state = MatchedRecoveryState(
+            source_id=_text(row, "source_id"),
+            source_native_id=_text(row, "source_native_id"),
+            input_fingerprint=_fingerprint(row, "input_fingerprint"),
+            reason=reason,
+            first_attempt_at=_timestamp_value(row, "first_attempt_at"),
+            last_attempt_at=_timestamp_value(row, "last_attempt_at"),
+            next_retry_at=_timestamp_value(row, "next_retry_at"),
+        )
+        if (
+            state.first_attempt_at > state.last_attempt_at
+            or state.next_retry_at - state.last_attempt_at != AUDIT_INTERVAL
+        ):
+            raise PersistenceError("Spotify planner matched recovery timestamps are inconsistent")
+        return state
+
+    def record_matched_recovery(
+        self,
+        *,
+        source_id: str,
+        source_native_id: str,
+        input_fingerprint: str,
+        attempted_at: datetime,
+    ) -> MatchedRecoveryState:
+        attempted = _as_utc(attempted_at)
+        input_fingerprint = _require_fingerprint(input_fingerprint)
+        current = self.get_matched_recovery(source_id, source_native_id)
+        first = (
+            current.first_attempt_at
+            if current is not None and current.input_fingerprint == input_fingerprint
+            else attempted
+        )
+        baseline = max(attempted, current.last_attempt_at) if current is not None else attempted
+        state = MatchedRecoveryState(
+            source_id=source_id,
+            source_native_id=source_native_id,
+            input_fingerprint=input_fingerprint,
+            reason=MatchedRecoveryReason.INCONCLUSIVE_CATALOGUE,
+            first_attempt_at=first,
+            last_attempt_at=baseline,
+            next_retry_at=baseline + AUDIT_INTERVAL,
+        )
+        with self._connection("persist Spotify planner matched recovery state") as connection:
+            connection.execute(
+                """
+                INSERT INTO spotify_planner_matched_recovery_state (
+                    source_id, source_native_id, input_fingerprint, reason,
+                    first_attempt_at, last_attempt_at, next_retry_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_id, source_native_id) DO UPDATE SET
+                    input_fingerprint=excluded.input_fingerprint,
+                    reason=excluded.reason,
+                    first_attempt_at=excluded.first_attempt_at,
+                    last_attempt_at=excluded.last_attempt_at,
+                    next_retry_at=excluded.next_retry_at
+                """,
+                (
+                    source_id,
+                    source_native_id,
+                    input_fingerprint,
+                    state.reason.value,
+                    _timestamp(first),
+                    _timestamp(baseline),
+                    _timestamp(state.next_retry_at),
+                ),
+            )
+        return state
+
+    def clear_matched_recovery(self, source_id: str, source_native_id: str) -> None:
+        with self._connection("clear Spotify planner matched recovery state") as connection:
+            connection.execute(
+                """DELETE FROM spotify_planner_matched_recovery_state
+                   WHERE source_id = ? AND source_native_id = ?""",
+                (source_id, source_native_id),
+            )
 
     def get_match_input(self, source_id: str, source_native_id: str) -> MatchInputState | None:
         with self._connection("read Spotify planner match input") as connection:
@@ -652,6 +762,21 @@ def unresolved_retry_interval(age: timedelta) -> timedelta:
     if age < timedelta(hours=6):
         return timedelta(hours=1)
     return timedelta(hours=6)
+
+
+def matched_recovery_planning_reason(
+    state: MatchedRecoveryState | None, *, input_fingerprint: str, now: datetime
+) -> PlannerReason | None:
+    observed = _as_utc(now)
+    if state is None:
+        return PlannerReason.MISSING_EVIDENCE
+    if state.input_fingerprint != input_fingerprint:
+        return PlannerReason.INPUT_CHANGED
+    if observed < state.last_attempt_at:
+        return PlannerReason.CLOCK_ROLLBACK
+    if observed >= state.next_retry_at:
+        return PlannerReason.RETRY_DUE
+    return None
 
 
 def unresolved_planning_reason(
