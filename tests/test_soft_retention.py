@@ -79,6 +79,22 @@ def test_expiry_only_removal_is_deferred_per_playlist() -> None:
     assert decision.oldest_soft_expired_age_seconds == 49 * 60 * 60
 
 
+def test_exact_48_hour_boundary_is_soft_expired_and_deferred() -> None:
+    current = _item("current", age=timedelta(hours=1))
+    boundary = _item("boundary", age=timedelta(hours=48))
+
+    decision = classify_soft_retention(
+        _playlist(),
+        _state(current, boundary),
+        _state(current),
+        now=NOW,
+    )
+
+    assert decision.disposition is SoftRetentionDisposition.DEFER
+    assert decision.soft_expired_count == 1
+    assert decision.oldest_soft_expired_age_seconds == 48 * 60 * 60
+
+
 def test_multiple_expired_items_are_coalesced_into_one_deferred_cleanup() -> None:
     current = _item("current", age=timedelta(hours=2))
     expired_1 = _item("expired-1", age=timedelta(hours=49))
