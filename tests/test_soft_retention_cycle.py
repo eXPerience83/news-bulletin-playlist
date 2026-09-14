@@ -24,6 +24,7 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.reconciliation import build_desired_state_from_store
 from news_bulletin_playlist.soft_retention_engine import SoftRetentionEngineRunner
+from news_bulletin_playlist.spotify.matcher import match_source_editions
 from news_bulletin_playlist.spotify_destination_audit import playlist_attestation_fingerprint
 from news_bulletin_playlist.spotify_planner import (
     DestinationVerificationContext,
@@ -256,6 +257,103 @@ def _prepare_verified_baseline(
         updated_at=BASE,
     )
     return expected
+
+
+def test_inconclusive_catalogue_preserves_evidence_and_allows_expiry_only_defer(
+    tmp_path: Path,
+) -> None:
+    class IncompleteCatalogue:
+        calls = 0
+
+        def show_episodes(
+            self,
+            show_id: str,
+            *,
+            limit: int = 50,
+            offset: int = 0,
+        ) -> dict[str, Any]:
+            assert show_id == "show"
+            assert limit == 50
+            assert offset in {0, 50}
+            self.calls += 1
+            if offset == 0:
+                items = [_candidate("Current bulletin", "2026-09-13", CURRENT_URI)]
+            else:
+                items = [
+                    _candidate(
+                        "Unrelated programme",
+                        "2026-09-13",
+                        "spotify:episode:DDDDDDDDDDDDDDDDDDDDDD",
+                    )
+                ]
+            return {
+                "items": items,
+                "next": "more",
+                "limit": limit,
+                "offset": offset,
+                "total": 101,
+            }
+
+    source = _source()
+    playlist = _playlist()
+    config = EngineConfig(schema_version=1, sources=(source,), playlists=(playlist,))
+    store = _store(tmp_path)
+    baseline_context = _prepare_verified_baseline(store, source, playlist)
+    spotify = _Spotify((CURRENT_URI, OLD_URI))
+    auth = _Auth()
+    clock = _Clock(BASE)
+    runner = SoftRetentionEngineRunner(
+        config,
+        store,
+        auth,
+        fetcher=lambda _url: _feed(False),
+        client_factory=lambda _token: spotify,
+        clock=clock,
+        monotonic_clock=lambda: 1_000.0,
+    )
+    runner.destination_leases.publish(
+        playlist.id,
+        baseline_context,
+        verified_monotonic=1_000.0,
+    )
+    runner._shadow_auth_context = AUTH_CONTEXT
+
+    old = store.get_edition(SOURCE_ID, "old")
+    current = store.get_edition(SOURCE_ID, "current")
+    assert old is not None and current is not None
+    inspection = match_source_editions(
+        IncompleteCatalogue(),
+        store,
+        source,
+        (old, current),
+        now=BASE,
+    )
+    old_outcome = next(
+        outcome for outcome in inspection.outcomes if outcome.edition.source_native_id == "old"
+    )
+    assert not inspection.catalogue_complete
+    assert old_outcome.status is MatchStatus.MATCHED
+    assert old_outcome.spotify_episode_uri == OLD_URI
+    assert old_outcome.planner_input_evidence_qualified is None
+    runner._observe_matching_result(source, inspection, BASE)
+    old_input = runner.planner_journal.get_match_input(str(SOURCE_ID), "old")
+    assert old_input is not None
+    assert old_input.input_fingerprint == matching_input_fingerprint(source, old)
+
+    clock.value = BASE + timedelta(hours=2)
+    deferred = runner.run_cycle()
+
+    assert deferred.ok
+    assert deferred.playlists[0].desired_count == 1
+    assert deferred.playlists[0].applied_count == 2
+    assert deferred.playlists[0].wrote is False
+    assert not deferred.provider_work_planned
+    assert not deferred.provider_session_created
+    assert auth.calls == 0
+    assert spotify.show_calls == 0
+    assert spotify.item_calls == 0
+    assert spotify.snapshot_calls == 0
+    assert spotify.replacements == []
 
 
 def test_expiry_only_cycle_uses_zero_spotify_then_next_useful_write_cleans_up(
