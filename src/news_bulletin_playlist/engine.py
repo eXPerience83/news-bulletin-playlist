@@ -84,6 +84,7 @@ from news_bulletin_playlist.spotify_planner import (
     SpotifyPlannerJournal,
     catalogue_context_fingerprint,
     destination_context_fingerprint,
+    matched_recovery_planning_reason,
     matching_input_fingerprint,
     plan_shadow_cycle,
     playlist_config_fingerprint,
@@ -1205,7 +1206,24 @@ class EngineRunner:
                     prior_input = self.planner_journal.get_match_input(
                         str(source.id), edition.source_native_id
                     )
-                    if prior_input is None or prior_input.input_fingerprint != fingerprint:
+                    if prior_input is None:
+                        if match.status is MatchStatus.MATCHED:
+                            recovery = self.planner_journal.get_matched_recovery(
+                                str(source.id), edition.source_native_id
+                            )
+                            recovery_reason = matched_recovery_planning_reason(
+                                recovery,
+                                input_fingerprint=fingerprint,
+                                now=now,
+                            )
+                            if recovery_reason is PlannerReason.CLOCK_ROLLBACK:
+                                additional_reasons.add(recovery_reason)
+                            if recovery_reason is not None:
+                                source_reasons.append((identity, recovery_reason))
+                            continue
+                        source_reasons.append((identity, PlannerReason.INPUT_CHANGED))
+                        continue
+                    if prior_input.input_fingerprint != fingerprint:
                         source_reasons.append((identity, PlannerReason.INPUT_CHANGED))
                         continue
                     if match.status is MatchStatus.MATCHED:
@@ -1487,8 +1505,20 @@ class EngineRunner:
                     unresolved_relevant_count += 1
                 if prior_input is None:
                     if match.status is MatchStatus.MATCHED:
-                        intents[edition.identity] = MatchEvaluationIntent.EVIDENCE_RECOVERY
-                        evidence_recovery_count += 1
+                        recovery = self.planner_journal.get_matched_recovery(
+                            str(source.id), edition.source_native_id
+                        )
+                        reason = matched_recovery_planning_reason(
+                            recovery,
+                            input_fingerprint=fingerprint,
+                            now=now,
+                        )
+                        if reason is PlannerReason.INPUT_CHANGED:
+                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                            input_changed_count += 1
+                        elif reason is not None:
+                            intents[edition.identity] = MatchEvaluationIntent.EVIDENCE_RECOVERY
+                            evidence_recovery_count += 1
                     else:
                         intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
                         missing_evidence_count += 1
@@ -1832,15 +1862,39 @@ class EngineRunner:
                         input_fingerprint=input_fingerprint,
                         observed_at=observed_at,
                     )
+                    self.planner_journal.clear_matched_recovery(
+                        str(edition.source_id), edition.source_native_id
+                    )
                 elif outcome.planner_input_evidence_qualified is False:
                     self.planner_journal.clear_match_input(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                    self.planner_journal.clear_matched_recovery(
                         str(edition.source_id), edition.source_native_id
                     )
                 if outcome.status is MatchStatus.MATCHED:
                     self.planner_journal.clear_unresolved(
                         str(edition.source_id), edition.source_native_id
                     )
-                elif not outcome.from_cache:
+                    if (
+                        result.catalogue_inspected
+                        and outcome.planner_input_evidence_qualified is None
+                        and self.planner_journal.get_match_input(
+                            str(edition.source_id), edition.source_native_id
+                        )
+                        is None
+                    ):
+                        self.planner_journal.record_matched_recovery(
+                            source_id=str(edition.source_id),
+                            source_native_id=edition.source_native_id,
+                            input_fingerprint=input_fingerprint,
+                            attempted_at=observed_at,
+                        )
+                else:
+                    self.planner_journal.clear_matched_recovery(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                if outcome.status is not MatchStatus.MATCHED and not outcome.from_cache:
                     self.planner_journal.record_unresolved(
                         source_id=str(edition.source_id),
                         source_native_id=edition.source_native_id,
