@@ -1315,7 +1315,7 @@ class EngineRunner:
                     monotonic_now=self.monotonic_clock(),
                 )
             )
-        except (PersistenceError, ValueError):
+        except PersistenceError, ValueError:
             self.destination_leases.revoke(playlist.id)
             self._planner_shadow = PlannerShadowResult.unsafe()
             return _DestinationWorkPlan(needs_remote=False, state_available=False)
@@ -1640,7 +1640,7 @@ class EngineRunner:
                     now=now,
                     source_timezones=self._source_timezones(),
                 )
-            except (PersistenceError, DesiredStateError):
+            except PersistenceError, DesiredStateError:
                 self.destination_leases.revoke(playlist.id)
                 persistence_blocked.add(playlist.id)
                 continue
