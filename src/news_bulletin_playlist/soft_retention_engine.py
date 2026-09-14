@@ -164,7 +164,7 @@ class _SoftRetentionPlannerJournal(SpotifyPlannerJournal):
 
 
 class _SoftRetentionStore(SQLiteStore):
-    """Record the proven physical count while a logical expiry is deferred."""
+    """Record a physical count already proven by the deferral decision."""
 
     def __init__(self, path: Path, runner: SoftRetentionEngineRunner) -> None:
         super().__init__(path)
@@ -181,12 +181,12 @@ class _SoftRetentionStore(SQLiteStore):
         applied_count: int,
         error: str | None = None,
     ) -> None:
-        adjusted_applied_count = self.runner._soft_retention_applied_count(
-            playlist_id,
-            started_at=started_at,
-            ok=ok,
-            fallback=applied_count,
-        )
+        adjusted_applied_count = applied_count
+        if ok:
+            adjusted_applied_count = self.runner._soft_retention_deferred_applied_counts.get(
+                playlist_id,
+                applied_count,
+            )
         super().record_playlist_run(
             playlist_id,
             started_at=started_at,
@@ -205,11 +205,13 @@ class SoftRetentionEngineRunner(EngineRunner):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._soft_retention_now: datetime | None = None
+        self._soft_retention_deferred_applied_counts: dict[PlaylistId, int] = {}
         self._soft_retention_recorded_applied_counts: dict[PlaylistId, int] = {}
         self.store = _SoftRetentionStore(self.store.path, self)
         self.planner_journal = _SoftRetentionPlannerJournal(self.store, self)
 
     def _run_cycle(self) -> EngineCycleResult:
+        self._soft_retention_deferred_applied_counts.clear()
         self._soft_retention_recorded_applied_counts.clear()
         with bind_soft_retention_audit_resolver(self._soft_retention_audit_desired):
             result = super()._run_cycle()
@@ -300,6 +302,10 @@ class SoftRetentionEngineRunner(EngineRunner):
         )
         if playlist is None:
             return requested_fingerprint
+
+        # This cache is cycle-local transport of the exact evidence that authorized DEFER.
+        # Clear any earlier provisional decision before evaluating the latest desired state.
+        self._soft_retention_deferred_applied_counts.pop(playlist.id, None)
         try:
             logical_desired = build_desired_state_from_store(
                 self.store,
@@ -314,41 +320,10 @@ class SoftRetentionEngineRunner(EngineRunner):
         evidence = self._soft_retention_evidence(playlist, logical_desired, now=now)
         if evidence is None or not evidence.decision.should_defer:
             return requested_fingerprint
-        return stable_fingerprint(evidence.physical_baseline.uris)
-
-    def _soft_retention_applied_count(
-        self,
-        playlist_id: PlaylistId,
-        *,
-        started_at: datetime,
-        ok: bool,
-        fallback: int,
-    ) -> int:
-        if not ok:
-            return fallback
-        playlist = next(
-            (
-                candidate
-                for candidate in self.config.playlists
-                if candidate.enabled and candidate.id == playlist_id
-            ),
-            None,
+        self._soft_retention_deferred_applied_counts[playlist.id] = len(
+            evidence.physical_baseline.items
         )
-        if playlist is None:
-            return fallback
-        try:
-            logical_desired = build_desired_state_from_store(
-                self.store,
-                playlist,
-                now=started_at,
-                source_timezones=self._source_timezones(),
-            )
-        except DesiredStateError, PersistenceError, ValueError:
-            return fallback
-        evidence = self._soft_retention_evidence(playlist, logical_desired, now=started_at)
-        if evidence is None or not evidence.decision.should_defer:
-            return fallback
-        return len(evidence.physical_baseline.items)
+        return stable_fingerprint(evidence.physical_baseline.uris)
 
     def _soft_retention_evidence(
         self,
