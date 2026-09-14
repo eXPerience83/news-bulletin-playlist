@@ -1,3 +1,4 @@
+import time
 import urllib.error
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -10,16 +11,36 @@ from news_bulletin_playlist import collection
 
 
 class _RedirectHandler(BaseHTTPRequestHandler):
+    target_hits = 0
+
     def do_GET(self) -> None:
         if self.path == "/start":
             self.send_response(301)
             self.send_header("Location", "/feed")
             self.end_headers()
             return
+        if self.path == "/slow-start":
+            self.send_response(301)
+            self.send_header("Location", "/target")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"x")
+            self.wfile.flush()
+            time.sleep(0.5)
+            return
         if self.path == "/loop":
             self.send_response(301)
             self.send_header("Location", "/loop")
             self.end_headers()
+            return
+        if self.path == "/target":
+            type(self).target_hits += 1
+            payload = b"<rss />"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/rss+xml")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
             return
         if self.path == "/feed":
             payload = b"<rss />"
@@ -37,6 +58,7 @@ class _RedirectHandler(BaseHTTPRequestHandler):
 
 @contextmanager
 def _local_server() -> Iterator[str]:
+    _RedirectHandler.target_hits = 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -65,3 +87,12 @@ def test_fetch_feed_does_not_count_rejected_loop_redirect() -> None:
     assert raised.value.code == 301
     assert getattr(raised.value, collection._FETCH_REDIRECT_ATTR) == 4
     assert getattr(raised.value, collection._FETCH_FAILURE_KIND_ATTR) == "redirect_error"
+
+
+def test_fetch_feed_does_not_count_redirect_before_target_dispatch() -> None:
+    with _local_server() as base_url, pytest.raises(TimeoutError) as raised:
+        collection.fetch_feed(f"{base_url}/slow-start", timeout=0.1)
+
+    assert getattr(raised.value, collection._FETCH_REDIRECT_ATTR) == 0
+    assert getattr(raised.value, collection._FETCH_FAILURE_KIND_ATTR) == "timeout"
+    assert _RedirectHandler.target_hits == 0
