@@ -231,6 +231,7 @@ def test_persisted_mapping_is_revalidated_against_complete_catalogue(tmp_path: P
     assert result.outcomes[0].from_cache
     assert result.outcomes[0].spotify_episode_uri == "spotify:episode:255703f871486907cb7a6c"
     assert result.outcomes[0].spotify_duration_seconds == 60
+    assert result.outcomes[0].planner_input_evidence_qualified is True
 
 
 def test_removed_persisted_episode_is_invalidated_when_show_catalogue_is_complete(
@@ -302,8 +303,52 @@ def test_absence_from_truncated_catalogue_does_not_invalidate_persisted_mapping(
     result = match_source_editions(client, store, source, (edition,), now=now)
 
     assert result.catalogue_calls == DEFAULT_MAX_PAGES
+    assert not result.catalogue_complete
     assert result.outcomes[0].status is MatchStatus.MATCHED
     assert result.outcomes[0].spotify_episode_uri == "spotify:episode:749805a97028902eef9ca5"
+    assert result.outcomes[0].planner_input_evidence_qualified is None
+
+
+def test_present_cached_mapping_with_semantic_mismatch_is_negative_shadow_evidence(
+    tmp_path: Path,
+) -> None:
+    source = _source("ser", "ser", "Europe/Madrid", "show-ser")
+    edition = _edition(source, "ser-native", "Las noticias de la SER, 10:00 (30/08/2026)")
+    store = _store(tmp_path)
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    cached_uri = "spotify:episode:749805a97028902eef9ca5"
+    store.upsert_editions((edition,), observed_at=now)
+    store.set_match_state(
+        *edition.identity,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri=cached_uri,
+        spotify_duration_seconds=60,
+        diagnostics="known durable mapping",
+        updated_at=now - timedelta(days=1),
+    )
+    incompatible = _candidate(
+        edition,
+        source,
+        uri=cached_uri,
+        title="Unrelated programme",
+    )
+    client = FakeCatalogClient(
+        pages=[
+            {"items": [incompatible], "next": "page-2"},
+            {"items": [incompatible], "next": "page-3"},
+        ]
+    )
+
+    result = match_source_editions(client, store, source, (edition,), now=now)
+
+    assert not result.catalogue_complete
+    assert result.outcomes[0].from_cache
+    assert result.outcomes[0].spotify_episode_uri == cached_uri
+    assert result.outcomes[0].planner_input_evidence_qualified is False
+    state = store.get_match_state(*edition.identity)
+    assert state is not None
+    assert state.status is MatchStatus.MATCHED
+    assert state.spotify_episode_uri == cached_uri
 
 
 def test_empty_complete_catalogue_does_not_invalidate_every_persisted_mapping(
@@ -333,6 +378,7 @@ def test_empty_complete_catalogue_does_not_invalidate_every_persisted_mapping(
 
     assert result.outcomes[0].status is MatchStatus.MATCHED
     assert result.outcomes[0].spotify_episode_uri == "spotify:episode:255703f871486907cb7a6c"
+    assert result.outcomes[0].planner_input_evidence_qualified is None
 
 
 def test_empty_page_with_next_does_not_prove_catalogue_is_complete(tmp_path: Path) -> None:
