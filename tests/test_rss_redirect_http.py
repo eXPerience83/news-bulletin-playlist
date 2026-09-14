@@ -1,8 +1,8 @@
+import urllib.error
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
-import urllib.error
 
 import pytest
 
@@ -59,9 +59,8 @@ def test_fetch_feed_counts_followed_redirect_with_real_http() -> None:
 
 
 def test_fetch_feed_does_not_count_rejected_loop_redirect() -> None:
-    with _local_server() as base_url:
-        with pytest.raises(urllib.error.HTTPError) as raised:
-            collection.fetch_feed(f"{base_url}/loop")
+    with _local_server() as base_url, pytest.raises(urllib.error.HTTPError) as raised:
+        collection.fetch_feed(f"{base_url}/loop")
 
     assert raised.value.code == 301
     assert getattr(raised.value, collection._FETCH_REDIRECT_ATTR) == 4
