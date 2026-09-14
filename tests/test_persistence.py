@@ -63,6 +63,29 @@ def test_initialize_creates_temporary_data_database_and_is_repeatable(tmp_path: 
     assert _count_rows(store.path, "schema_migrations") == LATEST_SCHEMA_VERSION
 
 
+def test_schema_five_database_upgrades_to_matched_recovery_schema(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE spotify_planner_matched_recovery_state")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 6")
+
+    legacy = SQLiteStore(store.path)
+    assert legacy.schema_version() == 5
+
+    legacy.initialize()
+
+    assert legacy.schema_version() == 6
+    with sqlite3.connect(store.path) as connection:
+        row = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'spotify_planner_matched_recovery_state'
+            """
+        ).fetchone()
+    assert row == ("spotify_planner_matched_recovery_state",)
+
+
 def test_canonical_edition_survives_restart_and_upsert_is_idempotent(tmp_path: Path) -> None:
     store = _store(tmp_path)
     edition = _edition("rne-asset-1")
