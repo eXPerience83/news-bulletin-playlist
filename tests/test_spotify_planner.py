@@ -30,6 +30,7 @@ from news_bulletin_playlist.spotify_planner import (
     SpotifyPlannerJournal,
     destination_context_fingerprint,
     edition_input_fingerprint,
+    matched_recovery_planning_reason,
     matching_input_fingerprint,
     plan_shadow_cycle,
     playlist_config_fingerprint,
@@ -334,6 +335,74 @@ def test_unresolved_restart_new_edition_and_input_change(tmp_path: Path) -> None
         unresolved_planning_reason(first, input_fingerprint=SHA_A, now=first.next_retry_at)
         is PlannerReason.RETRY_DUE
     )
+
+
+def test_matched_recovery_is_durable_non_authoritative_and_six_hour_bounded(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    edition = _edition()
+    store.upsert_editions((edition,), observed_at=NOW)
+    journal = SpotifyPlannerJournal(store)
+
+    first = journal.record_matched_recovery(
+        source_id="source",
+        source_native_id="edition-one",
+        input_fingerprint=SHA_A,
+        attempted_at=NOW,
+    )
+
+    assert first.first_attempt_at == NOW
+    assert first.last_attempt_at == NOW
+    assert first.next_retry_at == NOW + AUDIT_INTERVAL
+    assert journal.get_match_input("source", "edition-one") is None
+    restarted = SpotifyPlannerJournal(SQLiteStore(store.path))
+    assert restarted.get_matched_recovery("source", "edition-one") == first
+    assert (
+        matched_recovery_planning_reason(
+            first,
+            input_fingerprint=SHA_A,
+            now=NOW + timedelta(minutes=10),
+        )
+        is None
+    )
+    assert (
+        matched_recovery_planning_reason(
+            first,
+            input_fingerprint=SHA_A,
+            now=first.next_retry_at,
+        )
+        is PlannerReason.RETRY_DUE
+    )
+    assert (
+        matched_recovery_planning_reason(
+            first,
+            input_fingerprint=SHA_B,
+            now=NOW + timedelta(minutes=10),
+        )
+        is PlannerReason.INPUT_CHANGED
+    )
+    assert (
+        matched_recovery_planning_reason(
+            first,
+            input_fingerprint=SHA_A,
+            now=NOW - timedelta(seconds=1),
+        )
+        is PlannerReason.CLOCK_ROLLBACK
+    )
+
+    refreshed = restarted.record_matched_recovery(
+        source_id="source",
+        source_native_id="edition-one",
+        input_fingerprint=SHA_A,
+        attempted_at=NOW + timedelta(hours=6),
+    )
+    assert refreshed.first_attempt_at == NOW
+    assert refreshed.last_attempt_at == NOW + timedelta(hours=6)
+    assert refreshed.next_retry_at == NOW + timedelta(hours=12)
+
+    restarted.clear_matched_recovery("source", "edition-one")
+    assert restarted.get_matched_recovery("source", "edition-one") is None
 
 
 def test_semantic_fingerprints_ignore_observation_time_and_invalidate_real_contracts() -> None:

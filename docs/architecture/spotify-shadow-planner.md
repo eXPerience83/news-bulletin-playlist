@@ -22,7 +22,12 @@ Schema migration 5 adds four focused tables:
   fingerprints, the observed and confirmed desired fingerprints, dirty/unknown flags, and the
   six-hour destination audit deadline.
 
-Schema remains at version 5. Durable destination confirmation is historical evidence, but it is
+Schema migration 6 adds `spotify_planner_matched_recovery_state`, a non-authoritative six-hour
+retry deadline for already-`MATCHED` editions whose semantic planner evidence could not be
+recovered from a bounded catalogue. It never substitutes for `spotify_planner_match_inputs` and
+cannot authorize soft retention, destination skips, or writes by itself.
+
+Schema is at version 6. Durable destination confirmation is historical evidence, but it is
 not sufficient by itself to authorize a local skip. The process owns an exact-context runtime
 lease for each playlist, measured with a monotonic clock. A restart deliberately loses all leases,
 so each destination receives one qualifying remote verification before that process may skip it.
@@ -93,8 +98,12 @@ destination local skips, or snapshot-first audits.
 
 Missing Phase-2 match-input evidence is recovery work rather than permission to discard the
 authoritative persisted mapping. Empty and truncated inspections preserve a valid `MATCHED` URI;
-they can recover semantic evidence only when local evaluation of observed candidates resolves
-uniquely to that same URI. Existing schema-5 edition fingerprints fail the versioned combined
+absence from a truncated catalogue is inconclusive and does not clear previously qualified
+matching-input evidence. When matching-input evidence is already missing, an inconclusive bounded
+inspection records only the non-authoritative matched-recovery deadline, preventing every-cycle
+catalogue reads while allowing new inputs, changed inputs, due audits and other same-show work to
+run immediately. Such inspections can recover semantic evidence only when local evaluation of
+observed candidates resolves uniquely to that same URI. Existing schema-5 edition fingerprints fail the versioned combined
 fingerprint comparison once, then converge when qualifying evidence becomes available.
 
 Remote destination evidence is bound to the immutable final desired returned by reconciliation.

@@ -290,23 +290,29 @@ def match_source_editions(
         if not outcome.from_cache:
             qualified = True
         elif outcome.status is MatchStatus.MATCHED and candidates:
-            try:
-                evaluated = _resolve_outcome(
-                    outcome.edition,
-                    tuple(
-                        _evaluate_candidate(source, outcome.edition, item) for item in candidates
-                    ),
-                    candidate_count=len(candidates),
-                    catalogue_calls=catalogue_calls,
-                )
-                qualified = (
-                    evaluated.status is MatchStatus.MATCHED
-                    and evaluated.spotify_episode_uri == outcome.spotify_episode_uri
-                    and evaluated.spotify_duration_seconds == outcome.spotify_duration_seconds
-                )
-            except Exception:
-                # An optional shadow evaluation must not replace a cached provider outcome.
-                qualified = False
+            if not catalogue.complete and outcome.spotify_episode_uri not in candidate_uris:
+                # Absence from a bounded/truncated catalogue is not negative evidence. Preserve
+                # any durable qualification already held and let recovery retry on its own cadence.
+                qualified = None
+            else:
+                try:
+                    evaluated = _resolve_outcome(
+                        outcome.edition,
+                        tuple(
+                            _evaluate_candidate(source, outcome.edition, item)
+                            for item in candidates
+                        ),
+                        candidate_count=len(candidates),
+                        catalogue_calls=catalogue_calls,
+                    )
+                    qualified = (
+                        evaluated.status is MatchStatus.MATCHED
+                        and evaluated.spotify_episode_uri == outcome.spotify_episode_uri
+                        and evaluated.spotify_duration_seconds == outcome.spotify_duration_seconds
+                    )
+                except Exception:
+                    # Failure of optional shadow evaluation is inconclusive, not contradiction.
+                    qualified = None
         outcomes[index] = replace(outcome, planner_input_evidence_qualified=qualified)
 
     return SourceMatchResult(

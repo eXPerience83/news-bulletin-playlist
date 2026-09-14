@@ -192,6 +192,45 @@ def test_durable_evidence_proves_expiry_only_transition(tmp_path: Path) -> None:
     assert evidence.decision.soft_expired_count == 1
 
 
+def test_matched_recovery_state_never_substitutes_for_match_input(tmp_path: Path) -> None:
+    attested_at = NOW - timedelta(hours=2)
+    store, source, playlist, _ = _prepare_baseline(
+        tmp_path,
+        attested_at=attested_at,
+        current_age=timedelta(hours=3),
+        expired_age=timedelta(hours=49),
+    )
+    journal = SpotifyPlannerJournal(store)
+    expired = store.get_edition(SOURCE_ID, "expired")
+    assert expired is not None
+    fingerprint = matching_input_fingerprint(source, expired)
+    journal.clear_match_input(str(SOURCE_ID), "expired")
+    journal.record_matched_recovery(
+        source_id=str(SOURCE_ID),
+        source_native_id="expired",
+        input_fingerprint=fingerprint,
+        attempted_at=NOW - timedelta(minutes=10),
+    )
+    logical = build_desired_state_from_store(
+        store,
+        playlist,
+        now=NOW,
+        source_timezones={SOURCE_ID: source.timezone},
+    )
+
+    assert (
+        resolve_soft_retention_evidence(
+            store,
+            {SOURCE_ID: source},
+            playlist,
+            logical,
+            now=NOW,
+            auth_context_fingerprint=AUTH_CONTEXT,
+        )
+        is None
+    )
+
+
 def test_clock_rollback_after_newer_verification_rejects_deferral(tmp_path: Path) -> None:
     attested_at = NOW - timedelta(hours=3)
     store, source, playlist, baseline = _prepare_baseline(
