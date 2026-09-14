@@ -163,17 +163,69 @@ class _SoftRetentionPlannerJournal(SpotifyPlannerJournal):
         )
 
 
+class _SoftRetentionStore(SQLiteStore):
+    """Record the proven physical count while a logical expiry is deferred."""
+
+    def __init__(self, path: Path, runner: SoftRetentionEngineRunner) -> None:
+        super().__init__(path)
+        self.runner = runner
+
+    def record_playlist_run(
+        self,
+        playlist_id: PlaylistId,
+        *,
+        started_at: datetime,
+        finished_at: datetime,
+        ok: bool,
+        desired_count: int,
+        applied_count: int,
+        error: str | None = None,
+    ) -> None:
+        adjusted_applied_count = self.runner._soft_retention_applied_count(
+            playlist_id,
+            started_at=started_at,
+            ok=ok,
+            fallback=applied_count,
+        )
+        super().record_playlist_run(
+            playlist_id,
+            started_at=started_at,
+            finished_at=finished_at,
+            ok=ok,
+            desired_count=desired_count,
+            applied_count=adjusted_applied_count,
+            error=error,
+        )
+        self.runner._soft_retention_recorded_applied_counts[playlist_id] = adjusted_applied_count
+
+
 class SoftRetentionEngineRunner(EngineRunner):
     """Engine runner that defers only strongly proven expiry-only destination deltas."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._soft_retention_now: datetime | None = None
+        self._soft_retention_recorded_applied_counts: dict[PlaylistId, int] = {}
+        self.store = _SoftRetentionStore(self.store.path, self)
         self.planner_journal = _SoftRetentionPlannerJournal(self.store, self)
 
     def _run_cycle(self) -> EngineCycleResult:
+        self._soft_retention_recorded_applied_counts.clear()
         with bind_soft_retention_audit_resolver(self._soft_retention_audit_desired):
-            return super()._run_cycle()
+            result = super()._run_cycle()
+        playlists = tuple(
+            replace(
+                outcome,
+                applied_count=self._soft_retention_recorded_applied_counts.get(
+                    outcome.playlist_id,
+                    outcome.applied_count,
+                ),
+            )
+            if outcome.ok and outcome.wrote is False
+            else outcome
+            for outcome in result.playlists
+        )
+        return replace(result, playlists=playlists)
 
     def _compute_shadow_plan(self, now: datetime) -> PlannerShadowResult:
         self._soft_retention_now = _as_utc(now)
@@ -263,6 +315,40 @@ class SoftRetentionEngineRunner(EngineRunner):
         if evidence is None or not evidence.decision.should_defer:
             return requested_fingerprint
         return stable_fingerprint(evidence.physical_baseline.uris)
+
+    def _soft_retention_applied_count(
+        self,
+        playlist_id: PlaylistId,
+        *,
+        started_at: datetime,
+        ok: bool,
+        fallback: int,
+    ) -> int:
+        if not ok:
+            return fallback
+        playlist = next(
+            (
+                candidate
+                for candidate in self.config.playlists
+                if candidate.enabled and candidate.id == playlist_id
+            ),
+            None,
+        )
+        if playlist is None:
+            return fallback
+        try:
+            logical_desired = build_desired_state_from_store(
+                self.store,
+                playlist,
+                now=started_at,
+                source_timezones=self._source_timezones(),
+            )
+        except DesiredStateError, PersistenceError, ValueError:
+            return fallback
+        evidence = self._soft_retention_evidence(playlist, logical_desired, now=started_at)
+        if evidence is None or not evidence.decision.should_defer:
+            return fallback
+        return len(evidence.physical_baseline.items)
 
     def _soft_retention_evidence(
         self,
