@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.soft_retention_engine import _SoftRetentionStore
@@ -12,6 +13,9 @@ class _RunnerStub:
     def __init__(self, playlist_id: PlaylistId) -> None:
         self._soft_retention_deferred_applied_counts = {playlist_id: 2}
         self._soft_retention_recorded_applied_counts: dict[PlaylistId, int] = {}
+
+    def _soft_retention_applied_count(self, *_args: Any, **_kwargs: Any) -> int:
+        raise AssertionError("recording must not recompute soft-retention evidence")
 
 
 def test_record_playlist_run_uses_already_proven_physical_count(tmp_path: Path) -> None:
