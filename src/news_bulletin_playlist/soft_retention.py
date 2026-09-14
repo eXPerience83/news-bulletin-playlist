@@ -53,8 +53,8 @@ def classify_soft_retention(
     ``logical_desired`` is the current strict state built with ``retention_hours``. The caller is
     responsible for proving that the baseline itself is durable and still trustworthy.
 
-    A transition is expiry-only only when deleting every baseline item older than the soft
-    retention cutoff reproduces the current logical desired state exactly. Additions, remaps,
+    A transition is expiry-only only when deleting every baseline item at or beyond the soft
+    retention boundary reproduces the current logical desired state exactly. Additions, remaps,
     reorders, or clock rollback therefore fail closed into the normal reconciliation path.
     """
     observed_at = _as_utc(now)
@@ -72,7 +72,7 @@ def classify_soft_retention(
         item_time = authoritative_playlist_time(item, playlist.ordering)
         if item_time > observed_at:
             return SoftRetentionDecision(SoftRetentionDisposition.NOT_EXPIRY_ONLY)
-        if item_time < soft_cutoff:
+        if item_time <= soft_cutoff:
             expired.append((item, item_time))
         else:
             retained.append(item)
