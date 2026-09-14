@@ -73,6 +73,8 @@ def resolve_soft_retention_evidence(
             or destination.unknown
             or destination.confirmed_desired_fingerprint is None
             or destination.confirmed_desired_fingerprint != destination.observed_desired_fingerprint
+            or destination.last_verified_at is None
+            or observed_at < destination.last_verified_at
             or destination.destination_context_fingerprint
             != destination_context_fingerprint(playlist)
             or destination.config_fingerprint != playlist_config_fingerprint(playlist)
