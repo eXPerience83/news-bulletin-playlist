@@ -56,6 +56,7 @@ _GZIP_MAGIC = b"\x1f\x8b"
 _FETCH_DURATION_ATTR = "_news_playlist_rss_fetch_duration_ms"
 _FETCH_REDIRECT_ATTR = "_news_playlist_rss_redirect_count"
 _FETCH_FAILURE_KIND_ATTR = "_news_playlist_rss_fetch_failure_kind"
+_REDIRECT_DISPATCH_ATTR = "_news_playlist_rss_redirect_dispatch"
 _RSS_FETCH_FAILURE_KINDS = frozenset(
     {
         "timeout",
@@ -155,13 +156,27 @@ class _RedirectCounter(urllib.request.HTTPRedirectHandler):
         newurl: str,
     ) -> urllib.request.Request | None:
         redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if redirected is None:
-            return None
-
-        visited = getattr(req, "redirect_dict", {})
-        if visited.get(newurl, 0) < self.max_repeats and len(visited) < self.max_redirections:
-            self.redirect_count += 1
+        if redirected is not None:
+            setattr(redirected, _REDIRECT_DISPATCH_ATTR, True)
         return redirected
+
+    def _observe_redirect_dispatch(
+        self,
+        req: urllib.request.Request,
+    ) -> urllib.request.Request:
+        if getattr(req, _REDIRECT_DISPATCH_ATTR, False):
+            self.redirect_count += 1
+            delattr(req, _REDIRECT_DISPATCH_ATTR)
+        return req
+
+    def http_request(self, req: urllib.request.Request) -> urllib.request.Request:
+        return self._observe_redirect_dispatch(req)
+
+    def https_request(self, req: urllib.request.Request) -> urllib.request.Request:
+        return self._observe_redirect_dispatch(req)
+
+    def ftp_request(self, req: urllib.request.Request) -> urllib.request.Request:
+        return self._observe_redirect_dispatch(req)
 
 
 def required_sources(config: EngineConfig) -> tuple[SourceDefinition, ...]:
