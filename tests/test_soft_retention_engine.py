@@ -192,6 +192,47 @@ def test_durable_evidence_proves_expiry_only_transition(tmp_path: Path) -> None:
     assert evidence.decision.soft_expired_count == 1
 
 
+def test_clock_rollback_after_newer_verification_rejects_deferral(tmp_path: Path) -> None:
+    attested_at = NOW - timedelta(hours=3)
+    store, source, playlist, baseline = _prepare_baseline(
+        tmp_path,
+        attested_at=attested_at,
+        current_age=timedelta(hours=4),
+        expired_age=timedelta(hours=49),
+    )
+    journal = SpotifyPlannerJournal(store)
+    expected = DestinationVerificationContext(
+        desired_fingerprint=stable_fingerprint(baseline.uris),
+        destination_context_fingerprint=destination_context_fingerprint(playlist),
+        config_fingerprint=playlist_config_fingerprint(playlist),
+        auth_context_fingerprint=AUTH_CONTEXT,
+    )
+    journal.verify_destination(
+        str(playlist.id),
+        expected=expected,
+        verified_at=NOW - timedelta(hours=1),
+    )
+    rolled_back_now = NOW - timedelta(hours=2)
+    logical = build_desired_state_from_store(
+        store,
+        playlist,
+        now=rolled_back_now,
+        source_timezones={SOURCE_ID: source.timezone},
+    )
+
+    assert (
+        resolve_soft_retention_evidence(
+            store,
+            {SOURCE_ID: source},
+            playlist,
+            logical,
+            now=rolled_back_now,
+            auth_context_fingerprint=AUTH_CONTEXT,
+        )
+        is None
+    )
+
+
 def test_new_episode_rejects_expiry_only_evidence(tmp_path: Path) -> None:
     attested_at = NOW - timedelta(hours=2)
     store, source, playlist, _ = _prepare_baseline(
