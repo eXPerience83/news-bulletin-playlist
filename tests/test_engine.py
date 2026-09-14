@@ -247,6 +247,141 @@ def test_cycle_fetches_shared_source_once_and_reconciles_two_playlists(tmp_path:
     assert catalogue_states == 1
 
 
+def test_matched_evidence_recovery_uses_durable_backoff_and_shared_catalogue(
+    tmp_path: Path,
+) -> None:
+    class TruncatedSpotify(_Spotify):
+        bounded = False
+
+        def show_episodes(
+            self,
+            show_id: str,
+            *,
+            limit: int = 50,
+            offset: int = 0,
+        ) -> dict[str, Any]:
+            if not self.bounded:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            assert show_id == "ser-show"
+            assert limit == 50
+            assert offset in {0, 50}
+            self.show_calls += 1
+            unrelated_uri = "spotify:episode:" + "9" * 22
+            return catalogue_page(
+                [
+                    {
+                        "uri": unrelated_uri,
+                        "name": "Unrelated programme",
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                        "duration_ms": 60_000,
+                    }
+                ],
+                offset=offset,
+                limit=limit,
+                next_url="more",
+                total=101,
+            )
+
+    current = NOW
+    old_title = SER_TITLE
+    include_new = False
+    spotify = TruncatedSpotify()
+    auth = _Auth()
+
+    def feed() -> bytes:
+        items = [
+            (
+                "ser-1",
+                old_title,
+                "Sun, 30 Aug 2026 09:05:00 +0000",
+            )
+        ]
+        if include_new:
+            items.append(
+                (
+                    "ser-2",
+                    "Las noticias de la SER, 12:00 (30/08/2026)",
+                    "Sun, 30 Aug 2026 10:05:00 +0000",
+                )
+            )
+        body = "".join(
+            f"<item><guid>{native}</guid><title>{title}</title>"
+            f"<pubDate>{published}</pubDate></item>"
+            for native, title, published in items
+        )
+        return f"<rss><channel>{body}</channel></rss>".encode()
+
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: feed(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: current,
+    )
+    assert runner.run_cycle().ok
+    assert spotify.show_calls == 1
+
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    spotify.bounded = True
+    current = NOW + timedelta(minutes=10)
+
+    first_recovery = runner.run_cycle()
+
+    assert first_recovery.ok
+    assert spotify.show_calls == 3
+    recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert recovery is not None
+    assert recovery.last_attempt_at == current
+    assert recovery.next_retry_at == current + timedelta(hours=6)
+
+    calls = spotify.show_calls
+    auth_calls = auth.calls
+    current = NOW + timedelta(minutes=20)
+    skipped = runner.run_cycle()
+
+    assert skipped.ok
+    assert not skipped.provider_work_planned
+    assert not skipped.provider_session_created
+    assert spotify.show_calls == calls
+    assert auth.calls == auth_calls
+
+    old_title = "Las noticias de la SER, 11:01 (30/08/2026)"
+    current = NOW + timedelta(minutes=30)
+    changed = runner.run_cycle()
+
+    assert changed.ok
+    assert spotify.show_calls == calls + 2
+    assert changed.sources[0].matching_reason_input_changed_count == 1
+    recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert recovery is not None
+    assert recovery.next_retry_at == current + timedelta(hours=6)
+
+    calls = spotify.show_calls
+    current = NOW + timedelta(minutes=40)
+    assert runner.run_cycle().ok
+    assert spotify.show_calls == calls
+
+    current = NOW + timedelta(hours=6, minutes=30)
+    due = runner.run_cycle()
+    assert due.ok
+    assert spotify.show_calls == calls + 2
+    assert due.sources[0].matching_reason_evidence_recovery_count == 1
+
+    calls = spotify.show_calls
+    include_new = True
+    current = NOW + timedelta(hours=6, minutes=40)
+    new_match = runner.run_cycle()
+
+    assert new_match.ok
+    assert spotify.show_calls == calls + 2
+    assert new_match.sources[0].matching_reason_new_match_count == 1
+    new_state = runner.store.get_match_state(SourceId("ser"), "ser-2")
+    assert new_state is not None
+    assert new_state.status is MatchStatus.PENDING
+
+
 def test_rss_failure_with_lkg_does_not_force_spotify(tmp_path: Path) -> None:
     auth = _Auth()
     spotify = _Spotify()
