@@ -113,11 +113,7 @@ MonotonicClock = Callable[[], float]
 PlaylistSkipGuard = Callable[[PlaylistDefinition], bool]
 
 
-class SpotifyEngineError(RuntimeError):
-    """Base class for engine-level failures."""
-
-
-class EngineCycleAlreadyRunning(SpotifyEngineError):
+class EngineCycleAlreadyRunning(RuntimeError):
     """Raised when a second cycle is requested while one is still executing."""
 
 
@@ -338,9 +334,6 @@ class PlaylistCycleOutcome:
     first_failure_at: datetime | None = None
     last_failure_at: datetime | None = None
     write_outcome: str | None = None
-    soft_retention_outcome: str | None = None
-    soft_expired_count: int | None = None
-    oldest_soft_expired_age_seconds: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -869,11 +862,22 @@ class EngineRunner:
                                 wrote=None,
                                 last_success_at=None,
                                 error=error,
+                                duration_decisions=desired.duration_decisions,
                                 **request_diagnostics,
                                 write_outcome="not_attempted",
                             )
                         )
                     continue
+                if not self._authorization_context_matches(
+                    authorization_session.authorization_context
+                ):
+                    self.destination_leases.revoke(playlist.id)
+                    raise SpotifyReconciliationError(
+                        "Spotify authorization changed during cycle; destination preserved"
+                    )
+                self.destination_leases.revoke(playlist.id)
+                remote_destination_ids.add(playlist.id)
+                reconciled = None
                 if destination_plan.audit_only:
                     reconciled = audit_spotify_playlist_snapshot_first(
                         client,
@@ -882,9 +886,7 @@ class EngineRunner:
                         store=self.store,
                         observed_at=playlist_started_at,
                     )
-                    if reconciled is None:
-                        destination_plan = _DestinationWorkPlan(needs_remote=True)
-                if not destination_plan.audit_only or reconciled is None:
+                if reconciled is None:
                     self._begin_destination_verification_required(playlist.id)
                     mutation_guard = partial(
                         self._provider_mutation_guard,
@@ -1362,20 +1364,20 @@ class EngineRunner:
                     now=now,
                     source_timezones=self._source_timezones(),
                 )
-                error: str | None = None
-                ok = True
+                unsafe = tuple(
+                    source_id
+                    for source_id in playlist.source_selection.explicit
+                    if source_id in unsafe_source_ids
+                )
+                error = None
+                ok = not unsafe and playlist.id not in persistence_blocked
                 if playlist.id in persistence_blocked:
                     error = "destination preserved because planner persistence is unavailable"
-                    ok = False
-                elif any(
-                    source_id in unsafe_source_ids
-                    for source_id in playlist.source_selection.explicit
-                ):
+                elif unsafe:
                     error = (
                         "destination preserved because no last-known-good state is available "
-                        "for one or more selected sources"
+                        "for source(s): " + ", ".join(str(value) for value in unsafe)
                     )
-                    ok = False
                 elif not self._local_skip_still_authorized(
                     playlist,
                     self._destination_verification_context(playlist, desired.uris),
