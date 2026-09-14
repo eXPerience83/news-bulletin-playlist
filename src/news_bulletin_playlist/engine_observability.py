@@ -514,6 +514,9 @@ def _source_diagnostic_details(
         "rss_native_id_guid_count": collection.rss_native_id_guid_count,
         "rss_native_id_enclosure_count": collection.rss_native_id_enclosure_count,
         "rss_native_id_link_count": collection.rss_native_id_link_count,
+        "rss_fetch_duration_ms": collection.rss_fetch_duration_ms,
+        "rss_fetch_failure_kind": collection.rss_fetch_failure_kind,
+        "rss_redirect_count": collection.rss_redirect_count,
         "collection_failure_reason": collection.failure_reason,
     }
     details.update(
