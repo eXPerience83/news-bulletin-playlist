@@ -159,10 +159,7 @@ class _RedirectCounter(urllib.request.HTTPRedirectHandler):
             return None
 
         visited = getattr(req, "redirect_dict", {})
-        if (
-            visited.get(newurl, 0) < self.max_repeats
-            and len(visited) < self.max_redirections
-        ):
+        if visited.get(newurl, 0) < self.max_repeats and len(visited) < self.max_redirections:
             self.redirect_count += 1
         return redirected
 
