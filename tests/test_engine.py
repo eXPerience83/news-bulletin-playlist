@@ -353,7 +353,7 @@ def test_matched_evidence_recovery_uses_durable_backoff_and_shared_catalogue(
 
     assert changed.ok
     assert spotify.show_calls == calls + 2
-    assert changed.sources[0].matching_reason_input_changed_count == 1
+    assert changed.sources[0].matching_diagnostics.matching_reason_input_changed_count == 1
     recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
     assert recovery is not None
     assert recovery.next_retry_at == current + timedelta(hours=6)
@@ -367,7 +367,7 @@ def test_matched_evidence_recovery_uses_durable_backoff_and_shared_catalogue(
     due = runner.run_cycle()
     assert due.ok
     assert spotify.show_calls == calls + 2
-    assert due.sources[0].matching_reason_evidence_recovery_count == 1
+    assert due.sources[0].matching_diagnostics.matching_reason_evidence_recovery_count == 1
 
     calls = spotify.show_calls
     include_new = True
@@ -376,7 +376,7 @@ def test_matched_evidence_recovery_uses_durable_backoff_and_shared_catalogue(
 
     assert new_match.ok
     assert spotify.show_calls == calls + 2
-    assert new_match.sources[0].matching_reason_new_match_count == 1
+    assert new_match.sources[0].matching_diagnostics.matching_reason_new_match_count == 1
     new_state = runner.store.get_match_state(SourceId("ser"), "ser-2")
     assert new_state is not None
     assert new_state.status is MatchStatus.PENDING
