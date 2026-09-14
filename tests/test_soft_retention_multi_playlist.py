@@ -381,6 +381,4 @@ def test_new_match_in_one_playlist_does_not_wake_expiry_only_sibling(
     assert expiry_outcome.applied_count == 2
     assert active_outcome.wrote is True
     assert spotify.items["active-destination"] == [ACTIVE_NEW_URI, ACTIVE_CURRENT_URI]
-    assert spotify.replacements == [
-        ("active-destination", (ACTIVE_NEW_URI, ACTIVE_CURRENT_URI))
-    ]
+    assert spotify.replacements == [("active-destination", (ACTIVE_NEW_URI, ACTIVE_CURRENT_URI))]
