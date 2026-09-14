@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import gzip
 import io
+import socket
+import ssl
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import Literal
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import (
@@ -32,12 +35,41 @@ type CollectionFailureReason = Literal[
     "configuration_error",
     "normalization_error",
 ]
+type RssFetchFailureKind = Literal[
+    "timeout",
+    "dns",
+    "tls",
+    "connection",
+    "http_4xx",
+    "http_5xx",
+    "redirect_error",
+    "payload_too_large",
+    "invalid_gzip",
+    "other_io",
+]
 
 _USER_AGENT = (
     "news-bulletin-playlist/0.0.1 (+https://github.com/eXPerience83/news-bulletin-playlist)"
 )
 _MAX_FEED_BYTES = 10 * 1024 * 1024
 _GZIP_MAGIC = b"\x1f\x8b"
+_FETCH_DURATION_ATTR = "_news_playlist_rss_fetch_duration_ms"
+_FETCH_REDIRECT_ATTR = "_news_playlist_rss_redirect_count"
+_FETCH_FAILURE_KIND_ATTR = "_news_playlist_rss_fetch_failure_kind"
+_RSS_FETCH_FAILURE_KINDS = frozenset(
+    {
+        "timeout",
+        "dns",
+        "tls",
+        "connection",
+        "http_4xx",
+        "http_5xx",
+        "redirect_error",
+        "payload_too_large",
+        "invalid_gzip",
+        "other_io",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +85,9 @@ class CollectionDiagnostics:
     rss_native_id_guid_count: int | None = None
     rss_native_id_enclosure_count: int | None = None
     rss_native_id_link_count: int | None = None
+    rss_fetch_duration_ms: int | None = None
+    rss_fetch_failure_kind: RssFetchFailureKind | None = None
+    rss_redirect_count: int | None = None
     failure_reason: CollectionFailureReason | None = None
 
 
@@ -72,7 +107,7 @@ class SourceCollectionResult:
 
 @dataclass(frozen=True, slots=True)
 class CollectionCycleResult:
-    """Per-source results for one fetch-once collection cycle."""
+    """Per-source results from one fetch-once collection cycle."""
 
     sources: tuple[SourceCollectionResult, ...]
 
@@ -86,6 +121,41 @@ class _NormalizedSource:
     editions: tuple[CanonicalEdition, ...]
     diagnostics: CollectionDiagnostics
     error: Exception | None = None
+
+
+class _ObservedFeedPayload(bytes):
+    rss_fetch_duration_ms: int
+    rss_redirect_count: int
+
+    def __new__(
+        cls,
+        payload: bytes,
+        *,
+        rss_fetch_duration_ms: int,
+        rss_redirect_count: int,
+    ) -> _ObservedFeedPayload:
+        observed = super().__new__(cls, payload)
+        observed.rss_fetch_duration_ms = rss_fetch_duration_ms
+        observed.rss_redirect_count = rss_redirect_count
+        return observed
+
+
+class _RedirectCounter(urllib.request.HTTPRedirectHandler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.redirect_count = 0
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        self.redirect_count += 1
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def required_sources(config: EngineConfig) -> tuple[SourceDefinition, ...]:
@@ -105,24 +175,40 @@ def required_sources(config: EngineConfig) -> tuple[SourceDefinition, ...]:
 def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
     """Fetch a bounded RSS payload and safely decode gzip when providers use it."""
 
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": _USER_AGENT,
-            "Accept-Encoding": "gzip",
-        },
+    started_at = time.monotonic()
+    redirect_counter = _RedirectCounter()
+    opener = urllib.request.build_opener(redirect_counter)
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": _USER_AGENT,
+                "Accept-Encoding": "gzip",
+            },
+        )
+        with opener.open(request, timeout=timeout) as response:
+            payload = response.read(_MAX_FEED_BYTES + 1)
+            headers = getattr(response, "headers", None)
+            content_encoding = ""
+            if headers is not None:
+                header_value = headers.get("Content-Encoding")
+                if isinstance(header_value, str):
+                    content_encoding = header_value.strip().casefold()
+        if len(payload) > _MAX_FEED_BYTES:
+            raise ValueError("feed payload exceeds 10 MiB limit")
+        decoded = _decode_feed_payload(bytes(payload), content_encoding=content_encoding)
+    except (OSError, TimeoutError, urllib.error.URLError, ValueError) as exc:
+        _attach_fetch_failure_observation(
+            exc,
+            duration_ms=_elapsed_ms(started_at),
+            redirect_count=redirect_counter.redirect_count,
+        )
+        raise
+    return _ObservedFeedPayload(
+        decoded,
+        rss_fetch_duration_ms=_elapsed_ms(started_at),
+        rss_redirect_count=redirect_counter.redirect_count,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = response.read(_MAX_FEED_BYTES + 1)
-        headers = getattr(response, "headers", None)
-        content_encoding = ""
-        if headers is not None:
-            header_value = headers.get("Content-Encoding")
-            if isinstance(header_value, str):
-                content_encoding = header_value.strip().casefold()
-    if len(payload) > _MAX_FEED_BYTES:
-        raise ValueError("feed payload exceeds 10 MiB limit")
-    return _decode_feed_payload(bytes(payload), content_encoding=content_encoding)
 
 
 def _decode_feed_payload(payload: bytes, *, content_encoding: str = "") -> bytes:
@@ -175,7 +261,7 @@ def _collect_source(source: SourceDefinition, fetcher: FeedFetcher) -> SourceCol
         return SourceCollectionResult(
             source.id,
             error=detail,
-            collection_diagnostics=CollectionDiagnostics(failure_reason="fetch_error"),
+            collection_diagnostics=_fetch_error_diagnostics(exc),
         )
 
     try:
@@ -185,7 +271,9 @@ def _collect_source(source: SourceDefinition, fetcher: FeedFetcher) -> SourceCol
         return SourceCollectionResult(
             source.id,
             error=detail,
-            collection_diagnostics=CollectionDiagnostics(failure_reason="xml_parse_error"),
+            collection_diagnostics=_merge_fetch_observation(
+                CollectionDiagnostics(failure_reason="xml_parse_error"), payload
+            ),
         )
     except (
         OSError,
@@ -198,21 +286,104 @@ def _collect_source(source: SourceDefinition, fetcher: FeedFetcher) -> SourceCol
         return SourceCollectionResult(
             source.id,
             error=detail,
-            collection_diagnostics=CollectionDiagnostics(failure_reason="normalization_error"),
+            collection_diagnostics=_merge_fetch_observation(
+                CollectionDiagnostics(failure_reason="normalization_error"), payload
+            ),
         )
 
+    diagnostics = _merge_fetch_observation(normalized.diagnostics, payload)
     if normalized.error is not None:
         detail = str(normalized.error).strip() or type(normalized.error).__name__
         return SourceCollectionResult(
             source.id,
             error=detail,
-            collection_diagnostics=normalized.diagnostics,
+            collection_diagnostics=diagnostics,
         )
     return SourceCollectionResult(
         source.id,
         editions=normalized.editions,
-        collection_diagnostics=normalized.diagnostics,
+        collection_diagnostics=diagnostics,
     )
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(round((time.monotonic() - started_at) * 1000), 0)
+
+
+def _attach_fetch_failure_observation(
+    exc: BaseException,
+    *,
+    duration_ms: int,
+    redirect_count: int,
+) -> None:
+    setattr(exc, _FETCH_DURATION_ATTR, duration_ms)
+    setattr(exc, _FETCH_REDIRECT_ATTR, max(redirect_count, 0))
+    setattr(exc, _FETCH_FAILURE_KIND_ATTR, _classify_fetch_failure(exc))
+
+
+def _classify_fetch_failure(exc: BaseException) -> RssFetchFailureKind:
+    if isinstance(exc, urllib.error.HTTPError):
+        if 300 <= exc.code < 400:
+            return "redirect_error"
+        if 400 <= exc.code < 500:
+            return "http_4xx"
+        if 500 <= exc.code < 600:
+            return "http_5xx"
+        return "other_io"
+
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, socket.gaierror):
+        return "dns"
+    if isinstance(reason, ssl.SSLError):
+        return "tls"
+    if isinstance(reason, TimeoutError):
+        return "timeout"
+    if isinstance(reason, ConnectionError):
+        return "connection"
+    if isinstance(reason, ValueError):
+        detail = str(reason)
+        if detail in {
+            "feed payload exceeds 10 MiB limit",
+            "decoded feed payload exceeds 10 MiB limit",
+        }:
+            return "payload_too_large"
+        if detail == "feed payload contained invalid gzip data":
+            return "invalid_gzip"
+    return "other_io"
+
+
+def _fetch_error_diagnostics(exc: BaseException) -> CollectionDiagnostics:
+    return CollectionDiagnostics(
+        rss_fetch_duration_ms=_observed_nonnegative_int(exc, _FETCH_DURATION_ATTR),
+        rss_fetch_failure_kind=_observed_failure_kind(exc),
+        rss_redirect_count=_observed_nonnegative_int(exc, _FETCH_REDIRECT_ATTR),
+        failure_reason="fetch_error",
+    )
+
+
+def _merge_fetch_observation(
+    diagnostics: CollectionDiagnostics,
+    payload: bytes,
+) -> CollectionDiagnostics:
+    if not isinstance(payload, _ObservedFeedPayload):
+        return diagnostics
+    return replace(
+        diagnostics,
+        rss_fetch_duration_ms=payload.rss_fetch_duration_ms,
+        rss_redirect_count=payload.rss_redirect_count,
+    )
+
+
+def _observed_nonnegative_int(exc: BaseException, attribute: str) -> int | None:
+    value = getattr(exc, attribute, None)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _observed_failure_kind(exc: BaseException) -> RssFetchFailureKind | None:
+    value = getattr(exc, _FETCH_FAILURE_KIND_ATTR, None)
+    if not isinstance(value, str) or value not in _RSS_FETCH_FAILURE_KINDS:
+        return None
+    return cast(RssFetchFailureKind, value)
 
 
 def normalize_rss_source(
