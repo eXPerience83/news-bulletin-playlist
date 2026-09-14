@@ -108,7 +108,7 @@ def build_playlist_desired_state(
         if edition.source_id not in selected_sources:
             continue
         ordering_at = authoritative_playlist_time(edition, playlist.ordering)
-        if ordering_at < cutoff or ordering_at > generated_at:
+        if ordering_at <= cutoff or ordering_at > generated_at:
             continue
         existing = canonical_by_identity.get(edition.identity)
         if existing is not None and existing != edition:

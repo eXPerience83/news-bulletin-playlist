@@ -98,7 +98,7 @@ def test_default_window_order_and_unmatched_exclusion() -> None:
 
     desired = build_playlist_desired_state(_playlist(), editions, matches, now=NOW)
 
-    assert tuple(item.source_native_id for item in desired.items) == ("newest", "boundary")
+    assert tuple(item.source_native_id for item in desired.items) == ("newest",)
 
 
 def test_newest_100_are_kept_deterministically() -> None:
