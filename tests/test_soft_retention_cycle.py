@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -301,7 +302,20 @@ def test_expiry_only_cycle_uses_zero_spotify_then_next_useful_write_cleans_up(
     assert spotify.replacements == []
     assert spotify.items == [CURRENT_URI, OLD_URI]
     assert expiry_only.playlists[0].desired_count == 1
+    assert expiry_only.playlists[0].applied_count == 2
     assert expiry_only.playlists[0].wrote is False
+    with sqlite3.connect(store.path) as connection:
+        durable_counts = connection.execute(
+            """
+            SELECT desired_count, applied_count
+            FROM playlist_runs
+            WHERE playlist_id = ?
+            ORDER BY finished_at DESC
+            LIMIT 1
+            """,
+            (str(playlist.id),),
+        ).fetchone()
+    assert durable_counts == (1, 2)
 
     new = _edition("new", "New bulletin", BASE + timedelta(hours=1, minutes=55))
     store.upsert_editions((new,), observed_at=clock.value)
