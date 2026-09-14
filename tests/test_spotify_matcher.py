@@ -217,7 +217,12 @@ def test_persisted_mapping_is_revalidated_against_complete_catalogue(tmp_path: P
         pages=[
             {
                 "items": [
-                    _candidate(edition, source, uri="spotify:episode:255703f871486907cb7a6c")
+                    _candidate(
+                        edition,
+                        source,
+                        uri="spotify:episode:255703f871486907cb7a6c",
+                        duration_ms=60_000,
+                    )
                 ],
                 "next": None,
             }
