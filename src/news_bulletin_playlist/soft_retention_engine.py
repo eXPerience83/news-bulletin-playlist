@@ -206,12 +206,14 @@ class SoftRetentionEngineRunner(EngineRunner):
         super().__init__(*args, **kwargs)
         self._soft_retention_now: datetime | None = None
         self._soft_retention_deferred_applied_counts: dict[PlaylistId, int] = {}
+        self._soft_retention_deferred_effective_fingerprints: dict[PlaylistId, str] = {}
         self._soft_retention_recorded_applied_counts: dict[PlaylistId, int] = {}
         self.store = _SoftRetentionStore(self.store.path, self)
         self.planner_journal = _SoftRetentionPlannerJournal(self.store, self)
 
     def _run_cycle(self) -> EngineCycleResult:
         self._soft_retention_deferred_applied_counts.clear()
+        self._soft_retention_deferred_effective_fingerprints.clear()
         self._soft_retention_recorded_applied_counts.clear()
         with bind_soft_retention_audit_resolver(self._soft_retention_audit_desired):
             result = super()._run_cycle()
@@ -303,8 +305,17 @@ class SoftRetentionEngineRunner(EngineRunner):
         if playlist is None:
             return requested_fingerprint
 
-        # This cache is cycle-local transport of the exact evidence that authorized DEFER.
-        # Clear any earlier provisional decision before evaluating the latest desired state.
+        cached_effective = self._soft_retention_deferred_effective_fingerprints.get(playlist.id)
+        if cached_effective == requested_fingerprint:
+            # EngineRunner first resolves the verification context and then the planner journal
+            # observes that already-effective fingerprint. This replay must not discard the exact
+            # physical count carried by the same DEFER decision.
+            return requested_fingerprint
+
+        # Any genuinely different fingerprint invalidates the earlier provisional evidence before
+        # we attempt to prove the latest desired state. A failed reevaluation therefore cannot
+        # leave stale count authority behind.
+        self._soft_retention_deferred_effective_fingerprints.pop(playlist.id, None)
         self._soft_retention_deferred_applied_counts.pop(playlist.id, None)
         try:
             logical_desired = build_desired_state_from_store(
@@ -320,10 +331,13 @@ class SoftRetentionEngineRunner(EngineRunner):
         evidence = self._soft_retention_evidence(playlist, logical_desired, now=now)
         if evidence is None or not evidence.decision.should_defer:
             return requested_fingerprint
+
+        effective_fingerprint = stable_fingerprint(evidence.physical_baseline.uris)
+        self._soft_retention_deferred_effective_fingerprints[playlist.id] = effective_fingerprint
         self._soft_retention_deferred_applied_counts[playlist.id] = len(
             evidence.physical_baseline.items
         )
-        return stable_fingerprint(evidence.physical_baseline.uris)
+        return effective_fingerprint
 
     def _soft_retention_evidence(
         self,
