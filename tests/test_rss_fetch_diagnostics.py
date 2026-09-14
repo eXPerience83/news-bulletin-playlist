@@ -8,7 +8,13 @@ from news_bulletin_playlist import collection
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.engine import SourceCycleOutcome
 from news_bulletin_playlist.engine_observability import _source_diagnostic_details
-from news_bulletin_playlist.models import CountryCode, LanguageTag, ParserId, SourceDefinition, SourceId
+from news_bulletin_playlist.models import (
+    CountryCode,
+    LanguageTag,
+    ParserId,
+    SourceDefinition,
+    SourceId,
+)
 
 NOW = datetime(2026, 9, 14, 8, 0, tzinfo=UTC)
 
