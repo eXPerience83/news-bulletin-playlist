@@ -41,16 +41,56 @@ This keeps same-show catalogue sharing: no extra Spotify GET is introduced. The 
 
 The same focused suite retains the prior persistence-rejection, complete/incomplete catalogue, #181 fail-closed, restart, rollback and eventual-convergence regressions.
 
+## D1 — an inconclusive explicit retry erased the barrier indirectly
+
+A final Codex + ASTRA audit of head `b9356e14625111ac344444e59146fee5b47dba25` found one further interaction. The original temporal rejection was inferred with:
+
+```text
+match.updated_at > matched_recovery.last_attempt_at
+```
+
+That is sufficient only until the first explicit retry. In the reproduced sequence, durable A was stored at 14:00, the rejected repair was attempted at 10:00, and matched recovery was due at 16:00. At 16:00 the bounded catalogue was truncated and did not contain A, so the retry was correctly inconclusive and only advanced scheduling to 22:00. Updating `last_attempt_at` to 16:00 made the comparison `14:00 > 16:00` false even though no durable repair had been accepted.
+
+After restart, a different same-show `NEW_MATCH` at 16:10 paid for a complete shared catalogue containing A as a semantically invalid candidate and B as the correct replacement. Because the barrier had disappeared, shadow contradiction could clear recovery and pre-write could then accept A through the physical-presence shortcut. The audit reproduced an incorrect replace containing A in two destinations.
+
+### D1 correction
+
+For `MATCHED` recovery, the temporal rejection is now anchored to `MatchedRecoveryState.first_attempt_at`, not the mutable scheduling timestamp `last_attempt_at`:
+
+```text
+match.updated_at > matched_recovery.first_attempt_at
+```
+
+`record_matched_recovery()` already preserves `first_attempt_at` for the same input fingerprint while later inconclusive attempts advance only `last_attempt_at` and `next_retry_at`. Therefore:
+
+- a rejected repair remains a destination-safety barrier across later inconclusive retries;
+- an inconclusive retry may move the next retry deadline without erasing the original rejected-transition evidence;
+- restart preserves the same inference from durable SQLite state;
+- a later shared catalogue remains shadow-only for A while A has no explicit intent;
+- successful authoritative resolution still clears matched recovery through the normal observer path;
+- no schema migration and no extra Spotify request are required.
+
+The dedicated regression `test_inconclusive_due_retry_keeps_rejected_barrier_across_restart` covers:
+
+1. durable `MATCHED(A)` at 14:00;
+2. rejected A→B repair after rollback to 10:00;
+3. matched recovery due at 16:00;
+4. explicit 16:00 retry with a truncated two-page catalogue that is inconclusive;
+5. scheduling advancing to 22:00 while `first_attempt_at` remains 10:00;
+6. process restart;
+7. a different native asset causing same-show `NEW_MATCH` at 16:10;
+8. A receiving shadow contradiction from the shared complete catalogue;
+9. no `match_input`, unchanged recovery/deadline, durable A preserved, and **zero PUT in two destinations**.
+
 ## Validation
 
-The one-shot validation that generated functional head `42770dcb46a1c1d9439289772987bd010818972b` completed with CPython 3.14.7:
+The D1 one-shot validation generated functional head `f643ed41ea4805505f1a4f06a233329aec2d6205` with CPython 3.14.7:
 
-- new shared-catalogue regression: pass;
-- all PR #211 persistence-rejection regressions: pass;
-- A1–A5/B1–B2 focused regressions: pass;
+- focused PR #211 persistence-rejection suite: **8 passed**;
 - Ruff: pass;
-- Ruff format: pass;
-- mypy: pass;
-- full pytest suite: **891 passed in 28.05s**.
+- Ruff format: pass (**169 files already formatted** before temporary files were removed);
+- mypy: pass (**55 source files**);
+- `git diff --check`: pass;
+- full pytest suite: **894 passed in 28.10s**.
 
-The temporary validation workflow and apply script were removed before the functional commit. A subsequent user-authored documentation commit is used only to let the normal CI and Container workflows validate the exact final PR tree.
+All temporary apply/workflow files were removed before the functional commit. The net diff from `b9356e1` to `f643ed4` contains only `src/news_bulletin_playlist/engine.py` and `tests/test_pr211_persistence_rejection_barriers.py`. A user-authored documentation commit follows solely to trigger the normal PR CI and Container workflows on the exact final tree; those normal checks must still be green before the PR can leave draft.
