@@ -31,6 +31,10 @@ jobs:
       - name: Apply reviewed fixes
         run: python .github/pr211_apply.py
 
+      - name: Fix synthetic truncated-catalogue IDs
+        run: |
+          sed -i 's/offset + index + 1:022d/offset + index + 1000:022d/g' tests/test_engine.py
+
       - name: Remove one-shot patch machinery
         run: |
           rm .github/pr211_apply.py
