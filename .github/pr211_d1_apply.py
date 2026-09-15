@@ -30,8 +30,7 @@ if test_name in tests:
     raise SystemExit("D1 regression already exists")
 
 tests += dedent(
-    r'''
-
+    r"""
 
 def test_inconclusive_due_retry_keeps_rejected_barrier_across_restart(
     tmp_path: Path,
@@ -141,6 +140,6 @@ def test_inconclusive_due_retry_keeps_rejected_barrier_across_restart(
     assert restarted.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
     assert spotify.items["destination-first"] == []
     assert spotify.items["destination-second"] == []
-'''
+"""
 )
 TEST_PATH.write_text(tests)
