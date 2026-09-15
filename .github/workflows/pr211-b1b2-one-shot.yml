@@ -32,10 +32,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
-      - name: Normalize generated regression test
+      - name: Normalize generated correction
         run: |
-          ruff check --fix tests/test_pr211_persistence_rejection_barriers.py
-          ruff format tests/test_pr211_persistence_rejection_barriers.py
+          ruff check --fix src/news_bulletin_playlist/engine.py src/news_bulletin_playlist/spotify/matcher.py tests/test_pr211_persistence_rejection_barriers.py
+          ruff format src/news_bulletin_playlist/engine.py src/news_bulletin_playlist/spotify/matcher.py tests/test_pr211_persistence_rejection_barriers.py
       - name: Validate focused regressions
         run: pytest -q tests/test_pr211_persistence_rejection_barriers.py tests/test_pr211_adversarial_regressions.py tests/test_matched_evidence_recovery_repairs.py
       - name: Validate full suite
