@@ -133,4 +133,14 @@ One-shot validation with CPython 3.14.7:
 - `git diff --check`: pass;
 - full pytest suite: **897 passed in 26.71s**.
 
-All temporary apply/workflow files were removed before the functional commit. The next user-authored documentation commit exists only to record D2 and trigger normal PR CI/Container validation on the exact final tree. The PR remains draft until a fresh independent audit of that exact head is complete.
+Normal GitHub validation on documentation head `6f4fb41bb0691fd810fd9b7f96d3c025c2c77d16` is green:
+
+- CI #956: **SUCCESS**;
+- Container #808: **SUCCESS**;
+- Ruff: pass;
+- Ruff format: pass (**168 files already formatted**);
+- mypy: pass (**55 source files**);
+- pytest: **897 passed in 29.18s**;
+- container build, live-provider contracts, hardened runtime, web portal and durable restart: pass.
+
+All temporary apply/workflow files were removed before the functional commit. The PR remains draft until a fresh independent audit of the exact current head is complete.
