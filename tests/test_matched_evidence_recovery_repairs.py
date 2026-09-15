@@ -56,7 +56,9 @@ def test_evidence_recovery_reuses_onda_catalogue_to_replace_contradicted_mapping
     assert persisted.spotify_duration_seconds == 251
 
 
-def test_evidence_recovery_reuses_catalogue_when_cached_uri_is_semantically_invalid(tmp_path) -> None:
+def test_evidence_recovery_reuses_catalogue_when_cached_uri_is_semantically_invalid(
+    tmp_path,
+) -> None:
     source = _source("ser", "ser", "Europe/Madrid", "show-ser")
     edition = _edition(
         source,
