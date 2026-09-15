@@ -38,6 +38,7 @@ jobs:
 
       - name: Format changed Python
         run: |
+          ruff check --fix tests/test_pr211_adversarial_regressions.py
           ruff format \
             src/news_bulletin_playlist/spotify/matcher.py \
             src/news_bulletin_playlist/engine.py \
