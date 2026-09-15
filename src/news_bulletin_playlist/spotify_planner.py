@@ -15,6 +15,9 @@ from typing import Literal
 
 from news_bulletin_playlist.models import CanonicalEdition, PlaylistDefinition, SourceDefinition
 from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore
+from news_bulletin_playlist.spotify.matching_policy import (
+    duration_disambiguation_tolerance_seconds,
+)
 
 AUDIT_INTERVAL = timedelta(hours=6)
 _FINGERPRINT_VERSION = 1
@@ -236,7 +239,6 @@ class SpotifyPlannerJournal:
     ) -> None:
         verified = _as_utc(verified_at)
         with self._connection("verify Spotify planner destination") as connection:
-            # Conditional UPDATE binds publication to the exact operation in one transaction.
             cursor = connection.execute(
                 """UPDATE spotify_planner_destination_state
                    SET confirmed_desired_fingerprint = observed_desired_fingerprint,
@@ -505,7 +507,6 @@ class SpotifyPlannerJournal:
             if current is not None and current.input_fingerprint == input_fingerprint
             else attempted
         )
-        # A clock rollback must not shorten an already durable deadline.
         baseline = max(attempted, current.last_attempt_at) if current is not None else attempted
         next_retry = baseline + unresolved_retry_interval(max(baseline - first, timedelta(0)))
         state = UnresolvedState(
@@ -831,6 +832,9 @@ def source_contract_fingerprint(source: SourceDefinition) -> str:
             "parser_id": str(source.parser_id),
             "timezone": str(source.timezone),
             "spotify_release_delay_days": source.spotify_release_delay_days,
+            "spotify_duration_disambiguation_tolerance_seconds": (
+                duration_disambiguation_tolerance_seconds(source)
+            ),
             "external_references": references,
         }
     )
