@@ -278,8 +278,9 @@ def match_source_editions(
                 catalogue_calls=catalogue_calls,
                 duration_tolerance_seconds=duration_tolerance,
             )
-            if intent is MatchEvaluationIntent.EVIDENCE_RECOVERY and not _recovery_can_repair_cached(
-                outcome, evaluated, evaluations
+            if (
+                intent is MatchEvaluationIntent.EVIDENCE_RECOVERY
+                and not _recovery_can_repair_cached(outcome, evaluated, evaluations)
             ):
                 continue
             _notify_fresh_evaluation(
