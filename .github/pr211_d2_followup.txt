@@ -1,0 +1,9 @@
+from pathlib import Path
+
+path = Path("tests/test_persistence.py")
+text = path.read_text()
+old = '''    with sqlite3.connect(store.path) as connection:\n        connection.execute("DROP TABLE spotify_planner_matched_recovery_state")\n        connection.execute("DELETE FROM schema_migrations WHERE version = 6")\n'''
+new = '''    with sqlite3.connect(store.path) as connection:\n        connection.execute("DROP TABLE spotify_planner_persistence_rejection_state")\n        connection.execute("DROP TABLE spotify_planner_matched_recovery_state")\n        connection.execute("DELETE FROM schema_migrations WHERE version IN (6, 7)")\n'''
+if text.count(old) != 1:
+    raise SystemExit(f"migration regression setup: expected one match, found {text.count(old)}")
+path.write_text(text.replace(old, new))
