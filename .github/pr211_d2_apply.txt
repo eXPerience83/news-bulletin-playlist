@@ -1,0 +1,286 @@
+from pathlib import Path
+from textwrap import dedent
+
+PERSISTENCE = Path("src/news_bulletin_playlist/persistence.py")
+PLANNER = Path("src/news_bulletin_playlist/spotify_planner.py")
+ENGINE = Path("src/news_bulletin_playlist/engine.py")
+PERSISTENCE_TESTS = Path("tests/test_persistence.py")
+PLANNER_TESTS = Path("tests/test_spotify_planner.py")
+BARRIER_TESTS = Path("tests/test_pr211_persistence_rejection_barriers.py")
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    if text.count(old) != 1:
+        raise SystemExit(f"{label}: expected exactly one match, found {text.count(old)}")
+    return text.replace(old, new)
+
+
+# Schema v7: a first-class persistence-rejection barrier independent of scheduling fingerprints.
+persistence = PERSISTENCE.read_text()
+persistence = replace_once(
+    persistence,
+    "LATEST_SCHEMA_VERSION = 6",
+    "LATEST_SCHEMA_VERSION = 7",
+    "schema version",
+)
+old_tail = '''    (\n        6,\n        (\n            """\n            CREATE TABLE spotify_planner_matched_recovery_state (\n                source_id TEXT NOT NULL,\n                source_native_id TEXT NOT NULL,\n                input_fingerprint TEXT NOT NULL,\n                reason TEXT NOT NULL CHECK (reason = 'inconclusive_catalogue'),\n                first_attempt_at TEXT NOT NULL,\n                last_attempt_at TEXT NOT NULL,\n                next_retry_at TEXT NOT NULL,\n                PRIMARY KEY (source_id, source_native_id),\n                FOREIGN KEY (source_id, source_native_id)\n                    REFERENCES canonical_editions (source_id, source_native_id)\n                    ON DELETE CASCADE\n            )\n            """,\n            """\n            CREATE INDEX spotify_planner_matched_recovery_retry_idx\n            ON spotify_planner_matched_recovery_state (next_retry_at)\n            """,\n        ),\n    ),\n)\n'''
+new_tail = '''    (\n        6,\n        (\n            """\n            CREATE TABLE spotify_planner_matched_recovery_state (\n                source_id TEXT NOT NULL,\n                source_native_id TEXT NOT NULL,\n                input_fingerprint TEXT NOT NULL,\n                reason TEXT NOT NULL CHECK (reason = 'inconclusive_catalogue'),\n                first_attempt_at TEXT NOT NULL,\n                last_attempt_at TEXT NOT NULL,\n                next_retry_at TEXT NOT NULL,\n                PRIMARY KEY (source_id, source_native_id),\n                FOREIGN KEY (source_id, source_native_id)\n                    REFERENCES canonical_editions (source_id, source_native_id)\n                    ON DELETE CASCADE\n            )\n            """,\n            """\n            CREATE INDEX spotify_planner_matched_recovery_retry_idx\n            ON spotify_planner_matched_recovery_state (next_retry_at)\n            """,\n        ),\n    ),\n    (\n        7,\n        (\n            """\n            CREATE TABLE spotify_planner_persistence_rejection_state (\n                source_id TEXT NOT NULL,\n                source_native_id TEXT NOT NULL,\n                protected_status TEXT NOT NULL\n                    CHECK (protected_status IN ('matched', 'pending', 'ambiguous')),\n                protected_spotify_episode_uri TEXT,\n                protected_spotify_duration_seconds INTEGER\n                    CHECK (\n                        protected_spotify_duration_seconds IS NULL\n                        OR protected_spotify_duration_seconds >= 0\n                    ),\n                protected_match_updated_at TEXT NOT NULL,\n                first_rejected_at TEXT NOT NULL,\n                last_rejected_at TEXT NOT NULL,\n                PRIMARY KEY (source_id, source_native_id),\n                FOREIGN KEY (source_id, source_native_id)\n                    REFERENCES canonical_editions (source_id, source_native_id)\n                    ON DELETE CASCADE\n            )\n            """,\n            """\n            INSERT OR IGNORE INTO spotify_planner_persistence_rejection_state (\n                source_id, source_native_id, protected_status,\n                protected_spotify_episode_uri, protected_spotify_duration_seconds,\n                protected_match_updated_at, first_rejected_at, last_rejected_at\n            )\n            SELECT m.source_id, m.source_native_id, m.status, m.spotify_episode_uri,\n                   m.spotify_duration_seconds, m.updated_at,\n                   r.first_attempt_at, r.last_attempt_at\n            FROM spotify_matches AS m\n            JOIN spotify_planner_matched_recovery_state AS r\n              ON r.source_id = m.source_id\n             AND r.source_native_id = m.source_native_id\n            WHERE m.status = 'matched' AND m.updated_at > r.first_attempt_at\n            """,\n            """\n            INSERT OR IGNORE INTO spotify_planner_persistence_rejection_state (\n                source_id, source_native_id, protected_status,\n                protected_spotify_episode_uri, protected_spotify_duration_seconds,\n                protected_match_updated_at, first_rejected_at, last_rejected_at\n            )\n            SELECT m.source_id, m.source_native_id, m.status, m.spotify_episode_uri,\n                   m.spotify_duration_seconds, m.updated_at,\n                   u.first_unresolved_at, u.last_attempt_at\n            FROM spotify_matches AS m\n            JOIN spotify_planner_unresolved_state AS u\n              ON u.source_id = m.source_id\n             AND u.source_native_id = m.source_native_id\n            WHERE m.status != 'matched' AND m.updated_at > u.last_attempt_at\n            """,\n        ),\n    ),\n)\n'''
+persistence = replace_once(persistence, old_tail, new_tail, "migration tail")
+PERSISTENCE.write_text(persistence)
+
+# Planner journal: explicit barrier state keyed only by durable edition identity.
+planner = PLANNER.read_text()
+planner = replace_once(
+    planner,
+    "from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore",
+    "from news_bulletin_playlist.persistence import (\n    EditionMatch,\n    MatchStatus,\n    PersistenceError,\n    SQLiteStore,\n)",
+    "planner persistence import",
+)
+matched_dataclass = '''@dataclass(frozen=True, slots=True)\nclass MatchedRecoveryState:\n    source_id: str\n    source_native_id: str\n    input_fingerprint: str\n    reason: MatchedRecoveryReason\n    first_attempt_at: datetime\n    last_attempt_at: datetime\n    next_retry_at: datetime\n\n\n'''
+barrier_dataclass = matched_dataclass + '''@dataclass(frozen=True, slots=True)\nclass PersistenceRejectionBarrierState:\n    """Durable destination-safety barrier for a match transition SQLite rejected."""\n\n    source_id: str\n    source_native_id: str\n    protected_status: MatchStatus\n    protected_spotify_episode_uri: str | None\n    protected_spotify_duration_seconds: int | None\n    protected_match_updated_at: datetime\n    first_rejected_at: datetime\n    last_rejected_at: datetime\n\n    def protects(self, match: EditionMatch | None) -> bool:\n        return bool(\n            match is not None\n            and str(match.source_id) == self.source_id\n            and match.source_native_id == self.source_native_id\n            and match.status is self.protected_status\n            and match.spotify_episode_uri == self.protected_spotify_episode_uri\n            and match.spotify_duration_seconds == self.protected_spotify_duration_seconds\n            and match.updated_at == self.protected_match_updated_at\n        )\n\n\n'''
+planner = replace_once(planner, matched_dataclass, barrier_dataclass, "barrier dataclass")
+clear_recovery = '''    def clear_matched_recovery(self, source_id: str, source_native_id: str) -> None:\n        with self._connection("clear Spotify planner matched recovery state") as connection:\n            connection.execute(\n                """DELETE FROM spotify_planner_matched_recovery_state\n                   WHERE source_id = ? AND source_native_id = ?""",\n                (source_id, source_native_id),\n            )\n\n'''
+barrier_methods = clear_recovery + '''    def get_persistence_rejection_barrier(\n        self, source_id: str, source_native_id: str\n    ) -> PersistenceRejectionBarrierState | None:\n        with self._connection("read Spotify planner persistence rejection state") as connection:\n            row = connection.execute(\n                """\n                SELECT source_id, source_native_id, protected_status,\n                       protected_spotify_episode_uri, protected_spotify_duration_seconds,\n                       protected_match_updated_at, first_rejected_at, last_rejected_at\n                FROM spotify_planner_persistence_rejection_state\n                WHERE source_id = ? AND source_native_id = ?\n                """,\n                (source_id, source_native_id),\n            ).fetchone()\n        if row is None:\n            return None\n        try:\n            status = MatchStatus(_text(row, "protected_status"))\n        except ValueError as exc:\n            raise PersistenceError(\n                "Spotify planner persistence rejection has invalid protected status"\n            ) from exc\n        uri_value = row["protected_spotify_episode_uri"]\n        if uri_value is not None and (not isinstance(uri_value, str) or not uri_value):\n            raise PersistenceError(\n                "Spotify planner persistence rejection has invalid protected URI"\n            )\n        duration_value = row["protected_spotify_duration_seconds"]\n        if duration_value is not None and (\n            not isinstance(duration_value, int) or duration_value < 0\n        ):\n            raise PersistenceError(\n                "Spotify planner persistence rejection has invalid protected duration"\n            )\n        state = PersistenceRejectionBarrierState(\n            source_id=_text(row, "source_id"),\n            source_native_id=_text(row, "source_native_id"),\n            protected_status=status,\n            protected_spotify_episode_uri=uri_value,\n            protected_spotify_duration_seconds=duration_value,\n            protected_match_updated_at=_timestamp_value(row, "protected_match_updated_at"),\n            first_rejected_at=_timestamp_value(row, "first_rejected_at"),\n            last_rejected_at=_timestamp_value(row, "last_rejected_at"),\n        )\n        if state.first_rejected_at > state.last_rejected_at:\n            raise PersistenceError(\n                "Spotify planner persistence rejection timestamps are inconsistent"\n            )\n        return state\n\n    def record_persistence_rejection_barrier(\n        self, match: EditionMatch, *, rejected_at: datetime\n    ) -> PersistenceRejectionBarrierState:\n        rejected = _as_utc(rejected_at)\n        source_id = str(match.source_id)\n        current = self.get_persistence_rejection_barrier(source_id, match.source_native_id)\n        same_protected_state = current is not None and current.protects(match)\n        first = current.first_rejected_at if same_protected_state else rejected\n        last = max(rejected, current.last_rejected_at) if same_protected_state else rejected\n        state = PersistenceRejectionBarrierState(\n            source_id=source_id,\n            source_native_id=match.source_native_id,\n            protected_status=match.status,\n            protected_spotify_episode_uri=match.spotify_episode_uri,\n            protected_spotify_duration_seconds=match.spotify_duration_seconds,\n            protected_match_updated_at=match.updated_at,\n            first_rejected_at=first,\n            last_rejected_at=last,\n        )\n        with self._connection("persist Spotify planner persistence rejection state") as connection:\n            connection.execute(\n                """\n                INSERT INTO spotify_planner_persistence_rejection_state (\n                    source_id, source_native_id, protected_status,\n                    protected_spotify_episode_uri, protected_spotify_duration_seconds,\n                    protected_match_updated_at, first_rejected_at, last_rejected_at\n                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n                ON CONFLICT(source_id, source_native_id) DO UPDATE SET\n                    protected_status=excluded.protected_status,\n                    protected_spotify_episode_uri=excluded.protected_spotify_episode_uri,\n                    protected_spotify_duration_seconds=excluded.protected_spotify_duration_seconds,\n                    protected_match_updated_at=excluded.protected_match_updated_at,\n                    first_rejected_at=excluded.first_rejected_at,\n                    last_rejected_at=excluded.last_rejected_at\n                """,\n                (\n                    state.source_id,\n                    state.source_native_id,\n                    state.protected_status.value,\n                    state.protected_spotify_episode_uri,\n                    state.protected_spotify_duration_seconds,\n                    _timestamp(state.protected_match_updated_at),\n                    _timestamp(state.first_rejected_at),\n                    _timestamp(state.last_rejected_at),\n                ),\n            )\n        return state\n\n    def clear_persistence_rejection_barrier(\n        self, source_id: str, source_native_id: str\n    ) -> None:\n        with self._connection("clear Spotify planner persistence rejection state") as connection:\n            connection.execute(\n                """DELETE FROM spotify_planner_persistence_rejection_state\n                   WHERE source_id = ? AND source_native_id = ?""",\n                (source_id, source_native_id),\n            )\n\n'''
+planner = replace_once(planner, clear_recovery, barrier_methods, "barrier journal methods")
+PLANNER.write_text(planner)
+
+# Engine: read/write the first-class barrier; scheduling rows no longer authorize destination safety.
+engine = ENGINE.read_text()
+old_barrier = '''    def _edition_has_persistence_rejection_barrier(\n        self,\n        source: SourceDefinition,\n        edition: CanonicalEdition,\n    ) -> bool:\n        """Detect durable evidence that a newer match rejected the last evaluation attempt."""\n        match = self.store.get_match_state(source.id, edition.source_native_id)\n        if match is None:\n            return False\n        fingerprint = matching_input_fingerprint(source, edition)\n        if match.status is MatchStatus.MATCHED:\n            recovery = self.planner_journal.get_matched_recovery(\n                str(source.id), edition.source_native_id\n            )\n            return bool(\n                recovery is not None\n                and recovery.input_fingerprint == fingerprint\n                # The first attempt anchors a temporal persistence rejection. Later\n                # inconclusive retries advance last_attempt_at for scheduling only; they\n                # must not erase the destination-safety barrier before a durable repair.\n                and match.updated_at > recovery.first_attempt_at\n            )\n        unresolved = self.planner_journal.get_unresolved(str(source.id), edition.source_native_id)\n        return bool(\n            unresolved is not None\n            and unresolved.input_fingerprint == fingerprint\n            and match.updated_at > unresolved.last_attempt_at\n        )\n'''
+new_barrier = '''    def _edition_has_persistence_rejection_barrier(\n        self,\n        source: SourceDefinition,\n        edition: CanonicalEdition,\n    ) -> bool:\n        """Return whether a rejected transition still protects the current durable match."""\n        barrier = self.planner_journal.get_persistence_rejection_barrier(\n            str(source.id), edition.source_native_id\n        )\n        if barrier is None:\n            return False\n        match = self.store.get_match_state(source.id, edition.source_native_id)\n        if barrier.protects(match):\n            return True\n        # The durable match advanced since the rejection (for example an accepted repair before\n        # a crash could clear planner state). The old barrier no longer protects that new row.\n        self.planner_journal.clear_persistence_rejection_barrier(\n            str(source.id), edition.source_native_id\n        )\n        return False\n'''
+engine = replace_once(engine, old_barrier, new_barrier, "engine barrier helper")
+old_rejected = '''                if outcome.persistence_rejected:\n                    # A newer durable match rejected this wall-clock observation. Evidence for the\n                    # attempted state is non-authoritative, the destination must remain closed, and\n                    # retries must use a bounded durable schedule instead of CLOCK_ROLLBACK polling.\n                    self.planner_journal.clear_match_input(\n                        str(edition.source_id), edition.source_native_id\n                    )\n'''
+new_rejected = '''                if outcome.persistence_rejected:\n                    # A newer durable match rejected this wall-clock observation. Persist a\n                    # dedicated safety barrier before touching retry scheduling: fingerprints and\n                    # retry timestamps may legitimately change while the rejected transition is\n                    # still unresolved.\n                    durable_match = self.store.get_match_state(\n                        edition.source_id, edition.source_native_id\n                    )\n                    if durable_match is None:\n                        raise PersistenceError(\n                            "rejected Spotify match repair has no durable state to protect"\n                        )\n                    self.planner_journal.record_persistence_rejection_barrier(\n                        durable_match, rejected_at=observed_at\n                    )\n                    self.planner_journal.clear_match_input(\n                        str(edition.source_id), edition.source_native_id\n                    )\n'''
+engine = replace_once(engine, old_rejected, new_rejected, "record explicit rejection barrier")
+old_true = '''                if outcome.planner_input_evidence_qualified is True:\n                    self.planner_journal.observe_match_input(\n                        source_id=str(edition.source_id),\n                        source_native_id=edition.source_native_id,\n                        input_fingerprint=input_fingerprint,\n                        observed_at=observed_at,\n                    )\n                    self.planner_journal.clear_matched_recovery(\n                        str(edition.source_id), edition.source_native_id\n                    )\n'''
+new_true = '''                if outcome.planner_input_evidence_qualified is True:\n                    self.planner_journal.observe_match_input(\n                        source_id=str(edition.source_id),\n                        source_native_id=edition.source_native_id,\n                        input_fingerprint=input_fingerprint,\n                        observed_at=observed_at,\n                    )\n                    self.planner_journal.clear_matched_recovery(\n                        str(edition.source_id), edition.source_native_id\n                    )\n                    if explicit_evaluation and rejection_barrier:\n                        # A conclusive explicit evaluation is authority to resolve the barrier.\n                        # Shadow observations never take this path. Accepted state transitions also\n                        # make the protected durable-row snapshot differ and are cleared lazily.\n                        self.planner_journal.clear_persistence_rejection_barrier(\n                            str(edition.source_id), edition.source_native_id\n                        )\n'''
+engine = replace_once(engine, old_true, new_true, "clear barrier on authoritative resolution")
+ENGINE.write_text(engine)
+
+# Persistence migration expectations.
+persistence_tests = PERSISTENCE_TESTS.read_text()
+persistence_tests = replace_once(
+    persistence_tests,
+    '''    assert legacy.schema_version() == 6\n    with sqlite3.connect(store.path) as connection:\n        row = connection.execute(\n            """\n            SELECT name\n            FROM sqlite_master\n            WHERE type = 'table' AND name = 'spotify_planner_matched_recovery_state'\n            """\n        ).fetchone()\n    assert row == ("spotify_planner_matched_recovery_state",)\n''',
+    '''    assert legacy.schema_version() == LATEST_SCHEMA_VERSION\n    with sqlite3.connect(store.path) as connection:\n        rows = connection.execute(\n            """\n            SELECT name\n            FROM sqlite_master\n            WHERE type = 'table'\n              AND name IN (\n                  'spotify_planner_matched_recovery_state',\n                  'spotify_planner_persistence_rejection_state'\n              )\n            ORDER BY name\n            """\n        ).fetchall()\n    assert rows == [\n        ("spotify_planner_matched_recovery_state",),\n        ("spotify_planner_persistence_rejection_state",),\n    ]\n''',
+    "schema-five upgrade expectation",
+)
+PERSISTENCE_TESTS.write_text(persistence_tests)
+
+# Journal-level proof that scheduling fingerprint changes do not mutate the barrier lifecycle.
+planner_tests = PLANNER_TESTS.read_text()
+planner_test_name = "test_persistence_rejection_barrier_is_durable_and_independent_of_recovery_fingerprint"
+if planner_test_name in planner_tests:
+    raise SystemExit("planner D2 barrier regression already exists")
+planner_tests += dedent(
+    r'''
+
+
+def test_persistence_rejection_barrier_is_durable_and_independent_of_recovery_fingerprint(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    edition = _edition()
+    store.upsert_editions((edition,), observed_at=NOW)
+    assert store.set_match_state(
+        *edition.identity,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:durable-a",
+        spotify_duration_seconds=60,
+        diagnostics="durable A",
+        updated_at=NOW + timedelta(hours=4),
+    )
+    match = store.get_match_state(*edition.identity)
+    assert match is not None
+    journal = SpotifyPlannerJournal(store)
+
+    barrier = journal.record_persistence_rejection_barrier(match, rejected_at=NOW)
+    journal.record_matched_recovery(
+        source_id="source",
+        source_native_id="edition-one",
+        input_fingerprint=SHA_A,
+        attempted_at=NOW,
+    )
+    changed_recovery = journal.record_matched_recovery(
+        source_id="source",
+        source_native_id="edition-one",
+        input_fingerprint=SHA_B,
+        attempted_at=NOW + timedelta(hours=5),
+    )
+
+    assert changed_recovery.first_attempt_at == NOW + timedelta(hours=5)
+    restarted = SpotifyPlannerJournal(SQLiteStore(store.path))
+    assert restarted.get_persistence_rejection_barrier("source", "edition-one") == barrier
+    assert barrier.protects(store.get_match_state(*edition.identity))
+
+    assert store.set_match_state(
+        *edition.identity,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:durable-b",
+        spotify_duration_seconds=61,
+        diagnostics="accepted B",
+        updated_at=NOW + timedelta(hours=6),
+    )
+    assert not barrier.protects(store.get_match_state(*edition.identity))
+    restarted.clear_persistence_rejection_barrier("source", "edition-one")
+    assert restarted.get_persistence_rejection_barrier("source", "edition-one") is None
+'''
+)
+PLANNER_TESTS.write_text(planner_tests)
+
+# D2 end-to-end reproduction: fingerprint changes, inconclusive inspection, restart, shared work.
+barrier_tests = BARRIER_TESTS.read_text()
+d2_name = "test_input_fingerprint_change_cannot_erase_rejected_repair_barrier"
+if d2_name in barrier_tests:
+    raise SystemExit("D2 integration regression already exists")
+barrier_tests += dedent(
+    r'''
+
+
+def test_input_fingerprint_change_cannot_erase_rejected_repair_barrier(
+    tmp_path: Path,
+) -> None:
+    spotify = _RollbackReplacementSpotify()
+    auth = _Auth()
+
+    def feed(*, corrected: bool, sibling: bool = False) -> bytes:
+        published = (
+            "Sun, 30 Aug 2026 09:06:00 +0000"
+            if corrected
+            else "Sun, 30 Aug 2026 09:05:00 +0000"
+        )
+        items = [
+            f"<item><guid>ser-1</guid><title>{SER_TITLE}</title>"
+            f"<pubDate>{published}</pubDate></item>"
+        ]
+        if sibling:
+            items.append(
+                "<item><guid>ser-2</guid>"
+                "<title>Las noticias de la SER, 12:00 (30/08/2026)</title>"
+                "<pubDate>Sun, 30 Aug 2026 10:05:00 +0000</pubDate></item>"
+            )
+        return f"<rss><channel>{''.join(items)}</channel></rss>".encode()
+
+    runner = EngineRunner(
+        _config("first", "second"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: feed(corrected=False),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW + timedelta(hours=4),
+    )
+    assert runner.run_cycle().ok
+
+    runner.clock = lambda: NOW
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    for playlist_id in ("first", "second"):
+        runner.planner_journal.mark_destination_unknown(playlist_id)
+        spotify.items[f"destination-{playlist_id}"] = []
+    spotify.replacement_catalogue = True
+    spotify.include_invalid_cached = True
+    writes_before = tuple(spotify.replacements)
+
+    rejected = runner.run_cycle()
+    assert not rejected.ok
+    barrier = runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1")
+    assert barrier is not None
+    assert barrier.first_rejected_at == NOW
+    initial_recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert initial_recovery is not None
+    assert initial_recovery.next_retry_at == NOW + timedelta(hours=6)
+    calls_after_rejection = spotify.show_calls
+
+    # At 15:00 only pubDate changes. INPUT_CHANGED is legitimate, but the bounded catalogue is
+    # truncated and cannot establish whether durable A is still valid. Scheduling may reset for
+    # the new fingerprint; destination-safety memory must not.
+    def truncated_show_episodes(
+        show_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        assert show_id == "ser-show"
+        assert limit == 50
+        assert offset in {0, 50}
+        spotify.show_calls += 1
+        items = [
+            {
+                "uri": f"spotify:episode:{offset + index + 5000:022d}",
+                "name": "unrelated",
+                "release_date": "2026-08-30",
+                "release_date_precision": "day",
+                "duration_ms": 60_000,
+            }
+            for index in range(50)
+        ]
+        return catalogue_page(
+            items,
+            offset=offset,
+            limit=limit,
+            next_url="more",
+            total=101,
+        )
+
+    replacement_show_episodes = spotify.show_episodes
+    spotify.show_episodes = truncated_show_episodes  # type: ignore[method-assign]
+    runner.fetcher = lambda _url: feed(corrected=True)
+    runner.clock = lambda: NOW + timedelta(hours=5)
+    changed = runner.run_cycle()
+
+    assert not changed.ok
+    diagnostics = changed.sources[0].matching_diagnostics
+    assert diagnostics.matching_reason_input_changed_count == 1
+    assert spotify.show_calls == calls_after_rejection + 2
+    changed_recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert changed_recovery is not None
+    assert changed_recovery.first_attempt_at == NOW + timedelta(hours=5)
+    assert changed_recovery.next_retry_at == NOW + timedelta(hours=11)
+    assert runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") == barrier
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is None
+    assert tuple(spotify.replacements) == writes_before
+
+    # Restart at 15:10. A sibling NEW_MATCH pays for the shared show catalogue; A is shadow-only.
+    # The catalogue again contradicts A and identifies B, but without explicit authority for A it
+    # cannot erase the durable barrier or authorize PUT(A) into either empty destination.
+    spotify.show_episodes = replacement_show_episodes  # type: ignore[method-assign]
+    calls_before_shared = spotify.show_calls
+    restarted = EngineRunner(
+        _config("first", "second"),
+        type(runner.store)(runner.store.path),
+        auth,
+        fetcher=lambda _url: feed(corrected=True, sibling=True),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW + timedelta(hours=5, minutes=10),
+    )
+    shared = restarted.run_cycle()
+
+    assert not shared.ok
+    diagnostics = shared.sources[0].matching_diagnostics
+    assert diagnostics.matching_reason_new_match_count == 1
+    assert diagnostics.matching_reason_input_changed_count == 0
+    assert diagnostics.matching_reason_evidence_recovery_count == 0
+    assert spotify.show_calls == calls_before_shared + 2
+    assert tuple(spotify.replacements) == writes_before
+    assert restarted.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") == barrier
+    assert restarted.planner_journal.get_matched_recovery("ser", "ser-1") == changed_recovery
+    assert restarted.planner_journal.get_match_input("ser", "ser-1") is None
+    assert restarted.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+    assert spotify.items["destination-first"] == []
+    assert spotify.items["destination-second"] == []
+
+    # At the new fingerprint's due deadline, a conclusive explicit repair may finally resolve the
+    # barrier, persist B, restore current evidence, and reconcile both destinations.
+    restarted.fetcher = lambda _url: feed(corrected=True, sibling=False)
+    restarted.clock = lambda: changed_recovery.next_retry_at
+    resolved = restarted.run_cycle()
+
+    assert resolved.ok
+    assert restarted.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == REPLACEMENT_URI
+    assert restarted.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") is None
+    assert restarted.planner_journal.get_matched_recovery("ser", "ser-1") is None
+    assert restarted.planner_journal.get_match_input("ser", "ser-1") is not None
+    assert spotify.items["destination-first"][0] == REPLACEMENT_URI
+    assert spotify.items["destination-second"][0] == REPLACEMENT_URI
+'''
+)
+BARRIER_TESTS.write_text(barrier_tests)
