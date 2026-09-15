@@ -1714,7 +1714,10 @@ class EngineRunner:
             return bool(
                 recovery is not None
                 and recovery.input_fingerprint == fingerprint
-                and match.updated_at > recovery.last_attempt_at
+                # The first attempt anchors a temporal persistence rejection. Later
+                # inconclusive retries advance last_attempt_at for scheduling only; they
+                # must not erase the destination-safety barrier before a durable repair.
+                and match.updated_at > recovery.first_attempt_at
             )
         unresolved = self.planner_journal.get_unresolved(str(source.id), edition.source_native_id)
         return bool(
