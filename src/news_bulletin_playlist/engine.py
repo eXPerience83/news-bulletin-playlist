@@ -610,7 +610,12 @@ class EngineRunner:
                     matched_count = sum(
                         outcome.spotify_episode_uri is not None for outcome in match_result.outcomes
                     )
-                    self._observe_matching_result(source, match_result, matching_now)
+                    self._observe_matching_result(
+                        source,
+                        match_result,
+                        matching_now,
+                        evaluation_intents=plan.evaluation_intents,
+                    )
                     if match_result.persistence_rejected:
                         persistence_rejected_source_ids.add(source.id)
                         unsafe_source_ids.add(source.id)
@@ -1913,7 +1918,14 @@ class EngineRunner:
                         source.id,
                     ),
                 )
-                self._observe_matching_result(source, result, observed_at)
+                self._observe_matching_result(
+                    source,
+                    result,
+                    observed_at,
+                    evaluation_intents={
+                        edition.identity: MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    },
+                )
                 if result.persistence_rejected:
                     raise SpotifyReconciliationError(
                         "Spotify prewrite validation could not durably apply matching evidence; "
@@ -1936,6 +1948,8 @@ class EngineRunner:
         source: SourceDefinition,
         result: SourceMatchResult,
         observed_at: datetime,
+        *,
+        evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent] | None = None,
     ) -> None:
         try:
             if self._shadow_auth_context is None:
@@ -1946,6 +1960,10 @@ class EngineRunner:
             for outcome in result.outcomes:
                 edition = outcome.edition
                 input_fingerprint = matching_input_fingerprint(source, edition)
+                explicit_evaluation = bool(
+                    evaluation_intents is not None and edition.identity in evaluation_intents
+                )
+                rejection_barrier = self._edition_has_persistence_rejection_barrier(source, edition)
                 if outcome.persistence_rejected:
                     # A newer durable match rejected this wall-clock observation. Evidence for the
                     # attempted state is non-authoritative, the destination must remain closed, and
@@ -1989,9 +2007,14 @@ class EngineRunner:
                     self.planner_journal.clear_match_input(
                         str(edition.source_id), edition.source_native_id
                     )
-                    self.planner_journal.clear_matched_recovery(
-                        str(edition.source_id), edition.source_native_id
-                    )
+                    # A shadow-only contradiction can invalidate positive match-input evidence,
+                    # but it did not attempt the repair whose temporal rejection created the
+                    # durable destination barrier. Preserve that barrier until an explicit
+                    # evaluation resolves it.
+                    if explicit_evaluation or not rejection_barrier:
+                        self.planner_journal.clear_matched_recovery(
+                            str(edition.source_id), edition.source_native_id
+                        )
                 if outcome.status is MatchStatus.MATCHED:
                     self.planner_journal.clear_unresolved(
                         str(edition.source_id), edition.source_native_id
@@ -2011,7 +2034,9 @@ class EngineRunner:
                                 str(edition.source_id), edition.source_native_id
                             )
                             prior_input = None
-                        if prior_input is None:
+                        if prior_input is None and not (
+                            rejection_barrier and not explicit_evaluation
+                        ):
                             self.planner_journal.record_matched_recovery(
                                 source_id=str(edition.source_id),
                                 source_native_id=edition.source_native_id,

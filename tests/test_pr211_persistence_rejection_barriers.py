@@ -14,10 +14,12 @@ from test_engine import (
     _config,
     _playlist,
     _rss,
+    _rss_two,
     _source,
     _Spotify,
     _store,
 )
+from test_shadow_planner_review import setup
 from test_spotify_matcher import FakeCatalogClient, _candidate, _edition
 from test_spotify_matcher import _source as _matcher_source
 
@@ -265,3 +267,52 @@ def test_fresh_resolution_rejected_by_temporal_guard_never_qualifies(tmp_path: P
     assert durable is not None
     assert durable.status is MatchStatus.PENDING
     assert durable.updated_at == NOW + timedelta(hours=4)
+
+
+def test_shared_catalogue_preserves_rejected_repair_barrier(tmp_path: Path) -> None:
+    spotify = _RollbackReplacementSpotify()
+    runner, spotify, _, _ = setup(tmp_path, spotify=spotify)
+
+    runner.clock = lambda: NOW + timedelta(hours=4)
+    assert runner.run_cycle().ok
+
+    runner.clock = lambda: NOW
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    runner.planner_journal.mark_destination_unknown("first")
+    spotify.items["destination-first"] = []
+    spotify.replacement_catalogue = True
+    spotify.include_invalid_cached = True
+
+    rejected = runner.run_cycle()
+    assert not rejected.ok
+    recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert recovery is not None
+    assert recovery.next_retry_at == NOW + timedelta(hours=6)
+    writes_before = tuple(spotify.replacements)
+    calls_after_rejection = spotify.show_calls
+
+    # Another native asset legitimately wakes the shared show catalogue while A remains inside
+    # its persistence-rejection backoff. Shadow qualification may clear stale positive evidence,
+    # but it must not clear or rebase the rejection barrier.
+    runner.clock = lambda: NOW + timedelta(minutes=10)
+    runner.fetcher = lambda _url: _rss_two()
+    shared = runner.run_cycle()
+
+    durable = runner.store.get_match_state(SourceId("ser"), "ser-1")
+    assert durable is not None
+    assert durable.status is MatchStatus.MATCHED
+    assert durable.spotify_episode_uri == SER_URI
+    assert durable.updated_at == NOW + timedelta(hours=4)
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is None
+    assert runner.planner_journal.get_matched_recovery("ser", "ser-1") == recovery
+    assert tuple(spotify.replacements) == writes_before
+    assert spotify.show_calls == calls_after_rejection + 2
+    assert not shared.ok
+
+    # The shared shadow inspection must not turn the next quiet cycle into an early recovery.
+    runner.clock = lambda: NOW + timedelta(minutes=20)
+    quiet = runner.run_cycle()
+    assert not quiet.ok
+    assert spotify.show_calls == calls_after_rejection + 2
+    assert tuple(spotify.replacements) == writes_before
+    assert runner.planner_journal.get_matched_recovery("ser", "ser-1") == recovery
