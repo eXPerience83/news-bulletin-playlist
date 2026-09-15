@@ -13,6 +13,9 @@ from typing import Any, Protocol
 from news_bulletin_playlist.models import CanonicalEdition, SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.registry import get_title_parser
+from news_bulletin_playlist.spotify.matching_policy import (
+    duration_disambiguation_tolerance_seconds,
+)
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 
 DEFAULT_PAGE_SIZE = 50
@@ -66,8 +69,8 @@ class MatchOutcome:
     diagnostics: str
     spotify_duration_seconds: int | None = None
     from_cache: bool = False
-    # None means no semantic evaluation was possible in this call. False means the current
-    # catalogue actively disproved qualification and prior planner evidence must be cleared.
+    # None means current evidence is inconclusive. False means the current catalogue actively
+    # contradicts the persisted mapping and prior planner evidence must be cleared.
     planner_input_evidence_qualified: bool | None = None
 
 
@@ -149,6 +152,7 @@ def match_source_editions(
     unresolved: list[tuple[int, CanonicalEdition]] = []
     selected = None if evaluation_intents is None else frozenset(evaluation_intents)
     notified_fresh_indices: set[int] = set()
+    duration_tolerance = duration_disambiguation_tolerance_seconds(source)
 
     for index, edition in enumerate(editions):
         if edition.source_id != source.id:
@@ -231,6 +235,7 @@ def match_source_editions(
             evaluations,
             candidate_count=len(candidates),
             catalogue_calls=catalogue_calls,
+            duration_tolerance_seconds=duration_tolerance,
         )
         _notify_fresh_evaluation(
             on_fresh_evaluation,
@@ -264,6 +269,7 @@ def match_source_editions(
                 tuple(_evaluate_candidate(source, outcome.edition, item) for item in candidates),
                 candidate_count=len(candidates),
                 catalogue_calls=catalogue_calls,
+                duration_tolerance_seconds=duration_tolerance,
             )
             _notify_fresh_evaluation(
                 on_fresh_evaluation,
@@ -296,19 +302,15 @@ def match_source_editions(
                 qualified = None
             else:
                 try:
-                    evaluated = _resolve_outcome(
-                        outcome.edition,
-                        tuple(
-                            _evaluate_candidate(source, outcome.edition, item)
-                            for item in candidates
-                        ),
+                    evaluations = tuple(
+                        _evaluate_candidate(source, outcome.edition, item) for item in candidates
+                    )
+                    qualified = _qualify_cached_mapping(
+                        outcome,
+                        evaluations,
                         candidate_count=len(candidates),
                         catalogue_calls=catalogue_calls,
-                    )
-                    qualified = (
-                        evaluated.status is MatchStatus.MATCHED
-                        and evaluated.spotify_episode_uri == outcome.spotify_episode_uri
-                        and evaluated.spotify_duration_seconds == outcome.spotify_duration_seconds
+                        duration_tolerance_seconds=duration_tolerance,
                     )
                 except Exception:
                     # Failure of optional shadow evaluation is inconclusive, not contradiction.
@@ -323,6 +325,48 @@ def match_source_editions(
         catalogue_candidate_count=len(candidates),
         catalogue_inspected=True,
     )
+
+
+def _qualify_cached_mapping(
+    outcome: MatchOutcome,
+    evaluations: Sequence[_CandidateEvaluation],
+    *,
+    candidate_count: int,
+    catalogue_calls: int,
+    duration_tolerance_seconds: int | None,
+) -> bool | None:
+    """Classify cached evidence without turning ambiguity into contradiction."""
+    cached_uri = outcome.spotify_episode_uri
+    if cached_uri is None:
+        return False
+    cached_evaluation = next(
+        (evaluation for evaluation in evaluations if evaluation.candidate.uri == cached_uri),
+        None,
+    )
+    if cached_evaluation is None:
+        return None
+    if not cached_evaluation.matched:
+        return False
+
+    evaluated = _resolve_outcome(
+        outcome.edition,
+        evaluations,
+        candidate_count=candidate_count,
+        catalogue_calls=catalogue_calls,
+        duration_tolerance_seconds=duration_tolerance_seconds,
+    )
+    if evaluated.status is not MatchStatus.MATCHED:
+        # The persisted URI still passes semantic evaluation, but current evidence cannot
+        # select it uniquely. This is inconclusive and should enter bounded recovery backoff.
+        return None
+    if evaluated.spotify_episode_uri != cached_uri:
+        # Current matching rules uniquely prefer another semantic candidate.
+        return False
+    if evaluated.spotify_duration_seconds != outcome.spotify_duration_seconds:
+        # The URI remains uniquely correct, but exact provider metadata changed. Do not certify
+        # stale duration evidence and do not create an every-cycle contradiction loop.
+        return None
+    return True
 
 
 def _notify_fresh_evaluation(
@@ -679,14 +723,33 @@ def _resolve_outcome(
     *,
     candidate_count: int,
     catalogue_calls: int,
+    duration_tolerance_seconds: int | None,
 ) -> MatchOutcome:
     viable = tuple(evaluation for evaluation in evaluations if evaluation.matched)
+    original_viable_count = len(viable)
+    duration_disambiguated = False
+
+    if len(viable) > 1:
+        duration_choice = _duration_disambiguation_choice(
+            edition,
+            viable,
+            duration_tolerance_seconds=duration_tolerance_seconds,
+        )
+        if duration_choice is not None:
+            viable = (duration_choice,)
+            duration_disambiguated = True
 
     if len(viable) == 1:
         evaluation = viable[0]
         candidate = evaluation.candidate
         duration_detail = _duration_diagnostic(edition, candidate)
         release_detail = _release_delay_diagnostic(evaluation)
+        disambiguation_detail = (
+            f"; duration disambiguated 1 of {original_viable_count} viable candidate(s) "
+            f"within ±{duration_tolerance_seconds}s"
+            if duration_disambiguated and duration_tolerance_seconds is not None
+            else ""
+        )
         return MatchOutcome(
             edition=edition,
             status=MatchStatus.MATCHED,
@@ -694,7 +757,7 @@ def _resolve_outcome(
             spotify_duration_seconds=candidate.duration_seconds,
             diagnostics=(
                 f"matched 1 of {candidate_count} candidate(s) in {catalogue_calls} call(s)"
-                f"{release_detail}{duration_detail}"
+                f"{release_detail}{disambiguation_detail}{duration_detail}"
             ),
         )
     if len(viable) > 1:
@@ -724,6 +787,28 @@ def _resolve_outcome(
         spotify_episode_uri=None,
         diagnostics=diagnostics,
     )
+
+
+def _duration_disambiguation_choice(
+    edition: CanonicalEdition,
+    viable: Sequence[_CandidateEvaluation],
+    *,
+    duration_tolerance_seconds: int | None,
+) -> _CandidateEvaluation | None:
+    if duration_tolerance_seconds is None or edition.duration_seconds is None:
+        return None
+    if any(evaluation.candidate.duration_seconds is None for evaluation in viable):
+        return None
+    within_tolerance = tuple(
+        evaluation
+        for evaluation in viable
+        if evaluation.candidate.duration_seconds is not None
+        and abs(edition.duration_seconds - evaluation.candidate.duration_seconds)
+        <= duration_tolerance_seconds
+    )
+    if len(within_tolerance) != 1:
+        return None
+    return within_tolerance[0]
 
 
 def _release_delay_diagnostic(evaluation: _CandidateEvaluation) -> str:
