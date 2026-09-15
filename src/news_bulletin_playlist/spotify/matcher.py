@@ -304,7 +304,7 @@ def match_source_editions(
                 continue
 
             evaluated = assessment.evaluated
-            store.set_match_state(
+            applied = store.set_match_state(
                 outcome.edition.source_id,
                 outcome.edition.source_native_id,
                 status=evaluated.status,
@@ -313,6 +313,12 @@ def match_source_editions(
                 diagnostics=evaluated.diagnostics,
                 updated_at=observed_at,
             )
+            if not applied:
+                # The durable row is newer than this runner observation (for example after a
+                # clock rollback). Never publish a fresh repaired outcome that SQLite rejected:
+                # planner evidence must remain fail-closed against the mapping still on disk.
+                qualification_overrides[index] = assessment.qualification
+                continue
             outcomes[index] = evaluated
 
     # Shadow-only semantic qualification. Reuse the already-fetched candidates and the

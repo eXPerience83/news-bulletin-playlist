@@ -2372,3 +2372,84 @@ def test_unknown_provider_duration_keeps_known_duration_and_enters_recovery_back
     clock[0] = NOW + timedelta(minutes=20)
     assert runner.run_cycle().ok
     assert spotify.show_calls == calls_before + 1
+
+
+def test_clock_rollback_rejected_repair_never_publishes_match_input_and_recovers_later(
+    tmp_path: Path,
+) -> None:
+    clock = [NOW]
+    replacement_uri = "spotify:episode:" + "9" * 22
+
+    class ReplacementSpotify(_Spotify):
+        replacement_catalogue = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            if not self.replacement_catalogue:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            assert show_id == "ser-show"
+            assert limit == 50
+            assert offset == 0
+            self.show_calls += 1
+            return catalogue_page(
+                [
+                    {
+                        "uri": SER_URI,
+                        "name": "contenido que no representa la edición",
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                        "duration_ms": 60_000,
+                    },
+                    {
+                        "uri": replacement_uri,
+                        "name": SER_TITLE,
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                        "duration_ms": 61_000,
+                    },
+                ],
+                offset=offset,
+                limit=limit,
+            )
+
+    spotify = ReplacementSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+    assert runner.run_cycle().ok
+    assert runner.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is not None
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    spotify.replacement_catalogue = True
+    writes_before = tuple(spotify.replacements)
+
+    # Roll the runner clock behind the durable 10:00 match. The catalogue proves A stale and B
+    # correct, but SQLite must reject a repair stamped 09:50. The engine must not publish current
+    # evidence for B (or for A) and must not mutate the destination from the durable A state.
+    clock[0] = NOW - timedelta(minutes=10)
+    rolled_back = runner.run_cycle()
+    assert rolled_back.ok
+    durable = runner.store.get_match_state(SourceId("ser"), "ser-1")
+    assert durable is not None
+    assert durable.status is MatchStatus.MATCHED
+    assert durable.spotify_episode_uri == SER_URI
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is None
+    assert spotify.items["destination-first"] == [SER_URI]
+    assert tuple(spotify.replacements) == writes_before
+
+    # Once time is newer than the durable row, the same evidence-recovery path may persist B and
+    # then publish evidence for the state that is actually on disk.
+    clock[0] = NOW + timedelta(minutes=1)
+    recovered = runner.run_cycle()
+    assert recovered.ok
+    durable = runner.store.get_match_state(SourceId("ser"), "ser-1")
+    assert durable is not None
+    assert durable.status is MatchStatus.MATCHED
+    assert durable.spotify_episode_uri == replacement_uri
+    assert durable.spotify_duration_seconds == 61
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is not None
+    assert spotify.items["destination-first"] == [replacement_uri]

@@ -546,8 +546,8 @@ class SQLiteStore:
         spotify_episode_uri: str | None = None,
         spotify_duration_seconds: int | None = None,
         diagnostics: str | None = None,
-    ) -> None:
-        """Persist deterministic source-edition to Spotify matching state."""
+    ) -> bool:
+        """Persist matching state and report whether the temporal guard applied it."""
         if status is MatchStatus.MATCHED:
             if spotify_episode_uri is None or not spotify_episode_uri.strip():
                 raise ValueError("matched state requires spotify_episode_uri")
@@ -559,7 +559,7 @@ class SQLiteStore:
             raise ValueError("non-matched state must not store spotify_duration_seconds")
 
         with self._connection("set Spotify match state") as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT INTO spotify_matches (
                     source_id,
@@ -588,6 +588,7 @@ class SQLiteStore:
                     _format_timestamp(updated_at),
                 ),
             )
+            return cursor.rowcount > 0
 
     def get_match_state(
         self,

@@ -171,3 +171,75 @@ def test_onda_production_shaped_duplicate_still_disambiguates_by_duration(tmp_pa
         (URI_309, 309),
         (URI_251, 251),
     ]
+
+
+def test_rejected_clock_rollback_repair_keeps_durable_mapping_and_never_qualifies(
+    tmp_path,
+) -> None:
+    source = _source("ser", "ser", "Europe/Madrid", "show-ser")
+    edition = _edition(
+        source,
+        "ser-clock-rollback",
+        "Las noticias de la SER, 10:00 (14/09/2026)",
+        duration_seconds=60,
+    )
+    store = _store(tmp_path)
+    _persist_cached_match(store, edition, uri=URI_309, duration=60)
+    # Pin the durable row at NOW so the recovery observation at NOW-10m is rejected by
+    # SQLite's monotonic updated_at guard. The shared helper deliberately stores older state.
+    assert store.set_match_state(
+        *edition.identity,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri=URI_309,
+        spotify_duration_seconds=60,
+        diagnostics="known mapping at current durable time",
+        updated_at=NOW,
+    )
+
+    stale_cached_candidate = _candidate(
+        edition,
+        source,
+        title="contenido que no representa la edición",
+        uri=URI_309,
+        duration_ms=60_000,
+    )
+    replacement_candidate = _candidate(
+        edition,
+        source,
+        uri=URI_251,
+        duration_ms=61_000,
+    )
+    client = FakeCatalogClient(
+        pages=[
+            {
+                "items": [stale_cached_candidate, replacement_candidate],
+                "next": None,
+            }
+        ]
+    )
+
+    result = match_source_editions(
+        client,
+        store,
+        source,
+        (edition,),
+        now=NOW - timedelta(minutes=10),
+        evaluation_intents={edition.identity: MatchEvaluationIntent.EVIDENCE_RECOVERY},
+    )
+    outcome = result.outcomes[0]
+
+    # The fresh catalogue positively contradicts A and uniquely selects B, but the temporal
+    # persistence guard rejects the 09:20 repair because A was stored at 09:30. The public
+    # result must therefore stay aligned with durable SQLite and must not publish positive
+    # planner evidence for the rejected repair.
+    assert outcome.from_cache
+    assert outcome.status is MatchStatus.MATCHED
+    assert outcome.spotify_episode_uri == URI_309
+    assert outcome.spotify_duration_seconds == 60
+    assert outcome.planner_input_evidence_qualified is False
+
+    durable = store.get_match_state(*edition.identity)
+    assert durable is not None
+    assert durable.status is MatchStatus.MATCHED
+    assert durable.spotify_episode_uri == URI_309
+    assert durable.spotify_duration_seconds == 60
