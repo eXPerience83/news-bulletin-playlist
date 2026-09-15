@@ -475,6 +475,7 @@ class EngineRunner:
         source_outcomes: dict[SourceId, SourceCycleOutcome] = {}
         playlist_outcomes: list[PlaylistCycleOutcome] = []
         unsafe_source_ids: set[SourceId] = set()
+        persistence_rejected_source_ids: set[SourceId] = set()
         matching_evaluated_counts: dict[SourceId, int] = {}
 
         try:
@@ -610,6 +611,9 @@ class EngineRunner:
                         outcome.spotify_episode_uri is not None for outcome in match_result.outcomes
                     )
                     self._observe_matching_result(source, match_result, matching_now)
+                    if match_result.persistence_rejected:
+                        persistence_rejected_source_ids.add(source.id)
+                        unsafe_source_ids.add(source.id)
                 else:
                     matched_count = 0
                     if catalogue is not None:
@@ -673,10 +677,16 @@ class EngineRunner:
             playlist_started_at = _as_utc(self.clock())
             desired_count = 0
             request_diagnostics: dict[str, Any] = {}
+            rejected_for_playlist = tuple(
+                source_id
+                for source_id in playlist.source_selection.explicit
+                if source_id in persistence_rejected_source_ids
+                or self._source_has_persistence_rejection_barrier(source_id, playlist_started_at)
+            )
             unsafe_for_playlist = tuple(
                 source_id
                 for source_id in playlist.source_selection.explicit
-                if source_id in unsafe_source_ids
+                if source_id in unsafe_source_ids or source_id in rejected_for_playlist
             )
             if playlist.id in persistence_blocked:
                 playlist_started_at = _as_utc(self.clock())
@@ -715,11 +725,18 @@ class EngineRunner:
                         desired_count = len(desired.items)
                     except DesiredStateError:
                         desired_count = 0
-                    reason = (
-                        "destination preserved because no last-known-good state is available "
-                        "for source(s): "
-                        + ", ".join(str(source_id) for source_id in unsafe_for_playlist)
-                    )
+                    if rejected_for_playlist:
+                        reason = (
+                            "destination preserved because a Spotify matching repair was "
+                            "rejected by durable persistence for source(s): "
+                            + ", ".join(str(source_id) for source_id in rejected_for_playlist)
+                        )
+                    else:
+                        reason = (
+                            "destination preserved because no last-known-good state is available "
+                            "for source(s): "
+                            + ", ".join(str(source_id) for source_id in unsafe_for_playlist)
+                        )
                     playlist_finished_at = _as_utc(self.clock())
                     self.store.record_playlist_run(
                         playlist.id,
@@ -1516,12 +1533,32 @@ class EngineRunner:
                         if reason is PlannerReason.INPUT_CHANGED:
                             intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
                             input_changed_count += 1
-                        elif reason is not None:
+                        elif reason in {
+                            PlannerReason.MISSING_EVIDENCE,
+                            PlannerReason.RETRY_DUE,
+                        }:
                             intents[edition.identity] = MatchEvaluationIntent.EVIDENCE_RECOVERY
                             evidence_recovery_count += 1
                     else:
-                        intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                        missing_evidence_count += 1
+                        retry = self.planner_journal.get_unresolved(
+                            str(source.id), edition.source_native_id
+                        )
+                        reason = unresolved_planning_reason(
+                            retry,
+                            input_fingerprint=fingerprint,
+                            now=now,
+                        )
+                        if reason is PlannerReason.MISSING_EVIDENCE:
+                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                            missing_evidence_count += 1
+                        elif reason is PlannerReason.INPUT_CHANGED:
+                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                            input_changed_count += 1
+                        elif reason is PlannerReason.RETRY_DUE:
+                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                            retry_due_count += 1
+                        elif reason is None:
+                            coalescing_candidates.append(edition.identity)
                     continue
                 if prior_input.input_fingerprint != fingerprint:
                     intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
@@ -1655,6 +1692,50 @@ class EngineRunner:
             source_plans[source.id] = self._source_matching_plan(source, editions, now)
         return source_editions, source_plans
 
+    def _edition_has_persistence_rejection_barrier(
+        self,
+        source: SourceDefinition,
+        edition: CanonicalEdition,
+    ) -> bool:
+        """Detect durable evidence that a newer match rejected the last evaluation attempt."""
+        match = self.store.get_match_state(source.id, edition.source_native_id)
+        if match is None:
+            return False
+        fingerprint = matching_input_fingerprint(source, edition)
+        if match.status is MatchStatus.MATCHED:
+            recovery = self.planner_journal.get_matched_recovery(
+                str(source.id), edition.source_native_id
+            )
+            return bool(
+                recovery is not None
+                and recovery.input_fingerprint == fingerprint
+                and match.updated_at > recovery.last_attempt_at
+            )
+        unresolved = self.planner_journal.get_unresolved(str(source.id), edition.source_native_id)
+        return bool(
+            unresolved is not None
+            and unresolved.input_fingerprint == fingerprint
+            and match.updated_at > unresolved.last_attempt_at
+        )
+
+    def _source_has_persistence_rejection_barrier(
+        self,
+        source_id: SourceId,
+        now: datetime,
+    ) -> bool:
+        source = next(
+            (candidate for candidate in required_sources(self.config) if candidate.id == source_id),
+            None,
+        )
+        if source is None:
+            return False
+        matching_cutoff = self._matching_cutoff(now)
+        return any(
+            matching_cutoff <= edition.published_at <= now
+            and self._edition_has_persistence_rejection_barrier(source, edition)
+            for edition in self.store.list_editions(source_id=source_id)
+        )
+
     def _plan_destinations(
         self, now: datetime, unsafe_source_ids: set[SourceId]
     ) -> tuple[set[PlaylistId], set[PlaylistId]]:
@@ -1776,6 +1857,17 @@ class EngineRunner:
                     raise SpotifyReconciliationError(
                         "Spotify prewrite validation could not resolve a configured source"
                     )
+                edition = self.store.get_edition(item.source_id, item.source_native_id)
+                if edition is None:
+                    raise SpotifyReconciliationError(
+                        "Spotify prewrite validation lost its canonical edition; "
+                        "destination preserved"
+                    )
+                if self._edition_has_persistence_rejection_barrier(source, edition):
+                    raise SpotifyReconciliationError(
+                        "Spotify prewrite validation found a temporally rejected matching repair; "
+                        "destination preserved"
+                    )
                 current = self.store.get_match_state(item.source_id, item.source_native_id)
                 if (
                     current is None
@@ -1803,12 +1895,6 @@ class EngineRunner:
                         "destination preserved"
                     )
 
-                edition = self.store.get_edition(item.source_id, item.source_native_id)
-                if edition is None:
-                    raise SpotifyReconciliationError(
-                        "Spotify prewrite validation lost its canonical edition; "
-                        "destination preserved"
-                    )
                 result = match_source_editions(
                     catalogue_coordinator.client,
                     self.store,
@@ -1828,6 +1914,11 @@ class EngineRunner:
                     ),
                 )
                 self._observe_matching_result(source, result, observed_at)
+                if result.persistence_rejected:
+                    raise SpotifyReconciliationError(
+                        "Spotify prewrite validation could not durably apply matching evidence; "
+                        "destination preserved"
+                    )
 
             return build_desired_state_from_store(
                 self.store,
@@ -1855,6 +1946,35 @@ class EngineRunner:
             for outcome in result.outcomes:
                 edition = outcome.edition
                 input_fingerprint = matching_input_fingerprint(source, edition)
+                if outcome.persistence_rejected:
+                    # A newer durable match rejected this wall-clock observation. Evidence for the
+                    # attempted state is non-authoritative, the destination must remain closed, and
+                    # retries must use a bounded durable schedule instead of CLOCK_ROLLBACK polling.
+                    self.planner_journal.clear_match_input(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                    self.planner_journal.clear_matched_recovery(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                    self.planner_journal.clear_unresolved(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                    if outcome.status is MatchStatus.MATCHED:
+                        self.planner_journal.record_matched_recovery(
+                            source_id=str(edition.source_id),
+                            source_native_id=edition.source_native_id,
+                            input_fingerprint=input_fingerprint,
+                            attempted_at=observed_at,
+                        )
+                    else:
+                        self.planner_journal.record_unresolved(
+                            source_id=str(edition.source_id),
+                            source_native_id=edition.source_native_id,
+                            input_fingerprint=input_fingerprint,
+                            status=outcome.status,
+                            attempted_at=observed_at,
+                        )
+                    continue
                 if outcome.planner_input_evidence_qualified is True:
                     self.planner_journal.observe_match_input(
                         source_id=str(edition.source_id),

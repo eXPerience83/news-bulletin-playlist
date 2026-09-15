@@ -11,7 +11,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from news_bulletin_playlist.models import CanonicalEdition, SourceDefinition, SourceId
-from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
+from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore
 from news_bulletin_playlist.registry import get_title_parser
 from news_bulletin_playlist.spotify.matching_policy import (
     duration_disambiguation_tolerance_seconds,
@@ -72,6 +72,10 @@ class MatchOutcome:
     # None means current evidence is inconclusive. False means the current catalogue actively
     # contradicts the persisted mapping and prior planner evidence must be cleared.
     planner_input_evidence_qualified: bool | None = None
+    # True means a semantically-authoritative transition was attempted but SQLite's
+    # monotonic updated_at guard rejected it. The returned mapping remains aligned with
+    # durable state and Engine must keep planner evidence and destination writes fail-closed.
+    persistence_rejected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +86,10 @@ class SourceMatchResult:
     catalogue_complete: bool = False
     catalogue_candidate_count: int = 0
     catalogue_inspected: bool = False
+
+    @property
+    def persistence_rejected(self) -> bool:
+        return any(outcome.persistence_rejected for outcome in self.outcomes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,7 +224,7 @@ def match_source_editions(
             if uri is None or uri in candidate_uris:
                 continue
             diagnostics = "persisted Spotify episode is absent from the complete show catalogue"
-            store.set_match_state(
+            applied = store.set_match_state(
                 cached.edition.source_id,
                 cached.edition.source_native_id,
                 status=MatchStatus.PENDING,
@@ -225,6 +233,13 @@ def match_source_editions(
                 diagnostics=diagnostics,
                 updated_at=observed_at,
             )
+            if not applied:
+                # A complete catalogue positively contradicted the durable mapping, but a newer
+                # durable row won the temporal ordering guard. Keep the public result aligned with
+                # SQLite and make the rejection explicit so Engine can block writes and back off.
+                outcomes[index] = replace(cached, persistence_rejected=True)
+                qualification_overrides[index] = False
+                continue
             outcomes[index] = MatchOutcome(
                 edition=cached.edition,
                 status=MatchStatus.PENDING,
@@ -251,7 +266,7 @@ def match_source_editions(
             index=index,
             notified_indices=notified_fresh_indices,
         )
-        store.set_match_state(
+        applied = store.set_match_state(
             edition.source_id,
             edition.source_native_id,
             status=outcome.status,
@@ -260,6 +275,16 @@ def match_source_editions(
             diagnostics=outcome.diagnostics,
             updated_at=observed_at,
         )
+        if not applied:
+            durable = _persisted_outcome(store, edition, now=observed_at)
+            if durable is None:
+                raise PersistenceError(
+                    "Spotify match write was rejected by temporal ordering and durable state "
+                    "cannot be safely reused"
+                )
+            outcomes[index] = replace(durable, persistence_rejected=True)
+            qualification_overrides[index] = None
+            continue
         outcomes[index] = outcome
 
     if evaluation_intents is not None:
@@ -318,6 +343,7 @@ def match_source_editions(
                 # clock rollback). Never publish a fresh repaired outcome that SQLite rejected:
                 # planner evidence must remain fail-closed against the mapping still on disk.
                 qualification_overrides[index] = assessment.qualification
+                outcomes[index] = replace(outcome, persistence_rejected=True)
                 continue
             outcomes[index] = evaluated
 
@@ -462,7 +488,7 @@ def _cached_outcome(
     if state.status is MatchStatus.MATCHED and state.spotify_episode_uri:
         if not is_spotify_episode_uri(state.spotify_episode_uri):
             diagnostics = "persisted Spotify mapping contained an invalid episode URI"
-            store.set_match_state(
+            applied = store.set_match_state(
                 edition.source_id,
                 edition.source_native_id,
                 status=MatchStatus.PENDING,
@@ -471,6 +497,10 @@ def _cached_outcome(
                 diagnostics=diagnostics,
                 updated_at=now,
             )
+            if not applied:
+                raise PersistenceError(
+                    "invalid persisted Spotify mapping could not be durably invalidated"
+                )
             return None
         # Schema-v2 matches predate durable destination duration. Refresh those
         # mappings once instead of treating unknown duration as eligibility proof.

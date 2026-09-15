@@ -2432,18 +2432,33 @@ def test_clock_rollback_rejected_repair_never_publishes_match_input_and_recovers
     # evidence for B (or for A) and must not mutate the destination from the durable A state.
     clock[0] = NOW - timedelta(minutes=10)
     rolled_back = runner.run_cycle()
-    assert rolled_back.ok
+    # A rejected authoritative repair preserves the destination and marks reconciliation unsafe.
+    assert not rolled_back.ok
     durable = runner.store.get_match_state(SourceId("ser"), "ser-1")
     assert durable is not None
     assert durable.status is MatchStatus.MATCHED
     assert durable.spotify_episode_uri == SER_URI
     assert runner.planner_journal.get_match_input("ser", "ser-1") is None
+    recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert recovery is not None
+    assert recovery.last_attempt_at == NOW - timedelta(minutes=10)
+    assert recovery.next_retry_at == NOW + timedelta(hours=5, minutes=50)
+    assert spotify.items["destination-first"] == [SER_URI]
+    assert tuple(spotify.replacements) == writes_before
+    calls_after_rejection = spotify.show_calls
+
+    # Merely catching up past the durable mapping timestamp must not recreate ten-minute polling.
+    # With no destination reconciliation needed, this quiet cycle may complete successfully.
+    clock[0] = NOW + timedelta(minutes=1)
+    waiting = runner.run_cycle()
+    assert waiting.ok
+    assert spotify.show_calls == calls_after_rejection
+    assert runner.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is None
     assert spotify.items["destination-first"] == [SER_URI]
     assert tuple(spotify.replacements) == writes_before
 
-    # Once time is newer than the durable row, the same evidence-recovery path may persist B and
-    # then publish evidence for the state that is actually on disk.
-    clock[0] = NOW + timedelta(minutes=1)
+    clock[0] = recovery.next_retry_at
     recovered = runner.run_cycle()
     assert recovered.ok
     durable = runner.store.get_match_state(SourceId("ser"), "ser-1")
@@ -2452,4 +2467,5 @@ def test_clock_rollback_rejected_repair_never_publishes_match_input_and_recovers
     assert durable.spotify_episode_uri == replacement_uri
     assert durable.spotify_duration_seconds == 61
     assert runner.planner_journal.get_match_input("ser", "ser-1") is not None
+    assert runner.planner_journal.get_matched_recovery("ser", "ser-1") is None
     assert spotify.items["destination-first"] == [replacement_uri]
