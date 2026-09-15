@@ -90,6 +90,20 @@ The revised tests cover the four blockers and their request-budget consequences,
 
 The validated correction run completed Ruff, Ruff format, mypy, and the full pytest suite with `884 passed` before committing the fix.
 
+## Second adversarial review: persistence acknowledgement
+
+A second independent adversarial review confirmed A1–A4 fixed, then found one separate consistency defect at the boundary between matching and durable persistence. `spotify_matches` intentionally rejects stale writes with the monotonic guard `excluded.updated_at >= spotify_matches.updated_at`. During a runner clock rollback, an explicit recovery could therefore discover a conclusive replacement B, attempt to persist it with an older timestamp, have SQLite reject the UPDATE, and still return B as a fresh qualified outcome. Engine observation could then publish current `match_input` evidence even though SQLite still contained A. The review demonstrated that this false evidence could make #181 soft-retention return `DEFER` for A despite the catalogue having positively contradicted A.
+
+The correction keeps the temporal guard and makes its result explicit instead of bypassing it:
+
+- `SQLiteStore.set_match_state()` now returns whether the INSERT/UPDATE actually applied;
+- the cached-repair path publishes the fresh repaired outcome only when persistence acknowledges success;
+- when a repair is rejected by the temporal guard, the matcher keeps its returned outcome aligned with the durable cached mapping and preserves the assessment's fail-closed qualification (`False` for positive contradiction, `None` for inconclusive metadata repair);
+- Engine therefore cannot publish positive `match_input` evidence for an uncommitted repair;
+- once wall-clock time advances beyond the durable row, the same recovery can persist the replacement and then certify the state normally.
+
+Regression coverage now includes both the persistence acknowledgement contract and the exact rollback scenario from the review. At matcher level, a replacement discovered at `NOW-10m` against a durable mapping stamped at `NOW` remains cached and unqualified after SQLite rejects the write. At EngineRunner level, the rejected repair publishes no match-input, performs no incorrect destination replacement, and later converges to the replacement URI after the clock catches up. The validated one-shot correction run passed Ruff, Ruff format, mypy, focused rollback tests, and the full suite with **886 passed**.
+
 ## Expected operational effects
 
 - the #209 cached-ambiguity loop enters the existing six-hour matched-recovery backoff instead of polling every scheduler cycle;
@@ -97,6 +111,7 @@ The validated correction run completed Ruff, Ruff format, mypy, and the full pyt
 - stale match-input rows cannot keep `INPUT_CHANGED` alive every ten minutes after an inconclusive inspection;
 - non-opted sources avoid an unnecessary fingerprint-driven revalidation burst;
 - unknown provider duration cannot erase known durable duration and create a new missing-evidence loop;
+- a temporal SQLite no-op cannot be mistaken for a committed repair or become positive planner evidence;
 - the observed Onda 309s/251s duplicate can resolve deterministically when Spotify durations match the production-established contract;
 - resolving the 251s sibling also removes one current `AMBIGUOUS` retry contributor from #174;
 - #148 complete/incomplete catalogue absence semantics remain unchanged;
