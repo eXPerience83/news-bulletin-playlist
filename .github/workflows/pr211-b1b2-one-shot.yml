@@ -24,8 +24,8 @@ jobs:
           cache: pip
       - name: Apply correction
         run: |
-          git apply --check .pr211-b1b2.patch
-          git apply .pr211-b1b2.patch
+          python .pr211_b1b2_apply.py
+          rm .pr211_b1b2_apply.py
           rm .pr211-b1b2.patch
           rm .github/workflows/pr211-b1b2-one-shot.yml
       - name: Install
