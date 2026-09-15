@@ -31,6 +31,20 @@ jobs:
       - name: Apply persistence acknowledgement fix
         run: python .github/pr211_fix_persistence_ack.py
 
+      - name: Correct rollback fixture timestamp
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_pr211_adversarial_regressions.py")
+          text = path.read_text()
+          old = '''    _persist_cached_match(store, edition, uri=URI_309, duration=60)\n\n    stale_cached_candidate = _candidate(\n'''
+          new = '''    _persist_cached_match(store, edition, uri=URI_309, duration=60)\n    # Pin the durable row at NOW so the recovery observation at NOW-10m is rejected by\n    # SQLite's monotonic updated_at guard. The shared helper deliberately stores older state.\n    assert store.set_match_state(\n        *edition.identity,\n        status=MatchStatus.MATCHED,\n        spotify_episode_uri=URI_309,\n        spotify_duration_seconds=60,\n        diagnostics="known mapping at current durable time",\n        updated_at=NOW,\n    )\n\n    stale_cached_candidate = _candidate(\n'''
+          if old not in text:
+              raise SystemExit("rollback fixture anchor not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
       - name: Remove one-shot patch machinery
         run: |
           rm .github/pr211_fix_persistence_ack.py
