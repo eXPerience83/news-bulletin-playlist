@@ -13,12 +13,13 @@ from news_bulletin_playlist.spotify.matching_policy import (
 
 NOW = datetime(2026, 9, 15, 8, 30, tzinfo=UTC)
 ONDA_TITLE = "Las noticias de Onda Cero de las 3:00h (14/9/2026)"
+ONDA_SHOW_ID = "0tjEexypyczHXW9vE3SU3P"
 URI_309 = "spotify:episode:" + "a" * 22
 URI_251 = "spotify:episode:" + "b" * 22
 
 
 def _onda():
-    return _source("ondacero", "ondacero", "Europe/Madrid", "show-ondacero")
+    return _source("ondacero", "ondacero", "Europe/Madrid", ONDA_SHOW_ID)
 
 
 def test_onda_duration_policy_is_narrow_source_opt_in() -> None:
@@ -26,6 +27,12 @@ def test_onda_duration_policy_is_narrow_source_opt_in() -> None:
     assert (
         duration_disambiguation_tolerance_seconds(
             _source("ser", "ser", "Europe/Madrid", "show-ser")
+        )
+        is None
+    )
+    assert (
+        duration_disambiguation_tolerance_seconds(
+            _source("ondacero", "ondacero", "Europe/Madrid", "other-show")
         )
         is None
     )
