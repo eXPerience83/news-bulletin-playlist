@@ -8,9 +8,7 @@ from news_bulletin_playlist.models import SourceDefinition
 # contract may opt in, and the matcher uses the value solely to disambiguate candidates that
 # already passed title/time/date semantics. If the parser or show reference changes, the policy
 # fails closed until that new contract is measured independently.
-_DURATION_DISAMBIGUATION_TOLERANCE_SECONDS: dict[
-    tuple[str, str, tuple[str, ...]], int
-] = {
+_DURATION_DISAMBIGUATION_TOLERANCE_SECONDS: dict[tuple[str, str, tuple[str, ...]], int] = {
     ("ondacero", "ondacero", ("0tjEexypyczHXW9vE3SU3P",)): 1,
 }
 
