@@ -55,42 +55,82 @@ After restart, a different same-show `NEW_MATCH` at 16:10 paid for a complete sh
 
 ### D1 correction
 
-For `MATCHED` recovery, the temporal rejection is now anchored to `MatchedRecoveryState.first_attempt_at`, not the mutable scheduling timestamp `last_attempt_at`:
+For `MATCHED` recovery, the temporal rejection was first anchored to `MatchedRecoveryState.first_attempt_at`, not the mutable scheduling timestamp `last_attempt_at`:
 
 ```text
 match.updated_at > matched_recovery.first_attempt_at
 ```
 
-`record_matched_recovery()` already preserves `first_attempt_at` for the same input fingerprint while later inconclusive attempts advance only `last_attempt_at` and `next_retry_at`. Therefore:
+That closes D1 only while the scheduling fingerprint remains unchanged. The dedicated regression `test_inconclusive_due_retry_keeps_rejected_barrier_across_restart` retains coverage for multiple inconclusive retries, restart, shared same-show work and zero PUT.
 
-- a rejected repair remains a destination-safety barrier across later inconclusive retries;
-- an inconclusive retry may move the next retry deadline without erasing the original rejected-transition evidence;
-- restart preserves the same inference from durable SQLite state;
-- a later shared catalogue remains shadow-only for A while A has no explicit intent;
-- successful authoritative resolution still clears matched recovery through the normal observer path;
-- no schema migration and no extra Spotify request are required.
+## D2 — fingerprint changes proved scheduling cannot own the safety barrier
 
-The dedicated regression `test_inconclusive_due_retry_keeps_rejected_barrier_across_restart` covers:
+Codex + ASTRA then audited exact head `c70d755fd1e151123bc5d8ee98e3c2be9e1f9370` and found D2. `record_matched_recovery()` correctly starts a new scheduling series when the matching-input fingerprint changes. That means `first_attempt_at` also changes, so D1's timestamp inference still coupled destination safety to scheduling state.
 
-1. durable `MATCHED(A)` at 14:00;
-2. rejected A→B repair after rollback to 10:00;
-3. matched recovery due at 16:00;
-4. explicit 16:00 retry with a truncated two-page catalogue that is inconclusive;
-5. scheduling advancing to 22:00 while `first_attempt_at` remains 10:00;
-6. process restart;
-7. a different native asset causing same-show `NEW_MATCH` at 16:10;
-8. A receiving shadow contradiction from the shared complete catalogue;
-9. no `match_input`, unchanged recovery/deadline, durable A preserved, and **zero PUT in two destinations**.
+The reproduced sequence was:
+
+1. durable `MATCHED(A,60)` updated at 14:00;
+2. clock rollback to 10:00; explicit A→B repair rejected by SQLite; zero PUT;
+3. matched recovery starts at 10:00 and is due at 16:00;
+4. at 15:00 only RSS `pubDate` changes, producing a legitimate new input fingerprint;
+5. `INPUT_CHANGED` immediately inspects the bounded catalogue, which is truncated and therefore inconclusive;
+6. the recovery series is correctly reset for scheduling to `first_attempt_at=15:00`, `next_retry_at=21:00`;
+7. timestamp inference therefore loses the rejection barrier even though no repair was persisted;
+8. after restart, a sibling `NEW_MATCH` pays for a shared catalogue where A is still semantically invalid and B is correct;
+9. A is shadow-only, recovery can be cleared, and pre-write can accept A by physical presence;
+10. both destinations can incorrectly receive PUT containing A.
+
+### D2 correction — schema v7 first-class barrier
+
+D2 makes the architectural separation merge-critical. Schema v7 adds `spotify_planner_persistence_rejection_state`, keyed by `(source_id, source_native_id)` and deliberately independent of input fingerprints and retry deadlines.
+
+The barrier stores an exact snapshot of the durable match that won the temporal race:
+
+- protected match status;
+- protected Spotify URI and duration;
+- protected match `updated_at`;
+- first and last rejection observation timestamps.
+
+On every `persistence_rejected` outcome Engine records this barrier **before** changing retry scheduling. `match_input` remains non-authoritative and is cleared. `matched_recovery`/`unresolved` remain scheduling-only: an input change may legitimately reset their fingerprint and retry series without altering destination safety.
+
+The barrier resolves only when there is sufficient authority:
+
+- an explicit conclusive evaluation may clear it; or
+- an accepted durable state transition changes the protected match snapshot, so the old barrier no longer protects the new durable row and is cleared lazily.
+
+Shadow `False`, `True` or `None` never resolves the first-class barrier. This preserves same-show catalogue sharing without an extra Spotify request.
+
+Migration v7 conservatively reconstructs barriers that can be proven from the previous v6 implicit state. The reconstruction runs transactionally only when the required canonical/planner tables exist; partial historical/synthetic databases remain upgradeable and simply have no reconstructable barrier.
+
+### D2 regression coverage
+
+`test_input_fingerprint_change_cannot_erase_rejected_repair_barrier` now covers the complete D2 reproduction:
+
+1. rejected A→B repair under clock rollback;
+2. two empty/unknown destinations and zero PUT;
+3. `pubDate`-only input fingerprint change;
+4. immediate `INPUT_CHANGED` inspection with a truncated 100/101 catalogue;
+5. recovery scheduling reset to the new fingerprint while the first-class barrier remains unchanged;
+6. restart;
+7. sibling same-show `NEW_MATCH` with A contradicted and B correct;
+8. A remaining shadow-only;
+9. absent `match_input`, unchanged durable A and barrier, and zero PUT in both destinations;
+10. later explicit due recovery accepting B, restoring current evidence, clearing recovery/barrier and reconciling both destinations normally.
+
+Additional journal/migration regressions prove that a recovery fingerprint change does not mutate the barrier lifecycle, an accepted durable match no longer matches the protected snapshot, and a real schema-v6 implicit barrier is seeded into v7. The historical synthetic schema-v2 duration migration also remains green.
 
 ## Validation
 
-The D1 one-shot validation generated functional head `f643ed41ea4805505f1a4f06a233329aec2d6205` with CPython 3.14.7:
+D2 functional commit: `b0cf769b869fbba714d5d139a62d7329395ae710`.
 
-- focused PR #211 persistence-rejection suite: **8 passed**;
+One-shot validation with CPython 3.14.7:
+
+- focused PR #211 persistence-rejection suite: **9 passed**;
+- focused planner/persistence/duration migration suites: **29 passed**;
 - Ruff: pass;
-- Ruff format: pass (**169 files already formatted** before temporary files were removed);
+- Ruff format: pass (**168 files already formatted**);
 - mypy: pass (**55 source files**);
 - `git diff --check`: pass;
-- full pytest suite: **894 passed in 28.10s**.
+- full pytest suite: **897 passed in 26.71s**.
 
-All temporary apply/workflow files were removed before the functional commit. The net diff from `b9356e1` to `f643ed4` contains only `src/news_bulletin_playlist/engine.py` and `tests/test_pr211_persistence_rejection_barriers.py`. A user-authored documentation commit follows solely to trigger the normal PR CI and Container workflows on the exact final tree; those normal checks must still be green before the PR can leave draft.
+All temporary apply/workflow files were removed before the functional commit. The next user-authored documentation commit exists only to record D2 and trigger normal PR CI/Container validation on the exact final tree. The PR remains draft until a fresh independent audit of that exact head is complete.
