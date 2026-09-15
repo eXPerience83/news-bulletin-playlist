@@ -316,3 +316,108 @@ def test_shared_catalogue_preserves_rejected_repair_barrier(tmp_path: Path) -> N
     assert spotify.show_calls == calls_after_rejection + 2
     assert tuple(spotify.replacements) == writes_before
     assert runner.planner_journal.get_matched_recovery("ser", "ser-1") == recovery
+
+
+def test_shared_complete_absence_does_not_rebase_rejected_repair_deadline(
+    tmp_path: Path,
+) -> None:
+    spotify = _RollbackReplacementSpotify()
+    runner, spotify, auth, _ = setup(tmp_path, spotify=spotify)
+
+    runner.clock = lambda: NOW + timedelta(hours=4)
+    assert runner.run_cycle().ok
+
+    runner.clock = lambda: NOW
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    runner.planner_journal.mark_destination_unknown("first")
+    spotify.items["destination-first"] = []
+    spotify.replacement_catalogue = True
+    spotify.include_invalid_cached = True
+    assert not runner.run_cycle().ok
+    recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert recovery is not None
+    assert recovery.next_retry_at == NOW + timedelta(hours=6)
+    writes_before = tuple(spotify.replacements)
+    calls_after_rejection = spotify.show_calls
+
+    # A different native asset wakes the shared catalogue shortly before A's deadline. A is now
+    # absent from the complete catalogue, so its temporal invalidation is rejected again. That
+    # incidental rejection must preserve the original deadline rather than postponing recovery.
+    spotify.include_invalid_cached = False
+    original_show_episodes = spotify.show_episodes
+
+    def show_episodes(show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        page = original_show_episodes(show_id, limit=limit, offset=offset)
+        if offset == 0:
+            page["items"][1]["name"] = "Las noticias de la SER, 10:00 (30/08/2026)"
+        return page
+
+    spotify.show_episodes = show_episodes  # type: ignore[method-assign]
+    runner.fetcher = lambda _url: _rss_two()
+    runner.clock = lambda: NOW + timedelta(hours=3, minutes=50)
+    shared = runner.run_cycle()
+    assert not shared.ok
+    assert shared.sources[0].matching_diagnostics.matching_reason_new_match_count == 1
+    assert shared.sources[0].matching_diagnostics.matching_reason_evidence_recovery_count == 0
+    assert spotify.show_calls == calls_after_rejection + 2
+    assert tuple(spotify.replacements) == writes_before
+    assert runner.planner_journal.get_matched_recovery("ser", "ser-1") == recovery
+
+    restarted = EngineRunner(
+        _config("first"),
+        type(runner.store)(runner.store.path),
+        auth,
+        fetcher=lambda _url: _rss_two(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW + timedelta(hours=6),
+    )
+    recovered = restarted.run_cycle()
+    assert recovered.ok
+    assert spotify.show_calls == calls_after_rejection + 4
+    assert restarted.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == REPLACEMENT_URI
+    assert restarted.planner_journal.get_matched_recovery("ser", "ser-1") is None
+    assert spotify.replacements[-1][1][0] == REPLACEMENT_URI
+
+
+def test_exact_shared_shadow_does_not_resolve_rejected_repair_barrier(tmp_path: Path) -> None:
+    spotify = _RollbackReplacementSpotify()
+    runner, spotify, _, _ = setup(tmp_path, spotify=spotify)
+
+    runner.clock = lambda: NOW + timedelta(hours=4)
+    assert runner.run_cycle().ok
+    runner.clock = lambda: NOW
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    runner.planner_journal.mark_destination_unknown("first")
+    spotify.items["destination-first"] = []
+    spotify.replacement_catalogue = True
+    spotify.include_invalid_cached = True
+    assert not runner.run_cycle().ok
+    recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert recovery is not None
+    writes_before = tuple(spotify.replacements)
+
+    # A later shared catalogue exactly supports durable A. It may inform diagnostics, but only
+    # A's explicit retry may resolve the barrier created by its rejected repair.
+    original_show_episodes = spotify.show_episodes
+
+    def show_episodes(show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        page = original_show_episodes(show_id, limit=limit, offset=offset)
+        for item in page["items"]:
+            if item["uri"] == SER_URI:
+                item["name"] = SER_TITLE
+            elif item["uri"] == REPLACEMENT_URI:
+                item["name"] = "unrelated"
+        if offset == 0:
+            page["items"][1]["name"] = "Las noticias de la SER, 10:00 (30/08/2026)"
+        return page
+
+    spotify.show_episodes = show_episodes  # type: ignore[method-assign]
+    runner.fetcher = lambda _url: _rss_two()
+    runner.clock = lambda: NOW + timedelta(minutes=10)
+    shared = runner.run_cycle()
+
+    assert not shared.ok
+    assert runner.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is None
+    assert runner.planner_journal.get_matched_recovery("ser", "ser-1") == recovery
+    assert tuple(spotify.replacements) == writes_before

@@ -1964,6 +1964,11 @@ class EngineRunner:
                     evaluation_intents is not None and edition.identity in evaluation_intents
                 )
                 rejection_barrier = self._edition_has_persistence_rejection_barrier(source, edition)
+                shadow_matched_rejection_barrier = bool(
+                    rejection_barrier
+                    and outcome.status is MatchStatus.MATCHED
+                    and not explicit_evaluation
+                )
                 if outcome.persistence_rejected:
                     # A newer durable match rejected this wall-clock observation. Evidence for the
                     # attempted state is non-authoritative, the destination must remain closed, and
@@ -1971,6 +1976,11 @@ class EngineRunner:
                     self.planner_journal.clear_match_input(
                         str(edition.source_id), edition.source_native_id
                     )
+                    if shadow_matched_rejection_barrier:
+                        # Another edition may have paid for this catalogue and caused a fresh
+                        # complete-absence check for this one. That incidental rejection must not
+                        # rebase the already-durable repair deadline.
+                        continue
                     self.planner_journal.clear_matched_recovery(
                         str(edition.source_id), edition.source_native_id
                     )
@@ -1991,6 +2001,16 @@ class EngineRunner:
                             input_fingerprint=input_fingerprint,
                             status=outcome.status,
                             attempted_at=observed_at,
+                        )
+                    continue
+                if shadow_matched_rejection_barrier:
+                    # Shadow qualification may invalidate positive evidence, but only an explicit
+                    # evaluation may resolve or replace a temporally rejected repair. In
+                    # particular, an exact shadow result must not turn scheduling metadata into
+                    # authority or remove the destination barrier.
+                    if outcome.planner_input_evidence_qualified is False:
+                        self.planner_journal.clear_match_input(
+                            str(edition.source_id), edition.source_native_id
                         )
                     continue
                 if outcome.planner_input_evidence_qualified is True:
