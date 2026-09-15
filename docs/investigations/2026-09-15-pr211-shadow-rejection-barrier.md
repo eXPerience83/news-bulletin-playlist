@@ -133,14 +133,6 @@ One-shot validation with CPython 3.14.7:
 - `git diff --check`: pass;
 - full pytest suite: **897 passed in 26.71s**.
 
-Normal GitHub validation on documentation head `6f4fb41bb0691fd810fd9b7f96d3c025c2c77d16` is green:
-
-- CI #956: **SUCCESS**;
-- Container #808: **SUCCESS**;
-- Ruff: pass;
-- Ruff format: pass (**168 files already formatted**);
-- mypy: pass (**55 source files**);
-- pytest: **897 passed in 29.18s**;
-- container build, live-provider contracts, hardened runtime, web portal and durable restart: pass.
+Normal GitHub validation is required on the exact documentation head that follows this record. The immediately preceding documentation head `6f4fb41bb0691fd810fd9b7f96d3c025c2c77d16` was green in CI #956 and Container #808 with **897 passed**, Ruff/format/mypy clean, and container build/live-provider/hardened-runtime/restart validation green. The current documentation-only successor must also be green before independent audit sign-off.
 
 All temporary apply/workflow files were removed before the functional commit. The PR remains draft until a fresh independent audit of the exact current head is complete.
