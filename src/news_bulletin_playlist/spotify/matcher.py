@@ -257,20 +257,31 @@ def match_source_editions(
     if evaluation_intents is not None:
         for index, value in enumerate(outcomes):
             outcome = _require_outcome(value)
+            intent = evaluation_intents.get(outcome.edition.identity)
             if (
                 outcome.status is not MatchStatus.MATCHED
-                or evaluation_intents.get(outcome.edition.identity)
-                is not MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                or intent
+                not in {
+                    MatchEvaluationIntent.SEMANTIC_REEVALUATION,
+                    MatchEvaluationIntent.EVIDENCE_RECOVERY,
+                }
                 or outcome.spotify_episode_uri not in candidate_uris
             ):
                 continue
+            evaluations = tuple(
+                _evaluate_candidate(source, outcome.edition, item) for item in candidates
+            )
             evaluated = _resolve_outcome(
                 outcome.edition,
-                tuple(_evaluate_candidate(source, outcome.edition, item) for item in candidates),
+                evaluations,
                 candidate_count=len(candidates),
                 catalogue_calls=catalogue_calls,
                 duration_tolerance_seconds=duration_tolerance,
             )
+            if intent is MatchEvaluationIntent.EVIDENCE_RECOVERY and not _recovery_can_repair_cached(
+                outcome, evaluated, evaluations
+            ):
+                continue
             _notify_fresh_evaluation(
                 on_fresh_evaluation,
                 evaluated,
@@ -289,7 +300,8 @@ def match_source_editions(
             outcomes[index] = evaluated
 
     # Shadow-only semantic qualification. Reuse the already-fetched candidates and the
-    # same pure evaluator; never modify the production mapping or issue another request.
+    # same pure evaluator; never issue another request. Any conclusive production repair from
+    # an explicit recovery intent has already happened above using this same catalogue.
     for index, value in enumerate(outcomes):
         outcome = _require_outcome(value)
         qualified: bool | None = None
@@ -324,6 +336,35 @@ def match_source_editions(
         catalogue_complete=catalogue_complete,
         catalogue_candidate_count=len(candidates),
         catalogue_inspected=True,
+    )
+
+
+def _recovery_can_repair_cached(
+    cached: MatchOutcome,
+    evaluated: MatchOutcome,
+    evaluations: Sequence[_CandidateEvaluation],
+) -> bool:
+    """Reuse paid recovery work only when it gives conclusive new production evidence."""
+    cached_uri = cached.spotify_episode_uri
+    if cached_uri is None:
+        return False
+    cached_evaluation = next(
+        (evaluation for evaluation in evaluations if evaluation.candidate.uri == cached_uri),
+        None,
+    )
+    if cached_evaluation is None:
+        # Bounded absence is handled by the existing complete/incomplete catalogue rules.
+        return False
+    if not cached_evaluation.matched:
+        # The persisted mapping itself is positively contradicted. Persist the best current
+        # resolved state, even when that state is PENDING/AMBIGUOUS, instead of polling again.
+        return True
+    if evaluated.status is not MatchStatus.MATCHED:
+        # The cached URI remains viable but no unique mapping can be certified.
+        return False
+    return (
+        evaluated.spotify_episode_uri != cached_uri
+        or evaluated.spotify_duration_seconds != cached.spotify_duration_seconds
     )
 
 
@@ -364,7 +405,7 @@ def _qualify_cached_mapping(
         return False
     if evaluated.spotify_duration_seconds != outcome.spotify_duration_seconds:
         # The URI remains uniquely correct, but exact provider metadata changed. Do not certify
-        # stale duration evidence and do not create an every-cycle contradiction loop.
+        # stale duration evidence. An explicit evidence-recovery intent repairs it in-place.
         return None
     return True
 
@@ -742,7 +783,11 @@ def _resolve_outcome(
     if len(viable) == 1:
         evaluation = viable[0]
         candidate = evaluation.candidate
-        duration_detail = _duration_diagnostic(edition, candidate)
+        duration_detail = _duration_diagnostic(
+            edition,
+            candidate,
+            authoritative=duration_disambiguated,
+        )
         release_detail = _release_delay_diagnostic(evaluation)
         disambiguation_detail = (
             f"; duration disambiguated 1 of {original_viable_count} viable candidate(s) "
@@ -831,11 +876,14 @@ def _rejection_diagnostic(evaluations: Sequence[_CandidateEvaluation]) -> str:
 def _duration_diagnostic(
     edition: CanonicalEdition,
     candidate: _SpotifyEpisodeCandidate,
+    *,
+    authoritative: bool = False,
 ) -> str:
     if edition.duration_seconds is None or candidate.duration_seconds is None:
         return ""
     delta = abs(edition.duration_seconds - candidate.duration_seconds)
-    return f"; duration delta={delta}s (diagnostic only)"
+    qualifier = "" if authoritative else " (diagnostic only)"
+    return f"; duration delta={delta}s{qualifier}"
 
 
 def _normalize_title(value: str) -> str:
