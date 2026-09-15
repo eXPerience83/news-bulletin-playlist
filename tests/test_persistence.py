@@ -66,24 +66,33 @@ def test_initialize_creates_temporary_data_database_and_is_repeatable(tmp_path: 
 def test_schema_five_database_upgrades_to_matched_recovery_schema(tmp_path: Path) -> None:
     store = _store(tmp_path)
     with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE spotify_planner_persistence_rejection_state")
         connection.execute("DROP TABLE spotify_planner_matched_recovery_state")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 6")
+        connection.execute("DELETE FROM schema_migrations WHERE version IN (6, 7)")
 
     legacy = SQLiteStore(store.path)
     assert legacy.schema_version() == 5
 
     legacy.initialize()
 
-    assert legacy.schema_version() == 6
+    assert legacy.schema_version() == LATEST_SCHEMA_VERSION
     with sqlite3.connect(store.path) as connection:
-        row = connection.execute(
+        rows = connection.execute(
             """
             SELECT name
             FROM sqlite_master
-            WHERE type = 'table' AND name = 'spotify_planner_matched_recovery_state'
+            WHERE type = 'table'
+              AND name IN (
+                  'spotify_planner_matched_recovery_state',
+                  'spotify_planner_persistence_rejection_state'
+              )
+            ORDER BY name
             """
-        ).fetchone()
-    assert row == ("spotify_planner_matched_recovery_state",)
+        ).fetchall()
+    assert rows == [
+        ("spotify_planner_matched_recovery_state",),
+        ("spotify_planner_persistence_rejection_state",),
+    ]
 
 
 def test_canonical_edition_survives_restart_and_upsert_is_idempotent(tmp_path: Path) -> None:

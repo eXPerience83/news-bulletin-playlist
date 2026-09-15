@@ -1702,29 +1702,21 @@ class EngineRunner:
         source: SourceDefinition,
         edition: CanonicalEdition,
     ) -> bool:
-        """Detect durable evidence that a newer match rejected the last evaluation attempt."""
-        match = self.store.get_match_state(source.id, edition.source_native_id)
-        if match is None:
-            return False
-        fingerprint = matching_input_fingerprint(source, edition)
-        if match.status is MatchStatus.MATCHED:
-            recovery = self.planner_journal.get_matched_recovery(
-                str(source.id), edition.source_native_id
-            )
-            return bool(
-                recovery is not None
-                and recovery.input_fingerprint == fingerprint
-                # The first attempt anchors a temporal persistence rejection. Later
-                # inconclusive retries advance last_attempt_at for scheduling only; they
-                # must not erase the destination-safety barrier before a durable repair.
-                and match.updated_at > recovery.first_attempt_at
-            )
-        unresolved = self.planner_journal.get_unresolved(str(source.id), edition.source_native_id)
-        return bool(
-            unresolved is not None
-            and unresolved.input_fingerprint == fingerprint
-            and match.updated_at > unresolved.last_attempt_at
+        """Return whether a rejected transition still protects the current durable match."""
+        barrier = self.planner_journal.get_persistence_rejection_barrier(
+            str(source.id), edition.source_native_id
         )
+        if barrier is None:
+            return False
+        match = self.store.get_match_state(source.id, edition.source_native_id)
+        if barrier.protects(match):
+            return True
+        # The durable match advanced since the rejection (for example an accepted repair before
+        # a crash could clear planner state). The old barrier no longer protects that new row.
+        self.planner_journal.clear_persistence_rejection_barrier(
+            str(source.id), edition.source_native_id
+        )
+        return False
 
     def _source_has_persistence_rejection_barrier(
         self,
@@ -1973,9 +1965,20 @@ class EngineRunner:
                     and not explicit_evaluation
                 )
                 if outcome.persistence_rejected:
-                    # A newer durable match rejected this wall-clock observation. Evidence for the
-                    # attempted state is non-authoritative, the destination must remain closed, and
-                    # retries must use a bounded durable schedule instead of CLOCK_ROLLBACK polling.
+                    # A newer durable match rejected this wall-clock observation. Persist a
+                    # dedicated safety barrier before touching retry scheduling: fingerprints and
+                    # retry timestamps may legitimately change while the rejected transition is
+                    # still unresolved.
+                    durable_match = self.store.get_match_state(
+                        edition.source_id, edition.source_native_id
+                    )
+                    if durable_match is None:
+                        raise PersistenceError(
+                            "rejected Spotify match repair has no durable state to protect"
+                        )
+                    self.planner_journal.record_persistence_rejection_barrier(
+                        durable_match, rejected_at=observed_at
+                    )
                     self.planner_journal.clear_match_input(
                         str(edition.source_id), edition.source_native_id
                     )
@@ -2026,6 +2029,13 @@ class EngineRunner:
                     self.planner_journal.clear_matched_recovery(
                         str(edition.source_id), edition.source_native_id
                     )
+                    if explicit_evaluation and rejection_barrier:
+                        # A conclusive explicit evaluation is authority to resolve the barrier.
+                        # Shadow observations never take this path. Accepted state transitions also
+                        # make the protected durable-row snapshot differ and are cleared lazily.
+                        self.planner_journal.clear_persistence_rejection_barrier(
+                            str(edition.source_id), edition.source_native_id
+                        )
                 elif outcome.planner_input_evidence_qualified is False:
                     self.planner_journal.clear_match_input(
                         str(edition.source_id), edition.source_native_id

@@ -531,3 +531,147 @@ def test_inconclusive_due_retry_keeps_rejected_barrier_across_restart(
     assert restarted.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
     assert spotify.items["destination-first"] == []
     assert spotify.items["destination-second"] == []
+
+
+def test_input_fingerprint_change_cannot_erase_rejected_repair_barrier(
+    tmp_path: Path,
+) -> None:
+    spotify = _RollbackReplacementSpotify()
+    auth = _Auth()
+
+    def feed(*, corrected: bool, sibling: bool = False) -> bytes:
+        published = (
+            "Sun, 30 Aug 2026 09:06:00 +0000" if corrected else "Sun, 30 Aug 2026 09:05:00 +0000"
+        )
+        items = [
+            f"<item><guid>ser-1</guid><title>{SER_TITLE}</title>"
+            f"<pubDate>{published}</pubDate></item>"
+        ]
+        if sibling:
+            items.append(
+                "<item><guid>ser-2</guid>"
+                "<title>Las noticias de la SER, 12:00 (30/08/2026)</title>"
+                "<pubDate>Sun, 30 Aug 2026 10:05:00 +0000</pubDate></item>"
+            )
+        return f"<rss><channel>{''.join(items)}</channel></rss>".encode()
+
+    runner = EngineRunner(
+        _config("first", "second"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: feed(corrected=False),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW + timedelta(hours=4),
+    )
+    assert runner.run_cycle().ok
+
+    runner.clock = lambda: NOW
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    for playlist_id in ("first", "second"):
+        runner.planner_journal.mark_destination_unknown(playlist_id)
+        spotify.items[f"destination-{playlist_id}"] = []
+    spotify.replacement_catalogue = True
+    spotify.include_invalid_cached = True
+    writes_before = tuple(spotify.replacements)
+
+    rejected = runner.run_cycle()
+    assert not rejected.ok
+    barrier = runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1")
+    assert barrier is not None
+    assert barrier.first_rejected_at == NOW
+    initial_recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert initial_recovery is not None
+    assert initial_recovery.next_retry_at == NOW + timedelta(hours=6)
+    calls_after_rejection = spotify.show_calls
+
+    # At 15:00 only pubDate changes. INPUT_CHANGED is legitimate, but the bounded catalogue is
+    # truncated and cannot establish whether durable A is still valid. Scheduling may reset for
+    # the new fingerprint; destination-safety memory must not.
+    def truncated_show_episodes(
+        show_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        assert show_id == "ser-show"
+        assert limit == 50
+        assert offset in {0, 50}
+        spotify.show_calls += 1
+        items = [
+            {
+                "uri": f"spotify:episode:{offset + index + 5000:022d}",
+                "name": "unrelated",
+                "release_date": "2026-08-30",
+                "release_date_precision": "day",
+                "duration_ms": 60_000,
+            }
+            for index in range(50)
+        ]
+        return catalogue_page(
+            items,
+            offset=offset,
+            limit=limit,
+            next_url="more",
+            total=101,
+        )
+
+    replacement_show_episodes = spotify.show_episodes
+    spotify.show_episodes = truncated_show_episodes  # type: ignore[method-assign]
+    runner.fetcher = lambda _url: feed(corrected=True)
+    runner.clock = lambda: NOW + timedelta(hours=5)
+    changed = runner.run_cycle()
+
+    assert not changed.ok
+    diagnostics = changed.sources[0].matching_diagnostics
+    assert diagnostics.matching_reason_input_changed_count == 1
+    assert spotify.show_calls == calls_after_rejection + 2
+    changed_recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert changed_recovery is not None
+    assert changed_recovery.first_attempt_at == NOW + timedelta(hours=5)
+    assert changed_recovery.next_retry_at == NOW + timedelta(hours=11)
+    assert runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") == barrier
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is None
+    assert tuple(spotify.replacements) == writes_before
+
+    # Restart at 15:10. A sibling NEW_MATCH pays for the shared show catalogue; A is shadow-only.
+    # The catalogue again contradicts A and identifies B, but without explicit authority for A it
+    # cannot erase the durable barrier or authorize PUT(A) into either empty destination.
+    spotify.show_episodes = replacement_show_episodes  # type: ignore[method-assign]
+    calls_before_shared = spotify.show_calls
+    restarted = EngineRunner(
+        _config("first", "second"),
+        type(runner.store)(runner.store.path),
+        auth,
+        fetcher=lambda _url: feed(corrected=True, sibling=True),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW + timedelta(hours=5, minutes=10),
+    )
+    shared = restarted.run_cycle()
+
+    assert not shared.ok
+    diagnostics = shared.sources[0].matching_diagnostics
+    assert diagnostics.matching_reason_new_match_count == 1
+    assert diagnostics.matching_reason_input_changed_count == 0
+    assert diagnostics.matching_reason_evidence_recovery_count == 0
+    assert spotify.show_calls == calls_before_shared + 2
+    assert tuple(spotify.replacements) == writes_before
+    assert restarted.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") == barrier
+    assert restarted.planner_journal.get_matched_recovery("ser", "ser-1") == changed_recovery
+    assert restarted.planner_journal.get_match_input("ser", "ser-1") is None
+    assert restarted.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+    assert spotify.items["destination-first"] == []
+    assert spotify.items["destination-second"] == []
+
+    # At the new fingerprint's due deadline, a conclusive explicit repair may finally resolve the
+    # barrier, persist B, restore current evidence, and reconcile both destinations.
+    restarted.fetcher = lambda _url: feed(corrected=True, sibling=False)
+    restarted.clock = lambda: changed_recovery.next_retry_at
+    resolved = restarted.run_cycle()
+
+    assert resolved.ok
+    assert restarted.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == REPLACEMENT_URI
+    assert restarted.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") is None
+    assert restarted.planner_journal.get_matched_recovery("ser", "ser-1") is None
+    assert restarted.planner_journal.get_match_input("ser", "ser-1") is not None
+    assert spotify.items["destination-first"][0] == REPLACEMENT_URI
+    assert spotify.items["destination-second"][0] == REPLACEMENT_URI

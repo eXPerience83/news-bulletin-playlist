@@ -488,3 +488,93 @@ def _destination_state(*, dirty: bool, unknown: bool, verified: datetime | None)
         last_verified_at=verified,
         next_audit_at=None if verified is None else verified + AUDIT_INTERVAL,
     )
+
+
+def test_persistence_rejection_barrier_is_durable_and_independent_of_recovery_fingerprint(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    edition = _edition()
+    store.upsert_editions((edition,), observed_at=NOW)
+    assert store.set_match_state(
+        *edition.identity,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:durable-a",
+        spotify_duration_seconds=60,
+        diagnostics="durable A",
+        updated_at=NOW + timedelta(hours=4),
+    )
+    match = store.get_match_state(*edition.identity)
+    assert match is not None
+    journal = SpotifyPlannerJournal(store)
+
+    barrier = journal.record_persistence_rejection_barrier(match, rejected_at=NOW)
+    journal.record_matched_recovery(
+        source_id="source",
+        source_native_id="edition-one",
+        input_fingerprint=SHA_A,
+        attempted_at=NOW,
+    )
+    changed_recovery = journal.record_matched_recovery(
+        source_id="source",
+        source_native_id="edition-one",
+        input_fingerprint=SHA_B,
+        attempted_at=NOW + timedelta(hours=5),
+    )
+
+    assert changed_recovery.first_attempt_at == NOW + timedelta(hours=5)
+    restarted = SpotifyPlannerJournal(SQLiteStore(store.path))
+    assert restarted.get_persistence_rejection_barrier("source", "edition-one") == barrier
+    assert barrier.protects(store.get_match_state(*edition.identity))
+
+    assert store.set_match_state(
+        *edition.identity,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:durable-b",
+        spotify_duration_seconds=61,
+        diagnostics="accepted B",
+        updated_at=NOW + timedelta(hours=6),
+    )
+    assert not barrier.protects(store.get_match_state(*edition.identity))
+    restarted.clear_persistence_rejection_barrier("source", "edition-one")
+    assert restarted.get_persistence_rejection_barrier("source", "edition-one") is None
+
+
+def test_schema_six_upgrade_seeds_implicit_persistence_rejection_barrier(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    edition = _edition()
+    store.upsert_editions((edition,), observed_at=NOW)
+    assert store.set_match_state(
+        *edition.identity,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri="spotify:episode:durable-a",
+        spotify_duration_seconds=60,
+        diagnostics="durable A",
+        updated_at=NOW + timedelta(hours=4),
+    )
+    journal = SpotifyPlannerJournal(store)
+    journal.record_matched_recovery(
+        source_id="source",
+        source_native_id="edition-one",
+        input_fingerprint=SHA_A,
+        attempted_at=NOW,
+    )
+
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE spotify_planner_persistence_rejection_state")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 7")
+
+    legacy = SQLiteStore(store.path)
+    assert legacy.schema_version() == 6
+    legacy.initialize()
+
+    restarted = SpotifyPlannerJournal(SQLiteStore(store.path))
+    barrier = restarted.get_persistence_rejection_barrier("source", "edition-one")
+    assert barrier is not None
+    durable = store.get_match_state(*edition.identity)
+    assert durable is not None
+    assert barrier.protects(durable)
+    assert barrier.first_rejected_at == NOW
+    assert barrier.last_rejected_at == NOW

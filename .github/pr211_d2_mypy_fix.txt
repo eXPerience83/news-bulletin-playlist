@@ -1,9 +1,0 @@
-from pathlib import Path
-
-path = Path("src/news_bulletin_playlist/spotify_planner.py")
-text = path.read_text()
-old = '''        current = self.get_persistence_rejection_barrier(source_id, match.source_native_id)\n        same_protected_state = current is not None and current.protects(match)\n        first = current.first_rejected_at if same_protected_state else rejected\n        last = max(rejected, current.last_rejected_at) if same_protected_state else rejected\n'''
-new = '''        current = self.get_persistence_rejection_barrier(source_id, match.source_native_id)\n        if current is not None and current.protects(match):\n            first = current.first_rejected_at\n            last = max(rejected, current.last_rejected_at)\n        else:\n            first = rejected\n            last = rejected\n'''
-if text.count(old) != 1:
-    raise SystemExit(f"type narrowing fix: expected one match, found {text.count(old)}")
-path.write_text(text.replace(old, new))
