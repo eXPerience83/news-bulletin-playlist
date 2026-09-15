@@ -1879,17 +1879,25 @@ class EngineRunner:
                     if (
                         result.catalogue_inspected
                         and outcome.planner_input_evidence_qualified is None
-                        and self.planner_journal.get_match_input(
+                    ):
+                        prior_input = self.planner_journal.get_match_input(
                             str(edition.source_id), edition.source_native_id
                         )
-                        is None
-                    ):
-                        self.planner_journal.record_matched_recovery(
-                            source_id=str(edition.source_id),
-                            source_native_id=edition.source_native_id,
-                            input_fingerprint=input_fingerprint,
-                            attempted_at=observed_at,
-                        )
+                        if (
+                            prior_input is not None
+                            and prior_input.input_fingerprint != input_fingerprint
+                        ):
+                            self.planner_journal.clear_match_input(
+                                str(edition.source_id), edition.source_native_id
+                            )
+                            prior_input = None
+                        if prior_input is None:
+                            self.planner_journal.record_matched_recovery(
+                                source_id=str(edition.source_id),
+                                source_native_id=edition.source_native_id,
+                                input_fingerprint=input_fingerprint,
+                                attempted_at=observed_at,
+                            )
                 else:
                     self.planner_journal.clear_matched_recovery(
                         str(edition.source_id), edition.source_native_id

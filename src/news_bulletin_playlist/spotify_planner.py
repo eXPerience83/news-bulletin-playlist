@@ -825,19 +825,21 @@ def source_contract_fingerprint(source: SourceDefinition) -> str:
         (ref.system.casefold(), ref.resource_type.casefold(), ref.external_id)
         for ref in source.external_references
     )
-    return _digest(
-        {
-            "v": _FINGERPRINT_VERSION,
-            "source_id": str(source.id),
-            "parser_id": str(source.parser_id),
-            "timezone": str(source.timezone),
-            "spotify_release_delay_days": source.spotify_release_delay_days,
-            "spotify_duration_disambiguation_tolerance_seconds": (
-                duration_disambiguation_tolerance_seconds(source)
-            ),
-            "external_references": references,
-        }
-    )
+    contract: dict[str, object] = {
+        "v": _FINGERPRINT_VERSION,
+        "source_id": str(source.id),
+        "parser_id": str(source.parser_id),
+        "timezone": str(source.timezone),
+        "spotify_release_delay_days": source.spotify_release_delay_days,
+        "external_references": references,
+    }
+    duration_tolerance = duration_disambiguation_tolerance_seconds(source)
+    if duration_tolerance is not None:
+        # Preserve the exact legacy fingerprint payload for sources that did not opt in. This
+        # avoids an unrelated fleet-wide evidence invalidation merely because a new optional
+        # matching policy exists.
+        contract["spotify_duration_disambiguation_tolerance_seconds"] = duration_tolerance
+    return _digest(contract)
 
 
 def playlist_config_fingerprint(playlist: PlaylistDefinition) -> str:

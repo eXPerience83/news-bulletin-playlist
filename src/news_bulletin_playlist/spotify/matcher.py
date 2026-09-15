@@ -123,6 +123,13 @@ class _CandidateEvaluation:
     release_delay_days: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _CachedMappingAssessment:
+    evaluated: MatchOutcome
+    qualification: bool | None
+    recovery_repair_allowed: bool
+
+
 def match_source_editions(
     client: SpotifyCatalogClient,
     store: SQLiteStore,
@@ -153,6 +160,7 @@ def match_source_editions(
     selected = None if evaluation_intents is None else frozenset(evaluation_intents)
     notified_fresh_indices: set[int] = set()
     duration_tolerance = duration_disambiguation_tolerance_seconds(source)
+    qualification_overrides: dict[int, bool | None] = {}
 
     for index, edition in enumerate(editions):
         if edition.source_id != source.id:
@@ -259,7 +267,8 @@ def match_source_editions(
             outcome = _require_outcome(value)
             intent = evaluation_intents.get(outcome.edition.identity)
             if (
-                outcome.status is not MatchStatus.MATCHED
+                not outcome.from_cache
+                or outcome.status is not MatchStatus.MATCHED
                 or intent
                 not in {
                     MatchEvaluationIntent.SEMANTIC_REEVALUATION,
@@ -271,24 +280,30 @@ def match_source_editions(
             evaluations = tuple(
                 _evaluate_candidate(source, outcome.edition, item) for item in candidates
             )
-            evaluated = _resolve_outcome(
-                outcome.edition,
+            assessment = _assess_cached_mapping(
+                outcome,
                 evaluations,
                 candidate_count=len(candidates),
                 catalogue_calls=catalogue_calls,
                 duration_tolerance_seconds=duration_tolerance,
             )
-            if (
-                intent is MatchEvaluationIntent.EVIDENCE_RECOVERY
-                and not _recovery_can_repair_cached(outcome, evaluated, evaluations)
-            ):
-                continue
             _notify_fresh_evaluation(
                 on_fresh_evaluation,
-                evaluated,
+                assessment.evaluated,
                 index=index,
                 notified_indices=notified_fresh_indices,
             )
+            if assessment.qualification is True:
+                qualification_overrides[index] = True
+                continue
+            if assessment.qualification is None and not (
+                intent is MatchEvaluationIntent.EVIDENCE_RECOVERY
+                and assessment.recovery_repair_allowed
+            ):
+                qualification_overrides[index] = None
+                continue
+
+            evaluated = assessment.evaluated
             store.set_match_state(
                 outcome.edition.source_id,
                 outcome.edition.source_native_id,
@@ -306,7 +321,9 @@ def match_source_editions(
     for index, value in enumerate(outcomes):
         outcome = _require_outcome(value)
         qualified: bool | None = None
-        if not outcome.from_cache:
+        if index in qualification_overrides:
+            qualified = qualification_overrides[index]
+        elif not outcome.from_cache:
             qualified = True
         elif outcome.status is MatchStatus.MATCHED and candidates:
             if not catalogue.complete and outcome.spotify_episode_uri not in candidate_uris:
@@ -340,33 +357,54 @@ def match_source_editions(
     )
 
 
-def _recovery_can_repair_cached(
-    cached: MatchOutcome,
-    evaluated: MatchOutcome,
+def _assess_cached_mapping(
+    outcome: MatchOutcome,
     evaluations: Sequence[_CandidateEvaluation],
-) -> bool:
-    """Reuse paid recovery work only when it gives conclusive new production evidence."""
-    cached_uri = cached.spotify_episode_uri
+    *,
+    candidate_count: int,
+    catalogue_calls: int,
+    duration_tolerance_seconds: int | None,
+) -> _CachedMappingAssessment:
+    """Classify one cached mapping once for production repair and planner evidence."""
+    evaluated = _resolve_outcome(
+        outcome.edition,
+        evaluations,
+        candidate_count=candidate_count,
+        catalogue_calls=catalogue_calls,
+        duration_tolerance_seconds=duration_tolerance_seconds,
+    )
+    cached_uri = outcome.spotify_episode_uri
     if cached_uri is None:
-        return False
+        return _CachedMappingAssessment(evaluated, False, False)
+
     cached_evaluation = next(
         (evaluation for evaluation in evaluations if evaluation.candidate.uri == cached_uri),
         None,
     )
     if cached_evaluation is None:
-        # Bounded absence is handled by the existing complete/incomplete catalogue rules.
-        return False
+        # A bounded catalogue may simply not contain the durable URI. Absence handling is
+        # authoritative only in the existing complete/non-empty catalogue path above.
+        return _CachedMappingAssessment(evaluated, None, False)
     if not cached_evaluation.matched:
-        # The persisted mapping itself is positively contradicted. Persist the best current
-        # resolved state, even when that state is PENDING/AMBIGUOUS, instead of polling again.
-        return True
+        # Positive semantic contradiction of the durable mapping. The already-paid catalogue may
+        # replace it with the best fresh state, including PENDING/AMBIGUOUS when no replacement is
+        # uniquely established.
+        return _CachedMappingAssessment(evaluated, False, True)
     if evaluated.status is not MatchStatus.MATCHED:
-        # The cached URI remains viable but no unique mapping can be certified.
-        return False
-    return (
-        evaluated.spotify_episode_uri != cached_uri
-        or evaluated.spotify_duration_seconds != cached.spotify_duration_seconds
-    )
+        # The durable URI is still viable, but uniqueness has been lost. Preserve it.
+        return _CachedMappingAssessment(evaluated, None, False)
+    if evaluated.spotify_episode_uri != cached_uri:
+        # Current matching rules uniquely prefer another candidate.
+        return _CachedMappingAssessment(evaluated, False, True)
+    if evaluated.spotify_duration_seconds == outcome.spotify_duration_seconds:
+        return _CachedMappingAssessment(evaluated, True, False)
+    if evaluated.spotify_duration_seconds is None:
+        # Missing provider metadata is not a conclusive metadata update and must never erase a
+        # known durable duration.
+        return _CachedMappingAssessment(evaluated, None, False)
+    # Same uniquely-valid URI with a newly known duration. Only explicit evidence recovery may
+    # refresh the durable metadata in-place; ordinary semantic reevaluation remains inconclusive.
+    return _CachedMappingAssessment(evaluated, None, True)
 
 
 def _qualify_cached_mapping(
@@ -377,38 +415,14 @@ def _qualify_cached_mapping(
     catalogue_calls: int,
     duration_tolerance_seconds: int | None,
 ) -> bool | None:
-    """Classify cached evidence without turning ambiguity into contradiction."""
-    cached_uri = outcome.spotify_episode_uri
-    if cached_uri is None:
-        return False
-    cached_evaluation = next(
-        (evaluation for evaluation in evaluations if evaluation.candidate.uri == cached_uri),
-        None,
-    )
-    if cached_evaluation is None:
-        return None
-    if not cached_evaluation.matched:
-        return False
-
-    evaluated = _resolve_outcome(
-        outcome.edition,
+    """Return planner qualification from the shared cached-mapping assessment."""
+    return _assess_cached_mapping(
+        outcome,
         evaluations,
         candidate_count=candidate_count,
         catalogue_calls=catalogue_calls,
         duration_tolerance_seconds=duration_tolerance_seconds,
-    )
-    if evaluated.status is not MatchStatus.MATCHED:
-        # The persisted URI still passes semantic evaluation, but current evidence cannot
-        # select it uniquely. This is inconclusive and should enter bounded recovery backoff.
-        return None
-    if evaluated.spotify_episode_uri != cached_uri:
-        # Current matching rules uniquely prefer another semantic candidate.
-        return False
-    if evaluated.spotify_duration_seconds != outcome.spotify_duration_seconds:
-        # The URI remains uniquely correct, but exact provider metadata changed. Do not certify
-        # stale duration evidence. An explicit evidence-recovery intent repairs it in-place.
-        return None
-    return True
+    ).qualification
 
 
 def _notify_fresh_evaluation(

@@ -2109,3 +2109,266 @@ def test_source_matching_diagnostics_prewrite_survive_fatal_persistence_error(
     assert diagnostic.catalogue_inspected is True
     assert diagnostic.catalogue_request_count == 1
     assert spotify.show_calls == prior_show_calls + 1
+
+
+def test_input_changed_ambiguity_preserves_cached_mapping_and_both_playlists(
+    tmp_path: Path,
+) -> None:
+    clock = [NOW]
+
+    class AmbiguousSpotify(_Spotify):
+        ambiguous = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            if not self.ambiguous:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            assert show_id == "ser-show"
+            self.show_calls += 1
+            return catalogue_page(
+                [
+                    {
+                        "uri": SER_URI,
+                        "name": SER_TITLE,
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                        "duration_ms": 60_000,
+                    },
+                    {
+                        "uri": "spotify:episode:" + "2" * 22,
+                        "name": SER_TITLE,
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                        "duration_ms": 61_000,
+                    },
+                ],
+                offset=offset,
+                limit=limit,
+            )
+
+    spotify = AmbiguousSpotify()
+    runner = EngineRunner(
+        _config("first", "second"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+    assert runner.run_cycle().ok
+    writes_before = tuple(spotify.replacements)
+    runner.planner_journal.observe_match_input(
+        source_id="ser",
+        source_native_id="ser-1",
+        input_fingerprint="b" * 64,
+        observed_at=NOW,
+    )
+    spotify.ambiguous = True
+    clock[0] = NOW + timedelta(minutes=10)
+
+    result = runner.run_cycle()
+
+    assert result.ok
+    assert result.sources[0].matching_diagnostics.matching_reason_input_changed_count == 1
+    state = runner.store.get_match_state(SourceId("ser"), "ser-1")
+    assert state is not None and state.status is MatchStatus.MATCHED
+    assert state.spotify_episode_uri == SER_URI
+    assert spotify.items["destination-first"] == [SER_URI]
+    assert spotify.items["destination-second"] == [SER_URI]
+    assert tuple(spotify.replacements) == writes_before
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is None
+    recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert recovery is not None
+
+
+def test_stale_match_input_inconclusive_catalogue_uses_six_hour_recovery_across_restart(
+    tmp_path: Path,
+) -> None:
+    clock = [NOW]
+
+    class TruncatedMissingSpotify(_Spotify):
+        bounded = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            if not self.bounded:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            assert show_id == "ser-show"
+            self.show_calls += 1
+            items = [
+                {
+                    "uri": f"spotify:episode:{offset + index + 1000:022d}",
+                    "name": "unrelated",
+                    "release_date": "2026-08-30",
+                    "release_date_precision": "day",
+                    "duration_ms": 60_000,
+                }
+                for index in range(50)
+            ]
+            return catalogue_page(
+                items,
+                offset=offset,
+                limit=limit,
+                next_url="more",
+                total=101,
+            )
+
+    spotify = TruncatedMissingSpotify()
+    store = _store(tmp_path)
+    runner = EngineRunner(
+        _config("first"),
+        store,
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+    assert runner.run_cycle().ok
+    assert spotify.show_calls == 1
+    runner.planner_journal.observe_match_input(
+        source_id="ser",
+        source_native_id="ser-1",
+        input_fingerprint="b" * 64,
+        observed_at=NOW,
+    )
+    spotify.bounded = True
+
+    clock[0] = NOW + timedelta(minutes=10)
+    first = runner.run_cycle()
+    assert first.ok
+    assert spotify.show_calls == 3
+    assert runner.store.get_spotify_episode_uri(SourceId("ser"), "ser-1") == SER_URI
+    assert runner.planner_journal.get_match_input("ser", "ser-1") is None
+    recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert recovery is not None
+    calls_after_first = spotify.show_calls
+
+    clock[0] = NOW + timedelta(minutes=20)
+    assert runner.run_cycle().ok
+    assert spotify.show_calls == calls_after_first
+
+    clock[0] = NOW + timedelta(minutes=30)
+    restarted = EngineRunner(
+        _config("first"),
+        SQLiteStore(store.path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+    assert restarted.run_cycle().ok
+    assert spotify.show_calls == calls_after_first
+
+    clock[0] = NOW + timedelta(hours=6, minutes=10)
+    due = restarted.run_cycle()
+    assert due.ok
+    assert spotify.show_calls == calls_after_first + 2
+    assert due.sources[0].matching_diagnostics.matching_reason_evidence_recovery_count == 1
+
+
+def test_new_input_breaks_matched_recovery_backoff_immediately(tmp_path: Path) -> None:
+    clock = [NOW]
+
+    class TruncatedMissingSpotify(_Spotify):
+        bounded = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            if not self.bounded:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            assert show_id == "ser-show"
+            self.show_calls += 1
+            items = [
+                {
+                    "uri": f"spotify:episode:{offset + index + 1000:022d}",
+                    "name": "unrelated",
+                    "release_date": "2026-08-30",
+                    "release_date_precision": "day",
+                    "duration_ms": 60_000,
+                }
+                for index in range(50)
+            ]
+            return catalogue_page(
+                items,
+                offset=offset,
+                limit=limit,
+                next_url="more",
+                total=101,
+            )
+
+    spotify = TruncatedMissingSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+    assert runner.run_cycle().ok
+    runner.planner_journal.observe_match_input(
+        source_id="ser",
+        source_native_id="ser-1",
+        input_fingerprint="b" * 64,
+        observed_at=NOW,
+    )
+    spotify.bounded = True
+    clock[0] = NOW + timedelta(minutes=10)
+    assert runner.run_cycle().ok
+    calls_after_first = spotify.show_calls
+
+    clock[0] = NOW + timedelta(minutes=20)
+    assert runner.run_cycle().ok
+    assert spotify.show_calls == calls_after_first
+
+    runner.config = replace(
+        runner.config,
+        sources=(replace(_source(), spotify_release_delay_days=1),),
+    )
+    clock[0] = NOW + timedelta(minutes=30)
+    changed = runner.run_cycle()
+
+    assert changed.ok
+    assert spotify.show_calls == calls_after_first + 2
+    assert changed.sources[0].matching_diagnostics.matching_reason_input_changed_count == 1
+
+
+def test_unknown_provider_duration_keeps_known_duration_and_enters_recovery_backoff(
+    tmp_path: Path,
+) -> None:
+    clock = [NOW]
+
+    class UnknownDurationSpotify(_Spotify):
+        unknown_duration = False
+
+        def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0):
+            page = super().show_episodes(show_id, limit=limit, offset=offset)
+            if self.unknown_duration:
+                page["items"][0]["duration_ms"] = None
+            return page
+
+    spotify = UnknownDurationSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+    assert runner.run_cycle().ok
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    spotify.unknown_duration = True
+    calls_before = spotify.show_calls
+
+    clock[0] = NOW + timedelta(minutes=10)
+    first = runner.run_cycle()
+    assert first.ok
+    assert spotify.show_calls == calls_before + 1
+    state = runner.store.get_match_state(SourceId("ser"), "ser-1")
+    assert state is not None
+    assert state.status is MatchStatus.MATCHED
+    assert state.spotify_episode_uri == SER_URI
+    assert state.spotify_duration_seconds == 60
+    assert runner.planner_journal.get_matched_recovery("ser", "ser-1") is not None
+
+    clock[0] = NOW + timedelta(minutes=20)
+    assert runner.run_cycle().ok
+    assert spotify.show_calls == calls_before + 1
