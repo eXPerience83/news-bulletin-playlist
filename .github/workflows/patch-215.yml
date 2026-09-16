@@ -1,0 +1,59 @@
+name: Apply exact #215 engine patch
+
+on:
+  push:
+    branches:
+      - fix/215-local-skip-matched-count
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, 'reuse active source snapshot') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/215-local-skip-matched-count
+      - name: Apply exact replacements
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/news_bulletin_playlist/engine.py')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  '''            return self._finish_local_only_cycle(\n                started_at,\n                source_outcomes,\n                unsafe_source_ids,\n                persistence_blocked,\n                matching_now,\n            )''',
+                  '''            return self._finish_local_only_cycle(\n                started_at,\n                source_outcomes,\n                source_editions,\n                unsafe_source_ids,\n                persistence_blocked,\n                matching_now,\n            )''',
+              ),
+              (
+                  '''    def _finish_local_only_cycle(\n        self,\n        started_at: datetime,\n        source_outcomes: dict[SourceId, SourceCycleOutcome],\n        unsafe_source_ids: set[SourceId],''',
+                  '''    def _finish_local_only_cycle(\n        self,\n        started_at: datetime,\n        source_outcomes: dict[SourceId, SourceCycleOutcome],\n        source_editions: Mapping[SourceId, tuple[CanonicalEdition, ...]],\n        unsafe_source_ids: set[SourceId],''',
+              ),
+              (
+                  '''                editions = self.store.list_editions(source_id=source.id)\n                matched = sum(''',
+                  '''                editions = source_editions.get(source.id, ())\n                matched = sum(''',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one match, found {count}: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+          git diff --check
+      - name: Commit exact patch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/news_bulletin_playlist/engine.py
+          git commit -m 'fix: reuse active source snapshot on local skip (#215)'
+          git push origin HEAD:fix/215-local-skip-matched-count
