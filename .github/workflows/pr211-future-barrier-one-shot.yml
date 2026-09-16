@@ -32,11 +32,14 @@ jobs:
 
           engine = Path('src/news_bulletin_playlist/engine.py')
           text = engine.read_text()
+          function_marker = '    def _source_has_persistence_rejection_barrier('
           old = 'matching_cutoff <= edition.published_at <= now'
           new = 'matching_cutoff <= edition.published_at'
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one barrier-window expression, found {text.count(old)}')
-          engine.write_text(text.replace(old, new, 1))
+          start = text.index(function_marker)
+          prefix, tail = text[:start], text[start:]
+          if tail.count(old) != 1:
+              raise SystemExit(f'expected one source-barrier window expression, found {tail.count(old)}')
+          engine.write_text(prefix + tail.replace(old, new, 1))
 
           tests = Path('tests/test_pr211_persistence_rejection_barriers.py')
           test_text = tests.read_text()
