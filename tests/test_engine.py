@@ -2469,3 +2469,74 @@ def test_clock_rollback_rejected_repair_never_publishes_match_input_and_recovers
     assert runner.planner_journal.get_match_input("ser", "ser-1") is not None
     assert runner.planner_journal.get_matched_recovery("ser", "ser-1") is None
     assert spotify.items["destination-first"] == [replacement_uri]
+
+
+def test_prewrite_positive_presence_stops_after_first_catalogue_page(tmp_path: Path) -> None:
+    clock = [NOW]
+
+    class TwoPagePrewriteSpotify(_Spotify):
+        prewrite_two_page = False
+
+        def show_episodes(
+            self, show_id: str, *, limit: int = 50, offset: int = 0
+        ) -> dict[str, Any]:
+            if not self.prewrite_two_page:
+                return super().show_episodes(show_id, limit=limit, offset=offset)
+            assert show_id == "ser-show"
+            assert limit == 50
+            self.show_calls += 1
+            if offset != 0:
+                raise AssertionError(
+                    "prewrite presence validation should stop after the first page"
+                )
+            items = [
+                {
+                    "uri": SER_URI,
+                    "name": SER_TITLE,
+                    "release_date": "2026-08-30",
+                    "release_date_precision": "day",
+                    "duration_ms": 60_000,
+                }
+            ] + [
+                {
+                    "uri": f"spotify:episode:{index + 100:022d}",
+                    "name": f"unrelated {index}",
+                    "release_date": "2026-08-30",
+                    "release_date_precision": "day",
+                    "duration_ms": 60_000,
+                }
+                for index in range(49)
+            ]
+            return catalogue_page(
+                items,
+                offset=offset,
+                limit=limit,
+                next_url="more",
+                total=51,
+            )
+
+    spotify = TwoPagePrewriteSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: clock[0],
+    )
+    assert runner.run_cycle().ok
+    prior_show_calls = spotify.show_calls
+
+    clock[0] = NOW + timedelta(minutes=10)
+    spotify.prewrite_two_page = True
+    spotify.items["destination-first"] = []
+    runner.planner_journal.begin_destination_verification("first")
+
+    result = runner.run_cycle()
+
+    assert result.ok
+    diagnostic = result.sources[0].matching_diagnostics
+    assert diagnostic.matching_work_count == 0
+    assert diagnostic.catalogue_request_count == 1
+    assert spotify.show_calls == prior_show_calls + 1
+    assert spotify.items["destination-first"] == [SER_URI]

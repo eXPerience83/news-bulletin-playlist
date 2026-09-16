@@ -160,6 +160,83 @@ def _prepared_store(tmp_path: Path, edition: CanonicalEdition) -> SQLiteStore:
     return store
 
 
+def test_required_uri_presence_can_stop_before_second_page() -> None:
+    calls: list[int] = []
+
+    class Client:
+        def show_episodes(
+            self, show_id: str, *, limit: int = 50, offset: int = 0
+        ) -> dict[str, Any]:
+            del show_id
+            calls.append(offset)
+            if offset != 0:
+                raise AssertionError("positive presence proof should stop after page one")
+            items = [_valid_item()] + [
+                {
+                    "uri": f"spotify:episode:{index + 100:022d}",
+                    "name": f"unrelated {index}",
+                    "release_date": "2026-08-30",
+                    "release_date_precision": "day",
+                }
+                for index in range(49)
+            ]
+            return catalogue_page(
+                items,
+                limit=limit,
+                offset=offset,
+                next_url="more",
+                total=51,
+            )
+
+    result = fetch_show_catalogue(
+        Client(),
+        "show-ser",
+        page_size=DEFAULT_PAGE_SIZE,
+        max_pages=DEFAULT_MAX_PAGES,
+        required_uris={str(_valid_item()["uri"])},
+    )
+
+    assert calls == [0]
+    assert result.request_count == 1
+    assert result.complete is False
+    assert str(_valid_item()["uri"]) in result.candidate_uris
+
+
+def test_required_uri_missing_still_requires_second_page_and_fails_closed() -> None:
+    class Client:
+        def show_episodes(
+            self, show_id: str, *, limit: int = 50, offset: int = 0
+        ) -> dict[str, Any]:
+            del show_id
+            if offset == 0:
+                items = [
+                    {
+                        "uri": f"spotify:episode:{index + 100:022d}",
+                        "name": f"unrelated {index}",
+                        "release_date": "2026-08-30",
+                        "release_date_precision": "day",
+                    }
+                    for index in range(50)
+                ]
+                return catalogue_page(
+                    items,
+                    limit=limit,
+                    offset=offset,
+                    next_url="more",
+                    total=51,
+                )
+            raise SpotifyTransportError("second-page provider failure")
+
+    with pytest.raises(SpotifyTransportError, match="second-page provider failure"):
+        fetch_show_catalogue(
+            Client(),
+            "show-ser",
+            page_size=DEFAULT_PAGE_SIZE,
+            max_pages=DEFAULT_MAX_PAGES,
+            required_uris={str(_valid_item()["uri"])},
+        )
+
+
 def test_catalogue_failure_does_not_persist_false_pending_state(tmp_path: Path) -> None:
     source = _source()
     edition = _edition(source)

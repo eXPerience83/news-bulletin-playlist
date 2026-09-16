@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -596,11 +596,15 @@ def fetch_show_catalogue(
     *,
     page_size: int,
     max_pages: int,
+    required_uris: Collection[str] | None = None,
 ) -> SpotifyCatalogueResult:
     by_uri: dict[str, _SpotifyEpisodeCandidate] = {}
     calls = 0
     complete = False
     expected_total: int | None = None
+    required = None if required_uris is None else frozenset(required_uris)
+    if required is not None and not required:
+        raise ValueError("required_uris must not be empty")
     for page_number in range(max_pages):
         requested_offset = page_number * page_size
         page = client.show_episodes(
@@ -659,6 +663,10 @@ def fetch_show_catalogue(
                     "Spotify catalogue repeated an episode URI with conflicting metadata"
                 )
 
+        if required is not None and required.issubset(by_uri):
+            if next_page is None:
+                complete = True
+            break
         if next_page is None:
             complete = True
             break
