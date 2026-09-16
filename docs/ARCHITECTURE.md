@@ -226,9 +226,11 @@ Operational state is stored once in SQLite under `/data`, independent from any o
 - playlist run history and latest playlist state are persisted without owning copies of canonical editions;
 - logical writes are transactional and persistence failures surface as `PersistenceError` rather than being interpreted as an empty fresh state;
 - state updates are monotonic, so replaying older collection/matching/reconciliation work cannot regress newer canonical metadata, mappings, source status or playlist status;
-- run history is eligible for deterministic 30-day pruning;
-- canonical editions older than the retention boundary may be removed only when the caller explicitly supplies the identities that still need protection for playlist correctness. If that protection boundary is unknown, canonical state is retained by default;
-- deleting an eligible canonical edition removes its dependent Spotify mapping transactionally through the database relationship.
+- source/playlist run history is eligible for deterministic 30-day pruning by its operational `finished_at` timestamp;
+- canonical retention is a separate 30-day lifecycle measured from local `last_seen_at`: provider-controlled `published_at`/`edition_at` determine episode semantics and playlist eligibility, but cannot make a source-native asset observed today physically stale in SQLite;
+- canonical editions whose `last_seen_at` is older than the retention boundary may be removed only when the caller explicitly supplies the identities that still need protection for playlist correctness. Playlist protection uses each playlist's own ordering authority and retention window. If that protection set is unknown, canonical state is retained by default;
+- the exact canonical cutoff is retained (`last_seen_at == cutoff` is not stale); only rows strictly older than it are eligible for deletion;
+- deleting an eligible canonical edition removes its dependent Spotify mapping and planner rows, including any persistence-rejection barrier, transactionally through the database relationships.
 
 The runtime initializes and migrates the database automatically under its persistent data directory on container start. P1.3 does not itself decide which collected editions to match or which playlist items to write.
 
