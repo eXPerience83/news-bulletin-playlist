@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import base64
 import io
 import logging
 import threading
-from dataclasses import dataclass
 from http import HTTPStatus
-from http.client import HTTPMessage
 from pathlib import Path
 from typing import Any
+
+from _http_handler import (
+    HandlerCaptureMixin,
+    initialize_handler_capture,
+)
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore
@@ -107,14 +109,7 @@ class _Lifecycle:
         return
 
 
-@dataclass(frozen=True, slots=True)
-class _Response:
-    status: HTTPStatus
-    payload: bytes
-    extra_headers: dict[str, str]
-
-
-class _Handler(OperationalHealthHandler):
+class _Handler(HandlerCaptureMixin, OperationalHealthHandler):
     def __init__(
         self,
         *,
@@ -145,31 +140,7 @@ class _Handler(OperationalHealthHandler):
         self.operational_diagnostics = OperationalDiagnostics(
             diagnostic_store, logger=diagnostic_logger
         )
-        self.path = path
-        self.client_address = ("127.0.0.1", 12345)
-        self.headers = HTTPMessage()
-        encoded = base64.b64encode(f"admin:{_PASSWORD}".encode()).decode("ascii")
-        self.headers["Authorization"] = f"Basic {encoded}"
-        self._form = {} if form is None else form
-        self.response: _Response | None = None
-
-    def _read_form(self) -> dict[str, list[str]]:
-        return self._form
-
-    def _reply(
-        self,
-        status: HTTPStatus,
-        payload: bytes,
-        *,
-        content_type: str = "text/html; charset=utf-8",
-        extra_headers: dict[str, str] | None = None,
-    ) -> None:
-        del content_type
-        self.response = _Response(
-            status=status,
-            payload=payload,
-            extra_headers={} if extra_headers is None else dict(extra_headers),
-        )
+        initialize_handler_capture(self, path=path, form=form, password=_PASSWORD)
 
 
 def _managed_service(tmp_path: Path) -> tuple[ManagedAdminService, _SpotifyClient, object]:
