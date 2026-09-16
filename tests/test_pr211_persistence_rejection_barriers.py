@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 import pytest
@@ -25,7 +26,7 @@ from test_spotify_matcher import FakeCatalogClient, _candidate, _edition
 from test_spotify_matcher import _source as _matcher_source
 
 from news_bulletin_playlist.engine import EngineRunner
-from news_bulletin_playlist.models import OrderingPolicy, SourceId
+from news_bulletin_playlist.models import CanonicalEdition, OrderingPolicy, SourceId
 from news_bulletin_playlist.persistence import MatchStatus
 from news_bulletin_playlist.reconciliation import build_desired_state_from_store
 from news_bulletin_playlist.soft_retention_engine import resolve_soft_retention_evidence
@@ -178,6 +179,113 @@ def test_rejection_barrier_expiry_uses_each_playlist_retention(
     assert spotify.replacements[writes_before:] == [("destination-first", ())]
     assert spotify.items["destination-second"] == [SER_URI]
     assert runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") == barrier
+
+
+def test_protected_identities_use_each_playlist_authoritative_time(tmp_path: Path) -> None:
+    config = _config("first", "second")
+    config = replace(
+        config,
+        playlists=(
+            replace(
+                config.playlists[0],
+                retention_hours=48,
+                ordering=OrderingPolicy.EDITION_AT_DESC,
+            ),
+            replace(
+                config.playlists[1],
+                retention_hours=72,
+                ordering=OrderingPolicy.PUBLISHED_AT_DESC,
+            ),
+        ),
+    )
+    runner = EngineRunner(
+        config,
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: _Spotify(),
+        clock=lambda: NOW,
+    )
+    editions = (
+        CanonicalEdition(
+            source_id=SourceId("ser"),
+            source_native_id="edition-authority",
+            title="edition authority",
+            published_at=NOW - timedelta(days=10),
+            edition_at=NOW - timedelta(hours=47),
+        ),
+        CanonicalEdition(
+            source_id=SourceId("ser"),
+            source_native_id="published-authority",
+            title="published authority",
+            published_at=NOW - timedelta(hours=71),
+            edition_at=NOW - timedelta(days=10),
+        ),
+        CanonicalEdition(
+            source_id=SourceId("ser"),
+            source_native_id="exact-edition-boundary",
+            title="exact edition boundary",
+            published_at=NOW - timedelta(days=10),
+            edition_at=NOW - timedelta(hours=48),
+        ),
+        CanonicalEdition(
+            source_id=SourceId("ser"),
+            source_native_id="future",
+            title="future",
+            published_at=NOW + timedelta(hours=1),
+            edition_at=NOW + timedelta(hours=1),
+        ),
+    )
+    runner.store.upsert_editions(editions, observed_at=NOW)
+
+    protected = runner._protected_identities(NOW)
+
+    assert (SourceId("ser"), "edition-authority") in protected
+    assert (SourceId("ser"), "published-authority") in protected
+    assert (SourceId("ser"), "future") in protected
+    # Desired-state retention is strict at the lower boundary: authoritative_time > cutoff.
+    assert (SourceId("ser"), "exact-edition-boundary") not in protected
+
+
+def test_legitimately_stale_canonical_cascades_rejection_barrier(tmp_path: Path) -> None:
+    spotify = _RollbackReplacementSpotify()
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW + timedelta(hours=4),
+    )
+    assert runner.run_cycle().ok
+    runner.clock = lambda: NOW
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    spotify.replacement_catalogue = True
+    spotify.include_invalid_cached = True
+    assert not runner.run_cycle().ok
+    assert runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") is not None
+
+    stale_at = NOW - timedelta(days=31)
+    stale_text = stale_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    with sqlite3.connect(runner.store.path) as connection:
+        connection.execute(
+            """
+            UPDATE canonical_editions
+            SET published_at = ?, edition_at = ?, last_seen_at = ?
+            WHERE source_id = 'ser' AND source_native_id = 'ser-1'
+            """,
+            (stale_text, stale_text, stale_text),
+        )
+
+    result = runner.store.prune_operational_history(
+        now=NOW,
+        protected_identities=runner._protected_identities(NOW),
+    )
+
+    assert result.canonical_editions_deleted == 1
+    assert runner.store.get_edition(SourceId("ser"), "ser-1") is None
+    assert runner.store.get_match_state(SourceId("ser"), "ser-1") is None
+    assert runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") is None
 
 
 class _RollbackReplacementSpotify(_Spotify):
