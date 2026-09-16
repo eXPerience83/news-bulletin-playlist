@@ -60,7 +60,10 @@ def test_canonical_retention_uses_last_seen_not_provider_timestamps(tmp_path: Pa
     result = store.prune_operational_history(now=now, protected_identities=())
 
     assert result.canonical_editions_deleted == 1
-    assert store.get_edition(observed_today.source_id, observed_today.source_native_id) == observed_today
+    assert (
+        store.get_edition(observed_today.source_id, observed_today.source_native_id)
+        == observed_today
+    )
     assert store.get_edition(stale.source_id, stale.source_native_id) is None
     assert store.get_spotify_episode_uri(stale.source_id, stale.source_native_id) is None
 
