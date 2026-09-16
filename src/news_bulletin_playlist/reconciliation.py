@@ -166,20 +166,6 @@ def build_desired_state_from_store(
     )
 
 
-def read_spotify_playlist_uris(
-    client: SpotifyPlaylistClient,
-    playlist_id: str,
-) -> tuple[str, ...]:
-    """Read the complete bounded playlist and fail closed on unavailable media."""
-    read = _read_spotify_playlist(
-        client,
-        playlist_id,
-        allow_unavailable=False,
-        phase="verification",
-    )
-    return tuple(slot for slot in read.slots if slot is not None)
-
-
 def reconcile_playlist_items(
     client: SpotifyPlaylistClient,
     playlist_id: str,

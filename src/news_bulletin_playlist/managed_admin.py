@@ -64,17 +64,6 @@ class SpotifyPlaylistProvisioningError(ManagedAdminError):
         self.playlist_id = playlist_id
 
 
-class SpotifyPlaylistPersistenceError(ManagedAdminError):
-    """Compatibility error retained for callers from pre-local-only metadata updates."""
-
-    def __init__(self, playlist_id: str) -> None:
-        super().__init__(
-            "Spotify playlist metadata was updated but local managed state could not be saved; "
-            f"destination id {playlist_id!r} now requires operator reconciliation"
-        )
-        self.playlist_id = playlist_id
-
-
 class SpotifyPlaylistCreationUncertainError(ManagedAdminError):
     """Prevent blind retries when Spotify creation may have succeeded remotely."""
 
