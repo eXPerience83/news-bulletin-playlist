@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import base64
 import html
 import re
 import urllib.parse
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from http import HTTPStatus
-from http.client import HTTPMessage
 from pathlib import Path
 
 import pytest
+from _http_handler import (
+    HandlerCaptureMixin,
+    initialize_handler_capture,
+)
+from _http_handler import (
+    captured_response as _response,
+)
 
 from news_bulletin_playlist.lan_admin import (
     LAN_SPOTIFY_REDIRECT_URI,
@@ -87,15 +91,7 @@ class _NeverExchangeTransport:
         raise AssertionError("refresh is not expected")
 
 
-@dataclass(frozen=True, slots=True)
-class _CapturedResponse:
-    status: HTTPStatus
-    payload: bytes
-    content_type: str
-    extra_headers: dict[str, str]
-
-
-class _HandlerHarness(LanAdminHandler):
+class _HandlerHarness(HandlerCaptureMixin, LanAdminHandler):
     """Exercise handler methods with in-memory request/response state only."""
 
     def __init__(
@@ -110,41 +106,13 @@ class _HandlerHarness(LanAdminHandler):
     ) -> None:
         self.admin_security = security
         self.spotify_auth = auth
-        self.path = path
-        self.client_address = (client_ip, 12345)
-        self.headers = HTTPMessage()
-        if password is not None:
-            self.headers["Authorization"] = _basic_header(password)
-        self._form = {} if form is None else form
-        self.response: _CapturedResponse | None = None
-
-    def _read_form(self) -> dict[str, list[str]]:
-        return self._form
-
-    def _reply(
-        self,
-        status: HTTPStatus,
-        payload: bytes,
-        *,
-        content_type: str = "text/html; charset=utf-8",
-        extra_headers: dict[str, str] | None = None,
-    ) -> None:
-        self.response = _CapturedResponse(
-            status=status,
-            payload=payload,
-            content_type=content_type,
-            extra_headers={} if extra_headers is None else dict(extra_headers),
+        initialize_handler_capture(
+            self,
+            path=path,
+            form=form,
+            password=password,
+            client_ip=client_ip,
         )
-
-
-def _basic_header(password: str) -> str:
-    encoded = base64.b64encode(f"admin:{password}".encode()).decode("ascii")
-    return f"Basic {encoded}"
-
-
-def _response(handler: _HandlerHarness) -> _CapturedResponse:
-    assert handler.response is not None
-    return handler.response
 
 
 def _body(handler: _HandlerHarness) -> str:

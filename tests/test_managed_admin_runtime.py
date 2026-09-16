@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import base64
 import threading
 import time
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
-from http.client import HTTPMessage
 from pathlib import Path
 from typing import Any
 
 import pytest
+from _http_handler import (
+    HandlerCaptureMixin,
+    initialize_handler_capture,
+)
+from _http_handler import (
+    captured_response as _response,
+)
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.effective_config import CONFIG_PATH_ENV
@@ -122,15 +126,7 @@ class _FakeLifecycle:
         self.wake_calls += 1
 
 
-@dataclass(frozen=True, slots=True)
-class _CapturedResponse:
-    status: HTTPStatus
-    payload: bytes
-    content_type: str
-    extra_headers: dict[str, str]
-
-
-class _HandlerHarness(OperationalHealthHandler):
+class _HandlerHarness(HandlerCaptureMixin, OperationalHealthHandler):
     """Exercise managed admin routes entirely in memory without TCP sockets."""
 
     def __init__(
@@ -156,31 +152,7 @@ class _HandlerHarness(OperationalHealthHandler):
         self.configuration_synchronization = ConfigurationSynchronization()
         self.managed_admin_service = service
         self.managed_admin_auth = auth_provider
-        self.path = path
-        self.client_address = ("127.0.0.1", 12345)
-        self.headers = HTTPMessage()
-        if password is not None:
-            self.headers["Authorization"] = _basic_header(password)
-        self._form = {} if form is None else form
-        self.response: _CapturedResponse | None = None
-
-    def _read_form(self) -> dict[str, list[str]]:
-        return self._form
-
-    def _reply(
-        self,
-        status: HTTPStatus,
-        payload: bytes,
-        *,
-        content_type: str = "text/html; charset=utf-8",
-        extra_headers: dict[str, str] | None = None,
-    ) -> None:
-        self.response = _CapturedResponse(
-            status=status,
-            payload=payload,
-            content_type=content_type,
-            extra_headers={} if extra_headers is None else dict(extra_headers),
-        )
+        initialize_handler_capture(self, path=path, form=form, password=password)
 
 
 class _CycleRunner:
@@ -220,11 +192,6 @@ class _BlockingCycleRunner:
         )
 
 
-def _basic_header(password: str) -> str:
-    encoded = base64.b64encode(f"admin:{password}".encode()).decode("ascii")
-    return f"Basic {encoded}"
-
-
 def _service(tmp_path: Path) -> tuple[ManagedAdminService, _Factory]:
     client = _FakeSpotifyClient()
     factory = _Factory(client)
@@ -233,11 +200,6 @@ def _service(tmp_path: Path) -> tuple[ManagedAdminService, _Factory]:
         client_factory=factory,
     )
     return service, factory
-
-
-def _response(handler: _HandlerHarness) -> _CapturedResponse:
-    assert handler.response is not None
-    return handler.response
 
 
 def _activation_form(csrf_token: str) -> dict[str, list[str]]:
