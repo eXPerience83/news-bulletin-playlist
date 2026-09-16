@@ -74,18 +74,28 @@ def test_future_edition_rejection_barrier_preserves_destinations_after_restart(
     if correct_old_publication:
         original = runner.store.get_edition(SourceId("ser"), "ser-1")
         assert original is not None
-        feed = feed.replace(b"Sun, 30 Aug 2026 09:05:00", b"Thu, 27 Aug 2026 09:05:00")
+        feed = feed.replace(b"Sun, 30 Aug 2026 09:05:00", b"Thu, 30 Jul 2026 09:05:00")
         runner.fetcher = lambda _url: feed
         runner.clock = lambda: NOW + timedelta(hours=5)
         calls_before_correction = spotify.show_calls
         runner.run_cycle()
         corrected = runner.store.get_edition(SourceId("ser"), "ser-1")
         assert corrected is not None
-        assert corrected.published_at == original.published_at - timedelta(days=3)
+        assert corrected.published_at == original.published_at - timedelta(days=31)
         assert corrected.edition_at == original.edition_at
         assert corrected.title == original.title
         assert spotify.show_calls == calls_before_correction
         assert tuple(spotify.replacements) == writes_before
+
+        # Canonical lifecycle is based on local observation, not provider pubDate.
+        # Pruning must preserve the canonical parent and therefore the durable match/barrier.
+        pruned = runner.store.prune_operational_history(
+            now=NOW + timedelta(hours=5),
+            protected_identities=runner._protected_identities(NOW + timedelta(hours=5)),
+        )
+        assert pruned.canonical_editions_deleted == 0
+        assert runner.store.get_match_state(SourceId("ser"), "ser-1") == durable
+        assert runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") == barrier
 
     # A second rollback puts both pubDate (09:05) and edition_at (09:00) in the future.
     # Empty desired must not bypass the barrier and erase either physical destination.
