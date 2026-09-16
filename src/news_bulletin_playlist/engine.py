@@ -24,6 +24,7 @@ from news_bulletin_playlist.desired_state import (
     DesiredPlaylistState,
     DesiredStateError,
     DurationEligibilityDecision,
+    authoritative_playlist_time,
 )
 from news_bulletin_playlist.models import (
     CanonicalEdition,
@@ -686,7 +687,9 @@ class EngineRunner:
                 source_id
                 for source_id in playlist.source_selection.explicit
                 if source_id in persistence_rejected_source_ids
-                or self._source_has_persistence_rejection_barrier(source_id, playlist_started_at)
+                or self._source_has_persistence_rejection_barrier(
+                    source_id, playlist, playlist_started_at
+                )
             )
             unsafe_for_playlist = tuple(
                 source_id
@@ -1721,6 +1724,7 @@ class EngineRunner:
     def _source_has_persistence_rejection_barrier(
         self,
         source_id: SourceId,
+        playlist: PlaylistDefinition,
         now: datetime,
     ) -> bool:
         source = next(
@@ -1729,12 +1733,12 @@ class EngineRunner:
         )
         if source is None:
             return False
-        matching_cutoff = self._matching_cutoff(now)
+        retention_cutoff = now - timedelta(hours=playlist.retention_hours)
         return any(
-            # A rollback or corrected pubDate may put a protected edition in the future.
-            # It still blocks destination mutations, including an empty desired playlist;
-            # only matching work uses the upper publication-time bound.
-            matching_cutoff <= edition.published_at
+            # Safety follows this destination's retention authority, not the matching window.
+            # A corrected pubDate must not hide a still-relevant semantic edition. Future
+            # editions also remain protected across rollback, even with an empty desired state.
+            authoritative_playlist_time(edition, playlist.ordering) > retention_cutoff
             and self._edition_has_persistence_rejection_barrier(source, edition)
             for edition in self.store.list_editions(source_id=source_id)
         )

@@ -127,17 +127,28 @@ A's publication (09:05) and semantic edition time (09:00) were both in the futur
 The source-level check excluded its still-active barrier, while empty desired state
 bypassed the per-item prewrite checks. Both physical destinations were emptied.
 
-Barrier enforcement now retains future-published editions within the existing lower
-retention bound. Matching still uses its original publication window; this change
-does not add matching work, change retry scheduling, or keep expired history blocking
-destinations indefinitely.
+The initial fix retained future-published editions but still used the matching
+publication cutoff as its lower bound. A subsequent audit reproduced another escape:
+RSS corrected only pubDate three days backwards while the semantic edition stayed
+current. The publication cutoff hid the barrier again, and a later rollback/restart
+allowed both destinations to be emptied.
+
+Barrier enforcement now uses `authoritative_playlist_time` with the specific
+playlist's ordering and retention. It has no upper time bound, preserving safety
+during rollback, and expires protection at the same lower boundary as that playlist's
+desired-state eligibility. Matching still uses its original publication window. This
+does not add matching work or change recovery deadlines; one playlist's retention
+does not unnecessarily block another playlist whose edition has actually expired.
 
 `test_future_edition_rejection_barrier_preserves_destinations_after_restart` reproduces
 the rejected two-page repair with real SQLite and two simulated destinations. It failed
 before the fix. It verifies zero PUT after the second rollback/restart, unchanged durable
 mapping/barrier/recovery, absent match-input evidence, and eventual convergence to B after
 an accepted due repair. Catalogue reads remain shared and bounded to two pages per
-inspection. The PR remains draft pending independent review of the new head.
+inspection. The regression also covers the backwards pubDate correction without
+changing title or semantic edition time. Separate cases cover differing destination
+retentions, the exact semantic expiry boundary, and publication-ordered playlists.
+The PR remains draft pending independent review of the new head.
 
 ## Historical D2 validation
 

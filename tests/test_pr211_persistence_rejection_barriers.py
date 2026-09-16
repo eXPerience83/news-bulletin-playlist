@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,7 @@ from test_spotify_matcher import FakeCatalogClient, _candidate, _edition
 from test_spotify_matcher import _source as _matcher_source
 
 from news_bulletin_playlist.engine import EngineRunner
-from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.models import OrderingPolicy, SourceId
 from news_bulletin_playlist.persistence import MatchStatus
 from news_bulletin_playlist.reconciliation import build_desired_state_from_store
 from news_bulletin_playlist.soft_retention_engine import resolve_soft_retention_evidence
@@ -33,8 +34,10 @@ from news_bulletin_playlist.spotify.matcher import MatchEvaluationIntent, match_
 REPLACEMENT_URI = "spotify:episode:" + "9" * 22
 
 
+@pytest.mark.parametrize("correct_old_publication", [False, True])
 def test_future_edition_rejection_barrier_preserves_destinations_after_restart(
     tmp_path: Path,
+    correct_old_publication: bool,
 ) -> None:
     spotify = _RollbackReplacementSpotify()
     auth = _Auth()
@@ -67,13 +70,30 @@ def test_future_edition_rejection_barrier_preserves_destinations_after_restart(
     assert barrier is not None and barrier.protects(durable)
     assert recovery is not None
 
+    feed = _rss()
+    if correct_old_publication:
+        original = runner.store.get_edition(SourceId("ser"), "ser-1")
+        assert original is not None
+        feed = feed.replace(b"Sun, 30 Aug 2026 09:05:00", b"Thu, 27 Aug 2026 09:05:00")
+        runner.fetcher = lambda _url: feed
+        runner.clock = lambda: NOW + timedelta(hours=5)
+        calls_before_correction = spotify.show_calls
+        runner.run_cycle()
+        corrected = runner.store.get_edition(SourceId("ser"), "ser-1")
+        assert corrected is not None
+        assert corrected.published_at == original.published_at - timedelta(days=3)
+        assert corrected.edition_at == original.edition_at
+        assert corrected.title == original.title
+        assert spotify.show_calls == calls_before_correction
+        assert tuple(spotify.replacements) == writes_before
+
     # A second rollback puts both pubDate (09:05) and edition_at (09:00) in the future.
     # Empty desired must not bypass the barrier and erase either physical destination.
     restarted = EngineRunner(
         _config("first", "second"),
         type(runner.store)(runner.store.path),
         auth,
-        fetcher=lambda _url: _rss(),
+        fetcher=lambda _url: feed,
         client_factory=lambda _token: spotify,
         clock=lambda: NOW - timedelta(minutes=70),
     )
@@ -91,6 +111,7 @@ def test_future_edition_rejection_barrier_preserves_destinations_after_restart(
     assert restarted.planner_journal.get_matched_recovery("ser", "ser-1") == recovery
 
     # Protection is not permanent: an accepted due repair still reconciles both playlists.
+    restarted.fetcher = lambda _url: _rss()
     restarted.clock = lambda: recovery.next_retry_at
     calls_before_retry = spotify.show_calls
     resolved = restarted.run_cycle()
@@ -100,6 +121,53 @@ def test_future_edition_rejection_barrier_preserves_destinations_after_restart(
     assert restarted.planner_journal.get_match_input("ser", "ser-1") is not None
     for playlist_id in ("first", "second"):
         assert spotify.items[f"destination-{playlist_id}"] == [REPLACEMENT_URI]
+
+
+@pytest.mark.parametrize(
+    ("ordering", "hours"),
+    [(OrderingPolicy.EDITION_AT_DESC, 47), (OrderingPolicy.PUBLISHED_AT_DESC, 5)],
+)
+def test_rejection_barrier_expiry_uses_each_playlist_retention(
+    tmp_path: Path, ordering: OrderingPolicy, hours: int
+) -> None:
+    spotify = _RollbackReplacementSpotify()
+    config = _config("first", "second")
+    config = replace(
+        config,
+        playlists=(
+            replace(config.playlists[0], ordering=ordering),
+            replace(config.playlists[1], retention_hours=72),
+        ),
+    )
+    runner = EngineRunner(
+        config,
+        _store(tmp_path),
+        _Auth(),
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW + timedelta(hours=4),
+    )
+    assert runner.run_cycle().ok
+    runner.clock = lambda: NOW
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    spotify.replacement_catalogue = True
+    spotify.include_invalid_cached = True
+    assert not runner.run_cycle().ok
+    barrier = runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1")
+    assert barrier is not None
+
+    # First expires by its own authority (exactly 48 semantic hours, or old pubDate).
+    # Second still needs protection. Correcting pubDate also excludes A from matching work.
+    feed = _rss().replace(b"Sun, 30 Aug 2026 09:05:00", b"Thu, 27 Aug 2026 09:05:00")
+    runner.fetcher = lambda _url: feed
+    runner.clock = lambda: NOW + timedelta(hours=hours)
+    writes_before = len(spotify.replacements)
+    result = runner.run_cycle()
+    assert result.playlists[0].ok
+    assert not result.playlists[1].ok
+    assert spotify.replacements[writes_before:] == [("destination-first", ())]
+    assert spotify.items["destination-second"] == [SER_URI]
+    assert runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") == barrier
 
 
 class _RollbackReplacementSpotify(_Spotify):
