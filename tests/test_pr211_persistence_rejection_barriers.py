@@ -242,8 +242,8 @@ def test_protected_identities_use_each_playlist_authoritative_time(tmp_path: Pat
 
     assert (SourceId("ser"), "edition-authority") in protected
     assert (SourceId("ser"), "published-authority") in protected
-    assert (SourceId("ser"), "future") in protected
-    # Desired-state retention is strict at the lower boundary: authoritative_time > cutoff.
+    assert (SourceId("ser"), "future") not in protected
+    # Desired-state retention is strict at both boundaries: cutoff < authority <= now.
     assert (SourceId("ser"), "exact-edition-boundary") not in protected
 
 
