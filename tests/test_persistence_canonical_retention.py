@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -5,48 +8,113 @@ from news_bulletin_playlist.models import CanonicalEdition, SourceId
 from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 
 
-def _edition(native_id: str, published_at: datetime) -> CanonicalEdition:
+def _edition(
+    native_id: str,
+    published_at: datetime,
+    *,
+    edition_at: datetime | None = None,
+) -> CanonicalEdition:
     return CanonicalEdition(
         source_id=SourceId("ser"),
         source_native_id=native_id,
         title=f"bulletin {native_id}",
         published_at=published_at,
-        edition_at=published_at,
+        edition_at=published_at if edition_at is None else edition_at,
     )
 
 
-def test_canonical_retention_requires_explicit_protection_boundary(tmp_path: Path) -> None:
+def _last_seen_at(store: SQLiteStore, native_id: str) -> datetime:
+    with sqlite3.connect(store.path) as connection:
+        row = connection.execute(
+            """
+            SELECT last_seen_at
+            FROM canonical_editions
+            WHERE source_id = 'ser' AND source_native_id = ?
+            """,
+            (native_id,),
+        ).fetchone()
+    assert row is not None
+    return datetime.fromisoformat(str(row[0]).replace("Z", "+00:00")).astimezone(UTC)
+
+
+def test_canonical_retention_uses_last_seen_not_provider_timestamps(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "data" / "state.sqlite3")
     store.initialize()
     now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
-    old_protected = _edition("protected", now - timedelta(days=40))
-    old_stale = _edition("stale", now - timedelta(days=40))
-    recent = _edition("recent", now - timedelta(days=5))
-    store.upsert_editions(
-        (old_protected, old_stale, recent),
-        observed_at=now,
+    observed_today = _edition(
+        "observed-today",
+        now - timedelta(days=40),
+        edition_at=now,
     )
+    stale = _edition("stale", now - timedelta(days=40))
+    store.upsert_editions((observed_today,), observed_at=now)
+    store.upsert_editions((stale,), observed_at=now - timedelta(days=31))
     store.set_match_state(
-        old_stale.source_id,
-        old_stale.source_native_id,
+        stale.source_id,
+        stale.source_native_id,
         status=MatchStatus.MATCHED,
         spotify_episode_uri="spotify:episode:stale",
-        updated_at=now,
+        updated_at=now - timedelta(days=31),
     )
 
-    safe_default = store.prune_operational_history(now=now)
-    assert safe_default.canonical_editions_deleted == 0
-    assert store.get_edition(old_stale.source_id, old_stale.source_native_id) == old_stale
-
-    result = store.prune_operational_history(
-        now=now,
-        protected_identities=(old_protected.identity,),
-    )
+    result = store.prune_operational_history(now=now, protected_identities=())
 
     assert result.canonical_editions_deleted == 1
-    assert (
-        store.get_edition(old_protected.source_id, old_protected.source_native_id) == old_protected
+    assert store.get_edition(observed_today.source_id, observed_today.source_native_id) == observed_today
+    assert store.get_edition(stale.source_id, stale.source_native_id) is None
+    assert store.get_spotify_episode_uri(stale.source_id, stale.source_native_id) is None
+
+
+def test_reobserving_asset_refreshes_last_seen_even_when_metadata_changes(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "data" / "state.sqlite3")
+    store.initialize()
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    first_observation = now - timedelta(days=31)
+    original = _edition("asset", now, edition_at=now)
+    corrected = CanonicalEdition(
+        source_id=original.source_id,
+        source_native_id=original.source_native_id,
+        title="corrected title",
+        published_at=now - timedelta(days=45),
+        edition_at=now - timedelta(minutes=5),
+        duration_seconds=251,
     )
-    assert store.get_edition(old_stale.source_id, old_stale.source_native_id) is None
-    assert store.get_spotify_episode_uri(old_stale.source_id, old_stale.source_native_id) is None
-    assert store.get_edition(recent.source_id, recent.source_native_id) == recent
+    store.upsert_editions((original,), observed_at=first_observation)
+    store.upsert_editions((corrected,), observed_at=now)
+
+    assert _last_seen_at(store, "asset") == now
+    assert store.get_edition(SourceId("ser"), "asset") == corrected
+    assert (
+        store.prune_operational_history(now=now, protected_identities=()).canonical_editions_deleted
+        == 0
+    )
+
+
+def test_canonical_retention_exact_cutoff_is_not_stale_until_older(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "data" / "state.sqlite3")
+    store.initialize()
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    cutoff = now - timedelta(days=30)
+    boundary = _edition("boundary", now - timedelta(days=90))
+    older = _edition("older", now + timedelta(days=5))
+    store.upsert_editions((boundary,), observed_at=cutoff)
+    store.upsert_editions((older,), observed_at=cutoff - timedelta(microseconds=1))
+
+    result = store.prune_operational_history(now=now, protected_identities=())
+
+    assert result.canonical_editions_deleted == 1
+    assert store.get_edition(SourceId("ser"), "boundary") == boundary
+    assert store.get_edition(SourceId("ser"), "older") is None
+
+
+def test_canonical_retention_requires_explicit_protection_set(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "data" / "state.sqlite3")
+    store.initialize()
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    stale = _edition("stale", now - timedelta(days=40))
+    store.upsert_editions((stale,), observed_at=now - timedelta(days=40))
+
+    safe_default = store.prune_operational_history(now=now)
+
+    assert safe_default.canonical_editions_deleted == 0
+    assert store.get_edition(stale.source_id, stale.source_native_id) == stale
