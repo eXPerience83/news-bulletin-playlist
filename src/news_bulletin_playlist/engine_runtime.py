@@ -526,6 +526,10 @@ def _playlist_write_contract(
 class OperationalHealthHandler(LanAdminHandler):
     """Serve read-only status plus authenticated managed-playlist administration."""
 
+    _content_security_policy = (
+        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; "
+        "form-action 'self'; frame-ancestors 'none'"
+    )
     operational_status: OperationalStatus | None = None
     engine_scheduler: EngineScheduler | None = None
     engine_lifecycle: EngineLifecycleController | None = None
@@ -536,28 +540,6 @@ class OperationalHealthHandler(LanAdminHandler):
     diagnostic_store: DiagnosticEventStore | None = None
     spotify_request_metrics: SpotifyRequestMetrics | None = None
     operational_diagnostics: OperationalDiagnostics | None = None
-
-    def _send_headers(
-        self,
-        *,
-        content_type: str,
-        length: int,
-        extra_headers: dict[str, str] | None = None,
-    ) -> None:
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(length))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; "
-            "form-action 'self'; frame-ancestors 'none'",
-        )
-        if extra_headers is not None:
-            for name, value in extra_headers.items():
-                self.send_header(name, value)
-        self.end_headers()
 
     def _spotify_state(self) -> AuthorizationState | None:
         synchronization = self.auth_synchronization
