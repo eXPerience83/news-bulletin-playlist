@@ -1731,7 +1731,10 @@ class EngineRunner:
             return False
         matching_cutoff = self._matching_cutoff(now)
         return any(
-            matching_cutoff <= edition.published_at <= now
+            # A rollback or corrected pubDate may put a protected edition in the future.
+            # It still blocks destination mutations, including an empty desired playlist;
+            # only matching work uses the upper publication-time bound.
+            matching_cutoff <= edition.published_at
             and self._edition_has_persistence_rejection_barrier(source, edition)
             for edition in self.store.list_editions(source_id=source_id)
         )

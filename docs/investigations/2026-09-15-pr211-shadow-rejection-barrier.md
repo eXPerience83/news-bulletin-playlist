@@ -119,7 +119,27 @@ Migration v7 conservatively reconstructs barriers that can be proven from the pr
 
 Additional journal/migration regressions prove that a recovery fingerprint change does not mutate the barrier lifecycle, an accepted durable match no longer matches the protected snapshot, and a real schema-v6 implicit barrier is seeded into v7. The historical synthetic schema-v2 duration migration also remains green.
 
-## Validation
+## Future publication after a second clock rollback
+
+The post-D2 audit reproduced a remaining destination-safety escape on `cf84b711`:
+durable A at 14:00, a rejected A-to-B repair at 10:00, then a restart at 08:50.
+A's publication (09:05) and semantic edition time (09:00) were both in the future.
+The source-level check excluded its still-active barrier, while empty desired state
+bypassed the per-item prewrite checks. Both physical destinations were emptied.
+
+Barrier enforcement now retains future-published editions within the existing lower
+retention bound. Matching still uses its original publication window; this change
+does not add matching work, change retry scheduling, or keep expired history blocking
+destinations indefinitely.
+
+`test_future_edition_rejection_barrier_preserves_destinations_after_restart` reproduces
+the rejected two-page repair with real SQLite and two simulated destinations. It failed
+before the fix. It verifies zero PUT after the second rollback/restart, unchanged durable
+mapping/barrier/recovery, absent match-input evidence, and eventual convergence to B after
+an accepted due repair. Catalogue reads remain shared and bounded to two pages per
+inspection. The PR remains draft pending independent review of the new head.
+
+## Historical D2 validation
 
 D2 functional commit: `b0cf769b869fbba714d5d139a62d7329395ae710`.
 

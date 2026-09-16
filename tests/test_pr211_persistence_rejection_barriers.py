@@ -33,6 +33,75 @@ from news_bulletin_playlist.spotify.matcher import MatchEvaluationIntent, match_
 REPLACEMENT_URI = "spotify:episode:" + "9" * 22
 
 
+def test_future_edition_rejection_barrier_preserves_destinations_after_restart(
+    tmp_path: Path,
+) -> None:
+    spotify = _RollbackReplacementSpotify()
+    auth = _Auth()
+    runner = EngineRunner(
+        _config("first", "second"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW + timedelta(hours=4),
+    )
+    assert runner.run_cycle().ok
+    durable = runner.store.get_match_state(SourceId("ser"), "ser-1")
+    assert durable is not None
+    assert durable.updated_at == NOW + timedelta(hours=4)
+
+    runner.clock = lambda: NOW
+    runner.planner_journal.clear_match_input("ser", "ser-1")
+    for playlist_id in ("first", "second"):
+        runner.planner_journal.mark_destination_unknown(playlist_id)
+    spotify.replacement_catalogue = True
+    spotify.include_invalid_cached = True
+    writes_before = tuple(spotify.replacements)
+    calls_before = spotify.show_calls
+    assert not runner.run_cycle().ok
+    assert spotify.show_calls == calls_before + 2
+    assert tuple(spotify.replacements) == writes_before
+    barrier = runner.planner_journal.get_persistence_rejection_barrier("ser", "ser-1")
+    recovery = runner.planner_journal.get_matched_recovery("ser", "ser-1")
+    assert barrier is not None and barrier.protects(durable)
+    assert recovery is not None
+
+    # A second rollback puts both pubDate (09:05) and edition_at (09:00) in the future.
+    # Empty desired must not bypass the barrier and erase either physical destination.
+    restarted = EngineRunner(
+        _config("first", "second"),
+        type(runner.store)(runner.store.path),
+        auth,
+        fetcher=lambda _url: _rss(),
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW - timedelta(minutes=70),
+    )
+    calls_before_restart = spotify.show_calls
+    blocked = restarted.run_cycle()
+    assert not blocked.ok
+    assert spotify.show_calls == calls_before_restart + 2
+    assert all(outcome.desired_count == 0 for outcome in blocked.playlists)
+    assert tuple(spotify.replacements) == writes_before
+    for playlist_id in ("first", "second"):
+        assert spotify.items[f"destination-{playlist_id}"] == [SER_URI]
+    assert restarted.store.get_match_state(SourceId("ser"), "ser-1") == durable
+    assert restarted.planner_journal.get_match_input("ser", "ser-1") is None
+    assert restarted.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") == barrier
+    assert restarted.planner_journal.get_matched_recovery("ser", "ser-1") == recovery
+
+    # Protection is not permanent: an accepted due repair still reconciles both playlists.
+    restarted.clock = lambda: recovery.next_retry_at
+    calls_before_retry = spotify.show_calls
+    resolved = restarted.run_cycle()
+    assert resolved.ok
+    assert spotify.show_calls == calls_before_retry + 2
+    assert restarted.planner_journal.get_persistence_rejection_barrier("ser", "ser-1") is None
+    assert restarted.planner_journal.get_match_input("ser", "ser-1") is not None
+    for playlist_id in ("first", "second"):
+        assert spotify.items[f"destination-{playlist_id}"] == [REPLACEMENT_URI]
+
+
 class _RollbackReplacementSpotify(_Spotify):
     replacement_catalogue = False
     include_invalid_cached = False
