@@ -166,23 +166,6 @@ def build_desired_state_from_store(
     )
 
 
-def reconcile_playlist_items(
-    client: SpotifyPlaylistClient,
-    playlist_id: str,
-    desired_uris: Sequence[str],
-) -> bool:
-    """Legacy strict helper: replace only on change and require exact readable readback."""
-    return _reconcile_playlist_items(
-        client,
-        playlist_id,
-        desired_uris,
-        store=None,
-        logical_playlist_id=None,
-        attestation_updated_at=None,
-        mutation_guard=None,
-    ).wrote
-
-
 def _reconcile_playlist_items(
     client: SpotifyPlaylistClient,
     playlist_id: str,

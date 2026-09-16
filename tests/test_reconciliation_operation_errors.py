@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from _reconciliation import strict_reconcile_playlist_items
 
 from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
-    reconcile_playlist_items,
 )
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
@@ -82,7 +82,7 @@ class _ReadbackApiFailure:
 
 def test_prewrite_api_failure_has_safe_phase_and_status() -> None:
     with pytest.raises(SpotifyReconciliationError) as raised:
-        reconcile_playlist_items(
+        strict_reconcile_playlist_items(
             _PrewriteApiFailure(),  # type: ignore[arg-type]
             "playlist",
             ["spotify:episode:one"],
@@ -95,7 +95,7 @@ def test_prewrite_api_failure_has_safe_phase_and_status() -> None:
 
 def test_write_transport_failure_has_safe_phase() -> None:
     with pytest.raises(SpotifyReconciliationError) as raised:
-        reconcile_playlist_items(
+        strict_reconcile_playlist_items(
             _WriteTransportFailure(),  # type: ignore[arg-type]
             "playlist",
             ["spotify:episode:one"],
@@ -111,7 +111,7 @@ def test_write_transport_failure_has_safe_phase() -> None:
 def test_5xx_after_applied_mutation_is_verified_by_readback_without_retry() -> None:
     client = _AppliedThen502()
 
-    wrote = reconcile_playlist_items(
+    wrote = strict_reconcile_playlist_items(
         client,  # type: ignore[arg-type]
         "playlist",
         ["spotify:episode:one"],
@@ -123,7 +123,7 @@ def test_5xx_after_applied_mutation_is_verified_by_readback_without_retry() -> N
 
 def test_readback_api_failure_has_safe_phase_and_status() -> None:
     with pytest.raises(SpotifyReconciliationError) as raised:
-        reconcile_playlist_items(
+        strict_reconcile_playlist_items(
             _ReadbackApiFailure(),  # type: ignore[arg-type]
             "playlist",
             ["spotify:episode:one"],
