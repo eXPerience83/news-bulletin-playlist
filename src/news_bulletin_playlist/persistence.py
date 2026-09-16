@@ -919,7 +919,7 @@ class SQLiteStore:
                     """
                     SELECT source_id, source_native_id
                     FROM canonical_editions
-                    WHERE published_at < ?
+                    WHERE last_seen_at < ?
                     """,
                     (cutoff,),
                 ).fetchall()
