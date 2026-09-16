@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-import sqlite3
 from typing import Any
 
 import pytest
