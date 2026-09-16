@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from _reconciliation import strict_reconcile_playlist_items
 
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.diagnostics_web import (
@@ -19,7 +20,6 @@ from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleR
 from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
-    reconcile_playlist_items,
 )
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.client import SpotifyApiError
@@ -199,7 +199,7 @@ def test_ambiguous_502_request_metrics_are_sanitized_in_store_ui_and_zip(
             return {"snapshot_id": "test"}
 
     try:
-        reconcile_playlist_items(
+        strict_reconcile_playlist_items(
             _Replace502(),  # type: ignore[arg-type]
             "playlist",
             ["spotify:episode:0000000000000000000001"],

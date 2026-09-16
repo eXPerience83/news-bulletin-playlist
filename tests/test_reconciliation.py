@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _reconciliation import strict_reconcile_playlist_items
 
 from news_bulletin_playlist.desired_state import DesiredPlaylistItem, DesiredPlaylistState
 from news_bulletin_playlist.models import (
@@ -23,7 +24,6 @@ from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
     build_desired_state_from_store,
-    reconcile_playlist_items,
     reconcile_spotify_destinations,
     reconcile_spotify_playlist,
 )
@@ -249,7 +249,7 @@ class _PostwritePaginationRaceSpotify(_FakeSpotify):
 def test_unchanged_desired_state_performs_zero_writes() -> None:
     client = _FakeSpotify({"playlist": ["spotify:episode:one", "spotify:episode:two"]})
 
-    wrote = reconcile_playlist_items(
+    wrote = strict_reconcile_playlist_items(
         client,
         "playlist",
         ("spotify:episode:one", "spotify:episode:two"),
@@ -264,7 +264,7 @@ def test_unchanged_state_over_50_items_uses_multiple_pages() -> None:
     desired = tuple(f"spotify:episode:{index}" for index in range(75))
     client = _FakeSpotify({"playlist": list(desired)})
 
-    wrote = reconcile_playlist_items(client, "playlist", desired)
+    wrote = strict_reconcile_playlist_items(client, "playlist", desired)
 
     assert wrote is False
     assert client.writes == []
@@ -280,7 +280,7 @@ def test_changed_state_is_replaced_and_exactly_read_back() -> None:
     client = _FakeSpotify({"playlist": ["spotify:episode:old"]})
     desired = ("spotify:episode:new", "spotify:episode:second")
 
-    wrote = reconcile_playlist_items(client, "playlist", desired)
+    wrote = strict_reconcile_playlist_items(client, "playlist", desired)
 
     assert wrote is True
     assert client.writes == [("playlist", list(desired))]
@@ -293,7 +293,7 @@ def test_current_state_over_100_forces_bounded_replacement() -> None:
     desired = tuple(current[:100])
     client = _FakeSpotify({"playlist": current})
 
-    wrote = reconcile_playlist_items(client, "playlist", desired)
+    wrote = strict_reconcile_playlist_items(client, "playlist", desired)
 
     assert wrote is True
     assert client.writes == [("playlist", list(desired))]
@@ -314,7 +314,7 @@ def test_false_terminal_page_with_total_fails_closed() -> None:
     client = _FalseTerminalSpotify({"playlist": current})
 
     with pytest.raises(SpotifyReconciliationError, match="truncated before total"):
-        reconcile_playlist_items(client, "playlist", desired)
+        strict_reconcile_playlist_items(client, "playlist", desired)
 
     assert client.writes == []
 
@@ -325,7 +325,7 @@ def test_short_false_terminal_page_without_total_never_reports_unchanged() -> No
     )
 
     with pytest.raises(SpotifyReconciliationError, match="missing total"):
-        reconcile_playlist_items(client, "playlist", ("spotify:episode:A",))
+        strict_reconcile_playlist_items(client, "playlist", ("spotify:episode:A",))
 
     assert client.writes == []
 
@@ -334,7 +334,7 @@ def test_prewrite_multi_page_comparison_cannot_mix_snapshots() -> None:
     desired = [f"spotify:episode:{index}" for index in range(75)]
     client = _PrewritePaginationRaceSpotify(desired)
 
-    wrote = reconcile_playlist_items(client, "playlist", desired)
+    wrote = strict_reconcile_playlist_items(client, "playlist", desired)
 
     assert wrote is True
     assert client.states["playlist"] == desired
@@ -345,7 +345,7 @@ def test_postwrite_multi_page_readback_cannot_mix_snapshots() -> None:
     client = _PostwritePaginationRaceSpotify()
 
     with pytest.raises(SpotifyReconciliationError, match="snapshot changed"):
-        reconcile_playlist_items(client, "playlist", desired)
+        strict_reconcile_playlist_items(client, "playlist", desired)
 
     assert client.writes == [("playlist", desired)]
 
@@ -372,7 +372,7 @@ def test_malformed_pagination_fails_closed_without_writing(
     client = _MalformedPagingSpotify(page)
 
     with pytest.raises(SpotifyReconciliationError, match=message) as error:
-        reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
+        strict_reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
 
     assert "prewrite" in str(error.value)
     assert "offset=0" in str(error.value)
@@ -384,7 +384,7 @@ def test_unavailable_media_item_does_not_block_replacement(media_key: str) -> No
     client = _UnavailableMediaSpotify(media_key)
     desired = ("spotify:episode:new", "spotify:episode:second")
 
-    wrote = reconcile_playlist_items(client, "playlist", desired)
+    wrote = strict_reconcile_playlist_items(client, "playlist", desired)
 
     assert wrote is True
     assert client.writes == [("playlist", list(desired))]
@@ -397,7 +397,7 @@ def test_unavailable_media_item_forces_healing_when_visible_uris_match() -> None
     client = _UnavailableMediaSpotify("item")
     desired = ("spotify:episode:old",)
 
-    wrote = reconcile_playlist_items(client, "playlist", desired)
+    wrote = strict_reconcile_playlist_items(client, "playlist", desired)
 
     assert wrote is True
     assert client.writes == [("playlist", list(desired))]
@@ -419,7 +419,7 @@ def test_contradictory_wrapper_media_fails_closed(wrapper: dict[str, object]) ->
     client = _MalformedPagingSpotify({"items": [wrapper], "next": None, "total": 1})
 
     with pytest.raises(SpotifyReconciliationError):
-        reconcile_playlist_items(client, "playlist", ("spotify:episode:one",))
+        strict_reconcile_playlist_items(client, "playlist", ("spotify:episode:one",))
 
     assert client.writes == []
 
@@ -434,7 +434,7 @@ def test_matching_dual_wrapper_media_is_accepted() -> None:
         }
     )
 
-    assert reconcile_playlist_items(client, "playlist", (uri,)) is False
+    assert strict_reconcile_playlist_items(client, "playlist", (uri,)) is False
     assert client.writes == []
 
 
@@ -445,7 +445,7 @@ def test_null_dual_wrapper_field_falls_back_to_valid_media(null_field: str) -> N
     wrapper[null_field] = None
     client = _MalformedPagingSpotify({"items": [wrapper], "next": None, "total": 1})
 
-    assert reconcile_playlist_items(client, "playlist", (uri,)) is False
+    assert strict_reconcile_playlist_items(client, "playlist", (uri,)) is False
     assert client.writes == []
 
 
@@ -453,7 +453,7 @@ def test_unavailable_media_item_after_write_fails_exact_readback() -> None:
     client = _UnavailableAfterWriteSpotify({"playlist": ["spotify:episode:old"]})
 
     with pytest.raises(SpotifyReconciliationError, match="unavailable media item") as error:
-        reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
+        strict_reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
 
     assert "readback" in str(error.value)
     assert "offset=0" in str(error.value)
@@ -464,7 +464,7 @@ def test_missing_media_field_still_fails_closed() -> None:
     client = _MissingMediaSpotify({"playlist": []})
 
     with pytest.raises(SpotifyReconciliationError, match="without a media object") as error:
-        reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
+        strict_reconcile_playlist_items(client, "playlist", ("spotify:episode:new",))
 
     assert "prewrite" in str(error.value)
     assert "offset=0" in str(error.value)
@@ -477,7 +477,7 @@ def test_post_write_order_mismatch_fails_closed() -> None:
     client.corrupt_after_write.add("playlist")
 
     with pytest.raises(SpotifyReconciliationError, match="readback did not match"):
-        reconcile_playlist_items(
+        strict_reconcile_playlist_items(
             client,
             "playlist",
             ("spotify:episode:one", "spotify:episode:two"),
@@ -489,7 +489,7 @@ def test_desired_state_over_100_is_rejected_before_writing() -> None:
     desired = tuple(f"spotify:episode:{index}" for index in range(101))
 
     with pytest.raises(ValueError, match="limited to 100"):
-        reconcile_playlist_items(client, "playlist", desired)
+        strict_reconcile_playlist_items(client, "playlist", desired)
 
     assert client.reads == []
     assert client.writes == []
