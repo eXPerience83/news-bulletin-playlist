@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
@@ -264,9 +264,11 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
 def _preservation_event_name(error: str | None) -> str | None:
     if error is None:
         return None
-    if error.startswith(
-        "destination preserved because a Spotify matching repair was rejected by durable persistence"
-    ) or "temporally rejected matching repair" in error:
+    persistence_rejection = (
+        "destination preserved because a Spotify matching repair was rejected by "
+        "durable persistence"
+    )
+    if error.startswith(persistence_rejection) or "temporally rejected matching repair" in error:
         return "destination_preserved_matching_persistence_rejection"
     if error == "destination preserved because planner persistence is unavailable":
         return "destination_preserved_planner_persistence_unavailable"
