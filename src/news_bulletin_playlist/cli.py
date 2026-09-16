@@ -8,6 +8,9 @@ from pathlib import Path
 
 from news_bulletin_playlist import engine_runtime
 from news_bulletin_playlist.diagnostics_runtime import serve
+from news_bulletin_playlist.production_observability import (
+    ProductionInstrumentedEngineCycleRunner,
+)
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
@@ -34,13 +37,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _serve_with_soft_retention(*, host: str, port: int, data_dir: Path) -> int:
-    """Compose #181 into the production runtime without changing test/LAB engine defaults."""
+    """Compose #181 plus production-only observability into the runtime."""
     runtime_namespace = vars(engine_runtime)
     original_engine_runner = runtime_namespace["EngineRunner"]
+    original_instrumented_runner = runtime_namespace["InstrumentedEngineCycleRunner"]
     runtime_namespace["EngineRunner"] = SoftRetentionEngineRunner
+    runtime_namespace["InstrumentedEngineCycleRunner"] = ProductionInstrumentedEngineCycleRunner
     try:
         return serve(host=host, port=port, data_dir=data_dir)
     finally:
+        runtime_namespace["InstrumentedEngineCycleRunner"] = original_instrumented_runner
         runtime_namespace["EngineRunner"] = original_engine_runner
 
 
