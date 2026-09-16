@@ -321,6 +321,10 @@ class HealthHandler(BaseHTTPRequestHandler):
     timeout = 2.0
     admin_security: AdminSecurity | None = None
     spotify_auth: SpotifyAuthService | None = None
+    _content_security_policy = (
+        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+        "form-action 'self'; frame-ancestors 'none'"
+    )
 
     def _send_headers(
         self,
@@ -334,11 +338,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
-            "form-action 'self'; frame-ancestors 'none'",
-        )
+        self.send_header("Content-Security-Policy", self._content_security_policy)
         if extra_headers is not None:
             for name, value in extra_headers.items():
                 self.send_header(name, value)
