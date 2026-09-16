@@ -5,7 +5,7 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -225,24 +225,51 @@ class _CycleCatalogueCoordinator:
         self.client = client
         self.auth_context = auth_context
         self._cache: dict[tuple[str, str, str, int, int, int], object] = {}
+        self._positive_cache: dict[tuple[str, str, str, int, int, int], SpotifyCatalogueResult] = {}
         self._observations: dict[SourceId, _CatalogueObservation] = {}
 
     def get(self, source: SourceDefinition) -> tuple[SpotifyCatalogueResult, int]:
-        show_id = spotify_show_id(source)
-        key = (
-            show_id,
+        result, request_count, _ = self._get(source, required_uris=None)
+        return result, request_count
+
+    def get_for_uris(
+        self, source: SourceDefinition, required_uris: Collection[str]
+    ) -> tuple[SpotifyCatalogueResult, int, bool]:
+        required = frozenset(required_uris)
+        if not required:
+            raise ValueError("required_uris must not be empty")
+        return self._get(source, required_uris=required)
+
+    def _cache_key(self, source: SourceDefinition) -> tuple[str, str, str, int, int, int]:
+        return (
+            spotify_show_id(source),
             self.auth_context,
             "user-token/account",
             DEFAULT_PAGE_SIZE,
             DEFAULT_MAX_PAGES,
             _CATALOGUE_CONTRACT_VERSION,
         )
+
+    def _get(
+        self,
+        source: SourceDefinition,
+        *,
+        required_uris: frozenset[str] | None,
+    ) -> tuple[SpotifyCatalogueResult, int, bool]:
+        key = self._cache_key(source)
+        show_id = key[0]
         cached = self._cache.get(key)
         if isinstance(cached, Exception):
             raise cached
         if isinstance(cached, SpotifyCatalogueResult):
             self._record_observation(source.id, request_count=0, inspected=True)
-            return cached, 0
+            return cached, 0, True
+
+        if required_uris is not None:
+            positive = self._positive_cache.get(key)
+            if positive is not None and required_uris.issubset(positive.candidate_uris):
+                self._record_observation(source.id, request_count=0, inspected=True)
+                return positive, 0, False
 
         delegated_before = self._delegated_show_episodes_count()
         try:
@@ -251,6 +278,7 @@ class _CycleCatalogueCoordinator:
                 show_id,
                 page_size=DEFAULT_PAGE_SIZE,
                 max_pages=DEFAULT_MAX_PAGES,
+                required_uris=required_uris,
             )
         except (MatchResponseError, SpotifyApiError, SpotifyTransportError) as exc:
             self._record_observation(
@@ -264,8 +292,13 @@ class _CycleCatalogueCoordinator:
         if request_count is None:
             request_count = result.request_count
         self._record_observation(source.id, request_count=request_count, inspected=True)
-        self._cache[key] = result
-        return result, result.request_count
+
+        full_bounded_inspection = result.complete or result.request_count >= DEFAULT_MAX_PAGES
+        if full_bounded_inspection:
+            self._cache[key] = result
+        elif required_uris is not None:
+            self._positive_cache[key] = result
+        return result, request_count, full_bounded_inspection
 
     def observation(self, source_id: SourceId) -> _CatalogueObservation:
         return self._observations.get(source_id, _CatalogueObservation())
@@ -1859,6 +1892,9 @@ class EngineRunner:
         """Validate every mapping selected for a possible mutation, then rebuild desired."""
         sources = {source.id: source for source in required_sources(self.config)}
         catalogues: dict[SourceId, tuple[SpotifyCatalogueResult, int]] = {}
+        required_uris_by_source: dict[SourceId, set[str]] = {}
+        for item in desired.items:
+            required_uris_by_source.setdefault(item.source_id, set()).add(item.spotify_episode_uri)
         try:
             for item in desired.items:
                 source = sources.get(item.source_id)
@@ -1892,9 +1928,15 @@ class EngineRunner:
 
                 cached_catalogue = catalogues.get(source.id)
                 if cached_catalogue is None:
-                    cached_catalogue = catalogue_coordinator.get(source)
+                    catalogue, request_count, full_bounded_inspection = (
+                        catalogue_coordinator.get_for_uris(
+                            source, required_uris_by_source[source.id]
+                        )
+                    )
+                    cached_catalogue = (catalogue, request_count)
                     catalogues[source.id] = cached_catalogue
-                    self._observe_catalogue_inspection(source, observed_at)
+                    if full_bounded_inspection:
+                        self._observe_catalogue_inspection(source, observed_at)
                 catalogue, request_count = cached_catalogue
                 if item.spotify_episode_uri in catalogue.candidate_uris:
                     continue
