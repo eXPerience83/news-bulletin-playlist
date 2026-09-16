@@ -245,20 +245,16 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
             return None
 
     def _canonical_identity_snapshot(self) -> frozenset[tuple[str, str]] | None:
-        runtime = self._runtime_state()
-        if runtime is None:
+        store = getattr(self.runner, "store", None)
+        if store is None:
             return None
-        config, store, _journal = runtime
-        identities: set[tuple[str, str]] = set()
         try:
-            for source in config.sources:
-                identities.update(
-                    (str(edition.source_id), edition.source_native_id)
-                    for edition in store.list_editions(source_id=source.id)
-                )
+            return frozenset(
+                (str(edition.source_id), edition.source_native_id)
+                for edition in store.list_editions()
+            )
         except Exception:  # noqa: BLE001 - diagnostics must never fail the cycle
             return None
-        return frozenset(identities)
 
 
 def _preservation_event_name(error: str | None) -> str | None:
