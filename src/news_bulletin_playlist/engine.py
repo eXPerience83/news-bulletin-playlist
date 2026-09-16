@@ -2208,9 +2208,9 @@ class EngineRunner:
             cutoff = now - timedelta(hours=playlist.retention_hours)
             for source_id in playlist.source_selection.explicit:
                 for edition in self.store.list_editions(source_id=source_id):
-                    if edition.published_at < cutoff:
-                        break
-                    if edition.published_at <= now:
+                    # Playlist relevance follows the playlist's own temporal authority.
+                    # Canonical physical age is handled separately by SQLite via last_seen_at.
+                    if authoritative_playlist_time(edition, playlist.ordering) > cutoff:
                         protected.add(edition.identity)
         return protected
 
