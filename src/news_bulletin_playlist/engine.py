@@ -540,6 +540,7 @@ class EngineRunner:
             return self._finish_local_only_cycle(
                 started_at,
                 source_outcomes,
+                source_editions,
                 unsafe_source_ids,
                 persistence_blocked,
                 matching_now,
@@ -1377,6 +1378,7 @@ class EngineRunner:
         self,
         started_at: datetime,
         source_outcomes: dict[SourceId, SourceCycleOutcome],
+        source_editions: Mapping[SourceId, tuple[CanonicalEdition, ...]],
         unsafe_source_ids: set[SourceId],
         persistence_blocked: set[PlaylistId],
         now: datetime,
@@ -1387,7 +1389,7 @@ class EngineRunner:
                 current = source_outcomes.get(source.id)
                 if current is None:
                     continue
-                editions = self.store.list_editions(source_id=source.id)
+                editions = source_editions.get(source.id, ())
                 matched = sum(
                     self.store.get_spotify_episode_uri(edition.source_id, edition.source_native_id)
                     is not None
