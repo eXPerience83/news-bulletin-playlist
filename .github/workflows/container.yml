@@ -93,7 +93,7 @@ jobs:
           set -euo pipefail
 
           start_container() {
-            docker run --detach --rm \
+            docker run --detach \
               --name news-bulletin-playlist-ci \
               --read-only \
               --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
@@ -131,6 +131,7 @@ jobs:
           # Regression guard: the exact candidate must restart cleanly against the durable
           # database/schema it created on first boot. Keep the volume; replace only the process.
           docker stop news-bulletin-playlist-ci
+          docker rm news-bulletin-playlist-ci
           start_container
           wait_healthy
           curl --fail --silent --show-error http://127.0.0.1:18788/healthz | grep -q '"status":"ok"'
@@ -138,5 +139,5 @@ jobs:
       - name: Stop validation container
         if: always()
         run: |
-          docker stop news-bulletin-playlist-ci 2>/dev/null || true
+          docker rm --force news-bulletin-playlist-ci 2>/dev/null || true
           docker volume rm news-bulletin-ci-data 2>/dev/null || true
