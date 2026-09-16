@@ -2210,7 +2210,8 @@ class EngineRunner:
                 for edition in self.store.list_editions(source_id=source_id):
                     # Playlist relevance follows the playlist's own temporal authority.
                     # Canonical physical age is handled separately by SQLite via last_seen_at.
-                    if authoritative_playlist_time(edition, playlist.ordering) > cutoff:
+                    ordering_at = authoritative_playlist_time(edition, playlist.ordering)
+                    if cutoff < ordering_at <= now:
                         protected.add(edition.identity)
         return protected
 
