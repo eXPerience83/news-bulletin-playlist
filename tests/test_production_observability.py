@@ -13,6 +13,7 @@ from news_bulletin_playlist.engine import (
     SourceCycleOutcome,
     SourceMatchingDiagnostics,
 )
+from news_bulletin_playlist.engine_runtime import DEFAULT_CONFIG_FILENAME
 from news_bulletin_playlist.models import (
     AdapterId,
     CanonicalEdition,
@@ -90,11 +91,53 @@ def _edition(native_id: str) -> CanonicalEdition:
     )
 
 
+def _valid_config() -> str:
+    return """schema_version: 1
+sources:
+  - id: ser
+    display_name: Cadena SER
+    countries: [ES]
+    languages: [es]
+    timezone: Europe/Madrid
+    enabled: true
+    parser_id: ser
+    endpoint_url: https://example.test/ser.xml
+    external_references:
+      - system: spotify
+        resource_type: show
+        external_id: ser-show
+playlists:
+  - id: spain
+    display_name: Spain
+    description: test
+    countries: [ES]
+    languages: [es]
+    enabled: true
+    retention_hours: 48
+    source_selection:
+      explicit: [ser]
+    destination:
+      adapter_id: spotify
+      external_id: destination-spain
+"""
+
+
 @dataclass
 class _Runner:
     config: EngineConfig
     store: SQLiteStore
     planner_journal: SpotifyPlannerJournal
+    result: EngineCycleResult
+
+    def run_cycle(self) -> EngineCycleResult:
+        return self.result
+
+
+@dataclass
+class _ReloadingRunnerShape:
+    data_dir: Path
+    environ: dict[str, str]
+    store: SQLiteStore
     result: EngineCycleResult
 
     def run_cycle(self) -> EngineCycleResult:
@@ -177,6 +220,52 @@ def test_production_diagnostics_expose_recovery_backoff_barrier_and_untracked_st
     assert by_name["matching_persistence_rejection_barrier_active"].details == {"total": 1}
     assert by_name["canonical_editions_pruned"].details == {"total": 0}
     assert "matching_recovery_due_active" not in by_name
+
+
+def test_production_diagnostics_load_config_from_reloading_runner_shape(tmp_path: Path) -> None:
+    (tmp_path / DEFAULT_CONFIG_FILENAME).write_text(_valid_config(), encoding="utf-8")
+    store = SQLiteStore(tmp_path / "engine.sqlite3")
+    store.initialize()
+    edition = _edition("untracked-production")
+    store.upsert_editions((edition,), observed_at=NOW)
+    assert store.set_match_state(
+        edition.source_id,
+        edition.source_native_id,
+        status=MatchStatus.MATCHED,
+        spotify_episode_uri=URI,
+        spotify_duration_seconds=60,
+        diagnostics="matched",
+        updated_at=NOW,
+    )
+    result = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW + timedelta(minutes=1),
+        ok=True,
+        sources=(
+            SourceCycleOutcome(
+                source_id=SourceId("ser"),
+                collection_ok=True,
+                matching_ok=True,
+                edition_count=1,
+                matched_count=1,
+                last_success_at=NOW,
+            ),
+        ),
+        playlists=(),
+    )
+    diagnostics, diagnostic_store = _diagnostics(tmp_path)
+    runner = ProductionInstrumentedEngineCycleRunner(
+        _ReloadingRunnerShape(tmp_path, {}, store, result),
+        diagnostics,
+        clock=lambda: NOW,
+    )
+
+    runner.run_cycle()
+
+    events = diagnostic_store.list_events(limit=50)
+    untracked = next(event for event in events if event.event_name == "matching_recovery_untracked")
+    assert untracked.source_id == "ser"
+    assert untracked.details == {"total": 1}
 
 
 def test_production_diagnostics_make_soft_retention_and_barrier_preservation_explicit(
