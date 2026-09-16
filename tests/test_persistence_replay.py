@@ -27,7 +27,7 @@ def test_stale_replays_do_not_regress_canonical_match_or_latest_states(tmp_path:
     store.upsert_editions((older,), observed_at=base + timedelta(minutes=10))
     assert store.get_edition(SourceId("rne"), "rne-asset-1") == newer
 
-    store.set_match_state(
+    assert store.set_match_state(
         SourceId("rne"),
         "rne-asset-1",
         status=MatchStatus.MATCHED,
@@ -35,7 +35,7 @@ def test_stale_replays_do_not_regress_canonical_match_or_latest_states(tmp_path:
         diagnostics="newer match",
         updated_at=base + timedelta(minutes=20),
     )
-    store.set_match_state(
+    assert not store.set_match_state(
         SourceId("rne"),
         "rne-asset-1",
         status=MatchStatus.PENDING,

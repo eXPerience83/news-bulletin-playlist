@@ -24,6 +24,7 @@ from news_bulletin_playlist.desired_state import (
     DesiredPlaylistState,
     DesiredStateError,
     DurationEligibilityDecision,
+    authoritative_playlist_time,
 )
 from news_bulletin_playlist.models import (
     CanonicalEdition,
@@ -475,6 +476,7 @@ class EngineRunner:
         source_outcomes: dict[SourceId, SourceCycleOutcome] = {}
         playlist_outcomes: list[PlaylistCycleOutcome] = []
         unsafe_source_ids: set[SourceId] = set()
+        persistence_rejected_source_ids: set[SourceId] = set()
         matching_evaluated_counts: dict[SourceId, int] = {}
 
         try:
@@ -609,7 +611,15 @@ class EngineRunner:
                     matched_count = sum(
                         outcome.spotify_episode_uri is not None for outcome in match_result.outcomes
                     )
-                    self._observe_matching_result(source, match_result, matching_now)
+                    self._observe_matching_result(
+                        source,
+                        match_result,
+                        matching_now,
+                        evaluation_intents=plan.evaluation_intents,
+                    )
+                    if match_result.persistence_rejected:
+                        persistence_rejected_source_ids.add(source.id)
+                        unsafe_source_ids.add(source.id)
                 else:
                     matched_count = 0
                     if catalogue is not None:
@@ -673,10 +683,18 @@ class EngineRunner:
             playlist_started_at = _as_utc(self.clock())
             desired_count = 0
             request_diagnostics: dict[str, Any] = {}
+            rejected_for_playlist = tuple(
+                source_id
+                for source_id in playlist.source_selection.explicit
+                if source_id in persistence_rejected_source_ids
+                or self._source_has_persistence_rejection_barrier(
+                    source_id, playlist, playlist_started_at
+                )
+            )
             unsafe_for_playlist = tuple(
                 source_id
                 for source_id in playlist.source_selection.explicit
-                if source_id in unsafe_source_ids
+                if source_id in unsafe_source_ids or source_id in rejected_for_playlist
             )
             if playlist.id in persistence_blocked:
                 playlist_started_at = _as_utc(self.clock())
@@ -715,11 +733,18 @@ class EngineRunner:
                         desired_count = len(desired.items)
                     except DesiredStateError:
                         desired_count = 0
-                    reason = (
-                        "destination preserved because no last-known-good state is available "
-                        "for source(s): "
-                        + ", ".join(str(source_id) for source_id in unsafe_for_playlist)
-                    )
+                    if rejected_for_playlist:
+                        reason = (
+                            "destination preserved because a Spotify matching repair was "
+                            "rejected by durable persistence for source(s): "
+                            + ", ".join(str(source_id) for source_id in rejected_for_playlist)
+                        )
+                    else:
+                        reason = (
+                            "destination preserved because no last-known-good state is available "
+                            "for source(s): "
+                            + ", ".join(str(source_id) for source_id in unsafe_for_playlist)
+                        )
                     playlist_finished_at = _as_utc(self.clock())
                     self.store.record_playlist_run(
                         playlist.id,
@@ -1516,12 +1541,32 @@ class EngineRunner:
                         if reason is PlannerReason.INPUT_CHANGED:
                             intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
                             input_changed_count += 1
-                        elif reason is not None:
+                        elif reason in {
+                            PlannerReason.MISSING_EVIDENCE,
+                            PlannerReason.RETRY_DUE,
+                        }:
                             intents[edition.identity] = MatchEvaluationIntent.EVIDENCE_RECOVERY
                             evidence_recovery_count += 1
                     else:
-                        intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                        missing_evidence_count += 1
+                        retry = self.planner_journal.get_unresolved(
+                            str(source.id), edition.source_native_id
+                        )
+                        reason = unresolved_planning_reason(
+                            retry,
+                            input_fingerprint=fingerprint,
+                            now=now,
+                        )
+                        if reason is PlannerReason.MISSING_EVIDENCE:
+                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                            missing_evidence_count += 1
+                        elif reason is PlannerReason.INPUT_CHANGED:
+                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                            input_changed_count += 1
+                        elif reason is PlannerReason.RETRY_DUE:
+                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                            retry_due_count += 1
+                        elif reason is None:
+                            coalescing_candidates.append(edition.identity)
                     continue
                 if prior_input.input_fingerprint != fingerprint:
                     intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
@@ -1655,6 +1700,49 @@ class EngineRunner:
             source_plans[source.id] = self._source_matching_plan(source, editions, now)
         return source_editions, source_plans
 
+    def _edition_has_persistence_rejection_barrier(
+        self,
+        source: SourceDefinition,
+        edition: CanonicalEdition,
+    ) -> bool:
+        """Return whether a rejected transition still protects the current durable match."""
+        barrier = self.planner_journal.get_persistence_rejection_barrier(
+            str(source.id), edition.source_native_id
+        )
+        if barrier is None:
+            return False
+        match = self.store.get_match_state(source.id, edition.source_native_id)
+        if barrier.protects(match):
+            return True
+        # The durable match advanced since the rejection (for example an accepted repair before
+        # a crash could clear planner state). The old barrier no longer protects that new row.
+        self.planner_journal.clear_persistence_rejection_barrier(
+            str(source.id), edition.source_native_id
+        )
+        return False
+
+    def _source_has_persistence_rejection_barrier(
+        self,
+        source_id: SourceId,
+        playlist: PlaylistDefinition,
+        now: datetime,
+    ) -> bool:
+        source = next(
+            (candidate for candidate in required_sources(self.config) if candidate.id == source_id),
+            None,
+        )
+        if source is None:
+            return False
+        retention_cutoff = now - timedelta(hours=playlist.retention_hours)
+        return any(
+            # Safety follows this destination's retention authority, not the matching window.
+            # A corrected pubDate must not hide a still-relevant semantic edition. Future
+            # editions also remain protected across rollback, even with an empty desired state.
+            authoritative_playlist_time(edition, playlist.ordering) > retention_cutoff
+            and self._edition_has_persistence_rejection_barrier(source, edition)
+            for edition in self.store.list_editions(source_id=source_id)
+        )
+
     def _plan_destinations(
         self, now: datetime, unsafe_source_ids: set[SourceId]
     ) -> tuple[set[PlaylistId], set[PlaylistId]]:
@@ -1776,6 +1864,17 @@ class EngineRunner:
                     raise SpotifyReconciliationError(
                         "Spotify prewrite validation could not resolve a configured source"
                     )
+                edition = self.store.get_edition(item.source_id, item.source_native_id)
+                if edition is None:
+                    raise SpotifyReconciliationError(
+                        "Spotify prewrite validation lost its canonical edition; "
+                        "destination preserved"
+                    )
+                if self._edition_has_persistence_rejection_barrier(source, edition):
+                    raise SpotifyReconciliationError(
+                        "Spotify prewrite validation found a temporally rejected matching repair; "
+                        "destination preserved"
+                    )
                 current = self.store.get_match_state(item.source_id, item.source_native_id)
                 if (
                     current is None
@@ -1803,12 +1902,6 @@ class EngineRunner:
                         "destination preserved"
                     )
 
-                edition = self.store.get_edition(item.source_id, item.source_native_id)
-                if edition is None:
-                    raise SpotifyReconciliationError(
-                        "Spotify prewrite validation lost its canonical edition; "
-                        "destination preserved"
-                    )
                 result = match_source_editions(
                     catalogue_coordinator.client,
                     self.store,
@@ -1827,7 +1920,19 @@ class EngineRunner:
                         source.id,
                     ),
                 )
-                self._observe_matching_result(source, result, observed_at)
+                self._observe_matching_result(
+                    source,
+                    result,
+                    observed_at,
+                    evaluation_intents={
+                        edition.identity: MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    },
+                )
+                if result.persistence_rejected:
+                    raise SpotifyReconciliationError(
+                        "Spotify prewrite validation could not durably apply matching evidence; "
+                        "destination preserved"
+                    )
 
             return build_desired_state_from_store(
                 self.store,
@@ -1845,6 +1950,8 @@ class EngineRunner:
         source: SourceDefinition,
         result: SourceMatchResult,
         observed_at: datetime,
+        *,
+        evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent] | None = None,
     ) -> None:
         try:
             if self._shadow_auth_context is None:
@@ -1855,6 +1962,70 @@ class EngineRunner:
             for outcome in result.outcomes:
                 edition = outcome.edition
                 input_fingerprint = matching_input_fingerprint(source, edition)
+                explicit_evaluation = bool(
+                    evaluation_intents is not None and edition.identity in evaluation_intents
+                )
+                rejection_barrier = self._edition_has_persistence_rejection_barrier(source, edition)
+                shadow_matched_rejection_barrier = bool(
+                    rejection_barrier
+                    and outcome.status is MatchStatus.MATCHED
+                    and not explicit_evaluation
+                )
+                if outcome.persistence_rejected:
+                    # A newer durable match rejected this wall-clock observation. Persist a
+                    # dedicated safety barrier before touching retry scheduling: fingerprints and
+                    # retry timestamps may legitimately change while the rejected transition is
+                    # still unresolved.
+                    durable_match = self.store.get_match_state(
+                        edition.source_id, edition.source_native_id
+                    )
+                    if durable_match is None:
+                        raise PersistenceError(
+                            "rejected Spotify match repair has no durable state to protect"
+                        )
+                    self.planner_journal.record_persistence_rejection_barrier(
+                        durable_match, rejected_at=observed_at
+                    )
+                    self.planner_journal.clear_match_input(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                    if shadow_matched_rejection_barrier:
+                        # Another edition may have paid for this catalogue and caused a fresh
+                        # complete-absence check for this one. That incidental rejection must not
+                        # rebase the already-durable repair deadline.
+                        continue
+                    self.planner_journal.clear_matched_recovery(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                    self.planner_journal.clear_unresolved(
+                        str(edition.source_id), edition.source_native_id
+                    )
+                    if outcome.status is MatchStatus.MATCHED:
+                        self.planner_journal.record_matched_recovery(
+                            source_id=str(edition.source_id),
+                            source_native_id=edition.source_native_id,
+                            input_fingerprint=input_fingerprint,
+                            attempted_at=observed_at,
+                        )
+                    else:
+                        self.planner_journal.record_unresolved(
+                            source_id=str(edition.source_id),
+                            source_native_id=edition.source_native_id,
+                            input_fingerprint=input_fingerprint,
+                            status=outcome.status,
+                            attempted_at=observed_at,
+                        )
+                    continue
+                if shadow_matched_rejection_barrier:
+                    # Shadow qualification may invalidate positive evidence, but only an explicit
+                    # evaluation may resolve or replace a temporally rejected repair. In
+                    # particular, an exact shadow result must not turn scheduling metadata into
+                    # authority or remove the destination barrier.
+                    if outcome.planner_input_evidence_qualified is False:
+                        self.planner_journal.clear_match_input(
+                            str(edition.source_id), edition.source_native_id
+                        )
+                    continue
                 if outcome.planner_input_evidence_qualified is True:
                     self.planner_journal.observe_match_input(
                         source_id=str(edition.source_id),
@@ -1865,13 +2036,25 @@ class EngineRunner:
                     self.planner_journal.clear_matched_recovery(
                         str(edition.source_id), edition.source_native_id
                     )
+                    if explicit_evaluation and rejection_barrier:
+                        # A conclusive explicit evaluation is authority to resolve the barrier.
+                        # Shadow observations never take this path. Accepted state transitions also
+                        # make the protected durable-row snapshot differ and are cleared lazily.
+                        self.planner_journal.clear_persistence_rejection_barrier(
+                            str(edition.source_id), edition.source_native_id
+                        )
                 elif outcome.planner_input_evidence_qualified is False:
                     self.planner_journal.clear_match_input(
                         str(edition.source_id), edition.source_native_id
                     )
-                    self.planner_journal.clear_matched_recovery(
-                        str(edition.source_id), edition.source_native_id
-                    )
+                    # A shadow-only contradiction can invalidate positive match-input evidence,
+                    # but it did not attempt the repair whose temporal rejection created the
+                    # durable destination barrier. Preserve that barrier until an explicit
+                    # evaluation resolves it.
+                    if explicit_evaluation or not rejection_barrier:
+                        self.planner_journal.clear_matched_recovery(
+                            str(edition.source_id), edition.source_native_id
+                        )
                 if outcome.status is MatchStatus.MATCHED:
                     self.planner_journal.clear_unresolved(
                         str(edition.source_id), edition.source_native_id
@@ -1879,17 +2062,27 @@ class EngineRunner:
                     if (
                         result.catalogue_inspected
                         and outcome.planner_input_evidence_qualified is None
-                        and self.planner_journal.get_match_input(
+                    ):
+                        prior_input = self.planner_journal.get_match_input(
                             str(edition.source_id), edition.source_native_id
                         )
-                        is None
-                    ):
-                        self.planner_journal.record_matched_recovery(
-                            source_id=str(edition.source_id),
-                            source_native_id=edition.source_native_id,
-                            input_fingerprint=input_fingerprint,
-                            attempted_at=observed_at,
-                        )
+                        if (
+                            prior_input is not None
+                            and prior_input.input_fingerprint != input_fingerprint
+                        ):
+                            self.planner_journal.clear_match_input(
+                                str(edition.source_id), edition.source_native_id
+                            )
+                            prior_input = None
+                        if prior_input is None and not (
+                            rejection_barrier and not explicit_evaluation
+                        ):
+                            self.planner_journal.record_matched_recovery(
+                                source_id=str(edition.source_id),
+                                source_native_id=edition.source_native_id,
+                                input_fingerprint=input_fingerprint,
+                                attempted_at=observed_at,
+                            )
                 else:
                     self.planner_journal.clear_matched_recovery(
                         str(edition.source_id), edition.source_native_id
@@ -2015,9 +2208,10 @@ class EngineRunner:
             cutoff = now - timedelta(hours=playlist.retention_hours)
             for source_id in playlist.source_selection.explicit:
                 for edition in self.store.list_editions(source_id=source_id):
-                    if edition.published_at < cutoff:
-                        break
-                    if edition.published_at <= now:
+                    # Playlist relevance follows the playlist's own temporal authority.
+                    # Canonical physical age is handled separately by SQLite via last_seen_at.
+                    ordering_at = authoritative_playlist_time(edition, playlist.ordering)
+                    if cutoff < ordering_at <= now:
                         protected.add(edition.identity)
         return protected
 

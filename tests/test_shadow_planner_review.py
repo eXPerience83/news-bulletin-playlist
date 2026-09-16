@@ -196,13 +196,15 @@ def test_failed_semantic_disqualification_is_shadow_only(tmp_path, monkeypatch, 
     first_trace = tuple(provider.trace)
     original = provider.show_episodes
 
-    def ambiguous(*args, **kwargs):
+    def contradicted(*args, **kwargs):
         page = original(*args, **kwargs)
-        page["items"].append({**page["items"][0], "uri": "spotify:episode:" + "2" * 22})
+        replacement = {**page["items"][0], "uri": "spotify:episode:" + "2" * 22}
+        page["items"][0]["name"] = "unrelated"
+        page["items"].append(replacement)
         page["total"] = len(page["items"])
         return page
 
-    provider.show_episodes = ambiguous
+    provider.show_episodes = contradicted
     runner.clock = lambda: NOW + timedelta(hours=6)
     monkeypatch.setattr(
         runner.planner_journal,
@@ -416,15 +418,21 @@ def test_cached_input_requires_pure_semantic_qualification(tmp_path, change):
     calls = provider.show_calls
     result = match_source_editions(provider, runner.store, _source(), [edition], now=NOW)
     outcome = result.outcomes[0]
+    expected_qualification = {
+        "same": True,
+        "time": False,
+        "ambiguous": None,
+        "different": False,
+    }[change]
     assert outcome.from_cache and outcome.spotify_episode_uri == SER_URI
-    assert outcome.planner_input_evidence_qualified == (change == "same")
+    assert outcome.planner_input_evidence_qualified is expected_qualification
     assert provider.show_calls == calls + 1
     assert runner.store.get_match_state(edition.source_id, edition.source_native_id) == before
     runner._observe_matching_result(_source(), result, NOW)
     persisted = runner.planner_journal.get_match_input(
         str(edition.source_id), edition.source_native_id
     )
-    if change == "same":
+    if change in {"same", "ambiguous"}:
         assert persisted is not None
         assert persisted.input_fingerprint == matching_input_fingerprint(_source(), edition)
     else:

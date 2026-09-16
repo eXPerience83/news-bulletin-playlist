@@ -11,8 +11,11 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from news_bulletin_playlist.models import CanonicalEdition, SourceDefinition, SourceId
-from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
+from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore
 from news_bulletin_playlist.registry import get_title_parser
+from news_bulletin_playlist.spotify.matching_policy import (
+    duration_disambiguation_tolerance_seconds,
+)
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 
 DEFAULT_PAGE_SIZE = 50
@@ -66,9 +69,13 @@ class MatchOutcome:
     diagnostics: str
     spotify_duration_seconds: int | None = None
     from_cache: bool = False
-    # None means no semantic evaluation was possible in this call. False means the current
-    # catalogue actively disproved qualification and prior planner evidence must be cleared.
+    # None means current evidence is inconclusive. False means the current catalogue actively
+    # contradicts the persisted mapping and prior planner evidence must be cleared.
     planner_input_evidence_qualified: bool | None = None
+    # True means a semantically-authoritative transition was attempted but SQLite's
+    # monotonic updated_at guard rejected it. The returned mapping remains aligned with
+    # durable state and Engine must keep planner evidence and destination writes fail-closed.
+    persistence_rejected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +86,10 @@ class SourceMatchResult:
     catalogue_complete: bool = False
     catalogue_candidate_count: int = 0
     catalogue_inspected: bool = False
+
+    @property
+    def persistence_rejected(self) -> bool:
+        return any(outcome.persistence_rejected for outcome in self.outcomes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +131,13 @@ class _CandidateEvaluation:
     release_delay_days: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _CachedMappingAssessment:
+    evaluated: MatchOutcome
+    qualification: bool | None
+    recovery_repair_allowed: bool
+
+
 def match_source_editions(
     client: SpotifyCatalogClient,
     store: SQLiteStore,
@@ -149,6 +167,8 @@ def match_source_editions(
     unresolved: list[tuple[int, CanonicalEdition]] = []
     selected = None if evaluation_intents is None else frozenset(evaluation_intents)
     notified_fresh_indices: set[int] = set()
+    duration_tolerance = duration_disambiguation_tolerance_seconds(source)
+    qualification_overrides: dict[int, bool | None] = {}
 
     for index, edition in enumerate(editions):
         if edition.source_id != source.id:
@@ -204,7 +224,7 @@ def match_source_editions(
             if uri is None or uri in candidate_uris:
                 continue
             diagnostics = "persisted Spotify episode is absent from the complete show catalogue"
-            store.set_match_state(
+            applied = store.set_match_state(
                 cached.edition.source_id,
                 cached.edition.source_native_id,
                 status=MatchStatus.PENDING,
@@ -213,6 +233,13 @@ def match_source_editions(
                 diagnostics=diagnostics,
                 updated_at=observed_at,
             )
+            if not applied:
+                # A complete catalogue positively contradicted the durable mapping, but a newer
+                # durable row won the temporal ordering guard. Keep the public result aligned with
+                # SQLite and make the rejection explicit so Engine can block writes and back off.
+                outcomes[index] = replace(cached, persistence_rejected=True)
+                qualification_overrides[index] = False
+                continue
             outcomes[index] = MatchOutcome(
                 edition=cached.edition,
                 status=MatchStatus.PENDING,
@@ -231,6 +258,7 @@ def match_source_editions(
             evaluations,
             candidate_count=len(candidates),
             catalogue_calls=catalogue_calls,
+            duration_tolerance_seconds=duration_tolerance,
         )
         _notify_fresh_evaluation(
             on_fresh_evaluation,
@@ -238,7 +266,7 @@ def match_source_editions(
             index=index,
             notified_indices=notified_fresh_indices,
         )
-        store.set_match_state(
+        applied = store.set_match_state(
             edition.source_id,
             edition.source_native_id,
             status=outcome.status,
@@ -247,31 +275,61 @@ def match_source_editions(
             diagnostics=outcome.diagnostics,
             updated_at=observed_at,
         )
+        if not applied:
+            durable = _persisted_outcome(store, edition, now=observed_at)
+            if durable is None:
+                raise PersistenceError(
+                    "Spotify match write was rejected by temporal ordering and durable state "
+                    "cannot be safely reused"
+                )
+            outcomes[index] = replace(durable, persistence_rejected=True)
+            qualification_overrides[index] = None
+            continue
         outcomes[index] = outcome
 
     if evaluation_intents is not None:
         for index, value in enumerate(outcomes):
             outcome = _require_outcome(value)
+            intent = evaluation_intents.get(outcome.edition.identity)
             if (
-                outcome.status is not MatchStatus.MATCHED
-                or evaluation_intents.get(outcome.edition.identity)
-                is not MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                not outcome.from_cache
+                or outcome.status is not MatchStatus.MATCHED
+                or intent
+                not in {
+                    MatchEvaluationIntent.SEMANTIC_REEVALUATION,
+                    MatchEvaluationIntent.EVIDENCE_RECOVERY,
+                }
                 or outcome.spotify_episode_uri not in candidate_uris
             ):
                 continue
-            evaluated = _resolve_outcome(
-                outcome.edition,
-                tuple(_evaluate_candidate(source, outcome.edition, item) for item in candidates),
+            evaluations = tuple(
+                _evaluate_candidate(source, outcome.edition, item) for item in candidates
+            )
+            assessment = _assess_cached_mapping(
+                outcome,
+                evaluations,
                 candidate_count=len(candidates),
                 catalogue_calls=catalogue_calls,
+                duration_tolerance_seconds=duration_tolerance,
             )
             _notify_fresh_evaluation(
                 on_fresh_evaluation,
-                evaluated,
+                assessment.evaluated,
                 index=index,
                 notified_indices=notified_fresh_indices,
             )
-            store.set_match_state(
+            if assessment.qualification is True:
+                qualification_overrides[index] = True
+                continue
+            if assessment.qualification is None and not (
+                intent is MatchEvaluationIntent.EVIDENCE_RECOVERY
+                and assessment.recovery_repair_allowed
+            ):
+                qualification_overrides[index] = None
+                continue
+
+            evaluated = assessment.evaluated
+            applied = store.set_match_state(
                 outcome.edition.source_id,
                 outcome.edition.source_native_id,
                 status=evaluated.status,
@@ -280,14 +338,24 @@ def match_source_editions(
                 diagnostics=evaluated.diagnostics,
                 updated_at=observed_at,
             )
+            if not applied:
+                # The durable row is newer than this runner observation (for example after a
+                # clock rollback). Never publish a fresh repaired outcome that SQLite rejected:
+                # planner evidence must remain fail-closed against the mapping still on disk.
+                qualification_overrides[index] = assessment.qualification
+                outcomes[index] = replace(outcome, persistence_rejected=True)
+                continue
             outcomes[index] = evaluated
 
     # Shadow-only semantic qualification. Reuse the already-fetched candidates and the
-    # same pure evaluator; never modify the production mapping or issue another request.
+    # same pure evaluator; never issue another request. Any conclusive production repair from
+    # an explicit recovery intent has already happened above using this same catalogue.
     for index, value in enumerate(outcomes):
         outcome = _require_outcome(value)
         qualified: bool | None = None
-        if not outcome.from_cache:
+        if index in qualification_overrides:
+            qualified = qualification_overrides[index]
+        elif not outcome.from_cache:
             qualified = True
         elif outcome.status is MatchStatus.MATCHED and candidates:
             if not catalogue.complete and outcome.spotify_episode_uri not in candidate_uris:
@@ -296,19 +364,15 @@ def match_source_editions(
                 qualified = None
             else:
                 try:
-                    evaluated = _resolve_outcome(
-                        outcome.edition,
-                        tuple(
-                            _evaluate_candidate(source, outcome.edition, item)
-                            for item in candidates
-                        ),
+                    evaluations = tuple(
+                        _evaluate_candidate(source, outcome.edition, item) for item in candidates
+                    )
+                    qualified = _qualify_cached_mapping(
+                        outcome,
+                        evaluations,
                         candidate_count=len(candidates),
                         catalogue_calls=catalogue_calls,
-                    )
-                    qualified = (
-                        evaluated.status is MatchStatus.MATCHED
-                        and evaluated.spotify_episode_uri == outcome.spotify_episode_uri
-                        and evaluated.spotify_duration_seconds == outcome.spotify_duration_seconds
+                        duration_tolerance_seconds=duration_tolerance,
                     )
                 except Exception:
                     # Failure of optional shadow evaluation is inconclusive, not contradiction.
@@ -323,6 +387,74 @@ def match_source_editions(
         catalogue_candidate_count=len(candidates),
         catalogue_inspected=True,
     )
+
+
+def _assess_cached_mapping(
+    outcome: MatchOutcome,
+    evaluations: Sequence[_CandidateEvaluation],
+    *,
+    candidate_count: int,
+    catalogue_calls: int,
+    duration_tolerance_seconds: int | None,
+) -> _CachedMappingAssessment:
+    """Classify one cached mapping once for production repair and planner evidence."""
+    evaluated = _resolve_outcome(
+        outcome.edition,
+        evaluations,
+        candidate_count=candidate_count,
+        catalogue_calls=catalogue_calls,
+        duration_tolerance_seconds=duration_tolerance_seconds,
+    )
+    cached_uri = outcome.spotify_episode_uri
+    if cached_uri is None:
+        return _CachedMappingAssessment(evaluated, False, False)
+
+    cached_evaluation = next(
+        (evaluation for evaluation in evaluations if evaluation.candidate.uri == cached_uri),
+        None,
+    )
+    if cached_evaluation is None:
+        # A bounded catalogue may simply not contain the durable URI. Absence handling is
+        # authoritative only in the existing complete/non-empty catalogue path above.
+        return _CachedMappingAssessment(evaluated, None, False)
+    if not cached_evaluation.matched:
+        # Positive semantic contradiction of the durable mapping. The already-paid catalogue may
+        # replace it with the best fresh state, including PENDING/AMBIGUOUS when no replacement is
+        # uniquely established.
+        return _CachedMappingAssessment(evaluated, False, True)
+    if evaluated.status is not MatchStatus.MATCHED:
+        # The durable URI is still viable, but uniqueness has been lost. Preserve it.
+        return _CachedMappingAssessment(evaluated, None, False)
+    if evaluated.spotify_episode_uri != cached_uri:
+        # Current matching rules uniquely prefer another candidate.
+        return _CachedMappingAssessment(evaluated, False, True)
+    if evaluated.spotify_duration_seconds == outcome.spotify_duration_seconds:
+        return _CachedMappingAssessment(evaluated, True, False)
+    if evaluated.spotify_duration_seconds is None:
+        # Missing provider metadata is not a conclusive metadata update and must never erase a
+        # known durable duration.
+        return _CachedMappingAssessment(evaluated, None, False)
+    # Same uniquely-valid URI with a newly known duration. Only explicit evidence recovery may
+    # refresh the durable metadata in-place; ordinary semantic reevaluation remains inconclusive.
+    return _CachedMappingAssessment(evaluated, None, True)
+
+
+def _qualify_cached_mapping(
+    outcome: MatchOutcome,
+    evaluations: Sequence[_CandidateEvaluation],
+    *,
+    candidate_count: int,
+    catalogue_calls: int,
+    duration_tolerance_seconds: int | None,
+) -> bool | None:
+    """Return planner qualification from the shared cached-mapping assessment."""
+    return _assess_cached_mapping(
+        outcome,
+        evaluations,
+        candidate_count=candidate_count,
+        catalogue_calls=catalogue_calls,
+        duration_tolerance_seconds=duration_tolerance_seconds,
+    ).qualification
 
 
 def _notify_fresh_evaluation(
@@ -356,7 +488,7 @@ def _cached_outcome(
     if state.status is MatchStatus.MATCHED and state.spotify_episode_uri:
         if not is_spotify_episode_uri(state.spotify_episode_uri):
             diagnostics = "persisted Spotify mapping contained an invalid episode URI"
-            store.set_match_state(
+            applied = store.set_match_state(
                 edition.source_id,
                 edition.source_native_id,
                 status=MatchStatus.PENDING,
@@ -365,6 +497,10 @@ def _cached_outcome(
                 diagnostics=diagnostics,
                 updated_at=now,
             )
+            if not applied:
+                raise PersistenceError(
+                    "invalid persisted Spotify mapping could not be durably invalidated"
+                )
             return None
         # Schema-v2 matches predate durable destination duration. Refresh those
         # mappings once instead of treating unknown duration as eligibility proof.
@@ -679,14 +815,37 @@ def _resolve_outcome(
     *,
     candidate_count: int,
     catalogue_calls: int,
+    duration_tolerance_seconds: int | None,
 ) -> MatchOutcome:
     viable = tuple(evaluation for evaluation in evaluations if evaluation.matched)
+    original_viable_count = len(viable)
+    duration_disambiguated = False
+
+    if len(viable) > 1:
+        duration_choice = _duration_disambiguation_choice(
+            edition,
+            viable,
+            duration_tolerance_seconds=duration_tolerance_seconds,
+        )
+        if duration_choice is not None:
+            viable = (duration_choice,)
+            duration_disambiguated = True
 
     if len(viable) == 1:
         evaluation = viable[0]
         candidate = evaluation.candidate
-        duration_detail = _duration_diagnostic(edition, candidate)
+        duration_detail = _duration_diagnostic(
+            edition,
+            candidate,
+            authoritative=duration_disambiguated,
+        )
         release_detail = _release_delay_diagnostic(evaluation)
+        disambiguation_detail = (
+            f"; duration disambiguated 1 of {original_viable_count} viable candidate(s) "
+            f"within ±{duration_tolerance_seconds}s"
+            if duration_disambiguated and duration_tolerance_seconds is not None
+            else ""
+        )
         return MatchOutcome(
             edition=edition,
             status=MatchStatus.MATCHED,
@@ -694,7 +853,7 @@ def _resolve_outcome(
             spotify_duration_seconds=candidate.duration_seconds,
             diagnostics=(
                 f"matched 1 of {candidate_count} candidate(s) in {catalogue_calls} call(s)"
-                f"{release_detail}{duration_detail}"
+                f"{release_detail}{disambiguation_detail}{duration_detail}"
             ),
         )
     if len(viable) > 1:
@@ -726,6 +885,28 @@ def _resolve_outcome(
     )
 
 
+def _duration_disambiguation_choice(
+    edition: CanonicalEdition,
+    viable: Sequence[_CandidateEvaluation],
+    *,
+    duration_tolerance_seconds: int | None,
+) -> _CandidateEvaluation | None:
+    if duration_tolerance_seconds is None or edition.duration_seconds is None:
+        return None
+    if any(evaluation.candidate.duration_seconds is None for evaluation in viable):
+        return None
+    within_tolerance = tuple(
+        evaluation
+        for evaluation in viable
+        if evaluation.candidate.duration_seconds is not None
+        and abs(edition.duration_seconds - evaluation.candidate.duration_seconds)
+        <= duration_tolerance_seconds
+    )
+    if len(within_tolerance) != 1:
+        return None
+    return within_tolerance[0]
+
+
 def _release_delay_diagnostic(evaluation: _CandidateEvaluation) -> str:
     if evaluation.reason != "delayed_release_matched":
         return ""
@@ -746,11 +927,14 @@ def _rejection_diagnostic(evaluations: Sequence[_CandidateEvaluation]) -> str:
 def _duration_diagnostic(
     edition: CanonicalEdition,
     candidate: _SpotifyEpisodeCandidate,
+    *,
+    authoritative: bool = False,
 ) -> str:
     if edition.duration_seconds is None or candidate.duration_seconds is None:
         return ""
     delta = abs(edition.duration_seconds - candidate.duration_seconds)
-    return f"; duration delta={delta}s (diagnostic only)"
+    qualifier = "" if authoritative else " (diagnostic only)"
+    return f"; duration delta={delta}s{qualifier}"
 
 
 def _normalize_title(value: str) -> str:

@@ -14,7 +14,15 @@ from types import TracebackType
 from typing import Literal
 
 from news_bulletin_playlist.models import CanonicalEdition, PlaylistDefinition, SourceDefinition
-from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore
+from news_bulletin_playlist.persistence import (
+    EditionMatch,
+    MatchStatus,
+    PersistenceError,
+    SQLiteStore,
+)
+from news_bulletin_playlist.spotify.matching_policy import (
+    duration_disambiguation_tolerance_seconds,
+)
 
 AUDIT_INTERVAL = timedelta(hours=6)
 _FINGERPRINT_VERSION = 1
@@ -124,6 +132,31 @@ class MatchedRecoveryState:
     first_attempt_at: datetime
     last_attempt_at: datetime
     next_retry_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PersistenceRejectionBarrierState:
+    """Durable destination-safety barrier for a match transition SQLite rejected."""
+
+    source_id: str
+    source_native_id: str
+    protected_status: MatchStatus
+    protected_spotify_episode_uri: str | None
+    protected_spotify_duration_seconds: int | None
+    protected_match_updated_at: datetime
+    first_rejected_at: datetime
+    last_rejected_at: datetime
+
+    def protects(self, match: EditionMatch | None) -> bool:
+        return bool(
+            match is not None
+            and str(match.source_id) == self.source_id
+            and match.source_native_id == self.source_native_id
+            and match.status is self.protected_status
+            and match.spotify_episode_uri == self.protected_spotify_episode_uri
+            and match.spotify_duration_seconds == self.protected_spotify_duration_seconds
+            and match.updated_at == self.protected_match_updated_at
+        )
 
 
 class SpotifyPlannerJournal:
@@ -236,7 +269,6 @@ class SpotifyPlannerJournal:
     ) -> None:
         verified = _as_utc(verified_at)
         with self._connection("verify Spotify planner destination") as connection:
-            # Conditional UPDATE binds publication to the exact operation in one transaction.
             cursor = connection.execute(
                 """UPDATE spotify_planner_destination_state
                    SET confirmed_desired_fingerprint = observed_desired_fingerprint,
@@ -433,6 +465,115 @@ class SpotifyPlannerJournal:
                 (source_id, source_native_id),
             )
 
+    def get_persistence_rejection_barrier(
+        self, source_id: str, source_native_id: str
+    ) -> PersistenceRejectionBarrierState | None:
+        with self._connection("read Spotify planner persistence rejection state") as connection:
+            row = connection.execute(
+                """
+                SELECT source_id, source_native_id, protected_status,
+                       protected_spotify_episode_uri, protected_spotify_duration_seconds,
+                       protected_match_updated_at, first_rejected_at, last_rejected_at
+                FROM spotify_planner_persistence_rejection_state
+                WHERE source_id = ? AND source_native_id = ?
+                """,
+                (source_id, source_native_id),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            status = MatchStatus(_text(row, "protected_status"))
+        except ValueError as exc:
+            raise PersistenceError(
+                "Spotify planner persistence rejection has invalid protected status"
+            ) from exc
+        uri_value = row["protected_spotify_episode_uri"]
+        if uri_value is not None and (not isinstance(uri_value, str) or not uri_value):
+            raise PersistenceError(
+                "Spotify planner persistence rejection has invalid protected URI"
+            )
+        duration_value = row["protected_spotify_duration_seconds"]
+        if duration_value is not None and (
+            not isinstance(duration_value, int) or duration_value < 0
+        ):
+            raise PersistenceError(
+                "Spotify planner persistence rejection has invalid protected duration"
+            )
+        state = PersistenceRejectionBarrierState(
+            source_id=_text(row, "source_id"),
+            source_native_id=_text(row, "source_native_id"),
+            protected_status=status,
+            protected_spotify_episode_uri=uri_value,
+            protected_spotify_duration_seconds=duration_value,
+            protected_match_updated_at=_timestamp_value(row, "protected_match_updated_at"),
+            first_rejected_at=_timestamp_value(row, "first_rejected_at"),
+            last_rejected_at=_timestamp_value(row, "last_rejected_at"),
+        )
+        if state.first_rejected_at > state.last_rejected_at:
+            raise PersistenceError(
+                "Spotify planner persistence rejection timestamps are inconsistent"
+            )
+        return state
+
+    def record_persistence_rejection_barrier(
+        self, match: EditionMatch, *, rejected_at: datetime
+    ) -> PersistenceRejectionBarrierState:
+        rejected = _as_utc(rejected_at)
+        source_id = str(match.source_id)
+        current = self.get_persistence_rejection_barrier(source_id, match.source_native_id)
+        if current is not None and current.protects(match):
+            first = current.first_rejected_at
+            last = max(rejected, current.last_rejected_at)
+        else:
+            first = rejected
+            last = rejected
+        state = PersistenceRejectionBarrierState(
+            source_id=source_id,
+            source_native_id=match.source_native_id,
+            protected_status=match.status,
+            protected_spotify_episode_uri=match.spotify_episode_uri,
+            protected_spotify_duration_seconds=match.spotify_duration_seconds,
+            protected_match_updated_at=match.updated_at,
+            first_rejected_at=first,
+            last_rejected_at=last,
+        )
+        with self._connection("persist Spotify planner persistence rejection state") as connection:
+            connection.execute(
+                """
+                INSERT INTO spotify_planner_persistence_rejection_state (
+                    source_id, source_native_id, protected_status,
+                    protected_spotify_episode_uri, protected_spotify_duration_seconds,
+                    protected_match_updated_at, first_rejected_at, last_rejected_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_id, source_native_id) DO UPDATE SET
+                    protected_status=excluded.protected_status,
+                    protected_spotify_episode_uri=excluded.protected_spotify_episode_uri,
+                    protected_spotify_duration_seconds=excluded.protected_spotify_duration_seconds,
+                    protected_match_updated_at=excluded.protected_match_updated_at,
+                    first_rejected_at=excluded.first_rejected_at,
+                    last_rejected_at=excluded.last_rejected_at
+                """,
+                (
+                    state.source_id,
+                    state.source_native_id,
+                    state.protected_status.value,
+                    state.protected_spotify_episode_uri,
+                    state.protected_spotify_duration_seconds,
+                    _timestamp(state.protected_match_updated_at),
+                    _timestamp(state.first_rejected_at),
+                    _timestamp(state.last_rejected_at),
+                ),
+            )
+        return state
+
+    def clear_persistence_rejection_barrier(self, source_id: str, source_native_id: str) -> None:
+        with self._connection("clear Spotify planner persistence rejection state") as connection:
+            connection.execute(
+                """DELETE FROM spotify_planner_persistence_rejection_state
+                   WHERE source_id = ? AND source_native_id = ?""",
+                (source_id, source_native_id),
+            )
+
     def get_match_input(self, source_id: str, source_native_id: str) -> MatchInputState | None:
         with self._connection("read Spotify planner match input") as connection:
             row = connection.execute(
@@ -505,7 +646,6 @@ class SpotifyPlannerJournal:
             if current is not None and current.input_fingerprint == input_fingerprint
             else attempted
         )
-        # A clock rollback must not shorten an already durable deadline.
         baseline = max(attempted, current.last_attempt_at) if current is not None else attempted
         next_retry = baseline + unresolved_retry_interval(max(baseline - first, timedelta(0)))
         state = UnresolvedState(
@@ -824,16 +964,21 @@ def source_contract_fingerprint(source: SourceDefinition) -> str:
         (ref.system.casefold(), ref.resource_type.casefold(), ref.external_id)
         for ref in source.external_references
     )
-    return _digest(
-        {
-            "v": _FINGERPRINT_VERSION,
-            "source_id": str(source.id),
-            "parser_id": str(source.parser_id),
-            "timezone": str(source.timezone),
-            "spotify_release_delay_days": source.spotify_release_delay_days,
-            "external_references": references,
-        }
-    )
+    contract: dict[str, object] = {
+        "v": _FINGERPRINT_VERSION,
+        "source_id": str(source.id),
+        "parser_id": str(source.parser_id),
+        "timezone": str(source.timezone),
+        "spotify_release_delay_days": source.spotify_release_delay_days,
+        "external_references": references,
+    }
+    duration_tolerance = duration_disambiguation_tolerance_seconds(source)
+    if duration_tolerance is not None:
+        # Preserve the exact legacy fingerprint payload for sources that did not opt in. This
+        # avoids an unrelated fleet-wide evidence invalidation merely because a new optional
+        # matching policy exists.
+        contract["spotify_duration_disambiguation_tolerance_seconds"] = duration_tolerance
+    return _digest(contract)
 
 
 def playlist_config_fingerprint(playlist: PlaylistDefinition) -> str:

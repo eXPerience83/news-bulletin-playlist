@@ -13,7 +13,7 @@ from news_bulletin_playlist.models import CanonicalEdition, PlaylistId, SourceId
 DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
 DEFAULT_RETENTION_DAYS = 30
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 
 
 class PersistenceError(RuntimeError):
@@ -310,6 +310,32 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             """,
         ),
     ),
+    (
+        7,
+        (
+            """
+            CREATE TABLE spotify_planner_persistence_rejection_state (
+                source_id TEXT NOT NULL,
+                source_native_id TEXT NOT NULL,
+                protected_status TEXT NOT NULL
+                    CHECK (protected_status IN ('matched', 'pending', 'ambiguous')),
+                protected_spotify_episode_uri TEXT,
+                protected_spotify_duration_seconds INTEGER
+                    CHECK (
+                        protected_spotify_duration_seconds IS NULL
+                        OR protected_spotify_duration_seconds >= 0
+                    ),
+                protected_match_updated_at TEXT NOT NULL,
+                first_rejected_at TEXT NOT NULL,
+                last_rejected_at TEXT NOT NULL,
+                PRIMARY KEY (source_id, source_native_id),
+                FOREIGN KEY (source_id, source_native_id)
+                    REFERENCES canonical_editions (source_id, source_native_id)
+                    ON DELETE CASCADE
+            )
+            """,
+        ),
+    ),
 )
 
 
@@ -341,6 +367,8 @@ class SQLiteStore:
                     continue
                 for statement in statements:
                     connection.execute(statement)
+                if version == 7:
+                    self._seed_persistence_rejection_barriers(connection)
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (version, _format_timestamp(datetime.now(UTC))),
@@ -350,6 +378,66 @@ class SQLiteStore:
         """Return the latest applied migration version."""
         with self._connection("read schema version") as connection:
             return self._schema_version(connection)
+
+    @staticmethod
+    def _seed_persistence_rejection_barriers(connection: sqlite3.Connection) -> None:
+        """Migrate only implicit barriers that can be reconstructed safely.
+
+        Some historical/synthetic databases contain only the tables needed by the migration
+        under test. Creating the v7 table remains valid there, but attempting a DML insert into
+        a child table whose canonical-edition parent is absent fails with foreign_keys enabled.
+        Treat those partial databases as having no reconstructable barrier rather than making
+        unrelated legacy upgrades fail.
+        """
+        required = {
+            "canonical_editions",
+            "spotify_matches",
+            "spotify_planner_matched_recovery_state",
+            "spotify_planner_unresolved_state",
+            "spotify_planner_persistence_rejection_state",
+        }
+        placeholders = ", ".join("?" for _ in required)
+        rows = connection.execute(
+            f"SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ({placeholders})",
+            tuple(sorted(required)),
+        ).fetchall()
+        if {str(row[0]) for row in rows} != required:
+            return
+
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO spotify_planner_persistence_rejection_state (
+                source_id, source_native_id, protected_status,
+                protected_spotify_episode_uri, protected_spotify_duration_seconds,
+                protected_match_updated_at, first_rejected_at, last_rejected_at
+            )
+            SELECT m.source_id, m.source_native_id, m.status, m.spotify_episode_uri,
+                   m.spotify_duration_seconds, m.updated_at,
+                   r.first_attempt_at, r.last_attempt_at
+            FROM spotify_matches AS m
+            JOIN spotify_planner_matched_recovery_state AS r
+              ON r.source_id = m.source_id
+             AND r.source_native_id = m.source_native_id
+            WHERE m.status = 'matched' AND m.updated_at > r.first_attempt_at
+            """
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO spotify_planner_persistence_rejection_state (
+                source_id, source_native_id, protected_status,
+                protected_spotify_episode_uri, protected_spotify_duration_seconds,
+                protected_match_updated_at, first_rejected_at, last_rejected_at
+            )
+            SELECT m.source_id, m.source_native_id, m.status, m.spotify_episode_uri,
+                   m.spotify_duration_seconds, m.updated_at,
+                   u.first_unresolved_at, u.last_attempt_at
+            FROM spotify_matches AS m
+            JOIN spotify_planner_unresolved_state AS u
+              ON u.source_id = m.source_id
+             AND u.source_native_id = m.source_native_id
+            WHERE m.status != 'matched' AND m.updated_at > u.last_attempt_at
+            """
+        )
 
     def upsert_editions(
         self,
@@ -546,8 +634,8 @@ class SQLiteStore:
         spotify_episode_uri: str | None = None,
         spotify_duration_seconds: int | None = None,
         diagnostics: str | None = None,
-    ) -> None:
-        """Persist deterministic source-edition to Spotify matching state."""
+    ) -> bool:
+        """Persist matching state and report whether the temporal guard applied it."""
         if status is MatchStatus.MATCHED:
             if spotify_episode_uri is None or not spotify_episode_uri.strip():
                 raise ValueError("matched state requires spotify_episode_uri")
@@ -559,7 +647,7 @@ class SQLiteStore:
             raise ValueError("non-matched state must not store spotify_duration_seconds")
 
         with self._connection("set Spotify match state") as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT INTO spotify_matches (
                     source_id,
@@ -588,6 +676,7 @@ class SQLiteStore:
                     _format_timestamp(updated_at),
                 ),
             )
+            return cursor.rowcount > 0
 
     def get_match_state(
         self,
@@ -830,7 +919,7 @@ class SQLiteStore:
                     """
                     SELECT source_id, source_native_id
                     FROM canonical_editions
-                    WHERE published_at < ?
+                    WHERE last_seen_at < ?
                     """,
                     (cutoff,),
                 ).fetchall()
