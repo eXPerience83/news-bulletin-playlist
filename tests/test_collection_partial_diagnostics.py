@@ -70,7 +70,7 @@ def test_normalization_error_preserves_safely_known_partial_collection_counters(
     assert diagnostics.rss_filter_rejected_count == 1
     assert diagnostics.rss_duplicate_native_id_count == 0
     assert diagnostics.rss_invalid_published_at_count == 1
-    assert diagnostics.rss_title_parser_rejected_count == 0
+    assert diagnostics.rss_title_parser_rejected_count is None
     assert diagnostics.rss_native_id_guid_count == 3
     assert diagnostics.rss_native_id_enclosure_count == 1
     assert diagnostics.rss_native_id_link_count == 0
