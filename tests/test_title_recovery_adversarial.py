@@ -111,6 +111,72 @@ def test_unicode_compatibility_characters_do_not_change_product_identity(
 
 
 @pytest.mark.parametrize(
+    ("parser", "title"),
+    [
+        (RneParser(), "RNE DEPORTES - 17.09.2026 - 09.30H"),
+        (SerParser(), "SER DEPORTES - 09:30 (17/09/2026)"),
+        (
+            OndaCeroParser(),
+            "Onda Cero Deportes de las 09:30h (17/09/2026)",
+        ),
+        (CnnParser(), "CNN 10 cosas 09/17/26 5:00 am"),
+        (CopeParser(), "09:30H | 17 SEP 2026 | BOLETÍN VALENCIA"),
+        (
+            RfiJournalMondeParser(),
+            "Tranche d'information 17/09/2026 09h30 GMT",
+        ),
+    ],
+)
+def test_other_programmes_never_recover_as_configured_bulletins(
+    parser: RecoveryTitleParser,
+    title: str,
+) -> None:
+    assert parser.parse_with_recovery(title).parsed is None
+
+
+@pytest.mark.parametrize(
+    ("parser", "title"),
+    [
+        (RneParser(), "NOTICIAS RNЕ - 17.09.2026 - 09.30H"),
+        (SerParser(), "Las noticias de la SЕR, 09:30 (17/09/2026)"),
+        (
+            OndaCeroParser(),
+            "Las noticias de Оnda Cero de las 09:30h (17/09/2026)",
+        ),
+        (CnnParser(), "СNN 5 cosas 09/17/26 5:00 am"),
+        (CopeParser(), "09:30H | 17 SEP 2026 | BОLETÍN"),
+        (RfiJournalMondeParser(), "Jоurnal 17/09/2026 09h30 GMT"),
+    ],
+)
+def test_unicode_confusables_do_not_change_product_identity(
+    parser: RecoveryTitleParser,
+    title: str,
+) -> None:
+    assert parser.parse_with_recovery(title).parsed is None
+
+
+@pytest.mark.parametrize(
+    ("parser", "title"),
+    [
+        (RneParser(), "NOTICIAS RNE | 17/09/２０２６ : 09:30 H."),
+        (SerParser(), "Las noticias de la SER - 9.30 １７-09-26"),
+        (
+            OndaCeroParser(),
+            "Las noticias de Onda Cero de las ９.30 H 17-09-26.",
+        ),
+        (CnnParser(), "CNN 5 cosas ０9/17/26 5:00 am"),
+        (CopeParser(), "０9:30H | 17 SEP 2026 | BOLETÍN"),
+        (RfiJournalMondeParser(), "Journal 17/09/2026 ０9h30 GMT"),
+    ],
+)
+def test_unicode_numeric_compatibility_characters_are_not_date_or_time_tokens(
+    parser: RecoveryTitleParser,
+    title: str,
+) -> None:
+    assert parser.parse_with_recovery(title).parsed is None
+
+
+@pytest.mark.parametrize(
     ("parser", "canonical"),
     [
         (RneParser(), "NOTICIAS RNE - 17.09.2026 - 09.30H"),
