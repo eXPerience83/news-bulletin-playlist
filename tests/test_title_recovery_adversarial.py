@@ -284,6 +284,47 @@ def test_duplicate_or_ambiguous_temporal_tokens_never_recover(
 @pytest.mark.parametrize(
     ("parser", "title"),
     [
+        (SerParser(), "Las noticias de la SER - 9.3017-09-26"),
+        (SerParser(), "Las noticias de la SER - 9.30 (17-09-26]"),
+        (SerParser(), "Las noticias de la SER - 9.30 [17-09-26)"),
+        (
+            OndaCeroParser(),
+            "Las noticias de Onda Cero de las 9.30H17-09-26.",
+        ),
+        (
+            OndaCeroParser(),
+            "Las noticias de Onda Cero de las 9.30 H (17-09-26].",
+        ),
+    ],
+)
+def test_provider_compat_requires_explicit_temporal_boundary_and_balanced_brackets(
+    parser: RecoveryTitleParser,
+    title: str,
+) -> None:
+    assert parser.parse_with_recovery(title).parsed is None
+
+
+@pytest.mark.parametrize(
+    ("parser", "title"),
+    [
+        (RneParser(), "NOTICIAS\u00ad RNE - 17.09.2026 - 09.30H"),
+        (SerParser(), "Las noticias de la SER\u2060, 09:30 (17/09/2026)"),
+        (
+            OndaCeroParser(),
+            "Las noticias de Onda Cero de las 09:30h (17∕09∕2026)",
+        ),
+    ],
+)
+def test_unreviewed_unicode_syntax_is_not_silently_recovered(
+    parser: RecoveryTitleParser,
+    title: str,
+) -> None:
+    assert parser.parse_with_recovery(title).parsed is None
+
+
+@pytest.mark.parametrize(
+    ("parser", "title"),
+    [
         (CopeParser(), "09:30H | 17 SEP 26 | BOLETÍN"),
         (RfiJournalMondeParser(), "Journal 17/09/26 09h30 GMT"),
     ],
