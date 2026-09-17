@@ -99,10 +99,16 @@ def _resolve_soft_retention_evidence(
         destination = journal.get_destination(str(playlist.id))
         if destination is None:
             return _rejected(SoftRetentionRejectionReason.MISSING_DESTINATION_STATE)
-        if destination.dirty:
-            return _rejected(SoftRetentionRejectionReason.DIRTY_DESTINATION)
         if destination.unknown:
             return _rejected(SoftRetentionRejectionReason.UNKNOWN_DESTINATION)
+        if destination.destination_context_fingerprint != destination_context_fingerprint(playlist):
+            return _rejected(SoftRetentionRejectionReason.DESTINATION_MISMATCH)
+        if destination.config_fingerprint != playlist_config_fingerprint(playlist):
+            return _rejected(SoftRetentionRejectionReason.CONFIG_MISMATCH)
+        if destination.auth_context_fingerprint != auth_context_fingerprint:
+            return _rejected(SoftRetentionRejectionReason.AUTH_MISMATCH)
+        if destination.dirty:
+            return _rejected(SoftRetentionRejectionReason.DIRTY_DESTINATION)
         if destination.confirmed_desired_fingerprint is None:
             return _rejected(SoftRetentionRejectionReason.MISSING_DESTINATION_CONFIRMATION)
         if destination.confirmed_desired_fingerprint != destination.observed_desired_fingerprint:
@@ -111,12 +117,6 @@ def _resolve_soft_retention_evidence(
             return _rejected(SoftRetentionRejectionReason.MISSING_DESTINATION_VERIFICATION)
         if observed_at < destination.last_verified_at:
             return _rejected(SoftRetentionRejectionReason.CLOCK_ROLLBACK)
-        if destination.destination_context_fingerprint != destination_context_fingerprint(playlist):
-            return _rejected(SoftRetentionRejectionReason.DESTINATION_MISMATCH)
-        if destination.config_fingerprint != playlist_config_fingerprint(playlist):
-            return _rejected(SoftRetentionRejectionReason.CONFIG_MISMATCH)
-        if destination.auth_context_fingerprint != auth_context_fingerprint:
-            return _rejected(SoftRetentionRejectionReason.AUTH_MISMATCH)
 
         selected_sources: dict[SourceId, SourceDefinition] = {}
         for source_id in playlist.source_selection.explicit:
