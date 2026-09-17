@@ -110,16 +110,16 @@ def _provider_compat_candidates(provider_id: str, title: str) -> Iterable[tuple[
     if provider_id == "rne" and title.endswith("."):
         # Let the historical strict parser decide whether the otherwise-identical compact
         # form is valid. This intentionally does not create a second compact grammar.
-        candidate = title[:-1].rstrip()
-        if candidate:
-            yield candidate, "rne_terminal_punctuation"
+        terminal_candidate = title[:-1].rstrip()
+        if terminal_candidate:
+            yield terminal_candidate, "rne_terminal_punctuation"
 
     canonicalizer = _PROVIDER_COMPAT_CANONICALIZERS.get(provider_id)
     if canonicalizer is None:
         return
-    candidate = canonicalizer(title)
-    if candidate is not None:
-        yield candidate, _PROVIDER_COMPAT_KINDS[provider_id]
+    canonical_candidate = canonicalizer(title)
+    if canonical_candidate is not None:
+        yield canonical_candidate, _PROVIDER_COMPAT_KINDS[provider_id]
 
 
 def _canonical_rne(title: str) -> str | None:
