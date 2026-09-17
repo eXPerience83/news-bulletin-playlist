@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from news_bulletin_playlist.providers.base import TitleParser
+from news_bulletin_playlist.providers.base import RecoveryTitleParser, TitleParser
 from news_bulletin_playlist.providers.cnn import CnnParser
 from news_bulletin_playlist.providers.collection_filters import (
     CollectionFilter,
@@ -21,7 +21,7 @@ class ProviderConfig:
     provider_id: str
     feed_url: str
     spotify_show_id: str
-    parser: TitleParser
+    parser: RecoveryTitleParser
     contract_fallback_url: str | None = None
 
 
@@ -59,13 +59,16 @@ CORE_PROVIDERS: tuple[ProviderConfig, ...] = (
 
 # P1 configuration resolves parsers here and does not depend on the transitional
 # CORE_PROVIDERS registry, which remains for P0 watch/probe compatibility only.
-TITLE_PARSERS: dict[str, TitleParser] = {
+RECOVERY_TITLE_PARSERS: dict[str, RecoveryTitleParser] = {
     "ser": SerParser(),
     "rne": RneParser(),
     "ondacero": OndaCeroParser(),
     "cnn": CnnParser(),
     "cope": CopeParser(),
     "rfi_journal_monde": RfiJournalMondeParser(),
+}
+TITLE_PARSERS: dict[str, TitleParser] = {
+    **RECOVERY_TITLE_PARSERS,
     "release_date_title": ReleaseDateTitleParser(),
 }
 
@@ -83,6 +86,13 @@ def get_title_parser(parser_id: str) -> TitleParser:
         return TITLE_PARSERS[parser_id]
     except KeyError as exc:
         raise KeyError(f"unknown parser_id: {parser_id}") from exc
+
+
+def get_recovery_title_parser(parser_id: str) -> RecoveryTitleParser:
+    try:
+        return RECOVERY_TITLE_PARSERS[parser_id]
+    except KeyError as exc:
+        raise KeyError(f"parser_id does not support semantic title recovery: {parser_id}") from exc
 
 
 def has_collection_filter(filter_id: str) -> bool:
