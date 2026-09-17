@@ -116,7 +116,9 @@ def read_recovery_diagnostic_snapshot(
         finally:
             connection.close()
     except sqlite3.Error as exc:
-        raise PersistenceError(f"read production diagnostic snapshot failed for {path}: {exc}") from exc
+        raise PersistenceError(
+            f"read production diagnostic snapshot failed for {path}: {exc}"
+        ) from exc
 
     active_barriers = sum(_barrier_is_active(row) for row in barrier_rows)
     matched_without_input: list[RecoveryDiagnosticRow] = []
