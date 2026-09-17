@@ -13,6 +13,7 @@ from news_bulletin_playlist.collection import fetch_feed as fetch_runtime_feed
 from news_bulletin_playlist.collection import normalize_rss_source
 from news_bulletin_playlist.models import SourceDefinition
 from news_bulletin_playlist.providers.base import RecoveryTitleParser
+from news_bulletin_playlist.providers.title_recovery import normalize_title_syntax
 from news_bulletin_playlist.registry import CORE_PROVIDERS, ProviderConfig
 
 _SAMPLE_SIZE = 6
@@ -90,7 +91,9 @@ def extract_fallback_titles(provider_id: str, payload: bytes) -> list[str]:
     parser = _FallbackTitleHTMLParser()
     parser.feed(payload.decode("utf-8", errors="replace"))
     candidates = (
-        title for title in parser.titles if title.casefold().startswith(_ONDACERO_TITLE_PREFIX)
+        title
+        for title in parser.titles
+        if normalize_title_syntax(title).casefold().startswith(_ONDACERO_TITLE_PREFIX)
     )
     return list(dict.fromkeys(candidates))
 
