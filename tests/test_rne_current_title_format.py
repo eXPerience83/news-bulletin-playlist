@@ -21,6 +21,20 @@ def test_rne_accepts_current_rne_noticias_dotted_hour_titles() -> None:
         assert parsed.edition_at == expected
 
 
+def test_rne_accepts_current_noticias_rne_date_punctuation_variants() -> None:
+    parser = RneParser()
+    cases = {
+        "NOTICIAS RNE - 17.09.2026. - 00.00H": datetime(2026, 9, 17, 0, 0, tzinfo=MADRID),
+        "NOTICIAS RNE - 16.09.2026 - 21.00H": datetime(2026, 9, 16, 21, 0, tzinfo=MADRID),
+        "NOTICIAS RNE - 16.09.26 - 19.00H": datetime(2026, 9, 16, 19, 0, tzinfo=MADRID),
+    }
+
+    for title, expected in cases.items():
+        parsed = parser.parse(title)
+        assert parsed is not None
+        assert parsed.edition_at == expected
+
+
 def test_rne_keeps_previous_noticias_rne_shape() -> None:
     parsed = RneParser().parse("NOTICIAS RNE - 25.08.2026 - 18.30 H")
 
@@ -32,14 +46,21 @@ def test_rne_current_shape_does_not_accept_unrelated_products() -> None:
     assert RneParser().parse("RNE DEPORTES - 12.09.2026 - 16.00H") is None
 
 
+def test_rne_dotted_date_rejects_unsupported_year_width_and_invalid_date() -> None:
+    parser = RneParser()
+
+    assert parser.parse("NOTICIAS RNE - 16.09.026 - 19.00H") is None
+    assert parser.parse("NOTICIAS RNE - 31.02.26 - 19.00H") is None
+
+
 def test_provider_watch_accepts_current_rne_recent_titles() -> None:
     titles = [
-        "RNE NOTICIAS - 12.09.2026 - 16.00H",
-        "RNE NOTICIAS - 12.09.2026 - 15.00H",
-        "RNE NOTICIAS - 12.09.2026 - 13.00H",
-        "RNE NOTICIAS - 12.09.2026 - 12.00H",
-        "RNE NOTICIAS - 12.09.2026 - 11.00H",
-        "RNE NOTICIAS - 12.09.2026 - 10.00H",
+        "NOTICIAS RNE - 17.09.2026. - 00.00H",
+        "NOTICIAS RNE - 16.09.2026 - 21.00H",
+        "NOTICIAS RNE - 16.09.26 - 19.00H",
+        "RNE NOTICIAS - 16.09.2026 - 18.00H",
+        "RNE NOTICIAS - 16.09.2026 - 17.00H",
+        "RNE NOTICIAS - 16.09.2026 - 16.00H",
     ]
 
     result = evaluate_titles("rne", RneParser(), titles)
