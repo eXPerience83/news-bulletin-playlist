@@ -144,6 +144,25 @@ class _ReloadingRunnerShape:
         return self.result
 
 
+@dataclass
+class _PruningRunner:
+    config: EngineConfig
+    store: SQLiteStore
+    result: EngineCycleResult
+    fresh: CanonicalEdition
+
+    def run_cycle(self) -> EngineCycleResult:
+        self.store.upsert_editions((self.fresh,), observed_at=NOW)
+        self.store.prune_operational_history(now=NOW, protected_identities=())
+        return self.result
+
+
+class _NoListEditionsStore(SQLiteStore):
+    def list_editions(self, *args: object, **kwargs: object) -> tuple[CanonicalEdition, ...]:
+        del args, kwargs
+        raise AssertionError("production observability must not scan canonical_editions")
+
+
 def _diagnostics(tmp_path: Path) -> tuple[OperationalDiagnostics, DiagnosticEventStore]:
     store = DiagnosticEventStore(tmp_path / "diagnostics.sqlite3")
     store.initialize()
@@ -323,3 +342,46 @@ def test_production_diagnostics_make_soft_retention_and_barrier_preservation_exp
     )
     assert preserved.playlist_id == "blocked"
     assert preserved.details == {"total": 1}
+
+
+def test_production_prune_diagnostics_use_exact_prune_result_without_canonical_scans(
+    tmp_path: Path,
+) -> None:
+    config = EngineConfig(schema_version=1, sources=(_source(),), playlists=(_playlist(),))
+    store = _NoListEditionsStore(tmp_path / "engine.sqlite3")
+    store.initialize()
+    stale_at = NOW - timedelta(days=31)
+    stale = CanonicalEdition(
+        source_id=SourceId("ser"),
+        source_native_id="stale",
+        title="stale",
+        published_at=stale_at,
+        edition_at=stale_at,
+        duration_seconds=60,
+    )
+    fresh = _edition("fresh")
+    store.upsert_editions((stale,), observed_at=stale_at)
+    result = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW,
+        ok=True,
+        sources=(),
+        playlists=(),
+    )
+    diagnostics, diagnostic_store = _diagnostics(tmp_path)
+    runner = ProductionInstrumentedEngineCycleRunner(
+        _PruningRunner(config, store, result, fresh),
+        diagnostics,
+        clock=lambda: NOW,
+    )
+
+    assert runner.run_cycle() is result
+
+    event = next(
+        event
+        for event in diagnostic_store.list_events(limit=20)
+        if event.event_name == "canonical_editions_pruned"
+    )
+    assert event.details == {"total": 1}
+    assert store.get_edition(SourceId("ser"), "stale") is None
+    assert store.get_edition(SourceId("ser"), "fresh") == fresh

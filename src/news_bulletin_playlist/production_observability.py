@@ -25,14 +25,41 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._canonical_before_cycle: frozenset[tuple[str, str]] | None = None
+        self._canonical_pruned_count = 0
+        self._canonical_prune_observable = False
 
     def run_cycle(self) -> EngineCycleResult:
-        self._canonical_before_cycle = self._canonical_identity_snapshot()
+        self._canonical_pruned_count = 0
+        self._canonical_prune_observable = False
+        store = getattr(self.runner, "store", None)
+        original_prune = getattr(store, "prune_operational_history", None)
+        if store is None or not callable(original_prune):
+            return super().run_cycle()
+
+        instance_state = getattr(store, "__dict__", {})
+        had_instance_override = "prune_operational_history" in instance_state
+        previous_instance_override = instance_state.get("prune_operational_history")
+        self._canonical_prune_observable = True
+
+        def observed_prune(*args: Any, **kwargs: Any) -> Any:
+            result = original_prune(*args, **kwargs)
+            deleted = getattr(result, "canonical_editions_deleted", None)
+            if isinstance(deleted, int) and not isinstance(deleted, bool) and deleted >= 0:
+                self._canonical_pruned_count += deleted
+            else:
+                # A custom persistence boundary returned an unexpected shape. Do not invent
+                # retention evidence; the engine result itself remains untouched.
+                self._canonical_prune_observable = False
+            return result
+
+        store.prune_operational_history = observed_prune
         try:
             return super().run_cycle()
         finally:
-            self._canonical_before_cycle = None
+            if had_instance_override:
+                store.prune_operational_history = previous_instance_override
+            else:
+                del store.prune_operational_history
 
     def _emit_result(
         self,
@@ -215,9 +242,7 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
         result: EngineCycleResult,
         cycle_id: str,
     ) -> None:
-        before = self._canonical_before_cycle
-        after = self._canonical_identity_snapshot()
-        if before is None or after is None:
+        if not self._canonical_prune_observable:
             return
         self.diagnostics.emit(
             occurred_at=result.finished_at,
@@ -225,7 +250,7 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
             component="persistence.retention",
             event_name="canonical_editions_pruned",
             cycle_id=cycle_id,
-            details={"total": len(before - after)},
+            details={"total": self._canonical_pruned_count},
         )
 
     def _emit_source_count(
@@ -269,18 +294,6 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                 return None
             return config, store
         except Exception:  # noqa: BLE001 - diagnostics are best-effort and read-only
-            return None
-
-    def _canonical_identity_snapshot(self) -> frozenset[tuple[str, str]] | None:
-        store = getattr(self.runner, "store", None)
-        if store is None:
-            return None
-        try:
-            return frozenset(
-                (str(edition.source_id), edition.source_native_id)
-                for edition in store.list_editions()
-            )
-        except Exception:  # noqa: BLE001 - diagnostics must never fail the cycle
             return None
 
 
