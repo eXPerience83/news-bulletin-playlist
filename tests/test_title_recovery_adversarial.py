@@ -340,13 +340,7 @@ def test_title_parse_denominator_excludes_preparse_rejections(
 
     def item(guid: str, title: str | None, publication: str = published) -> str:
         title_xml = "" if title is None else f"<title>{title}</title>"
-        return (
-            "<item>"
-            f"<guid>{guid}</guid>"
-            f"{title_xml}"
-            f"<pubDate>{publication}</pubDate>"
-            "</item>"
-        )
+        return f"<item><guid>{guid}</guid>{title_xml}<pubDate>{publication}</pubDate></item>"
 
     payload = (
         "<rss><channel>"
