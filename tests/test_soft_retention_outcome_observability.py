@@ -95,9 +95,7 @@ def test_production_observability_emits_bounded_soft_retention_outcome(
     assert runner.run_cycle() is result
 
     event = next(
-        event
-        for event in diagnostic_store.list_events(limit=20)
-        if event.event_name == event_name
+        event for event in diagnostic_store.list_events(limit=20) if event.event_name == event_name
     )
     assert event.playlist_id == "spain"
     assert event.details == {"total": 2, "duration_seconds": 201_600}
