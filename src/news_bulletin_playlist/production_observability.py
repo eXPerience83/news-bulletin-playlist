@@ -9,11 +9,12 @@ from news_bulletin_playlist.diagnostics import DiagnosticSeverity
 from news_bulletin_playlist.effective_config import load_effective_config
 from news_bulletin_playlist.engine import EngineCycleResult, SourceCycleOutcome
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
-from news_bulletin_playlist.persistence import MatchStatus
+from news_bulletin_playlist.production_diagnostic_queries import (
+    read_recovery_diagnostic_snapshot,
+)
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestScopeSnapshot
 from news_bulletin_playlist.spotify_planner import (
     PlannerReason,
-    SpotifyPlannerJournal,
     matched_recovery_planning_reason,
     matching_input_fingerprint,
 )
@@ -96,7 +97,7 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
         runtime = self._runtime_state()
         if runtime is None:
             return
-        config, store, journal = runtime
+        config, store = runtime
         source_by_id = {source.id: source for source in config.sources}
         enabled_retention = [
             playlist.retention_hours for playlist in config.playlists if playlist.enabled
@@ -127,32 +128,18 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                 "matching_persistence_rejection_barrier_active": 0,
             }
             try:
-                editions = store.list_editions(source_id=outcome.source_id)
-                for edition in editions:
-                    match = store.get_match_state(edition.source_id, edition.source_native_id)
-                    if match is None:
-                        continue
-
-                    barrier = journal.get_persistence_rejection_barrier(
-                        str(edition.source_id), edition.source_native_id
-                    )
-                    if barrier is not None and barrier.protects(match):
-                        counts["matching_persistence_rejection_barrier_active"] += 1
-
-                    if (
-                        match.status is not MatchStatus.MATCHED
-                        or edition.published_at < matching_cutoff
-                        or edition.published_at > result.finished_at
-                    ):
-                        continue
-                    match_input = journal.get_match_input(
-                        str(edition.source_id), edition.source_native_id
-                    )
-                    if match_input is not None:
-                        continue
-                    recovery = journal.get_matched_recovery(
-                        str(edition.source_id), edition.source_native_id
-                    )
+                snapshot = read_recovery_diagnostic_snapshot(
+                    store.path,
+                    outcome.source_id,
+                    matching_cutoff=matching_cutoff,
+                    observed_at=result.finished_at,
+                )
+                counts["matching_persistence_rejection_barrier_active"] = (
+                    snapshot.active_persistence_rejection_barrier_count
+                )
+                for diagnostic_row in snapshot.matched_without_input:
+                    edition = diagnostic_row.edition
+                    recovery = diagnostic_row.recovery
                     if recovery is None:
                         counts["matching_recovery_untracked"] += 1
                         continue
@@ -260,7 +247,7 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
             details={"total": total},
         )
 
-    def _runtime_state(self) -> tuple[Any, Any, Any] | None:
+    def _runtime_state(self) -> tuple[Any, Any] | None:
         runner = self.runner
         store = getattr(runner, "store", None)
         if store is None:
@@ -280,10 +267,7 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                         config = load_effective_config(data_dir, environ)
             if config is None:
                 return None
-            journal = getattr(runner, "planner_journal", None)
-            if journal is None:
-                journal = SpotifyPlannerJournal(store)
-            return config, store, journal
+            return config, store
         except Exception:  # noqa: BLE001 - diagnostics are best-effort and read-only
             return None
 
