@@ -1,0 +1,82 @@
+name: Patch #207 destination rejection attribution
+
+on:
+  push:
+    branches:
+      - fix/207-destination-rejection-attribution
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/207-destination-rejection-attribution
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - name: Refine first-failing destination gate and coverage
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          engine = Path("src/news_bulletin_playlist/soft_retention_engine.py")
+          lines = engine.read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "if destination is None:")
+          end = next(
+              i
+              for i, line in enumerate(lines[start + 1 :], start + 1)
+              if line.strip().startswith("selected_sources: dict[")
+          )
+          indent = lines[start][: len(lines[start]) - len(lines[start].lstrip())]
+          inner = indent + "    "
+          gates = [
+              ("if destination is None:", "MISSING_DESTINATION_STATE"),
+              ("if destination.unknown:", "UNKNOWN_DESTINATION"),
+              (
+                  "if destination.destination_context_fingerprint != destination_context_fingerprint(playlist):",
+                  "DESTINATION_MISMATCH",
+              ),
+              ("if destination.config_fingerprint != playlist_config_fingerprint(playlist):", "CONFIG_MISMATCH"),
+              ("if destination.auth_context_fingerprint != auth_context_fingerprint:", "AUTH_MISMATCH"),
+              ("if destination.dirty:", "DIRTY_DESTINATION"),
+              ("if destination.confirmed_desired_fingerprint is None:", "MISSING_DESTINATION_CONFIRMATION"),
+              (
+                  "if destination.confirmed_desired_fingerprint != destination.observed_desired_fingerprint:",
+                  "DESIRED_FINGERPRINT_MISMATCH",
+              ),
+              ("if destination.last_verified_at is None:", "MISSING_DESTINATION_VERIFICATION"),
+              ("if observed_at < destination.last_verified_at:", "CLOCK_ROLLBACK"),
+          ]
+          replacement = []
+          for condition, reason in gates:
+              replacement.append(indent + condition)
+              replacement.append(
+                  inner + f"return _rejected(SoftRetentionRejectionReason.{reason})"
+              )
+          replacement.append("")
+          engine.write_text("\n".join(lines[:start] + replacement + lines[end:]) + "\n")
+
+          tests = Path("tests/test_soft_retention_rejection_resolution.py")
+          test_text = tests.read_text()
+          marker = "def test_resolution_reports_unknown_destination"
+          if marker not in test_text:
+              test_text += '''\n\ndef test_resolution_reports_unknown_destination(tmp_path: Path) -> None:\n    store, source, playlist = _prepared_store(tmp_path)\n    SpotifyPlannerJournal(store).mark_destination_unknown(str(playlist.id))\n\n    resolution = _resolution(store, source, playlist)\n\n    assert resolution.evidence is None\n    assert resolution.rejection_reason is SoftRetentionRejectionReason.UNKNOWN_DESTINATION\n'''
+              tests.write_text(test_text)
+          PY
+      - run: pip install ruff==0.16.8
+      - run: ruff format src/news_bulletin_playlist/soft_retention_engine.py tests/test_soft_retention_rejection_resolution.py
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/news_bulletin_playlist/soft_retention_engine.py tests/test_soft_retention_rejection_resolution.py
+          git commit -m "Refine #207 destination rejection attribution"
+          git push origin HEAD:fix/207-destination-rejection-attribution
