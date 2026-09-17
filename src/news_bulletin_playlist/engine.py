@@ -127,6 +127,14 @@ class SourceMatchingDiagnostics:
     matching_reason_input_changed_count: int = 0
     matching_reason_retry_due_count: int = 0
     matching_reason_coalesced_unresolved_count: int = 0
+    retry_due_evaluated_count: int = 0
+    retry_due_resolved_to_matched_count: int = 0
+    retry_due_still_pending_count: int = 0
+    retry_due_still_ambiguous_count: int = 0
+    coalesced_unresolved_evaluated_count: int = 0
+    coalesced_unresolved_resolved_to_matched_count: int = 0
+    coalesced_unresolved_still_pending_count: int = 0
+    coalesced_unresolved_still_ambiguous_count: int = 0
     matching_reason_evidence_recovery_count: int = 0
     matching_reason_missing_evidence_count: int = 0
     unresolved_relevant_count: int = 0
@@ -141,6 +149,8 @@ class SourceMatchingDiagnostics:
 class _SourceMatchingPlan:
     evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent]
     catalogue_audit_due: bool
+    retry_due_identities: frozenset[tuple[SourceId, str]] = frozenset()
+    coalesced_unresolved_identities: frozenset[tuple[SourceId, str]] = frozenset()
     conservative: bool = False
     diagnostics: SourceMatchingDiagnostics = field(default_factory=SourceMatchingDiagnostics)
 
@@ -642,6 +652,11 @@ class EngineRunner:
                             source.id,
                         ),
                     )
+                    plan = replace(
+                        plan,
+                        diagnostics=self._matching_yield_diagnostics(plan, match_result),
+                    )
+                    source_plans[source.id] = plan
                     matched_count = sum(
                         outcome.spotify_episode_uri is not None for outcome in match_result.outcomes
                     )
@@ -1544,6 +1559,7 @@ class EngineRunner:
                 or now >= catalogue.next_audit_at
             )
             intents: dict[tuple[SourceId, str], MatchEvaluationIntent] = {}
+            retry_due_identities: set[tuple[SourceId, str]] = set()
             coalescing_candidates: list[tuple[SourceId, str]] = []
             new_match_count = 0
             input_changed_count = 0
@@ -1599,6 +1615,7 @@ class EngineRunner:
                             input_changed_count += 1
                         elif reason is PlannerReason.RETRY_DUE:
                             intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                            retry_due_identities.add(edition.identity)
                             retry_due_count += 1
                         elif reason is None:
                             coalescing_candidates.append(edition.identity)
@@ -1632,17 +1649,19 @@ class EngineRunner:
                     input_changed_count += 1
                 elif reason is PlannerReason.RETRY_DUE:
                     intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+                    retry_due_identities.add(edition.identity)
                     retry_due_count += 1
                 elif reason is None:
                     coalescing_candidates.append(edition.identity)
 
             primary_needs_catalogue = bool(intents) or audit_due
-            if primary_needs_catalogue:
-                for identity in coalescing_candidates:
-                    intents[identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-            coalesced_unresolved_count = (
-                len(coalescing_candidates) if primary_needs_catalogue else 0
+            coalesced_unresolved_identities = (
+                frozenset(coalescing_candidates) if primary_needs_catalogue else frozenset()
             )
+            if primary_needs_catalogue:
+                for identity in coalesced_unresolved_identities:
+                    intents[identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
+            coalesced_unresolved_count = len(coalesced_unresolved_identities)
 
             diagnostics = SourceMatchingDiagnostics(
                 matching_work_count=len(intents),
@@ -1658,6 +1677,8 @@ class EngineRunner:
             return _SourceMatchingPlan(
                 intents,
                 audit_due,
+                retry_due_identities=frozenset(retry_due_identities),
+                coalesced_unresolved_identities=coalesced_unresolved_identities,
                 diagnostics=diagnostics,
             )
         except Exception:
@@ -1692,6 +1713,45 @@ class EngineRunner:
         _outcome: Any,
     ) -> None:
         counts[source_id] = counts.get(source_id, 0) + 1
+
+    @staticmethod
+    def _matching_yield_diagnostics(
+        plan: _SourceMatchingPlan,
+        result: SourceMatchResult,
+    ) -> SourceMatchingDiagnostics:
+        outcomes = {outcome.edition.identity: outcome for outcome in result.outcomes}
+
+        def classify(
+            identities: frozenset[tuple[SourceId, str]],
+        ) -> tuple[int, int, int, int]:
+            evaluated = tuple(outcomes[identity] for identity in identities if identity in outcomes)
+            return (
+                len(evaluated),
+                sum(outcome.status is MatchStatus.MATCHED for outcome in evaluated),
+                sum(outcome.status is MatchStatus.PENDING for outcome in evaluated),
+                sum(outcome.status is MatchStatus.AMBIGUOUS for outcome in evaluated),
+            )
+
+        retry_evaluated, retry_matched, retry_pending, retry_ambiguous = classify(
+            plan.retry_due_identities
+        )
+        (
+            coalesced_evaluated,
+            coalesced_matched,
+            coalesced_pending,
+            coalesced_ambiguous,
+        ) = classify(plan.coalesced_unresolved_identities)
+        return replace(
+            plan.diagnostics,
+            retry_due_evaluated_count=retry_evaluated,
+            retry_due_resolved_to_matched_count=retry_matched,
+            retry_due_still_pending_count=retry_pending,
+            retry_due_still_ambiguous_count=retry_ambiguous,
+            coalesced_unresolved_evaluated_count=coalesced_evaluated,
+            coalesced_unresolved_resolved_to_matched_count=coalesced_matched,
+            coalesced_unresolved_still_pending_count=coalesced_pending,
+            coalesced_unresolved_still_ambiguous_count=coalesced_ambiguous,
+        )
 
     @staticmethod
     def _apply_source_catalogue_diagnostics(

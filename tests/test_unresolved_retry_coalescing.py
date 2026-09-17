@@ -20,7 +20,12 @@ from news_bulletin_playlist.engine import EngineRunner
 from news_bulletin_playlist.models import CanonicalEdition
 from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.spotify.client import SpotifyTransportError
-from news_bulletin_playlist.spotify.matcher import SpotifyCatalogueResult, match_source_editions
+from news_bulletin_playlist.spotify.matcher import (
+    MatchOutcome,
+    SourceMatchResult,
+    SpotifyCatalogueResult,
+    match_source_editions,
+)
 from news_bulletin_playlist.spotify_planner import (
     catalogue_context_fingerprint,
     matching_input_fingerprint,
@@ -159,6 +164,49 @@ def test_due_retry_coalesces_non_due_unresolved_without_new_trigger(tmp_path: Pa
     assert plan.diagnostics.matching_reason_retry_due_count == 1
     assert plan.diagnostics.matching_reason_coalesced_unresolved_count == 1
     assert plan.diagnostics.matching_work_count == 2
+    assert plan.retry_due_identities == frozenset({due.identity})
+    assert plan.coalesced_unresolved_identities == frozenset({non_due.identity})
+
+
+def test_matching_yield_diagnostics_classify_retry_and_coalesced_outcomes(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    due = _edition("yield-due", minutes_old=30)
+    non_due = _edition("yield-coalesced", minutes_old=5)
+    _persist_unresolved(runner, due, attempted_at=NOW - timedelta(minutes=20))
+    _persist_unresolved(runner, non_due, attempted_at=NOW - timedelta(minutes=5))
+    plan = runner._source_matching_plan(_source(), (due, non_due), NOW)
+    result = SourceMatchResult(
+        source_id=_source().id,
+        outcomes=(
+            MatchOutcome(
+                edition=due,
+                status=MatchStatus.MATCHED,
+                spotify_episode_uri="spotify:episode:resolved-due",
+                diagnostics="matched",
+            ),
+            MatchOutcome(
+                edition=non_due,
+                status=MatchStatus.AMBIGUOUS,
+                spotify_episode_uri=None,
+                diagnostics="ambiguous",
+            ),
+        ),
+        catalogue_calls=1,
+        catalogue_complete=True,
+        catalogue_candidate_count=2,
+        catalogue_inspected=True,
+    )
+
+    diagnostic = runner._matching_yield_diagnostics(plan, result)
+
+    assert diagnostic.retry_due_evaluated_count == 1
+    assert diagnostic.retry_due_resolved_to_matched_count == 1
+    assert diagnostic.retry_due_still_pending_count == 0
+    assert diagnostic.retry_due_still_ambiguous_count == 0
+    assert diagnostic.coalesced_unresolved_evaluated_count == 1
+    assert diagnostic.coalesced_unresolved_resolved_to_matched_count == 0
+    assert diagnostic.coalesced_unresolved_still_pending_count == 0
+    assert diagnostic.coalesced_unresolved_still_ambiguous_count == 1
 
 
 def test_non_due_unresolved_alone_does_not_authorize_catalogue(tmp_path: Path) -> None:
@@ -325,6 +373,14 @@ def test_run_cycle_due_retry_coalesces_non_due_with_one_catalogue(tmp_path: Path
     assert diagnostic.catalogue_requested is True
     assert diagnostic.catalogue_inspected is True
     assert diagnostic.catalogue_request_count == 1
+    assert diagnostic.retry_due_evaluated_count == 1
+    assert diagnostic.retry_due_resolved_to_matched_count == 0
+    assert diagnostic.retry_due_still_pending_count == 1
+    assert diagnostic.retry_due_still_ambiguous_count == 0
+    assert diagnostic.coalesced_unresolved_evaluated_count == 1
+    assert diagnostic.coalesced_unresolved_resolved_to_matched_count == 0
+    assert diagnostic.coalesced_unresolved_still_pending_count == 1
+    assert diagnostic.coalesced_unresolved_still_ambiguous_count == 0
     assert spotify.show_calls == show_calls + 1
     assert after is not None
     assert after.first_unresolved_at == before.first_unresolved_at
