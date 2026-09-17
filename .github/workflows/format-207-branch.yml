@@ -1,0 +1,33 @@
+name: Format #207 branch
+
+on:
+  push:
+    branches:
+      - observe/207-soft-retention-rejections
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: observe/207-soft-retention-rejections
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - run: pip install ruff==0.16.8
+      - run: ruff format src/news_bulletin_playlist/soft_retention_engine.py tests/test_soft_retention_rejection_observability.py tests/test_soft_retention_rejection_resolution.py
+      - name: Commit formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/news_bulletin_playlist/soft_retention_engine.py tests/test_soft_retention_rejection_observability.py tests/test_soft_retention_rejection_resolution.py
+          git commit -m "Format #207 observability changes"
+          git push origin HEAD:observe/207-soft-retention-rejections
