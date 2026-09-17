@@ -4,6 +4,7 @@ from datetime import datetime
 
 import pytest
 
+from news_bulletin_playlist.provider_watch import evaluate_titles
 from news_bulletin_playlist.providers.common import MADRID
 from news_bulletin_playlist.providers.ondacero import OndaCeroParser
 from news_bulletin_playlist.providers.rne import RneParser
@@ -109,3 +110,25 @@ def test_recovery_never_accepts_unrelated_products_or_invalid_date_time(
 
     assert attempt.mode == "rejected"
     assert attempt.parsed is None
+
+
+def test_provider_watch_counts_recovered_titles_as_healthy_without_raw_title_leak() -> None:
+    recovered = "NOTICIAS RNE | 17/09/26 : 09:30 H."
+
+    result = evaluate_titles("rne", RneParser(), [recovered] * 6)
+
+    assert result.ok is True
+    assert result.parsed == 6
+    assert "recovered 6/6" in result.detail
+    assert recovered not in result.detail
+
+
+def test_provider_watch_reports_unresolved_counts_without_echoing_rejected_titles() -> None:
+    rejected = "RNE DEPORTES - private-looking arbitrary provider text"
+
+    result = evaluate_titles("rne", RneParser(), [rejected] * 6)
+
+    assert result.ok is False
+    assert result.parsed == 0
+    assert "unresolved 6/6" in result.detail
+    assert rejected not in result.detail
