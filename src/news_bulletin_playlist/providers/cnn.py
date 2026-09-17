@@ -8,8 +8,8 @@ from news_bulletin_playlist.providers.title_recovery import TitleParseAttempt, p
 
 _PATTERN = re.compile(
     r"^CNN 5 cosas\s+"
-    r"(?P<month>\d{1,2})/(?P<day>\d{1,2})/(?P<year>\d{2}|\d{4})\s+"
-    r"(?P<hour>\d{1,2})(?::(?P<minute>[0-5]\d))?\s*(?P<ampm>am|pm)$",
+    r"(?P<month>[0-9]{1,2})/(?P<day>[0-9]{1,2})/(?P<year>[0-9]{2}|[0-9]{4})\s+"
+    r"(?P<hour>[0-9]{1,2})(?::(?P<minute>[0-5][0-9]))?\s*(?P<ampm>am|pm)$",
     re.IGNORECASE,
 )
 
