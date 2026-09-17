@@ -23,7 +23,7 @@ from news_bulletin_playlist.models import (
     SourceId,
 )
 from news_bulletin_playlist.providers.release_date_title import RELEASE_DATE_TITLE_PARSER_ID
-from news_bulletin_playlist.registry import get_collection_filter, get_title_parser
+from news_bulletin_playlist.registry import get_collection_filter, get_recovery_title_parser
 
 FeedFetcher = Callable[[str], bytes]
 type CollectionFailureReason = Literal[
@@ -32,6 +32,7 @@ type CollectionFailureReason = Literal[
     "xml_parse_error",
     "no_rss_items",
     "no_canonical_editions",
+    "title_parser_drift",
     "configuration_error",
     "normalization_error",
 ]
@@ -57,6 +58,8 @@ _FETCH_DURATION_ATTR = "_news_playlist_rss_fetch_duration_ms"
 _FETCH_REDIRECT_ATTR = "_news_playlist_rss_redirect_count"
 _FETCH_FAILURE_KIND_ATTR = "_news_playlist_rss_fetch_failure_kind"
 _REDIRECT_DISPATCH_ATTR = "_news_playlist_rss_redirect_dispatch"
+_TITLE_PARSE_MIN_SAMPLE = 3
+_TITLE_PARSE_MIN_ACCEPT_RATIO = 0.5
 _RSS_FETCH_FAILURE_KINDS = frozenset(
     {
         "timeout",
@@ -82,6 +85,11 @@ class CollectionDiagnostics:
     rss_filter_rejected_count: int | None = None
     rss_duplicate_native_id_count: int | None = None
     rss_invalid_published_at_count: int | None = None
+    rss_title_parser_attempted_count: int | None = None
+    rss_title_parser_exact_count: int | None = None
+    rss_title_parser_recovered_count: int | None = None
+    rss_title_parser_normalized_recovered_count: int | None = None
+    rss_title_parser_provider_compat_recovered_count: int | None = None
     rss_title_parser_rejected_count: int | None = None
     rss_native_id_guid_count: int | None = None
     rss_native_id_enclosure_count: int | None = None
@@ -436,6 +444,11 @@ def _normalize_rss_source_observed(
                 rss_filter_rejected_count=0,
                 rss_duplicate_native_id_count=0,
                 rss_invalid_published_at_count=0,
+                rss_title_parser_attempted_count=0,
+                rss_title_parser_exact_count=0,
+                rss_title_parser_recovered_count=0,
+                rss_title_parser_normalized_recovered_count=0,
+                rss_title_parser_provider_compat_recovered_count=0,
                 rss_title_parser_rejected_count=0,
                 rss_native_id_guid_count=0,
                 rss_native_id_enclosure_count=0,
@@ -447,7 +460,11 @@ def _normalize_rss_source_observed(
 
     parser_id = str(source.parser_id)
     try:
-        parser = None if parser_id == RELEASE_DATE_TITLE_PARSER_ID else get_title_parser(parser_id)
+        parser = (
+            None
+            if parser_id == RELEASE_DATE_TITLE_PARSER_ID
+            else get_recovery_title_parser(parser_id)
+        )
         collection_filter = (
             None
             if source.collection_filter_id is None
@@ -478,6 +495,10 @@ def _normalize_rss_source_observed(
     filter_rejected_count = 0
     duplicate_native_id_count = 0
     invalid_published_at_count = 0
+    title_parser_attempted_count = 0
+    title_parser_exact_count = 0
+    title_parser_normalized_recovered_count = 0
+    title_parser_provider_compat_recovered_count = 0
     title_parser_rejected_count = 0
     native_id_guid_count = 0
     native_id_enclosure_count = 0
@@ -513,10 +534,18 @@ def _normalize_rss_source_observed(
 
             edition_at = None
             if parser is not None:
-                parsed = parser.parse(title)
+                title_parser_attempted_count += 1
+                attempt = parser.parse_with_recovery(title)
+                parsed = attempt.parsed
                 if parsed is None:
                     title_parser_rejected_count += 1
                     continue
+                if attempt.mode == "exact":
+                    title_parser_exact_count += 1
+                elif attempt.mode == "normalized":
+                    title_parser_normalized_recovered_count += 1
+                elif attempt.mode == "provider_compat":
+                    title_parser_provider_compat_recovered_count += 1
                 edition_at = _apply_source_timezone(parsed, source.timezone)
 
             editions.append(
@@ -538,6 +567,10 @@ def _normalize_rss_source_observed(
         ValueError,
         KeyError,
     ) as exc:
+        recovered_count = (
+            title_parser_normalized_recovered_count
+            + title_parser_provider_compat_recovered_count
+        )
         return _NormalizedSource(
             (),
             CollectionDiagnostics(
@@ -546,7 +579,24 @@ def _normalize_rss_source_observed(
                 rss_filter_rejected_count=filter_rejected_count,
                 rss_duplicate_native_id_count=duplicate_native_id_count,
                 rss_invalid_published_at_count=invalid_published_at_count,
-                rss_title_parser_rejected_count=title_parser_rejected_count,
+                rss_title_parser_attempted_count=(
+                    title_parser_attempted_count if parser is not None else None
+                ),
+                rss_title_parser_exact_count=(
+                    title_parser_exact_count if parser is not None else None
+                ),
+                rss_title_parser_recovered_count=(
+                    recovered_count if parser is not None else None
+                ),
+                rss_title_parser_normalized_recovered_count=(
+                    title_parser_normalized_recovered_count if parser is not None else None
+                ),
+                rss_title_parser_provider_compat_recovered_count=(
+                    title_parser_provider_compat_recovered_count if parser is not None else None
+                ),
+                rss_title_parser_rejected_count=(
+                    title_parser_rejected_count if parser is not None else None
+                ),
                 rss_native_id_guid_count=native_id_guid_count,
                 rss_native_id_enclosure_count=native_id_enclosure_count,
                 rss_native_id_link_count=native_id_link_count,
@@ -555,36 +605,60 @@ def _normalize_rss_source_observed(
             exc,
         )
 
+    recovered_count = (
+        title_parser_normalized_recovered_count + title_parser_provider_compat_recovered_count
+    )
     diagnostics = CollectionDiagnostics(
         rss_item_count=item_count,
         rss_missing_required_fields_count=missing_required_fields_count,
         rss_filter_rejected_count=filter_rejected_count,
         rss_duplicate_native_id_count=duplicate_native_id_count,
         rss_invalid_published_at_count=invalid_published_at_count,
-        rss_title_parser_rejected_count=title_parser_rejected_count,
+        rss_title_parser_attempted_count=(
+            title_parser_attempted_count if parser is not None else None
+        ),
+        rss_title_parser_exact_count=(title_parser_exact_count if parser is not None else None),
+        rss_title_parser_recovered_count=(recovered_count if parser is not None else None),
+        rss_title_parser_normalized_recovered_count=(
+            title_parser_normalized_recovered_count if parser is not None else None
+        ),
+        rss_title_parser_provider_compat_recovered_count=(
+            title_parser_provider_compat_recovered_count if parser is not None else None
+        ),
+        rss_title_parser_rejected_count=(
+            title_parser_rejected_count if parser is not None else None
+        ),
         rss_native_id_guid_count=native_id_guid_count,
         rss_native_id_enclosure_count=native_id_enclosure_count,
         rss_native_id_link_count=native_id_link_count,
     )
+
+    accepted_count = title_parser_exact_count + recovered_count
+    if parser is not None and _title_parser_drifted(
+        attempted_count=title_parser_attempted_count,
+        accepted_count=accepted_count,
+    ):
+        error = ValueError("title parser contract degraded")
+        return _NormalizedSource(
+            (),
+            replace(diagnostics, failure_reason="title_parser_drift"),
+            error,
+        )
+
     if not editions:
         error = ValueError("feed contained no canonical bulletin editions")
         return _NormalizedSource(
             (),
-            CollectionDiagnostics(
-                rss_item_count=diagnostics.rss_item_count,
-                rss_missing_required_fields_count=(diagnostics.rss_missing_required_fields_count),
-                rss_filter_rejected_count=diagnostics.rss_filter_rejected_count,
-                rss_duplicate_native_id_count=diagnostics.rss_duplicate_native_id_count,
-                rss_invalid_published_at_count=diagnostics.rss_invalid_published_at_count,
-                rss_title_parser_rejected_count=diagnostics.rss_title_parser_rejected_count,
-                rss_native_id_guid_count=diagnostics.rss_native_id_guid_count,
-                rss_native_id_enclosure_count=diagnostics.rss_native_id_enclosure_count,
-                rss_native_id_link_count=diagnostics.rss_native_id_link_count,
-                failure_reason="no_canonical_editions",
-            ),
+            replace(diagnostics, failure_reason="no_canonical_editions"),
             error,
         )
     return _NormalizedSource(tuple(editions), diagnostics)
+
+
+def _title_parser_drifted(*, attempted_count: int, accepted_count: int) -> bool:
+    if attempted_count < _TITLE_PARSE_MIN_SAMPLE:
+        return False
+    return accepted_count / attempted_count < _TITLE_PARSE_MIN_ACCEPT_RATIO
 
 
 def _source_native_id(item: ET.Element) -> str | None:
