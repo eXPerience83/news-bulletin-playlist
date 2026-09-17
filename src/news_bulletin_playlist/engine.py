@@ -1398,7 +1398,8 @@ class EngineRunner:
                 except PersistenceError:
                     # This read exists only to authorize the optional 60-second local deferral.
                     # If it is unavailable, preserve the pre-existing conservative provider flow
-                    # instead of turning an optimization lookup into a destination failure.
+                    # while retaining the shadow planner's fail-closed diagnostic state.
+                    self._planner_shadow = PlannerShadowResult.unsafe()
                     pending = None
                 if (
                     pending is not None
