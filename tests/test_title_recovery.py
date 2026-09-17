@@ -165,7 +165,7 @@ def test_rne_date_without_hour_cannot_reuse_year_digits_as_time(title: str) -> N
         "NOTICIAS RNE - 17/09/202609",
     ],
 )
-def test_rne_date_hour_boundary_rejects_concatenated_or_nfkc_digits(title: str) -> None:
+def test_rne_date_hour_boundary_rejects_concatenated_or_compatibility_digits(title: str) -> None:
     attempt = RneParser().parse_with_recovery(title)
 
     assert attempt.mode == "rejected"
