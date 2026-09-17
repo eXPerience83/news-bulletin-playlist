@@ -111,10 +111,7 @@ def _resolve_soft_retention_evidence(
             return _rejected(SoftRetentionRejectionReason.MISSING_DESTINATION_VERIFICATION)
         if observed_at < destination.last_verified_at:
             return _rejected(SoftRetentionRejectionReason.CLOCK_ROLLBACK)
-        if (
-            destination.destination_context_fingerprint
-            != destination_context_fingerprint(playlist)
-        ):
+        if destination.destination_context_fingerprint != destination_context_fingerprint(playlist):
             return _rejected(SoftRetentionRejectionReason.DESTINATION_MISMATCH)
         if destination.config_fingerprint != playlist_config_fingerprint(playlist):
             return _rejected(SoftRetentionRejectionReason.CONFIG_MISMATCH)
@@ -173,9 +170,7 @@ def _resolve_soft_retention_evidence(
                     return _rejected(
                         SoftRetentionRejectionReason.MATCHING_PERSISTENCE_REJECTION_BARRIER
                     )
-                recovery = journal.get_matched_recovery(
-                    str(item.source_id), item.source_native_id
-                )
+                recovery = journal.get_matched_recovery(str(item.source_id), item.source_native_id)
                 if recovery is not None:
                     reason = matched_recovery_planning_reason(
                         recovery,
@@ -203,7 +198,7 @@ def _resolve_soft_retention_evidence(
         if not decision.expiry_only:
             return _rejected(SoftRetentionRejectionReason.NOT_EXPIRY_ONLY)
         return _SoftRetentionEvidenceResolution(SoftRetentionEvidence(baseline, decision))
-    except (DesiredStateError, PersistenceError, ValueError):
+    except DesiredStateError, PersistenceError, ValueError:
         return _rejected(SoftRetentionRejectionReason.EVIDENCE_UNAVAILABLE)
 
 
@@ -335,7 +330,7 @@ class SoftRetentionEngineRunner(EngineRunner):
                 now=now,
                 source_timezones=self._source_timezones(),
             )
-        except (DesiredStateError, PersistenceError, ValueError):
+        except DesiredStateError, PersistenceError, ValueError:
             return plan
         evidence = self._soft_retention_evidence(
             playlist,
@@ -404,7 +399,7 @@ class SoftRetentionEngineRunner(EngineRunner):
                 now=now,
                 source_timezones=self._source_timezones(),
             )
-        except (DesiredStateError, PersistenceError, ValueError):
+        except DesiredStateError, PersistenceError, ValueError:
             return requested_fingerprint
         if stable_fingerprint(logical_desired.uris) != requested_fingerprint:
             return requested_fingerprint
