@@ -449,6 +449,14 @@ def test_source_matching_diagnostics_emit_only_fixed_schema_counts_and_booleans(
                     matching_reason_new_match_count=1,
                     matching_reason_retry_due_count=2,
                     matching_reason_coalesced_unresolved_count=1,
+                    retry_due_evaluated_count=2,
+                    retry_due_resolved_to_matched_count=1,
+                    retry_due_still_pending_count=1,
+                    retry_due_still_ambiguous_count=0,
+                    coalesced_unresolved_evaluated_count=1,
+                    coalesced_unresolved_resolved_to_matched_count=0,
+                    coalesced_unresolved_still_pending_count=0,
+                    coalesced_unresolved_still_ambiguous_count=1,
                     unresolved_relevant_count=4,
                     catalogue_requested=True,
                     catalogue_inspected=True,
@@ -480,6 +488,14 @@ def test_source_matching_diagnostics_emit_only_fixed_schema_counts_and_booleans(
     assert event.details["matching_reason_new_match_count"] == 1
     assert event.details["matching_reason_retry_due_count"] == 2
     assert event.details["matching_reason_coalesced_unresolved_count"] == 1
+    assert event.details["retry_due_evaluated_count"] == 2
+    assert event.details["retry_due_resolved_to_matched_count"] == 1
+    assert event.details["retry_due_still_pending_count"] == 1
+    assert event.details["retry_due_still_ambiguous_count"] == 0
+    assert event.details["coalesced_unresolved_evaluated_count"] == 1
+    assert event.details["coalesced_unresolved_resolved_to_matched_count"] == 0
+    assert event.details["coalesced_unresolved_still_pending_count"] == 0
+    assert event.details["coalesced_unresolved_still_ambiguous_count"] == 1
     assert event.details["catalogue_requested"] is True
     assert event.details["catalogue_inspected"] is True
     assert event.details["catalogue_request_count"] == 2

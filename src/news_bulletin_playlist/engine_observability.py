@@ -503,6 +503,32 @@ def _source_diagnostic_details(
                 "catalogue_prewrite_request_count": prewrite_requests,
             }
         )
+    if (
+        matching.matching_reason_retry_due_count > 0
+        or matching.matching_reason_coalesced_unresolved_count > 0
+    ):
+        details.update(
+            {
+                "retry_due_evaluated_count": matching.retry_due_evaluated_count,
+                "retry_due_resolved_to_matched_count": (
+                    matching.retry_due_resolved_to_matched_count
+                ),
+                "retry_due_still_pending_count": matching.retry_due_still_pending_count,
+                "retry_due_still_ambiguous_count": matching.retry_due_still_ambiguous_count,
+                "coalesced_unresolved_evaluated_count": (
+                    matching.coalesced_unresolved_evaluated_count
+                ),
+                "coalesced_unresolved_resolved_to_matched_count": (
+                    matching.coalesced_unresolved_resolved_to_matched_count
+                ),
+                "coalesced_unresolved_still_pending_count": (
+                    matching.coalesced_unresolved_still_pending_count
+                ),
+                "coalesced_unresolved_still_ambiguous_count": (
+                    matching.coalesced_unresolved_still_ambiguous_count
+                ),
+            }
+        )
     collection = source.collection_diagnostics
     optional_collection_details = {
         "rss_item_count": collection.rss_item_count,
