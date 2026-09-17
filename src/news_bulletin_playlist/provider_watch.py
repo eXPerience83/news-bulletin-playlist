@@ -1,31 +1,26 @@
 from __future__ import annotations
 
-import html
-import re
 import sys
 import time
 import urllib.error
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from math import ceil
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.collection import fetch_feed as fetch_runtime_feed
 from news_bulletin_playlist.collection import normalize_rss_source
 from news_bulletin_playlist.models import SourceDefinition
-from news_bulletin_playlist.providers.base import TitleParser
+from news_bulletin_playlist.providers.base import RecoveryTitleParser
 from news_bulletin_playlist.registry import CORE_PROVIDERS, ProviderConfig
 
 _SAMPLE_SIZE = 6
 _MIN_PARSE_RATIO = 0.5
 _RETRYABLE_HTTP = frozenset({429, 500, 502, 503, 504})
 _RETRY_DELAYS_SECONDS = (0.0, 2.0, 5.0)
-_ONDACERO_HTML_TITLE = re.compile(
-    r"Las noticias de Onda Cero de las\s+"
-    r"(?:[01]?\d|2[0-3]):[0-5]\d[hH]\s*"
-    r"\(\d{1,2}/\d{1,2}/\d{4}\)",
-    re.IGNORECASE,
-)
+_ONDACERO_TITLE_PREFIX = "las noticias de onda cero"
+_FALLBACK_TEXT_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6", "a", "p", "span", "li"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +30,37 @@ class ContractResult:
     sampled: int
     parsed: int
     detail: str
+
+
+class _FallbackTitleHTMLParser(HTMLParser):
+    """Extract complete text units; never detach a bulletin-looking substring."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._captures: list[tuple[str, list[str]]] = []
+        self.titles: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized = tag.casefold()
+        if normalized in _FALLBACK_TEXT_TAGS:
+            self._captures.append((normalized, []))
+
+    def handle_data(self, data: str) -> None:
+        for _tag, parts in self._captures:
+            parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.casefold()
+        for index in range(len(self._captures) - 1, -1, -1):
+            capture_tag, parts = self._captures[index]
+            if capture_tag != normalized:
+                continue
+            self._captures.pop(index)
+            text = " ".join("".join(parts).split()).strip()
+            if text:
+                self.titles.append(text)
+            break
 
 
 def extract_rss_titles(payload: bytes) -> list[str]:
@@ -53,13 +79,21 @@ def extract_rss_titles(payload: bytes) -> list[str]:
 
 
 def extract_fallback_titles(provider_id: str, payload: bytes) -> list[str]:
-    page = html.unescape(payload.decode("utf-8", errors="replace"))
     if provider_id != "ondacero":
         return []
-    return list(dict.fromkeys(match.group(0) for match in _ONDACERO_HTML_TITLE.finditer(page)))
+    parser = _FallbackTitleHTMLParser()
+    parser.feed(payload.decode("utf-8", errors="replace"))
+    candidates = (
+        title for title in parser.titles if title.casefold().startswith(_ONDACERO_TITLE_PREFIX)
+    )
+    return list(dict.fromkeys(candidates))
 
 
-def evaluate_titles(provider_id: str, parser: TitleParser, titles: list[str]) -> ContractResult:
+def evaluate_titles(
+    provider_id: str,
+    parser: RecoveryTitleParser,
+    titles: list[str],
+) -> ContractResult:
     sample = titles[:_SAMPLE_SIZE]
     if not sample:
         return ContractResult(provider_id, False, 0, 0, "source contained no bulletin titles")
@@ -67,9 +101,10 @@ def evaluate_titles(provider_id: str, parser: TitleParser, titles: list[str]) ->
     parsed = 0
     recovered = 0
     for title in sample:
-        accepted, was_recovered = _evaluate_title(parser, title)
+        attempt = parser.parse_with_recovery(title)
+        accepted = attempt.parsed is not None
         parsed += int(accepted)
-        recovered += int(was_recovered)
+        recovered += int(accepted and attempt.mode in {"normalized", "provider_compat"})
 
     required = max(1, ceil(len(sample) * _MIN_PARSE_RATIO))
     ok = parsed >= required
@@ -79,15 +114,6 @@ def evaluate_titles(provider_id: str, parser: TitleParser, titles: list[str]) ->
     if not ok:
         detail = f"{detail}; unresolved {len(sample) - parsed}/{len(sample)}"
     return ContractResult(provider_id, ok, len(sample), parsed, detail)
-
-
-def _evaluate_title(parser: TitleParser, title: str) -> tuple[bool, bool]:
-    recovery = getattr(parser, "parse_with_recovery", None)
-    if callable(recovery):
-        attempt = recovery(title)
-        accepted = attempt.parsed is not None
-        return accepted, accepted and attempt.mode in {"normalized", "provider_compat"}
-    return parser.parse(title) is not None, False
 
 
 def fetch_feed_once(url: str, timeout: float = 20.0) -> bytes:

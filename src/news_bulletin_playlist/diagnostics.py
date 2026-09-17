@@ -153,6 +153,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "no_canonical_editions",
             "no_rss_items",
             "normalization_error",
+            "title_parser_drift",
             "xml_parse_error",
         }
     ),

@@ -40,10 +40,53 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
         *,
         request_snapshot: SpotifyRequestScopeSnapshot | None = None,
     ) -> None:
+        self._emit_title_parse_diagnostics(result, cycle_id)
         self._emit_matching_recovery_diagnostics(result, cycle_id)
         self._emit_playlist_safety_diagnostics(result, cycle_id)
         self._emit_canonical_prune_diagnostics(result, cycle_id)
         super()._emit_result(result, cycle_id, request_snapshot=request_snapshot)
+
+    def _emit_title_parse_diagnostics(
+        self,
+        result: EngineCycleResult,
+        cycle_id: str,
+    ) -> None:
+        """Emit bounded mode counters without provider titles, ids, payloads or extra I/O."""
+        for outcome in result.sources:
+            collection = outcome.collection_diagnostics
+            counts = {
+                "title_parse_exact": collection.rss_title_parser_exact_count,
+                "title_parse_normalized_recovered": (
+                    collection.rss_title_parser_normalized_recovered_count
+                ),
+                "title_parse_provider_compat_recovered": (
+                    collection.rss_title_parser_provider_compat_recovered_count
+                ),
+                "title_parse_rejected": collection.rss_title_parser_rejected_count,
+            }
+            for event_name, total in counts.items():
+                if total is None or total <= 0:
+                    continue
+                self.diagnostics.emit(
+                    occurred_at=result.finished_at,
+                    severity=DiagnosticSeverity.INFO,
+                    component="source.collection",
+                    event_name=event_name,
+                    cycle_id=cycle_id,
+                    source_id=str(outcome.source_id),
+                    details={"total": total},
+                )
+
+            if collection.failure_reason == "title_parser_drift":
+                self.diagnostics.emit(
+                    occurred_at=result.finished_at,
+                    severity=DiagnosticSeverity.WARNING,
+                    component="source.collection",
+                    event_name="title_format_drift_unresolved",
+                    cycle_id=cycle_id,
+                    source_id=str(outcome.source_id),
+                    details={"total": collection.rss_title_parser_rejected_count or 0},
+                )
 
     def _emit_matching_recovery_diagnostics(
         self,

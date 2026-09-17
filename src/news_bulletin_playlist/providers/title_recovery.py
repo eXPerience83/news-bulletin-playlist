@@ -10,6 +10,12 @@ from news_bulletin_playlist.models import ParsedEdition
 
 type TitleParseMode = Literal["exact", "normalized", "provider_compat", "rejected"]
 type StrictTitleParser = Callable[[str], ParsedEdition | None]
+type CompatCanonicalizer = Callable[[str], str | None]
+
+# Current bulletin contracts produce short human-readable titles. 1024 characters is
+# intentionally far above every accepted grammar while bounding regex/Unicode work on
+# malformed provider input before the strict parser gets a chance to backtrack.
+MAX_TITLE_PARSE_CHARS = 1024
 
 _DASHES = str.maketrans(
     {
@@ -60,6 +66,9 @@ def parse_with_recovery(
 ) -> TitleParseAttempt:
     """Parse one title with bounded syntax recovery while preserving the original title."""
 
+    if len(title) > MAX_TITLE_PARSE_CHARS:
+        return TitleParseAttempt(None, "rejected", "title_too_long")
+
     exact = strict_parse(title)
     if exact is not None:
         return TitleParseAttempt(_preserve_original_title(exact, title), "exact")
@@ -91,25 +100,26 @@ def parse_with_recovery(
 
 
 def normalize_title_syntax(title: str) -> str:
-    """Normalize syntax-only Unicode/spacing variants without changing semantic tokens."""
+    """Normalize reviewed Unicode/spacing syntax without guessing semantic tokens."""
 
     value = unicodedata.normalize("NFKC", title).translate(_ZERO_WIDTH).translate(_DASHES)
     return " ".join(value.split()).strip()
 
 
 def _provider_compat_candidates(provider_id: str, title: str) -> Iterable[tuple[str, str]]:
-    if provider_id == "rne":
-        candidate = _canonical_rne(title)
-        if candidate is not None:
-            yield candidate, "rne_date_time_separators"
-    elif provider_id == "ser":
-        candidate = _canonical_ser(title)
-        if candidate is not None:
-            yield candidate, "ser_layout_punctuation"
-    elif provider_id == "ondacero":
-        candidate = _canonical_ondacero(title)
-        if candidate is not None:
-            yield candidate, "ondacero_layout_punctuation"
+    if provider_id == "rne" and title.endswith("."):
+        # Let the historical strict parser decide whether the otherwise-identical compact
+        # form is valid. This intentionally does not create a second compact grammar.
+        terminal_candidate = title[:-1].rstrip()
+        if terminal_candidate:
+            yield terminal_candidate, "rne_terminal_punctuation"
+
+    canonicalizer = _PROVIDER_COMPAT_CANONICALIZERS.get(provider_id)
+    if canonicalizer is None:
+        return
+    canonical_candidate = canonicalizer(title)
+    if canonical_candidate is not None:
+        yield canonical_candidate, _PROVIDER_COMPAT_KINDS[provider_id]
 
 
 def _canonical_rne(title: str) -> str | None:
@@ -129,7 +139,7 @@ def _canonical_ser(title: str) -> str | None:
     if match is None:
         return None
     values = match.groupdict()
-    year = _four_digit_current_year(values["year"])
+    year = _four_digit_spanish_year(values["year"])
     return (
         f"Las noticias de la SER, {values['hour']}:{values['minute']} "
         f"({values['day']}/{values['month']}/{year})"
@@ -141,14 +151,16 @@ def _canonical_ondacero(title: str) -> str | None:
     if match is None:
         return None
     values = match.groupdict()
-    year = _four_digit_current_year(values["year"])
+    year = _four_digit_spanish_year(values["year"])
     return (
         f"Las noticias de Onda Cero de las {values['hour']}:{values['minute']}h "
         f"({values['day']}/{values['month']}/{year})"
     )
 
 
-def _four_digit_current_year(value: str) -> str:
+def _four_digit_spanish_year(value: str) -> str:
+    # RNE already used the 2000+YY rule historically; SER/Onda compatibility intentionally
+    # follows the same reviewed bulletin-era policy rather than a clock-dependent pivot.
     return value if len(value) == 4 else f"20{value}"
 
 
@@ -156,3 +168,15 @@ def _preserve_original_title(parsed: ParsedEdition, original_title: str) -> Pars
     if parsed.title == original_title:
         return parsed
     return ParsedEdition(parsed.provider_id, original_title, parsed.edition_at)
+
+
+_PROVIDER_COMPAT_CANONICALIZERS: dict[str, CompatCanonicalizer] = {
+    "rne": _canonical_rne,
+    "ser": _canonical_ser,
+    "ondacero": _canonical_ondacero,
+}
+_PROVIDER_COMPAT_KINDS = {
+    "rne": "rne_date_time_separators",
+    "ser": "ser_layout_punctuation",
+    "ondacero": "ondacero_layout_punctuation",
+}
