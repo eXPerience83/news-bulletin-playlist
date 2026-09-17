@@ -158,6 +158,30 @@ def test_unicode_confusables_do_not_change_product_identity(
 @pytest.mark.parametrize(
     ("parser", "title"),
     [
+        (RneParser(), "NOTICIAS RNſ - 17.09.2026 - 09.30H"),
+        (SerParser(), "Laſ noticias de la SER, 09:30 (17/09/2026)"),
+        (SerParser(), "Las notİcias de la SER, 09:30 (17/09/2026)"),
+        (SerParser(), "Las notıcias de la SER, 09:30 (17/09/2026)"),
+        (
+            OndaCeroParser(),
+            "Las notİcias de Onda Cero de las 09:30h (17/09/2026)",
+        ),
+    ],
+)
+def test_python_ignorecase_unicode_extras_cannot_broaden_product_identity(
+    parser: RecoveryTitleParser,
+    title: str,
+) -> None:
+    attempt = parser.parse_with_recovery(title)
+
+    assert attempt.mode == "rejected"
+    assert attempt.recovery_kind == "unicode_casefold_confusable"
+    assert attempt.parsed is None
+
+
+@pytest.mark.parametrize(
+    ("parser", "title"),
+    [
         (RneParser(), "NOTICIAS RNE | 17/09/２０２６ : 09:30 H."),
         (SerParser(), "Las noticias de la SER - 9.30 １７-09-26"),
         (
