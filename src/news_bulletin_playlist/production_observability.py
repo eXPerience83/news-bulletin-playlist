@@ -14,7 +14,9 @@ from news_bulletin_playlist.production_diagnostic_queries import (
 )
 from news_bulletin_playlist.soft_retention import SoftRetentionDisposition
 from news_bulletin_playlist.soft_retention_diagnostics import (
+    SoftRetentionDiagnostic,
     SoftRetentionOutcomeDiagnostic,
+    SoftRetentionRejectionDiagnostic,
     bind_soft_retention_diagnostic_sink,
 )
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestScopeSnapshot
@@ -33,12 +35,14 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
         self._canonical_pruned_count = 0
         self._canonical_prune_observable = False
         self._soft_retention_outcomes: dict[str, SoftRetentionOutcomeDiagnostic] = {}
+        self._soft_retention_rejections: dict[str, SoftRetentionRejectionDiagnostic] = {}
 
     def run_cycle(self) -> EngineCycleResult:
         self._canonical_pruned_count = 0
         self._canonical_prune_observable = False
         self._soft_retention_outcomes.clear()
-        with bind_soft_retention_diagnostic_sink(self._record_soft_retention_outcome):
+        self._soft_retention_rejections.clear()
+        with bind_soft_retention_diagnostic_sink(self._record_soft_retention_diagnostic):
             return self._run_cycle_observing_prune()
 
     def _run_cycle_observing_prune(self) -> EngineCycleResult:
@@ -72,10 +76,16 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
             else:
                 del store.prune_operational_history
 
-    def _record_soft_retention_outcome(self, outcome: SoftRetentionOutcomeDiagnostic) -> None:
-        # The same proven decision may be consulted at several planner/reconciliation boundaries.
-        # Keep only the latest bounded classification per playlist for this serialized cycle.
-        self._soft_retention_outcomes[str(outcome.playlist_id)] = outcome
+    def _record_soft_retention_diagnostic(self, diagnostic: SoftRetentionDiagnostic) -> None:
+        playlist_id = str(diagnostic.playlist_id)
+        if isinstance(diagnostic, SoftRetentionOutcomeDiagnostic):
+            # A proven positive classification wins over any earlier evidence-gate rejection from
+            # another consultation boundary in the same serialized cycle.
+            self._soft_retention_outcomes[playlist_id] = diagnostic
+            self._soft_retention_rejections.pop(playlist_id, None)
+            return
+        if playlist_id not in self._soft_retention_outcomes:
+            self._soft_retention_rejections[playlist_id] = diagnostic
 
     def _emit_result(
         self,
@@ -225,7 +235,8 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
         cycle_id: str,
     ) -> None:
         for playlist in result.playlists:
-            retention = self._soft_retention_outcomes.get(str(playlist.playlist_id))
+            playlist_id = str(playlist.playlist_id)
+            retention = self._soft_retention_outcomes.get(playlist_id)
             if retention is not None and retention.disposition is SoftRetentionDisposition.DEFER:
                 self.diagnostics.emit(
                     occurred_at=result.finished_at,
@@ -233,7 +244,7 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                     component="playlist.retention",
                     event_name="soft_retention_deferred",
                     cycle_id=cycle_id,
-                    playlist_id=str(playlist.playlist_id),
+                    playlist_id=playlist_id,
                     details={
                         "total": retention.soft_expired_count,
                         "duration_seconds": retention.oldest_soft_expired_age_seconds,
@@ -252,7 +263,7 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                     component="playlist.retention",
                     event_name="soft_retention_deferred",
                     cycle_id=cycle_id,
-                    playlist_id=str(playlist.playlist_id),
+                    playlist_id=playlist_id,
                     details={"total": playlist.applied_count - playlist.desired_count},
                 )
 
@@ -266,11 +277,23 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                     component="playlist.retention",
                     event_name="soft_retention_forced_hard_expiry",
                     cycle_id=cycle_id,
-                    playlist_id=str(playlist.playlist_id),
+                    playlist_id=playlist_id,
                     details={
                         "total": retention.soft_expired_count,
                         "duration_seconds": retention.oldest_soft_expired_age_seconds,
                     },
+                )
+
+            rejection = self._soft_retention_rejections.get(playlist_id)
+            if retention is None and rejection is not None:
+                self.diagnostics.emit(
+                    occurred_at=result.finished_at,
+                    severity=DiagnosticSeverity.INFO,
+                    component="playlist.retention",
+                    event_name=f"soft_retention_evidence_rejected_{rejection.reason.value}",
+                    cycle_id=cycle_id,
+                    playlist_id=playlist_id,
+                    details={"total": 1},
                 )
 
             event_name = _preservation_event_name(playlist.error)
@@ -281,7 +304,7 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                     component="playlist.safety",
                     event_name=event_name,
                     cycle_id=cycle_id,
-                    playlist_id=str(playlist.playlist_id),
+                    playlist_id=playlist_id,
                     details={"total": 1},
                 )
 
