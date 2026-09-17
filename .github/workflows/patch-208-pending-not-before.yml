@@ -1,0 +1,122 @@
+name: Patch #208 pending confirmation not-before
+
+on:
+  push:
+    branches:
+      - perf/208-pending-not-before
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: perf/208-pending-not-before
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14'
+      - name: Patch engine pending gate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/news_bulletin_playlist/engine.py")
+          lines = path.read_text().splitlines()
+
+          constant_anchor = "_CATALOGUE_CONTRACT_VERSION = 1"
+          delay_line = "_PENDING_SNAPSHOT_CONFIRMATION_DELAY = timedelta(seconds=60)"
+          if delay_line not in lines:
+              anchor = lines.index(constant_anchor)
+              lines.insert(anchor + 1, delay_line)
+
+          start = next(
+              i for i, line in enumerate(lines) if line.strip() == "def _destination_work_plan("
+          )
+          end = next(
+              i
+              for i, line in enumerate(lines[start + 1 :], start + 1)
+              if line.strip().startswith("def _begin_destination_verification_required(")
+          )
+
+          method = [
+              "    def _destination_work_plan(",
+              "        self,",
+              "        playlist: PlaylistDefinition,",
+              "        now: datetime,",
+              "        expected: DestinationVerificationContext,",
+              "    ) -> _DestinationWorkPlan:",
+              "        try:",
+              "            state = self.planner_journal.get_destination(str(playlist.id))",
+              "            if state is None:",
+              "                return _DestinationWorkPlan(needs_remote=True)",
+              "",
+              "            context_matches = (",
+              "                state.destination_context_fingerprint == expected.destination_context_fingerprint",
+              "                and state.config_fingerprint == expected.config_fingerprint",
+              "                and state.auth_context_fingerprint == expected.auth_context_fingerprint",
+              "                and state.observed_desired_fingerprint == expected.desired_fingerprint",
+              "            )",
+              "            if state.dirty and not state.unknown and context_matches:",
+              "                pending = PendingSnapshotJournal(self.store).get(playlist.id)",
+              "                if (",
+              "                    pending is not None",
+              "                    and pending.readback_exact",
+              "                    and pending.destination_id == playlist.destination.external_id",
+              "                    and pending.desired_fingerprint == expected.desired_fingerprint",
+              "                    and pending.created_at <= now < pending.created_at + _PENDING_SNAPSHOT_CONFIRMATION_DELAY",
+              "                    and now < pending.expires_at",
+              "                ):",
+              "                    # Exact ordered-item readback already proved the write content.  Keep",
+              "                    # pending non-authoritative and revoke the runtime lease, but do not",
+              "                    # create provider work solely to re-read a snapshot during Spotify's",
+              "                    # immediate propagation window.",
+              "                    self.destination_leases.revoke(playlist.id)",
+              "                    return _DestinationWorkPlan(needs_remote=False)",
+              "",
+              "            if (",
+              "                not context_matches",
+              "                or state.confirmed_desired_fingerprint != expected.desired_fingerprint",
+              "                or state.dirty",
+              "                or state.unknown",
+              "                or state.last_verified_at is None",
+              "                or state.next_audit_at is None",
+              "                or now < state.last_verified_at",
+              "            ):",
+              "                return _DestinationWorkPlan(needs_remote=True)",
+              "            if PendingSnapshotJournal(self.store).get(playlist.id) is not None:",
+              "                self.destination_leases.revoke(playlist.id)",
+              "                return _DestinationWorkPlan(needs_remote=True)",
+              "            if now >= state.next_audit_at:",
+              "                return _DestinationWorkPlan(needs_remote=True, audit_only=True)",
+              "            return _DestinationWorkPlan(",
+              "                needs_remote=not self.destination_leases.allows(",
+              "                    playlist.id,",
+              "                    expected,",
+              "                    monotonic_now=self.monotonic_clock(),",
+              "                )",
+              "            )",
+              "        except (PersistenceError, ValueError):",
+              "            self.destination_leases.revoke(playlist.id)",
+              "            self._planner_shadow = PlannerShadowResult.unsafe()",
+              "            return _DestinationWorkPlan(needs_remote=False, state_available=False)",
+              "",
+          ]
+          lines[start:end] = method
+          path.write_text("\n".join(lines) + "\n")
+          PY
+      - run: pip install ruff==0.16.8
+      - run: ruff format src/news_bulletin_playlist/engine.py tests/test_pending_snapshot_not_before.py
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/news_bulletin_playlist/engine.py tests/test_pending_snapshot_not_before.py
+          git commit -m "Defer exact pending snapshot confirmation for 60 seconds"
+          git push origin HEAD:perf/208-pending-not-before
