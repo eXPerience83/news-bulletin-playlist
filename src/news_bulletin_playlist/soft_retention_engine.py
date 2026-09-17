@@ -20,6 +20,7 @@ from news_bulletin_playlist.reconciliation import build_desired_state_from_store
 from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
 from news_bulletin_playlist.soft_retention import SoftRetentionDecision, classify_soft_retention
 from news_bulletin_playlist.soft_retention_context import bind_soft_retention_audit_resolver
+from news_bulletin_playlist.soft_retention_diagnostics import publish_soft_retention_decision
 from news_bulletin_playlist.spotify_destination_audit import playlist_attestation_fingerprint
 from news_bulletin_playlist.spotify_planner import (
     DestinationState,
@@ -349,7 +350,7 @@ class SoftRetentionEngineRunner(EngineRunner):
         auth_context = self._shadow_auth_context
         if auth_context is None:
             return None
-        return resolve_soft_retention_evidence(
+        evidence = resolve_soft_retention_evidence(
             self.store,
             {source.id: source for source in self.config.sources},
             playlist,
@@ -357,6 +358,9 @@ class SoftRetentionEngineRunner(EngineRunner):
             now=now,
             auth_context_fingerprint=auth_context,
         )
+        if evidence is not None:
+            publish_soft_retention_decision(playlist.id, evidence.decision)
+        return evidence
 
     def _soft_retention_audit_desired(
         self,

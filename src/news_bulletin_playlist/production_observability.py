@@ -12,6 +12,11 @@ from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleR
 from news_bulletin_playlist.production_diagnostic_queries import (
     read_recovery_diagnostic_snapshot,
 )
+from news_bulletin_playlist.soft_retention import SoftRetentionDisposition
+from news_bulletin_playlist.soft_retention_diagnostics import (
+    SoftRetentionOutcomeDiagnostic,
+    bind_soft_retention_diagnostic_sink,
+)
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestScopeSnapshot
 from news_bulletin_playlist.spotify_planner import (
     PlannerReason,
@@ -27,10 +32,16 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
         super().__init__(*args, **kwargs)
         self._canonical_pruned_count = 0
         self._canonical_prune_observable = False
+        self._soft_retention_outcomes: dict[str, SoftRetentionOutcomeDiagnostic] = {}
 
     def run_cycle(self) -> EngineCycleResult:
         self._canonical_pruned_count = 0
         self._canonical_prune_observable = False
+        self._soft_retention_outcomes.clear()
+        with bind_soft_retention_diagnostic_sink(self._record_soft_retention_outcome):
+            return self._run_cycle_observing_prune()
+
+    def _run_cycle_observing_prune(self) -> EngineCycleResult:
         store = getattr(self.runner, "store", None)
         original_prune = getattr(store, "prune_operational_history", None)
         if store is None or not callable(original_prune):
@@ -60,6 +71,11 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                 store.prune_operational_history = previous_instance_override
             else:
                 del store.prune_operational_history
+
+    def _record_soft_retention_outcome(self, outcome: SoftRetentionOutcomeDiagnostic) -> None:
+        # The same proven decision may be consulted at several planner/reconciliation boundaries.
+        # Keep only the latest bounded classification per playlist for this serialized cycle.
+        self._soft_retention_outcomes[str(outcome.playlist_id)] = outcome
 
     def _emit_result(
         self,
@@ -209,12 +225,27 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
         cycle_id: str,
     ) -> None:
         for playlist in result.playlists:
-            if (
+            retention = self._soft_retention_outcomes.get(str(playlist.playlist_id))
+            if retention is not None and retention.disposition is SoftRetentionDisposition.DEFER:
+                self.diagnostics.emit(
+                    occurred_at=result.finished_at,
+                    severity=DiagnosticSeverity.INFO,
+                    component="playlist.retention",
+                    event_name="soft_retention_deferred",
+                    cycle_id=cycle_id,
+                    playlist_id=str(playlist.playlist_id),
+                    details={
+                        "total": retention.soft_expired_count,
+                        "duration_seconds": retention.oldest_soft_expired_age_seconds,
+                    },
+                )
+            elif (
                 playlist.ok
                 and playlist.wrote is False
                 and playlist.applied_count is not None
                 and playlist.applied_count > playlist.desired_count
             ):
+                # Preserve the legacy inference for non-soft-retention test/dummy runners.
                 self.diagnostics.emit(
                     occurred_at=result.finished_at,
                     severity=DiagnosticSeverity.INFO,
@@ -223,6 +254,23 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                     cycle_id=cycle_id,
                     playlist_id=str(playlist.playlist_id),
                     details={"total": playlist.applied_count - playlist.desired_count},
+                )
+
+            if (
+                retention is not None
+                and retention.disposition is SoftRetentionDisposition.FORCE_HARD_EXPIRY
+            ):
+                self.diagnostics.emit(
+                    occurred_at=result.finished_at,
+                    severity=DiagnosticSeverity.INFO,
+                    component="playlist.retention",
+                    event_name="soft_retention_forced_hard_expiry",
+                    cycle_id=cycle_id,
+                    playlist_id=str(playlist.playlist_id),
+                    details={
+                        "total": retention.soft_expired_count,
+                        "duration_seconds": retention.oldest_soft_expired_age_seconds,
+                    },
                 )
 
             event_name = _preservation_event_name(playlist.error)
