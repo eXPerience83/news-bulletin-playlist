@@ -37,6 +37,10 @@ Unreviewed compatibility characters stay fail-closed. For example, soft hyphen U
 U+2060 and Unicode division/fraction slashes are not silently mapped into ordinary product/date
 syntax. They require separate provider evidence before becoming an allowed recovery family.
 
+Python's Unicode case-insensitive regex engine also treats a small set of non-ASCII letters as ASCII
+I/i/S/K equivalents (U+0130, U+0131, U+017F and U+212A). Recovery rejects those characters before
+the historical strict regex runs, so IGNORECASE cannot silently broaden provider/product identity.
+
 ## Provider compatibility profiles
 
 RNE, SER and Onda Cero have explicit compatibility profiles. Profiles may tolerate reviewed syntax
