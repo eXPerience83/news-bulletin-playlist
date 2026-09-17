@@ -7,8 +7,8 @@ from news_bulletin_playlist.providers.common import MADRID, aware_datetime, span
 from news_bulletin_playlist.providers.title_recovery import TitleParseAttempt, parse_with_recovery
 
 _PATTERN = re.compile(
-    r"^(?P<hour>[01]?\d|2[0-3]):(?P<minute>[0-5]\d)H\s*\|\s*"
-    r"(?P<day>\d{1,2})\s+(?P<month>[A-ZÁÉÍÓÚÜÑ]{3,5})\s+(?P<year>\d{4})\s*\|\s*"
+    r"^(?P<hour>[01]?[0-9]|2[0-3]):(?P<minute>[0-5][0-9])H\s*\|\s*"
+    r"(?P<day>[0-9]{1,2})\s+(?P<month>[A-ZÁÉÍÓÚÜÑ]{3,5})\s+(?P<year>[0-9]{4})\s*\|\s*"
     r"(?P<label>.+)$",
     re.IGNORECASE,
 )
