@@ -568,8 +568,7 @@ def _normalize_rss_source_observed(
         KeyError,
     ) as exc:
         recovered_count = (
-            title_parser_normalized_recovered_count
-            + title_parser_provider_compat_recovered_count
+            title_parser_normalized_recovered_count + title_parser_provider_compat_recovered_count
         )
         return _NormalizedSource(
             (),
@@ -585,9 +584,7 @@ def _normalize_rss_source_observed(
                 rss_title_parser_exact_count=(
                     title_parser_exact_count if parser is not None else None
                 ),
-                rss_title_parser_recovered_count=(
-                    recovered_count if parser is not None else None
-                ),
+                rss_title_parser_recovered_count=(recovered_count if parser is not None else None),
                 rss_title_parser_normalized_recovered_count=(
                     title_parser_normalized_recovered_count if parser is not None else None
                 ),
