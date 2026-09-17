@@ -59,6 +59,14 @@ class TitleParseAttempt:
     recovery_kind: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderCompatProfile:
+    """Provider-specific syntax compatibility that still delegates final validation."""
+
+    canonicalize: CompatCanonicalizer
+    recovery_kind: str
+
+
 def parse_with_recovery(
     provider_id: str,
     title: str,
@@ -100,9 +108,12 @@ def parse_with_recovery(
 
 
 def normalize_title_syntax(title: str) -> str:
-    """Normalize reviewed Unicode/spacing syntax without guessing semantic tokens."""
+    """Normalize only reviewed syntax variants, never compatibility-fold product text."""
 
-    value = unicodedata.normalize("NFKC", title).translate(_ZERO_WIDTH).translate(_DASHES)
+    # NFC composes canonically equivalent Unicode while intentionally avoiding NFKC.
+    # Compatibility folding would turn full-width letters/digits or superscripts into
+    # ordinary product/date tokens and could silently broaden provider identity.
+    value = unicodedata.normalize("NFC", title).translate(_ZERO_WIDTH).translate(_DASHES)
     return " ".join(value.split()).strip()
 
 
@@ -114,12 +125,12 @@ def _provider_compat_candidates(provider_id: str, title: str) -> Iterable[tuple[
         if terminal_candidate:
             yield terminal_candidate, "rne_terminal_punctuation"
 
-    canonicalizer = _PROVIDER_COMPAT_CANONICALIZERS.get(provider_id)
-    if canonicalizer is None:
+    profile = _PROVIDER_COMPAT_PROFILES.get(provider_id)
+    if profile is None:
         return
-    canonical_candidate = canonicalizer(title)
+    canonical_candidate = profile.canonicalize(title)
     if canonical_candidate is not None:
-        yield canonical_candidate, _PROVIDER_COMPAT_KINDS[provider_id]
+        yield canonical_candidate, profile.recovery_kind
 
 
 def _canonical_rne(title: str) -> str | None:
@@ -170,13 +181,8 @@ def _preserve_original_title(parsed: ParsedEdition, original_title: str) -> Pars
     return ParsedEdition(parsed.provider_id, original_title, parsed.edition_at)
 
 
-_PROVIDER_COMPAT_CANONICALIZERS: dict[str, CompatCanonicalizer] = {
-    "rne": _canonical_rne,
-    "ser": _canonical_ser,
-    "ondacero": _canonical_ondacero,
-}
-_PROVIDER_COMPAT_KINDS = {
-    "rne": "rne_date_time_separators",
-    "ser": "ser_layout_punctuation",
-    "ondacero": "ondacero_layout_punctuation",
+_PROVIDER_COMPAT_PROFILES: dict[str, ProviderCompatProfile] = {
+    "rne": ProviderCompatProfile(_canonical_rne, "rne_date_time_separators"),
+    "ser": ProviderCompatProfile(_canonical_ser, "ser_layout_punctuation"),
+    "ondacero": ProviderCompatProfile(_canonical_ondacero, "ondacero_layout_punctuation"),
 }
