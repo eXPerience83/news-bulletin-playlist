@@ -118,8 +118,8 @@ def _canonical_rne(title: str) -> str | None:
     values = match.groupdict()
     minute = values["minute"] or "00"
     return (
-        f'{values["product"]} - {values["day"]}.{values["month"]}.{values["year"]} - '
-        f'{values["hour"]}.{minute}H'
+        f"{values['product']} - {values['day']}.{values['month']}.{values['year']} - "
+        f"{values['hour']}.{minute}H"
     )
 
 
@@ -130,8 +130,8 @@ def _canonical_ser(title: str) -> str | None:
     values = match.groupdict()
     year = _four_digit_current_year(values["year"])
     return (
-        f'Las noticias de la SER, {values["hour"]}:{values["minute"]} '
-        f'({values["day"]}/{values["month"]}/{year})'
+        f"Las noticias de la SER, {values['hour']}:{values['minute']} "
+        f"({values['day']}/{values['month']}/{year})"
     )
 
 
@@ -142,8 +142,8 @@ def _canonical_ondacero(title: str) -> str | None:
     values = match.groupdict()
     year = _four_digit_current_year(values["year"])
     return (
-        f'Las noticias de Onda Cero de las {values["hour"]}:{values["minute"]}h '
-        f'({values["day"]}/{values["month"]}/{year})'
+        f"Las noticias de Onda Cero de las {values['hour']}:{values['minute']}h "
+        f"({values['day']}/{values['month']}/{year})"
     )
 
 
