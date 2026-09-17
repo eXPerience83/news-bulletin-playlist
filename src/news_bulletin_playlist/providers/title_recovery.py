@@ -38,16 +38,16 @@ _RNE_COMPAT = re.compile(
 )
 _SER_COMPAT = re.compile(
     r"^Las\s+noticias\s+de\s+la\s+SER,?\s*(?:[-|:]\s*)?"
-    r"(?P<hour>[0-9]{1,2})[.:,](?P<minute>[0-9]{2})\s*"
-    r"(?:\(|\[)?\s*(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})"
-    r"\s*(?:\)|\])?\.?$",
+    r"(?P<hour>[0-9]{1,2})[.:,](?P<minute>[0-9]{2})\s+"
+    r"(?P<open>[\(\[])?\s*(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})"
+    r"\s*(?P<close>[\)\]])?\.?$",
     re.IGNORECASE,
 )
 _ONDACERO_COMPAT = re.compile(
     r"^Las\s+noticias\s+de\s+Onda\s+Cero\s+de\s+las\s+"
-    r"(?P<hour>[0-9]{1,2})[.:,](?P<minute>[0-9]{2})\s*[hH]?\s*"
-    r"(?:\(|\[)?\s*(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})"
-    r"\s*(?:\)|\])?\.?$",
+    r"(?P<hour>[0-9]{1,2})[.:,](?P<minute>[0-9]{2})\s*[hH]?\s+"
+    r"(?P<open>[\(\[])?\s*(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})"
+    r"\s*(?P<close>[\)\]])?\.?$",
     re.IGNORECASE,
 )
 
@@ -150,6 +150,8 @@ def _canonical_ser(title: str) -> str | None:
     if match is None:
         return None
     values = match.groupdict()
+    if not _balanced_optional_brackets(values["open"], values["close"]):
+        return None
     year = _four_digit_spanish_year(values["year"])
     return (
         f"Las noticias de la SER, {values['hour']}:{values['minute']} "
@@ -162,11 +164,21 @@ def _canonical_ondacero(title: str) -> str | None:
     if match is None:
         return None
     values = match.groupdict()
+    if not _balanced_optional_brackets(values["open"], values["close"]):
+        return None
     year = _four_digit_spanish_year(values["year"])
     return (
         f"Las noticias de Onda Cero de las {values['hour']}:{values['minute']}h "
         f"({values['day']}/{values['month']}/{year})"
     )
+
+
+def _balanced_optional_brackets(open_bracket: str | None, close_bracket: str | None) -> bool:
+    return (open_bracket, close_bracket) in {
+        (None, None),
+        ("(", ")"),
+        ("[", "]"),
+    }
 
 
 def _four_digit_spanish_year(value: str) -> str:
