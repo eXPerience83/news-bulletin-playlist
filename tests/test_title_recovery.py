@@ -66,12 +66,12 @@ def test_rne_recovers_unicode_spacing_and_dash_without_changing_original_title()
         ),
         (
             CopeParser(),
-            "09:30H\u00a0|\u00a017 SEP 2026\u00a0|\u00a0BOLETÍN",
+            "09:30H\u200b | \u200b17 SEP 2026\u200b | \u200bBOLETÍN",
             datetime(2026, 9, 17, 9, 30, tzinfo=MADRID),
         ),
         (
             RfiJournalMondeParser(),
-            "Journal\u00a017/09/2026\u00a009h30\u00a0GMT",
+            "Journal\u200b 17/09/2026\u200b 09h30\u200b GMT",
             datetime(2026, 9, 17, 9, 30, tzinfo=UTC),
         ),
     ],
