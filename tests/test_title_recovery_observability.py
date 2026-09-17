@@ -9,9 +9,18 @@ from zoneinfo import ZoneInfo
 from news_bulletin_playlist.collection import CollectionDiagnostics
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.engine import EngineCycleResult, SourceCycleOutcome
-from news_bulletin_playlist.models import CountryCode, EngineConfig, LanguageTag, ParserId, SourceDefinition, SourceId
+from news_bulletin_playlist.models import (
+    CountryCode,
+    EngineConfig,
+    LanguageTag,
+    ParserId,
+    SourceDefinition,
+    SourceId,
+)
 from news_bulletin_playlist.persistence import SQLiteStore
-from news_bulletin_playlist.production_observability import ProductionInstrumentedEngineCycleRunner
+from news_bulletin_playlist.production_observability import (
+    ProductionInstrumentedEngineCycleRunner,
+)
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify_planner import SpotifyPlannerJournal
 
@@ -50,7 +59,9 @@ def _diagnostics(tmp_path: Path) -> tuple[OperationalDiagnostics, DiagnosticEven
     return OperationalDiagnostics(store, logger=logger), store
 
 
-def test_production_emits_bounded_recovery_mode_counts_and_unresolved_drift(tmp_path: Path) -> None:
+def test_production_emits_bounded_recovery_mode_counts_and_unresolved_drift(
+    tmp_path: Path,
+) -> None:
     source = _source()
     config = EngineConfig(schema_version=1, sources=(source,), playlists=())
     store = SQLiteStore(tmp_path / "engine.sqlite3")
