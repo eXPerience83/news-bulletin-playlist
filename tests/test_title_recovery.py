@@ -13,6 +13,7 @@ from news_bulletin_playlist.models import (
     SourceId,
 )
 from news_bulletin_playlist.provider_watch import evaluate_titles
+from news_bulletin_playlist.providers.base import RecoveryTitleParser
 from news_bulletin_playlist.providers.cnn import CnnParser
 from news_bulletin_playlist.providers.common import MADRID, NEW_YORK
 from news_bulletin_playlist.providers.cope import CopeParser
@@ -42,8 +43,8 @@ from news_bulletin_playlist.providers.ser import SerParser
         ),
     ],
 )
-def test_exact_titles_keep_exact_mode(parser: object, title: str, expected: datetime) -> None:
-    attempt = parser.parse_with_recovery(title)  # type: ignore[attr-defined]
+def test_exact_titles_keep_exact_mode(parser: RecoveryTitleParser, title: str, expected: datetime) -> None:
+    attempt = parser.parse_with_recovery(title)
 
     assert attempt.mode == "exact"
     assert attempt.recovery_kind is None
@@ -85,11 +86,11 @@ def test_rne_recovers_unicode_spacing_and_dash_without_changing_original_title()
     ],
 )
 def test_generic_normalization_applies_to_other_strict_title_parsers(
-    parser: object,
+    parser: RecoveryTitleParser,
     title: str,
     expected: datetime,
 ) -> None:
-    attempt = parser.parse_with_recovery(title)  # type: ignore[attr-defined]
+    attempt = parser.parse_with_recovery(title)
 
     assert attempt.mode == "normalized"
     assert attempt.parsed is not None
@@ -133,12 +134,12 @@ def test_generic_normalization_applies_to_other_strict_title_parsers(
     ],
 )
 def test_provider_compat_recovers_safe_layout_variants(
-    parser: object,
+    parser: RecoveryTitleParser,
     title: str,
     expected: datetime,
     kind: str,
 ) -> None:
-    attempt = parser.parse_with_recovery(title)  # type: ignore[attr-defined]
+    attempt = parser.parse_with_recovery(title)
 
     assert attempt.mode == "provider_compat"
     assert attempt.recovery_kind == kind
@@ -184,10 +185,10 @@ def test_rne_date_hour_boundary_rejects_concatenated_or_compatibility_digits(tit
     ],
 )
 def test_recovery_never_accepts_unrelated_products_or_invalid_date_time(
-    parser: object,
+    parser: RecoveryTitleParser,
     title: str,
 ) -> None:
-    attempt = parser.parse_with_recovery(title)  # type: ignore[attr-defined]
+    attempt = parser.parse_with_recovery(title)
 
     assert attempt.mode == "rejected"
     assert attempt.parsed is None
