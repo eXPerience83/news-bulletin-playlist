@@ -64,14 +64,30 @@ def evaluate_titles(provider_id: str, parser: TitleParser, titles: list[str]) ->
     if not sample:
         return ContractResult(provider_id, False, 0, 0, "source contained no bulletin titles")
 
-    parsed = sum(parser.parse(title) is not None for title in sample)
+    parsed = 0
+    recovered = 0
+    for title in sample:
+        accepted, was_recovered = _evaluate_title(parser, title)
+        parsed += int(accepted)
+        recovered += int(was_recovered)
+
     required = max(1, ceil(len(sample) * _MIN_PARSE_RATIO))
     ok = parsed >= required
     detail = f"parsed {parsed}/{len(sample)} recent titles; required >= {required}"
+    if recovered:
+        detail = f"{detail}; recovered {recovered}/{len(sample)} with safe title compatibility"
     if not ok:
-        examples = " | ".join(sample[:3])
-        detail = f"{detail}; examples: {examples}"
+        detail = f"{detail}; unresolved {len(sample) - parsed}/{len(sample)}"
     return ContractResult(provider_id, ok, len(sample), parsed, detail)
+
+
+def _evaluate_title(parser: TitleParser, title: str) -> tuple[bool, bool]:
+    recovery = getattr(parser, "parse_with_recovery", None)
+    if callable(recovery):
+        attempt = recovery(title)
+        accepted = attempt.parsed is not None
+        return accepted, accepted and attempt.mode in {"normalized", "provider_compat"}
+    return parser.parse(title) is not None, False
 
 
 def fetch_feed_once(url: str, timeout: float = 20.0) -> bytes:
