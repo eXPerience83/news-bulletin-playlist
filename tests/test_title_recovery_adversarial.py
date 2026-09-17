@@ -298,7 +298,9 @@ def test_ondacero_fallback_prefilter_accepts_safe_whitespace_normalization() -> 
     assert "recovered 1/1" in result.detail
 
 
-def test_title_parse_denominator_excludes_preparse_rejections(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_title_parse_denominator_excludes_preparse_rejections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _Filter:
         def accepts(self, title: str) -> bool:
             return title != "filter me"
@@ -334,14 +336,28 @@ def test_title_parse_denominator_excludes_preparse_rejections(monkeypatch: pytes
 
     valid = "Las noticias de la SER, 09:30 (17/09/2026)"
     recovered = "Las noticias de la SER - 8.30 17-09-26"
-    payload = f"""<rss><channel>
-      <item><guid>g1</guid><title>{valid}</title><pubDate>Thu, 17 Sep 2026 07:35:00 +0000</pubDate></item>
-      <item><guid>g2</guid><pubDate>Thu, 17 Sep 2026 07:35:00 +0000</pubDate></item>
-      <item><guid>g3</guid><title>filter me</title><pubDate>Thu, 17 Sep 2026 07:35:00 +0000</pubDate></item>
-      <item><guid>g1</guid><title>SER DEPORTES - 09:30 (17/09/2026)</title><pubDate>Thu, 17 Sep 2026 07:35:00 +0000</pubDate></item>
-      <item><guid>g4</guid><title>{valid}</title><pubDate>not-a-date</pubDate></item>
-      <item><guid>g5</guid><title>{recovered}</title><pubDate>Thu, 17 Sep 2026 06:35:00 +0000</pubDate></item>
-    </channel></rss>""".encode()
+    published = "Thu, 17 Sep 2026 07:35:00 +0000"
+
+    def item(guid: str, title: str | None, publication: str = published) -> str:
+        title_xml = "" if title is None else f"<title>{title}</title>"
+        return (
+            "<item>"
+            f"<guid>{guid}</guid>"
+            f"{title_xml}"
+            f"<pubDate>{publication}</pubDate>"
+            "</item>"
+        )
+
+    payload = (
+        "<rss><channel>"
+        + item("g1", valid)
+        + item("g2", None)
+        + item("g3", "filter me")
+        + item("g1", "SER DEPORTES - 09:30 (17/09/2026)")
+        + item("g4", valid, "not-a-date")
+        + item("g5", recovered, "Thu, 17 Sep 2026 06:35:00 +0000")
+        + "</channel></rss>"
+    ).encode()
 
     result = collect_required_sources(config, fetcher=lambda _url: payload)
     collected = result.sources[0]
