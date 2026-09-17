@@ -28,6 +28,10 @@ _DASHES = str.maketrans(
     }
 )
 _ZERO_WIDTH = str.maketrans({"\u200b": None, "\u200c": None, "\u200d": None, "\ufeff": None})
+# Python Unicode case-insensitive regex matching treats these non-ASCII characters as
+# equivalents of ASCII I/i/S/K. None belongs to the reviewed provider grammars, so reject
+# them before the historical IGNORECASE regex can broaden product identity.
+_UNICODE_IGNORECASE_CONFUSABLES = frozenset({"\u0130", "\u0131", "\u017f", "\u212a"})
 
 _RNE_COMPAT = re.compile(
     r"^(?P<product>NOTICIAS\s+RNE|RNE\s+NOTICIAS)\s*(?:[-|:]\s*)?"
@@ -76,6 +80,8 @@ def parse_with_recovery(
 
     if len(title) > MAX_TITLE_PARSE_CHARS:
         return TitleParseAttempt(None, "rejected", "title_too_long")
+    if any(character in _UNICODE_IGNORECASE_CONFUSABLES for character in title):
+        return TitleParseAttempt(None, "rejected", "unicode_casefold_confusable")
 
     exact = strict_parse(title)
     if exact is not None:
