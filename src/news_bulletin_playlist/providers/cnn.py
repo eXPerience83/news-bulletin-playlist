@@ -4,6 +4,7 @@ import re
 
 from news_bulletin_playlist.models import ParsedEdition
 from news_bulletin_playlist.providers.common import NEW_YORK, aware_datetime, expand_two_digit_year
+from news_bulletin_playlist.providers.title_recovery import TitleParseAttempt, parse_with_recovery
 
 _PATTERN = re.compile(
     r"^CNN 5 cosas\s+"
@@ -17,6 +18,12 @@ class CnnParser:
     provider_id = "cnn"
 
     def parse(self, title: str) -> ParsedEdition | None:
+        return self.parse_with_recovery(title).parsed
+
+    def parse_with_recovery(self, title: str) -> TitleParseAttempt:
+        return parse_with_recovery(self.provider_id, title, self._parse_strict)
+
+    def _parse_strict(self, title: str) -> ParsedEdition | None:
         match = _PATTERN.match(title.strip())
         if match is None:
             return None
