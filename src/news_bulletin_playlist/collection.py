@@ -426,9 +426,7 @@ def _exception_chain(exc: BaseException) -> tuple[BaseException, ...]:
         seen.add(identity)
         chain.append(current)
 
-        if isinstance(current, urllib.error.URLError) and isinstance(
-            current.reason, BaseException
-        ):
+        if isinstance(current, urllib.error.URLError) and isinstance(current.reason, BaseException):
             pending.append(current.reason)
         if current.__cause__ is not None:
             pending.append(current.__cause__)
