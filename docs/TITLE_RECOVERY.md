@@ -29,7 +29,7 @@ Generic recovery deliberately uses **NFC**, not NFKC. It may:
 
 It intentionally does **not** compatibility-fold full-width letters/digits, superscripts or other
 Unicode compatibility characters into product/date tokens. Provider date/time grammars also require
-ASCII digits (`0`-`9`) rather than Python's broader Unicode `\\d` class. A visually similar product
+ASCII digits (`0`-`9`) rather than Python's broader Unicode `\d` class. A visually similar product
 name or numeric token must not become valid merely because Unicode normalization or regex character
 classes can transform/accept it.
 
