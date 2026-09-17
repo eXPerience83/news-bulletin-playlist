@@ -43,7 +43,11 @@ from news_bulletin_playlist.providers.ser import SerParser
         ),
     ],
 )
-def test_exact_titles_keep_exact_mode(parser: RecoveryTitleParser, title: str, expected: datetime) -> None:
+def test_exact_titles_keep_exact_mode(
+    parser: RecoveryTitleParser,
+    title: str,
+    expected: datetime,
+) -> None:
     attempt = parser.parse_with_recovery(title)
 
     assert attempt.mode == "exact"
