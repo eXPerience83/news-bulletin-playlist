@@ -255,3 +255,13 @@ def test_resolution_distinguishes_matching_recovery_phase(
 
     assert resolution.evidence is None
     assert resolution.rejection_reason is expected_reason
+
+
+def test_resolution_reports_unknown_destination(tmp_path: Path) -> None:
+    store, source, playlist = _prepared_store(tmp_path)
+    SpotifyPlannerJournal(store).mark_destination_unknown(str(playlist.id))
+
+    resolution = _resolution(store, source, playlist)
+
+    assert resolution.evidence is None
+    assert resolution.rejection_reason is SoftRetentionRejectionReason.UNKNOWN_DESTINATION
