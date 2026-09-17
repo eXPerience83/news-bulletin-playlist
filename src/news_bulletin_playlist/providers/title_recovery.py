@@ -32,15 +32,15 @@ _RNE_COMPAT = re.compile(
 _SER_COMPAT = re.compile(
     r"^Las\s+noticias\s+de\s+la\s+SER,?\s*(?:[-|:]\s*)?"
     r"(?P<hour>\d{1,2})[.:,](?P<minute>\d{2})\s*"
-    r"(?:[([]\s*)?(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2}|\d{4})"
-    r"(?:\s*[])])?\.?$",
+    r"(?:\(|\[)?\s*(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2}|\d{4})"
+    r"\s*(?:\)|\])?\.?$",
     re.IGNORECASE,
 )
 _ONDACERO_COMPAT = re.compile(
     r"^Las\s+noticias\s+de\s+Onda\s+Cero\s+de\s+las\s+"
     r"(?P<hour>\d{1,2})[.:,](?P<minute>\d{2})\s*[hH]?\s*"
-    r"(?:[([]\s*)?(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2}|\d{4})"
-    r"(?:\s*[])])?\.?$",
+    r"(?:\(|\[)?\s*(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2}|\d{4})"
+    r"\s*(?:\)|\])?\.?$",
     re.IGNORECASE,
 )
 
@@ -93,8 +93,7 @@ def normalize_title_syntax(title: str) -> str:
     """Normalize syntax-only Unicode/spacing variants without changing semantic tokens."""
 
     value = unicodedata.normalize("NFKC", title).translate(_ZERO_WIDTH).translate(_DASHES)
-    value = " ".join(value.split())
-    return re.sub(r"\s*-\s*", " - ", value).strip()
+    return " ".join(value.split()).strip()
 
 
 def _provider_compat_candidates(provider_id: str, title: str) -> Iterable[tuple[str, str]]:
