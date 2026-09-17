@@ -40,3 +40,19 @@ def test_ondacero_fallback_keeps_invalid_suffix_for_parser_to_reject() -> None:
     assert result.ok is False
     assert result.parsed == 0
     assert "unresolved 1/1" in result.detail
+
+
+def test_ondacero_fallback_does_not_emit_nested_fragment_as_separate_title() -> None:
+    canonical_fragment = "Las noticias de Onda Cero de las 10:00h (17/09/2026)"
+    complete_title = f"{canonical_fragment} - DEPORTES"
+    payload = (
+        f"<html><body><h3><span>{canonical_fragment}</span> - DEPORTES</h3></body></html>"
+    ).encode()
+
+    titles = extract_fallback_titles("ondacero", payload)
+    result = evaluate_titles("ondacero", OndaCeroParser(), titles)
+
+    assert titles == [complete_title]
+    assert result.ok is False
+    assert result.parsed == 0
+    assert "unresolved 1/1" in result.detail
