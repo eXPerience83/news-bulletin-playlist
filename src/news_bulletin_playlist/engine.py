@@ -1393,7 +1393,13 @@ class EngineRunner:
                 and state.observed_desired_fingerprint == expected.desired_fingerprint
             )
             if state.dirty and not state.unknown and context_matches:
-                pending = PendingSnapshotJournal(self.store).get(playlist.id)
+                try:
+                    pending = PendingSnapshotJournal(self.store).get(playlist.id)
+                except PersistenceError:
+                    # This read exists only to authorize the optional 60-second local deferral.
+                    # If it is unavailable, preserve the pre-existing conservative provider flow
+                    # instead of turning an optimization lookup into a destination failure.
+                    pending = None
                 if (
                     pending is not None
                     and pending.readback_exact
