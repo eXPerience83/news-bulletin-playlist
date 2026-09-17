@@ -60,6 +60,7 @@ _FETCH_FAILURE_KIND_ATTR = "_news_playlist_rss_fetch_failure_kind"
 _REDIRECT_DISPATCH_ATTR = "_news_playlist_rss_redirect_dispatch"
 _TITLE_PARSE_MIN_SAMPLE = 3
 _TITLE_PARSE_MIN_ACCEPT_RATIO = 0.5
+_TITLE_DRIFT_GUARD_PARSER_IDS = frozenset({"rne", "ser", "ondacero"})
 _RSS_FETCH_FAILURE_KINDS = frozenset(
     {
         "timeout",
@@ -631,7 +632,7 @@ def _normalize_rss_source_observed(
     )
 
     accepted_count = title_parser_exact_count + recovered_count
-    if parser is not None and _title_parser_drifted(
+    if parser_id in _TITLE_DRIFT_GUARD_PARSER_IDS and _title_parser_drifted(
         attempted_count=title_parser_attempted_count,
         accepted_count=accepted_count,
     ):
