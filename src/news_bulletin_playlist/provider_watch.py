@@ -57,6 +57,12 @@ class _FallbackTitleHTMLParser(HTMLParser):
             if capture_tag != normalized:
                 continue
             self._captures.pop(index)
+            # Nested supported tags are formatting fragments of the enclosing title unit.
+            # Their text is already accumulated into every active ancestor capture, so emitting
+            # the nested fragment independently could make a promotional/suffixed headline pass
+            # the provider-watch ratio using text that never existed as a complete title.
+            if self._captures:
+                break
             text = " ".join("".join(parts).split()).strip()
             if text:
                 self.titles.append(text)
