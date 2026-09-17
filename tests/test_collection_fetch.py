@@ -1,4 +1,6 @@
+import errno
 import gzip
+import http.client
 import socket
 import ssl
 import urllib.error
@@ -45,6 +47,15 @@ class _OversizedResponse(_Response):
     def read(self, size: int = -1) -> bytes:
         self.requested_bytes = size
         return b"x" * size
+
+
+class _IncompleteResponse(_Response):
+    def __init__(self) -> None:
+        super().__init__(b"")
+
+    def read(self, size: int = -1) -> bytes:
+        self.requested_bytes = size
+        raise http.client.IncompleteRead(b"partial", 100)
 
 
 class _Opener:
@@ -171,6 +182,8 @@ def test_fetch_feed_observes_success_duration_and_redirect_count(
         (urllib.error.URLError(socket.gaierror("provider-secret")), "dns"),
         (urllib.error.URLError(ssl.SSLError("provider-secret")), "tls"),
         (urllib.error.URLError(ConnectionResetError("provider-secret")), "connection"),
+        (urllib.error.URLError(OSError(errno.ETIMEDOUT, "provider-secret")), "timeout"),
+        (urllib.error.URLError(OSError(errno.ECONNRESET, "provider-secret")), "connection"),
         (
             urllib.error.HTTPError(
                 "https://provider-secret.invalid/feed",
@@ -222,6 +235,40 @@ def test_fetch_feed_preserves_exception_and_attaches_allowlisted_failure_observa
     assert _last_created(created).calls == 1
 
 
+def test_fetch_feed_classifies_timeout_hidden_in_exception_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapped = OSError("provider-secret-wrapper")
+    wrapped.__cause__ = TimeoutError("provider-secret-timeout")
+    created = _install_opener(monkeypatch, error=wrapped, redirects=1)
+    ticks = iter((25.0, 25.250))
+    monkeypatch.setattr(collection.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(OSError) as raised:
+        collection.fetch_feed("https://example.test/feed.xml")
+
+    assert raised.value is wrapped
+    assert getattr(wrapped, collection._FETCH_FAILURE_KIND_ATTR) == "timeout"
+    assert _last_created(created).calls == 1
+
+
+def test_fetch_feed_classifies_incomplete_body_as_connection_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _IncompleteResponse()
+    created = _install_opener(monkeypatch, response=response, redirects=1)
+    ticks = iter((27.0, 27.250))
+    monkeypatch.setattr(collection.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(http.client.IncompleteRead) as raised:
+        collection.fetch_feed("https://example.test/feed.xml")
+
+    assert getattr(raised.value, collection._FETCH_FAILURE_KIND_ATTR) == "connection"
+    assert getattr(raised.value, collection._FETCH_REDIRECT_ATTR) == 1
+    assert response.requested_bytes == collection._MAX_FEED_BYTES + 1
+    assert _last_created(created).calls == 1
+
+
 def test_fetch_feed_classifies_oversized_payload_without_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -245,5 +292,21 @@ def test_fetch_feed_classifies_invalid_gzip_without_retry(monkeypatch: pytest.Mo
     with pytest.raises(ValueError) as raised:
         collection.fetch_feed("https://example.test/feed.xml")
 
+    assert getattr(raised.value, collection._FETCH_FAILURE_KIND_ATTR) == "invalid_gzip"
+    assert _last_created(created).calls == 1
+
+
+def test_fetch_feed_classifies_truncated_gzip_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _Response(b"\x1f\x8b\x08\x00", content_encoding="gzip")
+    created = _install_opener(monkeypatch, response=response)
+    ticks = iter((41.0, 41.020))
+    monkeypatch.setattr(collection.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(ValueError) as raised:
+        collection.fetch_feed("https://example.test/feed.xml")
+
+    assert str(raised.value) == "feed payload contained invalid gzip data"
     assert getattr(raised.value, collection._FETCH_FAILURE_KIND_ATTR) == "invalid_gzip"
     assert _last_created(created).calls == 1
