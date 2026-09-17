@@ -200,8 +200,16 @@ def test_provider_watch_threshold_counts_exact_and_recovered_equally() -> None:
     recovered = "Las noticias de la SER - 9.30 17-09-26"
     rejected = "SER DEPORTES - 09:30 (17/09/2026)"
 
-    healthy = evaluate_titles("ser", SerParser(), [exact, exact, recovered, rejected, rejected, rejected])
-    unhealthy = evaluate_titles("ser", SerParser(), [exact, recovered, rejected, rejected, rejected, rejected])
+    healthy = evaluate_titles(
+        "ser",
+        SerParser(),
+        [exact, exact, recovered, rejected, rejected, rejected],
+    )
+    unhealthy = evaluate_titles(
+        "ser",
+        SerParser(),
+        [exact, recovered, rejected, rejected, rejected, rejected],
+    )
 
     assert healthy.ok is True
     assert healthy.parsed == 3
