@@ -89,6 +89,7 @@ def test_all_strict_providers_recover_reviewed_syntax_without_changing_semantics
     ("parser", "title"),
     [
         (RneParser(), "NOTICIAS ＲＮＥ - 17.09.2026 - 09.30H"),
+        (RneParser(), "NOTICIAS RNE | 17/09/２０２６ : 09:30 H."),
         (SerParser(), "Las noticias de la ＳＥＲ, 09:30 (17/09/2026)"),
         (
             OndaCeroParser(),
@@ -286,7 +287,7 @@ def test_recovery_preserves_provider_timezone_and_ambiguous_wall_clock_policy(
 
 
 def test_ondacero_fallback_prefilter_accepts_safe_whitespace_normalization() -> None:
-    title = "Las\u00a0noticias de Onda Cero de las 10:00h (17/09/2026)"
+    title = "Las\u200b noticias de Onda Cero de las 10:00h (17/09/2026)"
     payload = f"<html><body><h3>{title}</h3></body></html>".encode()
 
     titles = extract_fallback_titles("ondacero", payload)
