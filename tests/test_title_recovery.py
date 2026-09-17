@@ -5,8 +5,11 @@ from datetime import datetime
 import pytest
 
 from news_bulletin_playlist.provider_watch import evaluate_titles
-from news_bulletin_playlist.providers.common import MADRID
+from news_bulletin_playlist.providers.cnn import CnnParser
+from news_bulletin_playlist.providers.common import MADRID, NEW_YORK
+from news_bulletin_playlist.providers.cope import CopeParser
 from news_bulletin_playlist.providers.ondacero import OndaCeroParser
+from news_bulletin_playlist.providers.rfi import UTC, RfiJournalMondeParser
 from news_bulletin_playlist.providers.rne import RneParser
 from news_bulletin_playlist.providers.ser import SerParser
 
@@ -51,6 +54,39 @@ def test_rne_recovers_unicode_spacing_and_dash_without_changing_original_title()
     assert attempt.parsed is not None
     assert attempt.parsed.title == title
     assert attempt.parsed.edition_at == datetime(2026, 9, 17, 9, 30, tzinfo=MADRID)
+
+
+@pytest.mark.parametrize(
+    ("parser", "title", "expected"),
+    [
+        (
+            CnnParser(),
+            "CNN\u00a05 cosas\u00a09/17/26\u00a05:00\u00a0am",
+            datetime(2026, 9, 17, 5, 0, tzinfo=NEW_YORK),
+        ),
+        (
+            CopeParser(),
+            "09:30H\u00a0|\u00a017 SEP 2026\u00a0|\u00a0BOLETÍN",
+            datetime(2026, 9, 17, 9, 30, tzinfo=MADRID),
+        ),
+        (
+            RfiJournalMondeParser(),
+            "Journal\u00a017/09/2026\u00a009h30\u00a0GMT",
+            datetime(2026, 9, 17, 9, 30, tzinfo=UTC),
+        ),
+    ],
+)
+def test_generic_normalization_applies_to_other_strict_title_parsers(
+    parser: object,
+    title: str,
+    expected: datetime,
+) -> None:
+    attempt = parser.parse_with_recovery(title)  # type: ignore[attr-defined]
+
+    assert attempt.mode == "normalized"
+    assert attempt.parsed is not None
+    assert attempt.parsed.title == title
+    assert attempt.parsed.edition_at == expected
 
 
 @pytest.mark.parametrize(
