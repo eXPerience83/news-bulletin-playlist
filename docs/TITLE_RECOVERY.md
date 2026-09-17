@@ -33,12 +33,20 @@ ASCII digits (`0`-`9`) rather than Python's broader Unicode `\d` class. A visual
 name or numeric token must not become valid merely because Unicode normalization or regex character
 classes can transform/accept it.
 
+Unreviewed compatibility characters stay fail-closed. For example, soft hyphen U+00AD, word joiner
+U+2060 and Unicode division/fraction slashes are not silently mapped into ordinary product/date
+syntax. They require separate provider evidence before becoming an allowed recovery family.
+
 ## Provider compatibility profiles
 
 RNE, SER and Onda Cero have explicit compatibility profiles. Profiles may tolerate reviewed syntax
 families such as separators, terminal punctuation, hour suffix spacing and 2/4-digit years, but they
 must preserve exact product identity and delegate final calendar/clock validation to the strict
 parser.
+
+Compatibility profiles also preserve token boundaries: a time and date cannot be concatenated into
+one undelimited numeric string. SER/Onda bracket punctuation, when present, must be balanced as
+`(...)` or `[...]`; mismatched or one-sided brackets are rejected rather than normalized away.
 
 Two-digit-year policy is intentionally provider-specific:
 
