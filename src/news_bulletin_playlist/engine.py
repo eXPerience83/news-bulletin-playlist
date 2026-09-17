@@ -95,6 +95,7 @@ from news_bulletin_playlist.spotify_planner import (
 
 DEFAULT_ENGINE_INTERVAL = timedelta(minutes=10)
 _CATALOGUE_CONTRACT_VERSION = 1
+_PENDING_SNAPSHOT_CONFIRMATION_DELAY = timedelta(seconds=60)
 
 
 class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
@@ -1384,11 +1385,41 @@ class EngineRunner:
             state = self.planner_journal.get_destination(str(playlist.id))
             if state is None:
                 return _DestinationWorkPlan(needs_remote=True)
+
+            context_matches = (
+                state.destination_context_fingerprint == expected.destination_context_fingerprint
+                and state.config_fingerprint == expected.config_fingerprint
+                and state.auth_context_fingerprint == expected.auth_context_fingerprint
+                and state.observed_desired_fingerprint == expected.desired_fingerprint
+            )
+            if state.dirty and not state.unknown and context_matches:
+                try:
+                    pending = PendingSnapshotJournal(self.store).get(playlist.id)
+                except PersistenceError:
+                    # This read exists only to authorize the optional 60-second local deferral.
+                    # If it is unavailable, preserve the pre-existing conservative provider flow
+                    # while retaining the shadow planner's fail-closed diagnostic state.
+                    self._planner_shadow = PlannerShadowResult.unsafe()
+                    pending = None
+                if (
+                    pending is not None
+                    and pending.readback_exact
+                    and pending.destination_id == playlist.destination.external_id
+                    and pending.desired_fingerprint == expected.desired_fingerprint
+                    and pending.created_at
+                    <= now
+                    < pending.created_at + _PENDING_SNAPSHOT_CONFIRMATION_DELAY
+                    and now < pending.expires_at
+                ):
+                    # Exact ordered-item readback already proved the write content.  Keep
+                    # pending non-authoritative and revoke the runtime lease, but do not
+                    # create provider work solely to re-read a snapshot during Spotify's
+                    # immediate propagation window.
+                    self.destination_leases.revoke(playlist.id)
+                    return _DestinationWorkPlan(needs_remote=False)
+
             if (
-                state.destination_context_fingerprint != expected.destination_context_fingerprint
-                or state.config_fingerprint != expected.config_fingerprint
-                or state.auth_context_fingerprint != expected.auth_context_fingerprint
-                or state.observed_desired_fingerprint != expected.desired_fingerprint
+                not context_matches
                 or state.confirmed_desired_fingerprint != expected.desired_fingerprint
                 or state.dirty
                 or state.unknown
