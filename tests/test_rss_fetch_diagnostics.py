@@ -1,3 +1,4 @@
+import http.client
 from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -90,6 +91,40 @@ def test_collection_maps_observed_failure_without_exposing_raw_detail() -> None:
     serialized = repr(details)
     assert "provider-secret" not in serialized
     assert "token=secret" not in serialized
+
+
+def test_collection_contains_incomplete_body_read_as_fetch_error() -> None:
+    error = http.client.IncompleteRead(b"provider-secret-partial", 100)
+    collection._attach_fetch_failure_observation(error, duration_ms=42_400, redirect_count=1)
+
+    def failing_fetcher(_url: str) -> bytes:
+        raise error
+
+    result = collection._collect_source(_source(), failing_fetcher)
+
+    assert not result.ok
+    assert result.editions == ()
+    assert result.collection_diagnostics.failure_reason == "fetch_error"
+    assert result.collection_diagnostics.rss_fetch_failure_kind == "connection"
+    assert result.collection_diagnostics.rss_fetch_duration_ms == 42_400
+    assert result.collection_diagnostics.rss_redirect_count == 1
+
+    details = _source_diagnostic_details(
+        SourceCycleOutcome(
+            source_id=SourceId("rmf_fakty"),
+            collection_ok=False,
+            matching_ok=None,
+            edition_count=0,
+            matched_count=0,
+            last_success_at=NOW,
+            error=result.error,
+            collection_diagnostics=result.collection_diagnostics,
+        ),
+        phase="collection",
+    )
+    serialized = repr(details)
+    assert details["rss_fetch_failure_kind"] == "connection"
+    assert "provider-secret-partial" not in serialized
 
 
 def test_diagnostic_store_accepts_allowlisted_rss_fetch_observation(tmp_path: Path) -> None:
