@@ -20,14 +20,20 @@ from news_bulletin_playlist.reconciliation import build_desired_state_from_store
 from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
 from news_bulletin_playlist.soft_retention import SoftRetentionDecision, classify_soft_retention
 from news_bulletin_playlist.soft_retention_context import bind_soft_retention_audit_resolver
-from news_bulletin_playlist.soft_retention_diagnostics import publish_soft_retention_decision
+from news_bulletin_playlist.soft_retention_diagnostics import (
+    SoftRetentionRejectionReason,
+    publish_soft_retention_decision,
+    publish_soft_retention_rejection,
+)
 from news_bulletin_playlist.spotify_destination_audit import playlist_attestation_fingerprint
 from news_bulletin_playlist.spotify_planner import (
     DestinationState,
     DestinationVerificationContext,
+    PlannerReason,
     PlannerShadowResult,
     SpotifyPlannerJournal,
     destination_context_fingerprint,
+    matched_recovery_planning_reason,
     matching_input_fingerprint,
     playlist_config_fingerprint,
     stable_fingerprint,
@@ -40,6 +46,12 @@ class SoftRetentionEvidence:
     decision: SoftRetentionDecision
 
 
+@dataclass(frozen=True, slots=True)
+class _SoftRetentionEvidenceResolution:
+    evidence: SoftRetentionEvidence | None
+    rejection_reason: SoftRetentionRejectionReason | None = None
+
+
 def resolve_soft_retention_evidence(
     store: SQLiteStore,
     sources: Mapping[SourceId, SourceDefinition],
@@ -49,45 +61,68 @@ def resolve_soft_retention_evidence(
     now: datetime,
     auth_context_fingerprint: str,
 ) -> SoftRetentionEvidence | None:
-    """Prove that one playlist delta consists only of age-based removals.
+    """Prove that one playlist delta consists only of age-based removals."""
+    return _resolve_soft_retention_evidence(
+        store,
+        sources,
+        playlist,
+        logical_desired,
+        now=now,
+        auth_context_fingerprint=auth_context_fingerprint,
+    ).evidence
 
-    The existing strong playlist attestation is treated as the physical baseline. Rebuilding the
-    state at the attestation timestamp avoids persisting another URI list. Any missing, pending,
-    remapped, context-invalid or otherwise contradictory evidence rejects the optimization.
-    """
+
+def _resolve_soft_retention_evidence(
+    store: SQLiteStore,
+    sources: Mapping[SourceId, SourceDefinition],
+    playlist: PlaylistDefinition,
+    logical_desired: DesiredPlaylistState,
+    *,
+    now: datetime,
+    auth_context_fingerprint: str,
+) -> _SoftRetentionEvidenceResolution:
+    """Return the same fail-closed evidence result plus one bounded first-failing gate."""
     observed_at = _as_utc(now)
     try:
         if logical_desired.playlist_id != playlist.id:
-            return None
+            return _rejected(SoftRetentionRejectionReason.PLAYLIST_MISMATCH)
         if PendingSnapshotJournal(store).get(playlist.id) is not None:
-            return None
+            return _rejected(SoftRetentionRejectionReason.PENDING_SNAPSHOT)
 
         attestation = store.get_playlist_attestation(playlist.id)
-        if attestation is None or attestation.destination_id != playlist.destination.external_id:
-            return None
+        if attestation is None:
+            return _rejected(SoftRetentionRejectionReason.MISSING_ATTESTATION)
+        if attestation.destination_id != playlist.destination.external_id:
+            return _rejected(SoftRetentionRejectionReason.DESTINATION_MISMATCH)
 
         journal = SpotifyPlannerJournal(store)
         destination = journal.get_destination(str(playlist.id))
-        if (
-            destination is None
-            or destination.dirty
-            or destination.unknown
-            or destination.confirmed_desired_fingerprint is None
-            or destination.confirmed_desired_fingerprint != destination.observed_desired_fingerprint
-            or destination.last_verified_at is None
-            or observed_at < destination.last_verified_at
-            or destination.destination_context_fingerprint
-            != destination_context_fingerprint(playlist)
-            or destination.config_fingerprint != playlist_config_fingerprint(playlist)
-            or destination.auth_context_fingerprint != auth_context_fingerprint
-        ):
-            return None
+        if destination is None:
+            return _rejected(SoftRetentionRejectionReason.MISSING_DESTINATION_STATE)
+        if destination.dirty:
+            return _rejected(SoftRetentionRejectionReason.DIRTY_DESTINATION)
+        if destination.unknown:
+            return _rejected(SoftRetentionRejectionReason.UNKNOWN_DESTINATION)
+        if destination.confirmed_desired_fingerprint is None:
+            return _rejected(SoftRetentionRejectionReason.MISSING_DESTINATION_CONFIRMATION)
+        if destination.confirmed_desired_fingerprint != destination.observed_desired_fingerprint:
+            return _rejected(SoftRetentionRejectionReason.DESIRED_FINGERPRINT_MISMATCH)
+        if destination.last_verified_at is None:
+            return _rejected(SoftRetentionRejectionReason.MISSING_DESTINATION_VERIFICATION)
+        if observed_at < destination.last_verified_at:
+            return _rejected(SoftRetentionRejectionReason.CLOCK_ROLLBACK)
+        if destination.destination_context_fingerprint != destination_context_fingerprint(playlist):
+            return _rejected(SoftRetentionRejectionReason.DESTINATION_MISMATCH)
+        if destination.config_fingerprint != playlist_config_fingerprint(playlist):
+            return _rejected(SoftRetentionRejectionReason.CONFIG_MISMATCH)
+        if destination.auth_context_fingerprint != auth_context_fingerprint:
+            return _rejected(SoftRetentionRejectionReason.AUTH_MISMATCH)
 
         selected_sources: dict[SourceId, SourceDefinition] = {}
         for source_id in playlist.source_selection.explicit:
             source = sources.get(source_id)
             if source is None:
-                return None
+                return _rejected(SoftRetentionRejectionReason.MISSING_SOURCE)
             selected_sources[source_id] = source
 
         baseline = build_desired_state_from_store(
@@ -99,30 +134,60 @@ def resolve_soft_retention_evidence(
             },
         )
         baseline_fingerprint = stable_fingerprint(baseline.uris)
-        if (
-            playlist_attestation_fingerprint(baseline.uris) != attestation.desired_fingerprint
-            or baseline_fingerprint != destination.confirmed_desired_fingerprint
-        ):
-            return None
+        if playlist_attestation_fingerprint(baseline.uris) != attestation.desired_fingerprint:
+            return _rejected(SoftRetentionRejectionReason.ATTESTATION_MISMATCH)
+        if baseline_fingerprint != destination.confirmed_desired_fingerprint:
+            return _rejected(SoftRetentionRejectionReason.DESIRED_FINGERPRINT_MISMATCH)
 
         for item in baseline.items:
             edition = store.get_edition(item.source_id, item.source_native_id)
+            if edition is None:
+                return _rejected(SoftRetentionRejectionReason.MATCHING_EDITION_MISSING)
             match = store.get_match_state(item.source_id, item.source_native_id)
+            if match is None:
+                return _rejected(SoftRetentionRejectionReason.MATCHING_STATE_MISSING)
             source = selected_sources.get(item.source_id)
-            if (
-                edition is None
-                or match is None
-                or source is None
-                or match.status is not MatchStatus.MATCHED
-                or match.spotify_episode_uri != item.spotify_episode_uri
-                or match.updated_at > attestation.updated_at
-            ):
-                return None
+            if source is None:
+                return _rejected(SoftRetentionRejectionReason.MISSING_SOURCE)
+            if match.status is MatchStatus.PENDING:
+                return _rejected(SoftRetentionRejectionReason.MATCHING_PENDING)
+            if match.status is MatchStatus.AMBIGUOUS:
+                return _rejected(SoftRetentionRejectionReason.MATCHING_AMBIGUOUS)
+            if match.status is not MatchStatus.MATCHED:
+                return _rejected(SoftRetentionRejectionReason.MATCHING_STATE_MISSING)
+            if match.spotify_episode_uri != item.spotify_episode_uri:
+                return _rejected(SoftRetentionRejectionReason.MATCHING_MAPPING_CHANGED)
+            if match.updated_at > attestation.updated_at:
+                return _rejected(SoftRetentionRejectionReason.MATCHING_EVIDENCE_CHANGED)
+
+            expected_input = matching_input_fingerprint(source, edition)
             match_input = journal.get_match_input(str(item.source_id), item.source_native_id)
-            if match_input is None or match_input.input_fingerprint != matching_input_fingerprint(
-                source, edition
-            ):
-                return None
+            if match_input is None:
+                barrier = journal.get_persistence_rejection_barrier(
+                    str(item.source_id), item.source_native_id
+                )
+                if barrier is not None and barrier.protects(match):
+                    return _rejected(
+                        SoftRetentionRejectionReason.MATCHING_PERSISTENCE_REJECTION_BARRIER
+                    )
+                recovery = journal.get_matched_recovery(str(item.source_id), item.source_native_id)
+                if recovery is not None:
+                    reason = matched_recovery_planning_reason(
+                        recovery,
+                        input_fingerprint=expected_input,
+                        now=observed_at,
+                    )
+                    if reason is None:
+                        return _rejected(SoftRetentionRejectionReason.MATCHING_RECOVERY_BACKOFF)
+                    if reason is PlannerReason.RETRY_DUE:
+                        return _rejected(SoftRetentionRejectionReason.MATCHING_RECOVERY_DUE)
+                    if reason is PlannerReason.CLOCK_ROLLBACK:
+                        return _rejected(SoftRetentionRejectionReason.CLOCK_ROLLBACK)
+                    if reason is PlannerReason.INPUT_CHANGED:
+                        return _rejected(SoftRetentionRejectionReason.MATCHING_INPUT_CHANGED)
+                return _rejected(SoftRetentionRejectionReason.MATCHING_INPUT_MISSING)
+            if match_input.input_fingerprint != expected_input:
+                return _rejected(SoftRetentionRejectionReason.MATCHING_INPUT_CHANGED)
 
         decision = classify_soft_retention(
             playlist,
@@ -131,10 +196,14 @@ def resolve_soft_retention_evidence(
             now=observed_at,
         )
         if not decision.expiry_only:
-            return None
-        return SoftRetentionEvidence(baseline, decision)
+            return _rejected(SoftRetentionRejectionReason.NOT_EXPIRY_ONLY)
+        return _SoftRetentionEvidenceResolution(SoftRetentionEvidence(baseline, decision))
     except DesiredStateError, PersistenceError, ValueError:
-        return None
+        return _rejected(SoftRetentionRejectionReason.EVIDENCE_UNAVAILABLE)
+
+
+def _rejected(reason: SoftRetentionRejectionReason) -> _SoftRetentionEvidenceResolution:
+    return _SoftRetentionEvidenceResolution(None, reason)
 
 
 class _SoftRetentionPlannerJournal(SpotifyPlannerJournal):
@@ -263,7 +332,12 @@ class SoftRetentionEngineRunner(EngineRunner):
             )
         except DesiredStateError, PersistenceError, ValueError:
             return plan
-        evidence = self._soft_retention_evidence(playlist, logical_desired, now=now)
+        evidence = self._soft_retention_evidence(
+            playlist,
+            logical_desired,
+            now=now,
+            publish_rejection=True,
+        )
         if evidence is None or not evidence.decision.should_defer:
             return plan
         # A restart intentionally loses the six-hour runtime lease. Verify the physical baseline
@@ -346,11 +420,12 @@ class SoftRetentionEngineRunner(EngineRunner):
         logical_desired: DesiredPlaylistState,
         *,
         now: datetime,
+        publish_rejection: bool = False,
     ) -> SoftRetentionEvidence | None:
         auth_context = self._shadow_auth_context
         if auth_context is None:
             return None
-        evidence = resolve_soft_retention_evidence(
+        resolution = _resolve_soft_retention_evidence(
             self.store,
             {source.id: source for source in self.config.sources},
             playlist,
@@ -358,9 +433,11 @@ class SoftRetentionEngineRunner(EngineRunner):
             now=now,
             auth_context_fingerprint=auth_context,
         )
-        if evidence is not None:
-            publish_soft_retention_decision(playlist.id, evidence.decision)
-        return evidence
+        if resolution.evidence is not None:
+            publish_soft_retention_decision(playlist.id, resolution.evidence.decision)
+        elif publish_rejection and resolution.rejection_reason is not None:
+            publish_soft_retention_rejection(playlist.id, resolution.rejection_reason)
+        return resolution.evidence
 
     def _soft_retention_audit_desired(
         self,
