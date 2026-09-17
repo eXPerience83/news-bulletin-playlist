@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import gzip
+import http.client
 import io
 import socket
 import ssl
@@ -8,6 +10,7 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -61,6 +64,19 @@ _REDIRECT_DISPATCH_ATTR = "_news_playlist_rss_redirect_dispatch"
 _TITLE_PARSE_MIN_SAMPLE = 3
 _TITLE_PARSE_MIN_ACCEPT_RATIO = 0.5
 _TITLE_DRIFT_GUARD_PARSER_IDS = frozenset({"rne", "ser", "ondacero"})
+_TIMEOUT_ERRNOS = frozenset({errno.ETIMEDOUT})
+_CONNECTION_ERRNOS = frozenset(
+    {
+        errno.ECONNABORTED,
+        errno.ECONNREFUSED,
+        errno.ECONNRESET,
+        errno.ENETDOWN,
+        errno.ENETRESET,
+        errno.ENETUNREACH,
+        errno.EHOSTUNREACH,
+        errno.EPIPE,
+    }
+)
 _RSS_FETCH_FAILURE_KINDS = frozenset(
     {
         "timeout",
@@ -227,7 +243,13 @@ def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
         if len(payload) > _MAX_FEED_BYTES:
             raise ValueError("feed payload exceeds 10 MiB limit")
         decoded = _decode_feed_payload(bytes(payload), content_encoding=content_encoding)
-    except (OSError, TimeoutError, urllib.error.URLError, ValueError) as exc:
+    except (
+        OSError,
+        TimeoutError,
+        urllib.error.URLError,
+        http.client.HTTPException,
+        ValueError,
+    ) as exc:
         _attach_fetch_failure_observation(
             exc,
             duration_ms=_elapsed_ms(started_at),
@@ -249,7 +271,7 @@ def _decode_feed_payload(payload: bytes, *, content_encoding: str = "") -> bytes
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(payload), mode="rb") as compressed:
             decoded = compressed.read(_MAX_FEED_BYTES + 1)
-    except OSError as exc:
+    except (EOFError, OSError, zlib.error) as exc:
         raise ValueError("feed payload contained invalid gzip data") from exc
     if len(decoded) > _MAX_FEED_BYTES:
         raise ValueError("decoded feed payload exceeds 10 MiB limit")
@@ -283,6 +305,7 @@ def _collect_source(source: SourceDefinition, fetcher: FeedFetcher) -> SourceCol
         OSError,
         TimeoutError,
         urllib.error.URLError,
+        http.client.HTTPException,
         ET.ParseError,
         ValueError,
         KeyError,
@@ -361,25 +384,57 @@ def _classify_fetch_failure(exc: BaseException) -> RssFetchFailureKind:
             return "http_5xx"
         return "other_io"
 
-    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-    if isinstance(reason, socket.gaierror):
-        return "dns"
-    if isinstance(reason, ssl.SSLError):
-        return "tls"
-    if isinstance(reason, TimeoutError):
-        return "timeout"
-    if isinstance(reason, ConnectionError):
-        return "connection"
-    if isinstance(reason, ValueError):
-        detail = str(reason)
-        if detail in {
-            "feed payload exceeds 10 MiB limit",
-            "decoded feed payload exceeds 10 MiB limit",
-        }:
-            return "payload_too_large"
-        if detail == "feed payload contained invalid gzip data":
-            return "invalid_gzip"
+    for candidate in _exception_chain(exc):
+        if isinstance(candidate, ValueError):
+            detail = str(candidate)
+            if detail in {
+                "feed payload exceeds 10 MiB limit",
+                "decoded feed payload exceeds 10 MiB limit",
+            }:
+                return "payload_too_large"
+            if detail == "feed payload contained invalid gzip data":
+                return "invalid_gzip"
+        if isinstance(candidate, socket.gaierror):
+            return "dns"
+        if isinstance(candidate, ssl.SSLError):
+            return "tls"
+        if isinstance(candidate, TimeoutError):
+            return "timeout"
+        if isinstance(candidate, http.client.IncompleteRead):
+            return "connection"
+        if isinstance(candidate, ConnectionError):
+            return "connection"
+        if isinstance(candidate, OSError):
+            if candidate.errno in _TIMEOUT_ERRNOS:
+                return "timeout"
+            if candidate.errno in _CONNECTION_ERRNOS:
+                return "connection"
     return "other_io"
+
+
+def _exception_chain(exc: BaseException) -> tuple[BaseException, ...]:
+    """Return a bounded exception graph for classification only; never serialize its text."""
+
+    pending: list[BaseException] = [exc]
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    while pending and len(chain) < 8:
+        current = pending.pop(0)
+        identity = id(current)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        chain.append(current)
+
+        if isinstance(current, urllib.error.URLError) and isinstance(
+            current.reason, BaseException
+        ):
+            pending.append(current.reason)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return tuple(chain)
 
 
 def _fetch_error_diagnostics(exc: BaseException) -> CollectionDiagnostics:
