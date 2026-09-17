@@ -4,6 +4,14 @@ from datetime import datetime
 
 import pytest
 
+from news_bulletin_playlist.collection import normalize_rss_source
+from news_bulletin_playlist.models import (
+    CountryCode,
+    LanguageTag,
+    ParserId,
+    SourceDefinition,
+    SourceId,
+)
 from news_bulletin_playlist.provider_watch import evaluate_titles
 from news_bulletin_playlist.providers.cnn import CnnParser
 from news_bulletin_playlist.providers.common import MADRID, NEW_YORK
@@ -99,6 +107,18 @@ def test_generic_normalization_applies_to_other_strict_title_parsers(
             "rne_date_time_separators",
         ),
         (
+            RneParser(),
+            "NOTICIAS RNE - 17/09/2026 09:30",
+            datetime(2026, 9, 17, 9, 30, tzinfo=MADRID),
+            "rne_date_time_separators",
+        ),
+        (
+            RneParser(),
+            "NOTICIAS RNE - 17/09/2026. - 09:30",
+            datetime(2026, 9, 17, 9, 30, tzinfo=MADRID),
+            "rne_date_time_separators",
+        ),
+        (
             SerParser(),
             "Las noticias de la SER - 9.30 17-09-26",
             datetime(2026, 9, 17, 9, 30, tzinfo=MADRID),
@@ -128,6 +148,31 @@ def test_provider_compat_recovers_safe_layout_variants(
 
 
 @pytest.mark.parametrize(
+    "title",
+    [f"NOTICIAS RNE - 17/09/20{suffix:02d}" for suffix in range(24)],
+)
+def test_rne_date_without_hour_cannot_reuse_year_digits_as_time(title: str) -> None:
+    attempt = RneParser().parse_with_recovery(title)
+
+    assert attempt.mode == "rejected"
+    assert attempt.parsed is None
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "NOTICIAS RNE - 17/09/2026¹",
+        "NOTICIAS RNE - 17/09/202609",
+    ],
+)
+def test_rne_date_hour_boundary_rejects_concatenated_or_nfkc_digits(title: str) -> None:
+    attempt = RneParser().parse_with_recovery(title)
+
+    assert attempt.mode == "rejected"
+    assert attempt.parsed is None
+
+
+@pytest.mark.parametrize(
     ("parser", "title"),
     [
         (RneParser(), "RNE DEPORTES - 17.09.2026 - 09.30H"),
@@ -146,6 +191,37 @@ def test_recovery_never_accepts_unrelated_products_or_invalid_date_time(
 
     assert attempt.mode == "rejected"
     assert attempt.parsed is None
+
+
+def test_rne_date_without_hour_is_not_canonical_or_provider_watch_healthy() -> None:
+    source = SourceDefinition(
+        id=SourceId("rne"),
+        display_name="RNE",
+        countries=(CountryCode("ES"),),
+        languages=(LanguageTag("es"),),
+        timezone=MADRID,
+        enabled=True,
+        parser_id=ParserId("rne"),
+        endpoint_url="https://example.test/rne.xml",
+    )
+    title = "NOTICIAS RNE - 17/09/2021"
+    payload = f"""\
+<rss><channel>
+  <item>
+    <title>{title}</title>
+    <pubDate>Thu, 17 Sep 2026 07:05:00 +0000</pubDate>
+    <guid>rne-date-without-hour</guid>
+  </item>
+</channel></rss>
+""".encode()
+
+    with pytest.raises(ValueError, match="no canonical bulletin editions"):
+        normalize_rss_source(source, payload)
+
+    result = evaluate_titles("rne", RneParser(), [title] * 6)
+    assert result.ok is False
+    assert result.parsed == 0
+    assert "unresolved 6/6" in result.detail
 
 
 def test_provider_watch_counts_recovered_titles_as_healthy_without_raw_title_leak() -> None:

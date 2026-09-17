@@ -25,8 +25,9 @@ _ZERO_WIDTH = str.maketrans({"\u200b": None, "\u200c": None, "\u200d": None, "\u
 
 _RNE_COMPAT = re.compile(
     r"^(?P<product>NOTICIAS\s+RNE|RNE\s+NOTICIAS)\s*(?:[-|:]\s*)?"
-    r"(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2}|\d{4})\.?\s*"
-    r"(?:[-|:]\s*)?(?P<hour>\d{1,2})(?:[.:,](?P<minute>\d{2}))?\s*H?\.?$",
+    r"(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2}|\d{4})\.?"
+    r"(?:\s+|\s*[-|:]\s*)"
+    r"(?P<hour>\d{1,2})(?:[.:,](?P<minute>\d{2}))?\s*H?\.?$",
     re.IGNORECASE,
 )
 _SER_COMPAT = re.compile(
