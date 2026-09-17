@@ -52,17 +52,14 @@ class ProductionInstrumentedEngineCycleRunner(InstrumentedEngineCycleRunner):
                 self._canonical_prune_observable = False
             return result
 
-        setattr(store, "prune_operational_history", observed_prune)
+        store.prune_operational_history = observed_prune
         try:
             return super().run_cycle()
         finally:
             if had_instance_override:
-                setattr(store, "prune_operational_history", previous_instance_override)
+                store.prune_operational_history = previous_instance_override
             else:
-                try:
-                    delattr(store, "prune_operational_history")
-                except AttributeError:
-                    pass
+                del store.prune_operational_history
 
     def _emit_result(
         self,
