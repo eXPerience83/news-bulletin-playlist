@@ -28,8 +28,10 @@ Generic recovery deliberately uses **NFC**, not NFKC. It may:
 - map the reviewed dash/minus variants to ASCII `-`.
 
 It intentionally does **not** compatibility-fold full-width letters/digits, superscripts or other
-Unicode compatibility characters into product/date tokens. A visually similar product name must not
-become the configured product merely because Unicode normalization can transform it.
+Unicode compatibility characters into product/date tokens. Provider date/time grammars also require
+ASCII digits (`0`-`9`) rather than Python's broader Unicode `\\d` class. A visually similar product
+name or numeric token must not become valid merely because Unicode normalization or regex character
+classes can transform/accept it.
 
 ## Provider compatibility profiles
 
