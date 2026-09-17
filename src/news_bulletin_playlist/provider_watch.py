@@ -84,9 +84,7 @@ def extract_fallback_titles(provider_id: str, payload: bytes) -> list[str]:
     parser = _FallbackTitleHTMLParser()
     parser.feed(payload.decode("utf-8", errors="replace"))
     candidates = (
-        title
-        for title in parser.titles
-        if title.casefold().startswith(_ONDACERO_TITLE_PREFIX)
+        title for title in parser.titles if title.casefold().startswith(_ONDACERO_TITLE_PREFIX)
     )
     return list(dict.fromkeys(candidates))
 
