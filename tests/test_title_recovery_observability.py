@@ -125,10 +125,11 @@ def test_production_emits_bounded_recovery_mode_counts_and_unresolved_drift(
     assert "Las noticias" not in serialized
     assert "https://example.test" not in serialized
 
+
 def test_real_engine_drift_observability_adds_no_spotify_or_oauth_work(
     tmp_path: Path,
 ) -> None:
-    title = "Las noticias de la SER, 12:00 (17/09/2026)"
+    title = "Las noticias de la SER, 11:00 (17/09/2026)"
     episode_uri = "spotify:episode:0000000000000000000001"
     clock = [NOW]
     drift = [False]
@@ -235,14 +236,14 @@ def test_real_engine_drift_observability_adds_no_spotify_or_oauth_work(
             "<rss><channel><item>"
             "<guid>ser-1</guid>"
             f"<title>{title}</title>"
-            "<pubDate>Thu, 17 Sep 2026 10:05:00 +0000</pubDate>"
+            "<pubDate>Thu, 17 Sep 2026 09:05:00 +0000</pubDate>"
             "</item></channel></rss>"
         ).encode()
 
     def drifted_rss() -> bytes:
         items = (
-            ("ser-1", "Las noticias de la SER, 12:01 (17/09/2026)"),
-            ("ser-2", "SER DEPORTES - 13:00 (17/09/2026)"),
+            ("ser-1", "Las noticias de la SER, 11:01 (17/09/2026)"),
+            ("ser-2", "SER DEPORTES - 12:00 (17/09/2026)"),
             ("ser-3", "new unreviewed SER title shape"),
         )
         body = "".join(
