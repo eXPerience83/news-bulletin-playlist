@@ -24,9 +24,7 @@ _ONDACERO_TITLE_PREFIX = "las noticias de onda cero"
 _FALLBACK_TITLE_UNIT_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6", "a", "p", "li"})
 _FALLBACK_CONTEXT_TAGS = frozenset({"div", "article", "section", "header"})
 _FALLBACK_INLINE_TAGS = frozenset({"span", "strong", "em", "b", "i"})
-_FALLBACK_CAPTURE_TAGS = (
-    _FALLBACK_TITLE_UNIT_TAGS | _FALLBACK_CONTEXT_TAGS | _FALLBACK_INLINE_TAGS
-)
+_FALLBACK_CAPTURE_TAGS = _FALLBACK_TITLE_UNIT_TAGS | _FALLBACK_CONTEXT_TAGS | _FALLBACK_INLINE_TAGS
 
 
 @dataclass(frozen=True, slots=True)
