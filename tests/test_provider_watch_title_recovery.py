@@ -84,9 +84,7 @@ def test_ondacero_fallback_uses_complete_heading_instead_of_nested_link() -> Non
     canonical_fragment = "Las noticias de Onda Cero de las 09:30h (17/09/2026)"
     complete_title = f"{canonical_fragment} - DEPORTES"
     payload = (
-        "<html><body><h3>"
-        f'<a href="/promo">{canonical_fragment}</a>'
-        " - DEPORTES</h3></body></html>"
+        f'<html><body><h3><a href="/promo">{canonical_fragment}</a> - DEPORTES</h3></body></html>'
     ).encode()
 
     titles = extract_fallback_titles("ondacero", payload)
