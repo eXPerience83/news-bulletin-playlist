@@ -45,7 +45,12 @@ def _playlist() -> PlaylistDefinition:
     )
 
 
-def _desired(playlist: PlaylistDefinition, count: int, *, suffix: str = "new") -> DesiredPlaylistState:
+def _desired(
+    playlist: PlaylistDefinition,
+    count: int,
+    *,
+    suffix: str = "new",
+) -> DesiredPlaylistState:
     return DesiredPlaylistState(
         playlist_id=playlist.id,
         generated_at=NOW,
@@ -309,7 +314,9 @@ def _changed_context(
     return DestinationVerificationContext(
         desired_fingerprint=desired_fingerprint,
         destination_context_fingerprint=current.destination_context_fingerprint,
-        config_fingerprint=current.config_fingerprint if config_fingerprint is None else config_fingerprint,
+        config_fingerprint=(
+            current.config_fingerprint if config_fingerprint is None else config_fingerprint
+        ),
         auth_context_fingerprint=current.auth_context_fingerprint,
     )
 
@@ -342,6 +349,45 @@ def test_engine_marks_only_compatible_dirty_desired_change_as_snapshot_candidate
     assert plan.needs_remote is True
     assert plan.audit_only is False
     assert plan.snapshot_attested_prewrite is True
+
+
+def test_engine_disables_snapshot_candidate_while_pending_exists(tmp_path: Path) -> None:
+    runner, _, _, _ = setup(tmp_path)
+    assert runner.run_cycle().ok
+    playlist = runner.config.playlists[0]
+    state = runner.planner_journal.get_destination("first")
+    assert state is not None
+    current = DestinationVerificationContext(
+        desired_fingerprint=state.observed_desired_fingerprint,
+        destination_context_fingerprint=state.destination_context_fingerprint,
+        config_fingerprint=state.config_fingerprint,
+        auth_context_fingerprint=state.auth_context_fingerprint,
+    )
+    changed = _changed_context(current, desired_fingerprint="e" * 64)
+    runner.planner_journal.observe_destination(
+        playlist_id="first",
+        destination_context_fingerprint=changed.destination_context_fingerprint,
+        config_fingerprint=changed.config_fingerprint,
+        auth_context_fingerprint=changed.auth_context_fingerprint,
+        desired_fingerprint=changed.desired_fingerprint,
+    )
+    PendingSnapshotJournal(runner.store).set(
+        PendingSnapshotConfirmation(
+            playlist_id=playlist.id,
+            destination_id=playlist.destination.external_id,
+            baseline_snapshot_id="snapshot-a",
+            expected_snapshot_id="snapshot-b",
+            desired_fingerprint=playlist_attestation_fingerprint(("spotify:episode:pending",)),
+            created_at=NOW - timedelta(minutes=2),
+            expires_at=NOW + timedelta(minutes=58),
+            readback_exact=False,
+        )
+    )
+
+    plan = runner._destination_work_plan(playlist, NOW + timedelta(minutes=10), changed)
+
+    assert plan.needs_remote is True
+    assert plan.snapshot_attested_prewrite is False
 
 
 def test_engine_disables_snapshot_candidate_for_unknown_or_incompatible_state(
