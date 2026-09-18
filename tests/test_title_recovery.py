@@ -57,6 +57,49 @@ def test_exact_titles_keep_exact_mode(
     assert attempt.parsed.edition_at == expected
 
 
+@pytest.mark.parametrize(
+    ("compact", "separated", "expected_hour", "expected_minute"),
+    [
+        ("0001", "00.01", 0, 1),
+        ("0015", "00.15", 0, 15),
+        ("0023", "00.23", 0, 23),
+        ("0024", "00.24", 0, 24),
+        ("0930", "09.30", 9, 30),
+    ],
+)
+def test_rne_compact_hmm_hhmm_matches_separated_time(
+    compact: str,
+    separated: str,
+    expected_hour: int,
+    expected_minute: int,
+) -> None:
+    parser = RneParser()
+    compact_title = f"NOTICIAS RNE - 17.09.2026 - {compact}H"
+    separated_title = f"NOTICIAS RNE - 17.09.2026 - {separated}H"
+
+    compact_attempt = parser.parse_with_recovery(compact_title)
+    separated_attempt = parser.parse_with_recovery(separated_title)
+
+    assert compact_attempt.mode == "exact"
+    assert separated_attempt.mode == "exact"
+    assert compact_attempt.parsed is not None
+    assert separated_attempt.parsed is not None
+    assert compact_attempt.parsed.edition_at == separated_attempt.parsed.edition_at
+    assert compact_attempt.parsed.edition_at.hour == expected_hour
+    assert compact_attempt.parsed.edition_at.minute == expected_minute
+
+
+def test_rne_compact_midnight_time_keeps_semantics_with_terminal_punctuation_recovery() -> None:
+    parser = RneParser()
+    recovered = parser.parse_with_recovery("NOTICIAS RNE - 17.09.2026 - 0015H.")
+    baseline = parser.parse_with_recovery("NOTICIAS RNE - 17.09.2026 - 00.15H")
+
+    assert recovered.mode == "provider_compat"
+    assert recovered.parsed is not None
+    assert baseline.parsed is not None
+    assert recovered.parsed.edition_at == baseline.parsed.edition_at
+
+
 def test_rne_recovers_unicode_spacing_and_dash_without_changing_original_title() -> None:
     title = "NOTICIAS\u00a0RNE\u00a0–\u00a017.09.2026\u00a0–\u00a009.30H"
 
