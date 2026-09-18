@@ -37,9 +37,7 @@ def test_extract_rss_titles_keeps_nested_suffix_text() -> None:
       <title>Las noticias de la SER, 09:30 (17/09/2026)<span> - DEPORTES</span></title>
     </item></channel></rss>"""
 
-    assert extract_rss_titles(payload) == [
-        "Las noticias de la SER, 09:30 (17/09/2026) - DEPORTES"
-    ]
+    assert extract_rss_titles(payload) == ["Las noticias de la SER, 09:30 (17/09/2026) - DEPORTES"]
 
 
 def test_extract_rss_titles_handles_namespaced_rss() -> None:
