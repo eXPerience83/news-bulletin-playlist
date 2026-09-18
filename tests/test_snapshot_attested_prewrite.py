@@ -271,21 +271,20 @@ def test_pending_confirmation_blocks_attested_prewrite_shortcut(tmp_path: Path) 
     assert client.writes == 1
 
 
-def test_prewrite_preparation_change_rechecks_snapshot_before_skipping_items(
+def test_prewrite_preparation_change_restores_complete_item_comparison(
     tmp_path: Path,
 ) -> None:
     playlist = _playlist()
     first = _desired(playlist, 49, suffix="first")
-    final = _desired(playlist, 49, suffix="final")
     old = _desired(playlist, 49, suffix="old")
     store = _store(tmp_path)
     _seed_attestation(store, playlist, old.uris)
-    client = _Spotify(old.uris, ["snapshot-a", "snapshot-a", "snapshot-write"])
+    client = _Spotify(old.uris, ["snapshot-a"])
     preparations: list[tuple[str, ...]] = []
 
     def prepare(current: DesiredPlaylistState) -> DesiredPlaylistState:
         preparations.append(current.uris)
-        return final if current.items == first.items else current
+        return old if current.items == first.items else current
 
     result = reconcile_spotify_playlist(
         client,
@@ -297,12 +296,11 @@ def test_prewrite_preparation_change_rechecks_snapshot_before_skipping_items(
         snapshot_attested_prewrite=True,
     )
 
-    assert result.ok and result.wrote is True
-    assert preparations == [first.uris, final.uris]
-    assert client.snapshot_calls == 3
+    assert result.ok and result.wrote is False
+    assert preparations == [first.uris]
+    assert client.snapshot_calls == 1
     assert len(client.item_calls) == 1
-    assert client.writes == 1
-
+    assert client.writes == 0
 
 def _changed_context(
     current: DestinationVerificationContext,
