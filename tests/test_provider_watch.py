@@ -74,6 +74,17 @@ def test_ondacero_fallback_does_not_promote_inline_fragment_from_broader_context
     assert extract_fallback_titles("ondacero", payload) == []
 
 
+def test_ondacero_fallback_does_not_promote_nested_context_fragment() -> None:
+    title = "Las noticias de Onda Cero de las 09:30h (17/09/2026)"
+    payload = (
+        "<html><body><section>Promo: "
+        f"<div><span>{title}</span></div>"
+        " - DEPORTES</section></body></html>"
+    ).encode()
+
+    assert extract_fallback_titles("ondacero", payload) == []
+
+
 def test_unknown_provider_has_no_html_fallback_extractor() -> None:
     assert extract_fallback_titles("unknown", b"<html>News</html>") == []
 
