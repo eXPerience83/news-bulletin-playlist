@@ -31,7 +31,11 @@ from news_bulletin_playlist.snapshot_pending import (
 )
 from news_bulletin_playlist.spotify.client import SpotifyTransportError
 from news_bulletin_playlist.spotify_destination_audit import playlist_attestation_fingerprint
-from news_bulletin_playlist.spotify_planner import DestinationVerificationContext
+from news_bulletin_playlist.spotify_planner import (
+    DestinationVerificationContext,
+    SpotifyPlannerJournal,
+    stable_fingerprint,
+)
 
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
 
@@ -398,6 +402,126 @@ def test_engine_marks_only_compatible_dirty_desired_change_as_snapshot_candidate
     assert plan.needs_remote is True
     assert plan.audit_only is False
     assert plan.snapshot_attested_prewrite is True
+
+
+def test_restart_after_inflight_write_cannot_reuse_stale_attestation_fast_path(
+    tmp_path: Path,
+) -> None:
+    runner, _, _, _ = setup(tmp_path)
+    assert runner.run_cycle().ok
+    playlist = runner.config.playlists[0]
+    attestation = runner.store.get_playlist_attestation(playlist.id)
+    state = runner.planner_journal.get_destination("first")
+    assert attestation is not None
+    assert state is not None
+
+    desired = _desired(playlist, 1, suffix="after-crash")
+    changed = DestinationVerificationContext(
+        desired_fingerprint=stable_fingerprint(desired.uris),
+        destination_context_fingerprint=state.destination_context_fingerprint,
+        config_fingerprint=state.config_fingerprint,
+        auth_context_fingerprint=state.auth_context_fingerprint,
+    )
+    runner.planner_journal.observe_destination(
+        playlist_id="first",
+        destination_context_fingerprint=changed.destination_context_fingerprint,
+        config_fingerprint=changed.config_fingerprint,
+        auth_context_fingerprint=changed.auth_context_fingerprint,
+        desired_fingerprint=changed.desired_fingerprint,
+    )
+    authorized = runner._destination_work_plan(
+        playlist,
+        NOW + timedelta(minutes=10),
+        changed,
+    )
+    assert authorized.snapshot_attested_prewrite is True
+
+    # This is the durable boundary crossed immediately before reconciliation can reach PUT.
+    # Simulate a process death after Spotify applies the write but before any readback/pending
+    # state can be persisted.
+    runner._begin_destination_verification_required(playlist.id)
+    restarted_journal = SpotifyPlannerJournal(SQLiteStore(runner.store.path))
+    restarted_state = restarted_journal.get_destination("first")
+    assert restarted_state is not None
+    assert restarted_state.dirty is True
+    assert restarted_state.last_verified_at is None
+    assert restarted_state.next_audit_at is None
+    runner.planner_journal = restarted_journal
+
+    restarted_plan = runner._destination_work_plan(
+        playlist,
+        NOW + timedelta(minutes=20),
+        changed,
+    )
+    assert restarted_plan.needs_remote is True
+    assert restarted_plan.snapshot_attested_prewrite is False
+
+    # Spotify already contains the new desired items while snapshot propagation still exposes A.
+    # The restarted conservative path must read items and avoid repeating the applied PUT.
+    client = _Spotify(desired.uris, [attestation.snapshot_id])
+    result = reconcile_spotify_playlist(
+        client,
+        playlist,
+        desired,
+        store=runner.store,
+        snapshot_attested_prewrite=restarted_plan.snapshot_attested_prewrite,
+    )
+
+    assert result.ok and result.wrote is False
+    assert client.item_calls == [(50, 0)]
+    assert client.snapshot_calls == 0
+    assert client.writes == 0
+
+
+def test_clock_rollback_disables_fast_path_and_keeps_full_item_comparison(
+    tmp_path: Path,
+) -> None:
+    runner, _, _, _ = setup(tmp_path)
+    assert runner.run_cycle().ok
+    playlist = runner.config.playlists[0]
+    attestation = runner.store.get_playlist_attestation(playlist.id)
+    state = runner.planner_journal.get_destination("first")
+    assert attestation is not None
+    assert state is not None
+    assert state.last_verified_at is not None
+
+    desired = _desired(playlist, 1, suffix="rollback")
+    changed = DestinationVerificationContext(
+        desired_fingerprint=stable_fingerprint(desired.uris),
+        destination_context_fingerprint=state.destination_context_fingerprint,
+        config_fingerprint=state.config_fingerprint,
+        auth_context_fingerprint=state.auth_context_fingerprint,
+    )
+    runner.planner_journal.observe_destination(
+        playlist_id="first",
+        destination_context_fingerprint=changed.destination_context_fingerprint,
+        config_fingerprint=changed.config_fingerprint,
+        auth_context_fingerprint=changed.auth_context_fingerprint,
+        desired_fingerprint=changed.desired_fingerprint,
+    )
+
+    rolled_back = runner._destination_work_plan(
+        playlist,
+        state.last_verified_at - timedelta(hours=1),
+        changed,
+    )
+
+    assert rolled_back.needs_remote is True
+    assert rolled_back.snapshot_attested_prewrite is False
+
+    client = _Spotify(desired.uris, [attestation.snapshot_id])
+    result = reconcile_spotify_playlist(
+        client,
+        playlist,
+        desired,
+        store=runner.store,
+        snapshot_attested_prewrite=rolled_back.snapshot_attested_prewrite,
+    )
+
+    assert result.ok and result.wrote is False
+    assert client.item_calls == [(50, 0)]
+    assert client.snapshot_calls == 0
+    assert client.writes == 0
 
 
 def test_engine_disables_snapshot_candidate_while_pending_exists(tmp_path: Path) -> None:
