@@ -85,7 +85,7 @@ class _Spotify:
         self.fail_playlist = fail_playlist
         self.show_calls = 0
         self.playlist_reads: list[str] = []
-        self.snapshot_reads: list[str] = []
+        self.snapshot_read_calls: list[str] = []
         self.replacements: list[tuple[str, tuple[str, ...]]] = []
         self.items: dict[str, list[str]] = {}
         self.snapshots: dict[str, str] = {}
@@ -144,7 +144,7 @@ class _Spotify:
         return {"snapshot_id": snapshot}
 
     def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
-        self.snapshot_reads.append(playlist_id)
+        self.snapshot_read_calls.append(playlist_id)
         return {"snapshot_id": self.snapshots.get(playlist_id, "snapshot-initial")}
 
 
@@ -1346,7 +1346,7 @@ def test_title_parser_drift_carries_forward_lkg_without_spotify_work(tmp_path: P
         auth.calls,
         spotify.show_calls,
         len(spotify.playlist_reads),
-        len(spotify.snapshot_reads),
+        len(spotify.snapshot_read_calls),
         len(spotify.replacements),
     )
     drift = True
@@ -1371,7 +1371,7 @@ def test_title_parser_drift_carries_forward_lkg_without_spotify_work(tmp_path: P
         auth.calls,
         spotify.show_calls,
         len(spotify.playlist_reads),
-        len(spotify.snapshot_reads),
+        len(spotify.snapshot_read_calls),
         len(spotify.replacements),
     ) == provider_counts
 
@@ -1420,7 +1420,7 @@ def test_first_title_parser_drift_preserves_existing_destination_without_lkg_or_
     assert auth.calls == 0
     assert spotify.show_calls == 0
     assert spotify.playlist_reads == []
-    assert spotify.snapshot_reads == []
+    assert spotify.snapshot_read_calls == []
     assert spotify.replacements == []
 
 
