@@ -88,6 +88,8 @@ def parse_with_recovery(
         return TitleParseAttempt(_preserve_original_title(exact, title), "exact")
 
     normalized = normalize_title_syntax(title)
+    if _contains_unicode_ignorecase_confusable(normalized):
+        return TitleParseAttempt(None, "rejected", "unicode_casefold_confusable")
     if normalized != title.strip():
         parsed = strict_parse(normalized)
         if parsed is not None:
@@ -127,7 +129,11 @@ def normalize_title_syntax(title: str) -> str:
     # Compatibility folding would turn full-width letters/digits or superscripts into
     # ordinary product/date tokens and could silently broaden provider identity.
     value = unicodedata.normalize("NFC", title).translate(_ZERO_WIDTH).translate(_DASHES)
-    return " ".join(value.split()).strip()
+    collapsed = " ".join(value.split()).strip()
+    # Removing an allowed zero-width character can create a new canonical composition
+    # boundary (for example ASCII I + combining dot). Compose once more so the caller's
+    # post-normalization confusable guard sees the actual candidate fed to strict parsing.
+    return unicodedata.normalize("NFC", collapsed)
 
 
 def _provider_compat_candidates(provider_id: str, title: str) -> Iterable[tuple[str, str]]:
