@@ -208,6 +208,7 @@ The collection stage implements the first half of the core invariant without int
 - RSS/provider identity is preserved independently from title and timestamps. Native identity prefers `guid`/`id`, then the enclosure asset URL, then an editorial link when no stronger source-native identifier exists;
 - title/date/hour are never used to synthesize identity, so distinct native assets with identical visible metadata remain distinct;
 - RSS publication metadata produces `published_at`, while a provider title parser may produce editorial `edition_at`; sources without a trustworthy semantic timestamp may deliberately leave `edition_at` unset and use exact normalized title plus release-date matching downstream;
+- semantic title parsers use the recovery-first safety contract in [`TITLE_RECOVERY.md`](TITLE_RECOVERY.md): exact parsing remains authoritative, only reviewed syntax drift is recovered locally, and unresolved material drift is a source failure rather than an authoritative partial/empty batch;
 - the configured `SourceDefinition.timezone` is authoritative for interpreting local editorial wall clocks before the canonical model normalizes them to UTC;
 - collection returns an explicit success/failure result for each source. A malformed feed, failed fetch, missing required endpoint, or feed with no valid canonical bulletin editions is a source failure for that cycle rather than an invented empty-success state;
 - one source failure does not prevent unrelated sources from being collected;

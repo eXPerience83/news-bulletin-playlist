@@ -28,26 +28,30 @@ _DASHES = str.maketrans(
     }
 )
 _ZERO_WIDTH = str.maketrans({"\u200b": None, "\u200c": None, "\u200d": None, "\ufeff": None})
+# Python Unicode case-insensitive regex matching treats these non-ASCII characters as
+# equivalents of ASCII I/i/S/K. None belongs to the reviewed provider grammars, so reject
+# them before the historical IGNORECASE regex can broaden product identity.
+_UNICODE_IGNORECASE_CONFUSABLES = frozenset({"\u0130", "\u0131", "\u017f", "\u212a"})
 
 _RNE_COMPAT = re.compile(
     r"^(?P<product>NOTICIAS\s+RNE|RNE\s+NOTICIAS)\s*(?:[-|:]\s*)?"
-    r"(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2}|\d{4})\.?"
+    r"(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})\.?"
     r"(?:\s+|\s*[-|:]\s*)"
-    r"(?P<hour>\d{1,2})(?:[.:,](?P<minute>\d{2}))?\s*H?\.?$",
+    r"(?P<hour>[0-9]{1,2})(?:[.:,](?P<minute>[0-9]{2}))?\s*H?\.?$",
     re.IGNORECASE,
 )
 _SER_COMPAT = re.compile(
     r"^Las\s+noticias\s+de\s+la\s+SER,?\s*(?:[-|:]\s*)?"
-    r"(?P<hour>\d{1,2})[.:,](?P<minute>\d{2})\s*"
-    r"(?:\(|\[)?\s*(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2}|\d{4})"
-    r"\s*(?:\)|\])?\.?$",
+    r"(?P<hour>[0-9]{1,2})[.:,](?P<minute>[0-9]{2})\s+"
+    r"(?P<open>[\(\[])?\s*(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})"
+    r"\s*(?P<close>[\)\]])?\.?$",
     re.IGNORECASE,
 )
 _ONDACERO_COMPAT = re.compile(
     r"^Las\s+noticias\s+de\s+Onda\s+Cero\s+de\s+las\s+"
-    r"(?P<hour>\d{1,2})[.:,](?P<minute>\d{2})\s*[hH]?\s*"
-    r"(?:\(|\[)?\s*(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2}|\d{4})"
-    r"\s*(?:\)|\])?\.?$",
+    r"(?P<hour>[0-9]{1,2})[.:,](?P<minute>[0-9]{2})\s*[hH]?\s+"
+    r"(?P<open>[\(\[])?\s*(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})"
+    r"\s*(?P<close>[\)\]])?\.?$",
     re.IGNORECASE,
 )
 
@@ -59,6 +63,14 @@ class TitleParseAttempt:
     recovery_kind: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderCompatProfile:
+    """Provider-specific syntax compatibility that still delegates final validation."""
+
+    canonicalize: CompatCanonicalizer
+    recovery_kind: str
+
+
 def parse_with_recovery(
     provider_id: str,
     title: str,
@@ -68,6 +80,8 @@ def parse_with_recovery(
 
     if len(title) > MAX_TITLE_PARSE_CHARS:
         return TitleParseAttempt(None, "rejected", "title_too_long")
+    if _contains_unicode_ignorecase_confusable(title):
+        return TitleParseAttempt(None, "rejected", "unicode_casefold_confusable")
 
     exact = strict_parse(title)
     if exact is not None:
@@ -99,10 +113,20 @@ def parse_with_recovery(
     return TitleParseAttempt(None, "rejected")
 
 
-def normalize_title_syntax(title: str) -> str:
-    """Normalize reviewed Unicode/spacing syntax without guessing semantic tokens."""
+def _contains_unicode_ignorecase_confusable(title: str) -> bool:
+    if any(character in _UNICODE_IGNORECASE_CONFUSABLES for character in title):
+        return True
+    composed = unicodedata.normalize("NFC", title)
+    return any(character in _UNICODE_IGNORECASE_CONFUSABLES for character in composed)
 
-    value = unicodedata.normalize("NFKC", title).translate(_ZERO_WIDTH).translate(_DASHES)
+
+def normalize_title_syntax(title: str) -> str:
+    """Normalize only reviewed syntax variants, never compatibility-fold product text."""
+
+    # NFC composes canonically equivalent Unicode while intentionally avoiding NFKC.
+    # Compatibility folding would turn full-width letters/digits or superscripts into
+    # ordinary product/date tokens and could silently broaden provider identity.
+    value = unicodedata.normalize("NFC", title).translate(_ZERO_WIDTH).translate(_DASHES)
     return " ".join(value.split()).strip()
 
 
@@ -114,12 +138,12 @@ def _provider_compat_candidates(provider_id: str, title: str) -> Iterable[tuple[
         if terminal_candidate:
             yield terminal_candidate, "rne_terminal_punctuation"
 
-    canonicalizer = _PROVIDER_COMPAT_CANONICALIZERS.get(provider_id)
-    if canonicalizer is None:
+    profile = _PROVIDER_COMPAT_PROFILES.get(provider_id)
+    if profile is None:
         return
-    canonical_candidate = canonicalizer(title)
+    canonical_candidate = profile.canonicalize(title)
     if canonical_candidate is not None:
-        yield canonical_candidate, _PROVIDER_COMPAT_KINDS[provider_id]
+        yield canonical_candidate, profile.recovery_kind
 
 
 def _canonical_rne(title: str) -> str | None:
@@ -139,6 +163,8 @@ def _canonical_ser(title: str) -> str | None:
     if match is None:
         return None
     values = match.groupdict()
+    if not _balanced_optional_brackets(values["open"], values["close"]):
+        return None
     year = _four_digit_spanish_year(values["year"])
     return (
         f"Las noticias de la SER, {values['hour']}:{values['minute']} "
@@ -151,11 +177,21 @@ def _canonical_ondacero(title: str) -> str | None:
     if match is None:
         return None
     values = match.groupdict()
+    if not _balanced_optional_brackets(values["open"], values["close"]):
+        return None
     year = _four_digit_spanish_year(values["year"])
     return (
         f"Las noticias de Onda Cero de las {values['hour']}:{values['minute']}h "
         f"({values['day']}/{values['month']}/{year})"
     )
+
+
+def _balanced_optional_brackets(open_bracket: str | None, close_bracket: str | None) -> bool:
+    return (open_bracket, close_bracket) in {
+        (None, None),
+        ("(", ")"),
+        ("[", "]"),
+    }
 
 
 def _four_digit_spanish_year(value: str) -> str:
@@ -170,13 +206,8 @@ def _preserve_original_title(parsed: ParsedEdition, original_title: str) -> Pars
     return ParsedEdition(parsed.provider_id, original_title, parsed.edition_at)
 
 
-_PROVIDER_COMPAT_CANONICALIZERS: dict[str, CompatCanonicalizer] = {
-    "rne": _canonical_rne,
-    "ser": _canonical_ser,
-    "ondacero": _canonical_ondacero,
-}
-_PROVIDER_COMPAT_KINDS = {
-    "rne": "rne_date_time_separators",
-    "ser": "ser_layout_punctuation",
-    "ondacero": "ondacero_layout_punctuation",
+_PROVIDER_COMPAT_PROFILES: dict[str, ProviderCompatProfile] = {
+    "rne": ProviderCompatProfile(_canonical_rne, "rne_date_time_separators"),
+    "ser": ProviderCompatProfile(_canonical_ser, "ser_layout_punctuation"),
+    "ondacero": ProviderCompatProfile(_canonical_ondacero, "ondacero_layout_punctuation"),
 }

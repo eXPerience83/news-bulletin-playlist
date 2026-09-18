@@ -8,8 +8,8 @@ from news_bulletin_playlist.providers.title_recovery import TitleParseAttempt, p
 
 _PATTERN = re.compile(
     r"^Las noticias de la SER,?\s+"
-    r"(?P<hour>[01]?\d|2[0-3]):(?P<minute>[0-5]\d)\s*"
-    r"\((?P<day>\d{1,2})/(?P<month>\d{1,2})/(?P<year>\d{4})\)$",
+    r"(?P<hour>[01]?[0-9]|2[0-3]):(?P<minute>[0-5][0-9])\s*"
+    r"\((?P<day>[0-9]{1,2})/(?P<month>[0-9]{1,2})/(?P<year>[0-9]{4})\)$",
     re.IGNORECASE,
 )
 

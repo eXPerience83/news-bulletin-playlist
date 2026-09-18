@@ -11,8 +11,8 @@ UTC = ZoneInfo("UTC")
 
 _PATTERN = re.compile(
     r"^Journal\s+"
-    r"(?P<day>\d{1,2})/(?P<month>\d{1,2})/(?P<year>\d{4})\s+"
-    r"(?P<hour>[01]?\d|2[0-3])h(?P<minute>[0-5]\d)\s+GMT$",
+    r"(?P<day>[0-9]{1,2})/(?P<month>[0-9]{1,2})/(?P<year>[0-9]{4})\s+"
+    r"(?P<hour>[01]?[0-9]|2[0-3])h(?P<minute>[0-5][0-9])\s+GMT$",
     re.IGNORECASE,
 )
 

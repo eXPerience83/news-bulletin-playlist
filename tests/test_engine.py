@@ -1305,6 +1305,59 @@ def test_source_failure_carries_forward_recent_durable_match(tmp_path: Path) -> 
     assert spotify.items["destination-first"] == [SER_URI]
 
 
+def test_title_parser_drift_carries_forward_lkg_without_spotify_work(tmp_path: Path) -> None:
+    drift = False
+    spotify = _Spotify()
+    auth = _Auth()
+
+    def drifted_rss() -> bytes:
+        items = (
+            ("ser-1", SER_TITLE),
+            ("ser-2", "SER DEPORTES - 12:00 (30/08/2026)"),
+            ("ser-3", "new unreviewed SER title shape"),
+        )
+        body = "".join(
+            "<item>"
+            f"<guid>{native_id}</guid>"
+            f"<title>{title}</title>"
+            "<pubDate>Sun, 30 Aug 2026 09:05:00 +0000</pubDate>"
+            "</item>"
+            for native_id, title in items
+        )
+        return f"<rss><channel>{body}</channel></rss>".encode()
+
+    def fetcher(_url: str) -> bytes:
+        return drifted_rss() if drift else _rss()
+
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=fetcher,
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    first = runner.run_cycle()
+    provider_counts = (auth.calls, spotify.show_calls, len(spotify.playlist_reads))
+    drift = True
+    second = runner.run_cycle()
+
+    assert first.ok
+    assert not second.ok
+    assert not second.sources[0].collection_ok
+    diagnostics = second.sources[0].collection_diagnostics
+    assert diagnostics.failure_reason == "title_parser_drift"
+    assert diagnostics.rss_title_parser_attempted_count == 3
+    assert diagnostics.rss_title_parser_exact_count == 1
+    assert diagnostics.rss_title_parser_rejected_count == 2
+    assert second.playlists[0].ok
+    assert second.playlists[0].desired_count == 1
+    assert second.playlists[0].wrote is False
+    assert spotify.items["destination-first"] == [SER_URI]
+    assert (auth.calls, spotify.show_calls, len(spotify.playlist_reads)) == provider_counts
+
+
 def test_first_source_failure_preserves_existing_destination_without_lkg(
     tmp_path: Path,
 ) -> None:
