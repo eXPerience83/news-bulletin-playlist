@@ -312,4 +312,3 @@ def test_real_engine_drift_observability_adds_no_spotify_or_oauth_work(
     assert by_name["title_parse_rejected"].details == {"total": 2}
     assert by_name["title_format_drift_unresolved"].details == {"total": 2}
     assert by_name["title_format_drift_unresolved"].source_id == "ser"
-
