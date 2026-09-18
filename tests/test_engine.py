@@ -1376,6 +1376,87 @@ def test_title_parser_drift_carries_forward_lkg_without_spotify_work(tmp_path: P
     ) == provider_counts
 
 
+def test_title_parser_drift_does_not_block_independent_healthy_source(
+    tmp_path: Path,
+) -> None:
+    drift_source = replace(
+        _source(),
+        id=SourceId("ser-drift"),
+        endpoint_url="https://example.test/ser-drift.xml",
+    )
+    healthy_source = replace(
+        _source(),
+        id=SourceId("ser-healthy"),
+        endpoint_url="https://example.test/ser-healthy.xml",
+    )
+    drift_playlist = replace(
+        _playlist("drift"),
+        source_selection=SourceSelection((drift_source.id,)),
+    )
+    healthy_playlist = replace(
+        _playlist("healthy"),
+        source_selection=SourceSelection((healthy_source.id,)),
+    )
+    config = EngineConfig(
+        schema_version=1,
+        sources=(drift_source, healthy_source),
+        playlists=(drift_playlist, healthy_playlist),
+    )
+    drift_body = "".join(
+        "<item>"
+        f"<guid>drift-{index}</guid>"
+        f"<title>{title}</title>"
+        "<pubDate>Sun, 30 Aug 2026 09:05:00 +0000</pubDate>"
+        "</item>"
+        for index, title in enumerate(
+            (
+                SER_TITLE,
+                "SER DEPORTES - 12:00 (30/08/2026)",
+                "new unreviewed SER title shape",
+            ),
+            start=1,
+        )
+    )
+    drift_payload = f"<rss><channel>{drift_body}</channel></rss>".encode()
+    spotify = _Spotify()
+    auth = _Auth()
+
+    def fetcher(url: str) -> bytes:
+        if url == drift_source.endpoint_url:
+            return drift_payload
+        assert url == healthy_source.endpoint_url
+        return _rss()
+
+    runner = EngineRunner(
+        config,
+        _store(tmp_path),
+        auth,
+        fetcher=fetcher,
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+
+    assert not result.ok
+    by_source = {outcome.source_id: outcome for outcome in result.sources}
+    assert not by_source[drift_source.id].collection_ok
+    assert by_source[drift_source.id].collection_diagnostics.failure_reason == "title_parser_drift"
+    assert by_source[healthy_source.id].collection_ok
+    assert by_source[healthy_source.id].matching_ok is True
+
+    by_playlist = {outcome.playlist_id: outcome for outcome in result.playlists}
+    assert by_playlist[drift_playlist.id].wrote is None
+    assert by_playlist[healthy_playlist.id].ok
+    assert by_playlist[healthy_playlist.id].wrote is True
+    assert spotify.items["destination-healthy"] == [SER_URI]
+    assert spotify.replacements == [("destination-healthy", (SER_URI,))]
+    assert "destination-drift" not in spotify.playlist_reads
+    assert "destination-drift" not in spotify.snapshot_read_calls
+    assert auth.calls == 1
+    assert spotify.show_calls == 1
+
+
 def test_first_title_parser_drift_preserves_existing_destination_without_lkg_or_spotify_io(
     tmp_path: Path,
 ) -> None:

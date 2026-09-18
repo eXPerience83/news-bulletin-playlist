@@ -61,7 +61,11 @@ stream.
 Sanitized events are stored in the existing application SQLite database. The history has both:
 
 - a 30-day age limit; and
-- a 10,000-event row limit.
+- a 100,000-event emergency row limit.
+
+The row cap is intentionally much larger than the interactive page size so ordinary production
+event density can retain a meaningful multi-day/30-day window. Export metadata reports the current
+event count, oldest/newest retained timestamps and whether the row cap is active.
 
 The fields and textual values accepted by the durable event model are allow-listed. Diagnostic
 persistence is fail-soft: if the event store cannot be written, the playlist engine continues and
@@ -93,18 +97,28 @@ authenticated diagnostic surface.
 ## Export diagnostics
 
 The diagnostics page exposes **Download sanitized diagnostics ZIP**. Export uses the same active
-filters and is bounded to at most 500 events.
+severity/source/playlist/time filters as the page but has its own hard capacity of **10,000 events**;
+the interactive page remains bounded to **500 rows**. The export records whether its result was
+truncated, so a large window cannot silently look complete.
 
 The ZIP contains:
 
 - `diagnostics.jsonl` — machine-readable sanitized events;
 - `diagnostics.txt` — compact human-readable events;
 - `status.json` — current safe cycle/source/playlist summary without raw errors;
-- `runtime.json` — application version and diagnostic retention metadata;
+- `runtime.json` — application version/build revision, effective retention/capacity metadata,
+  export filters/truncation bounds and sanitized 24-hour Spotify request aggregates;
 - `manifest.json` — bundle format/privacy metadata.
 
 It does not contain the raw SQLite database, environment variables, Docker logs, OAuth callback
-URLs, provider response bodies, or credential files.
+URLs, provider response bodies, RSS titles/GUIDs/links, Spotify episode URI lists, or credential
+files.
+
+Source/playlist events intentionally retain only bounded operational evidence such as RSS funnel
+counts, title-parser mode/rejection counts, matching-plan/evaluation counters, request counts,
+allow-listed reconciliation reasons, duration histograms and preservation decisions. Correlate
+these with `cycle_id`, `source_id` and `playlist_id`; do not add raw provider text merely to make
+an incident easier to inspect.
 
 ## Secret-handling contract
 

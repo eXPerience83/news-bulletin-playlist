@@ -1,3 +1,4 @@
+import http.client
 import urllib.error
 from zoneinfo import ZoneInfo
 
@@ -19,6 +20,7 @@ from news_bulletin_playlist.provider_watch import (
     extract_rss_titles,
     format_report,
 )
+from news_bulletin_playlist.providers.ondacero import OndaCeroParser
 from news_bulletin_playlist.providers.ser import SerParser
 from news_bulletin_playlist.registry import ProviderConfig
 
@@ -169,6 +171,99 @@ def test_provider_watch_sanitizes_both_primary_and_fallback_errors(
     assert "HTTP 403" in report
     assert marker not in report
     assert "example.test" not in report
+
+
+def test_provider_watch_sanitizes_malformed_http_and_uses_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = "ARBITRARY_MARKER https://example.test/private"
+    calls: list[str] = []
+    fallback_title = "Las noticias de Onda Cero de las 09:30h (17/09/2026)"
+
+    def fetch(url: str, timeout: float = 20.0) -> bytes:
+        del timeout
+        calls.append(url)
+        if url.endswith("/feed"):
+            raise http.client.BadStatusLine(marker)
+        return f"<html><body><h3>{fallback_title}</h3></body></html>".encode()
+
+    monkeypatch.setattr(provider_watch_module, "fetch_feed", fetch)
+    provider = ProviderConfig(
+        provider_id="ondacero",
+        feed_url="https://example.test/feed",
+        spotify_show_id="show",
+        parser=OndaCeroParser(),
+        contract_fallback_url="https://example.test/fallback",
+    )
+
+    result = check_provider(provider)
+    report = format_report([result])
+
+    assert result.ok is True
+    assert calls == ["https://example.test/feed", "https://example.test/fallback"]
+    assert "checked official fallback page after RSS failure" in report
+    assert marker not in report
+    assert "private" not in report
+
+
+def test_provider_watch_sanitizes_malformed_http_from_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = "ARBITRARY_MARKER https://example.test/private"
+
+    def fail_fetch(url: str, timeout: float = 20.0) -> bytes:
+        del timeout
+        if url.endswith("/feed"):
+            raise ValueError("bad primary payload")
+        raise http.client.BadStatusLine(marker)
+
+    monkeypatch.setattr(provider_watch_module, "fetch_feed", fail_fetch)
+    provider = ProviderConfig(
+        provider_id="ondacero",
+        feed_url="https://example.test/feed",
+        spotify_show_id="show",
+        parser=SerParser(),
+        contract_fallback_url="https://example.test/fallback",
+    )
+
+    result = check_provider(provider)
+    report = format_report([result])
+
+    assert result.ok is False
+    assert "invalid provider payload" in report
+    assert "invalid HTTP response" in report
+    assert marker not in report
+    assert "private" not in report
+
+
+def test_catalog_watch_sanitizes_malformed_http_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = "ARBITRARY_MARKER https://example.test/private"
+    source = SourceDefinition(
+        id=SourceId("ser-test"),
+        display_name="SER",
+        countries=(CountryCode("ES"),),
+        languages=(LanguageTag("es"),),
+        timezone=ZoneInfo("Europe/Madrid"),
+        enabled=True,
+        parser_id=ParserId("ser"),
+        endpoint_url="https://example.test/feed",
+    )
+
+    def fail_fetch(_url: str, timeout: float = 20.0) -> bytes:
+        del timeout
+        raise http.client.BadStatusLine(marker)
+
+    monkeypatch.setattr(provider_watch_module, "fetch_feed", fail_fetch)
+
+    result = check_catalog_source(source)
+    report = format_report([result])
+
+    assert result.ok is False
+    assert "invalid HTTP response" in report
+    assert marker not in report
+    assert "private" not in report
 
 
 def test_catalog_watch_sanitizes_runtime_normalization_error(
