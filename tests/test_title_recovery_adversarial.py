@@ -180,6 +180,19 @@ def test_python_ignorecase_unicode_extras_cannot_broaden_product_identity(
     assert attempt.parsed is None
 
 
+@pytest.mark.parametrize("zero_width", ["\u200b", "\u200c", "\u200d", "\ufeff"])
+def test_zero_width_removal_cannot_create_ignorecase_confusable_after_normalization(
+    zero_width: str,
+) -> None:
+    title = f"Las notI{zero_width}\u0307cias de la SER, 09:30 (17/09/2026)"
+
+    attempt = SerParser().parse_with_recovery(title)
+
+    assert attempt.mode == "rejected"
+    assert attempt.recovery_kind == "unicode_casefold_confusable"
+    assert attempt.parsed is None
+
+
 @pytest.mark.parametrize(
     ("parser", "title"),
     [
