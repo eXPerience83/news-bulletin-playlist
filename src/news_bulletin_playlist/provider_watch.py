@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import sys
 import time
 import urllib.error
@@ -72,10 +73,20 @@ class _FallbackTitleHTMLParser(HTMLParser):
                 if any(
                     ancestor_tag in _FALLBACK_TITLE_UNIT_TAGS
                     or ancestor_tag in _FALLBACK_CONTEXT_TAGS
+                    or ancestor_tag in _FALLBACK_INLINE_TAGS
                     for ancestor_tag, _ancestor_parts in self._captures
                 ):
                     break
                 self.titles.append(text)
+                break
+
+            if capture_tag in _FALLBACK_TITLE_UNIT_TAGS and any(
+                ancestor_tag in _FALLBACK_TITLE_UNIT_TAGS
+                or ancestor_tag in _FALLBACK_INLINE_TAGS
+                for ancestor_tag, _ancestor_parts in self._captures
+            ):
+                # Nested semantic/inline candidates are fragments of the enclosing title unit.
+                # Defer to that enclosing unit so prefix/suffix promo text stays attached.
                 break
 
             if capture_tag in _FALLBACK_CONTEXT_TAGS and any(
@@ -177,7 +188,14 @@ def check_provider(provider: ProviderConfig) -> ContractResult:
     try:
         payload = fetch_feed(provider.feed_url)
         titles = extract_rss_titles(payload)
-    except (urllib.error.URLError, TimeoutError, ET.ParseError, OSError, ValueError) as feed_error:
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        TimeoutError,
+        ET.ParseError,
+        OSError,
+        ValueError,
+    ) as feed_error:
         if provider.contract_fallback_url is None:
             return ContractResult(
                 provider.provider_id,
@@ -189,7 +207,13 @@ def check_provider(provider: ProviderConfig) -> ContractResult:
         try:
             fallback_payload = fetch_feed(provider.contract_fallback_url)
             titles = extract_fallback_titles(provider.provider_id, fallback_payload)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as fallback_error:
+        except (
+            urllib.error.URLError,
+            http.client.HTTPException,
+            TimeoutError,
+            OSError,
+            ValueError,
+        ) as fallback_error:
             return ContractResult(
                 provider.provider_id,
                 False,
@@ -220,6 +244,7 @@ def check_catalog_source(source: SourceDefinition) -> ContractResult:
         editions = normalize_rss_source(source, payload)
     except (
         urllib.error.URLError,
+        http.client.HTTPException,
         TimeoutError,
         ET.ParseError,
         OSError,
@@ -249,6 +274,8 @@ def _safe_error_detail(exc: BaseException) -> str:
 
     if isinstance(exc, urllib.error.HTTPError):
         return f"HTTP {exc.code}"
+    if isinstance(exc, http.client.HTTPException):
+        return "invalid HTTP response"
     if isinstance(exc, ET.ParseError):
         return "invalid XML"
     if isinstance(exc, TimeoutError):
