@@ -80,7 +80,7 @@ def parse_with_recovery(
 
     if len(title) > MAX_TITLE_PARSE_CHARS:
         return TitleParseAttempt(None, "rejected", "title_too_long")
-    if any(character in _UNICODE_IGNORECASE_CONFUSABLES for character in title):
+    if _contains_unicode_ignorecase_confusable(title):
         return TitleParseAttempt(None, "rejected", "unicode_casefold_confusable")
 
     exact = strict_parse(title)
@@ -111,6 +111,13 @@ def parse_with_recovery(
             )
 
     return TitleParseAttempt(None, "rejected")
+
+
+def _contains_unicode_ignorecase_confusable(title: str) -> bool:
+    if any(character in _UNICODE_IGNORECASE_CONFUSABLES for character in title):
+        return True
+    composed = unicodedata.normalize("NFC", title)
+    return any(character in _UNICODE_IGNORECASE_CONFUSABLES for character in composed)
 
 
 def normalize_title_syntax(title: str) -> str:
