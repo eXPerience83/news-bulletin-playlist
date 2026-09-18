@@ -726,6 +726,7 @@ def reconcile_spotify_playlist(
 
     evidence = evidence if evidence is not None else ReconciliationEvidence()
     current_desired = desired
+    allow_snapshot_attested_prewrite = snapshot_attested_prewrite
     seen = {_desired_preparation_key(current_desired)}
     max_preparations = prewrite_iteration_limit or len(current_desired.items) + 1
     if max_preparations < 1:
@@ -747,7 +748,7 @@ def reconcile_spotify_playlist(
                 mutation_guard=mutation_guard,
                 prepare_write=prepared_callback,
                 prewrite_desired=current_desired,
-                snapshot_attested_prewrite=snapshot_attested_prewrite,
+                snapshot_attested_prewrite=allow_snapshot_attested_prewrite,
                 evidence=evidence,
             )
             break
@@ -763,6 +764,11 @@ def reconcile_spotify_playlist(
                 ) from None
             seen.add(changed_key)
             current_desired = changed.desired
+            # The snapshot/attestation candidate was authorized for the original dirty desired
+            # state. A #148 preparation change can make the rebuilt desired already equal the
+            # remote playlist, so subsequent bounded iterations must restore the complete
+            # pre-write item comparison instead of reusing the shortcut.
+            allow_snapshot_attested_prewrite = False
     else:
         raise SpotifyReconciliationError(
             "Spotify prewrite desired-state preparation exceeded its bounded iterations"
