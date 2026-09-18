@@ -80,7 +80,15 @@ class _FallbackTitleHTMLParser(HTMLParser):
                 self.titles.append(text)
                 break
 
-            # Semantic title tags and bounded structural contexts are emitted with all of their
+            if capture_tag in _FALLBACK_CONTEXT_TAGS and any(
+                ancestor_tag in _FALLBACK_CONTEXT_TAGS
+                for ancestor_tag, _ancestor_parts in self._captures
+            ):
+                # Nested structural wrappers are not independent title evidence. Defer to the
+                # outer bounded context so any surrounding promo/special text remains attached.
+                break
+
+            # Semantic title tags and top-level bounded structural contexts are emitted with all
             # descendant text. The later prefix filter and recovery parser still validate the
             # complete candidate rather than a nested fragment.
             self.titles.append(text)
