@@ -302,6 +302,7 @@ def test_prewrite_preparation_change_restores_complete_item_comparison(
     assert len(client.item_calls) == 1
     assert client.writes == 0
 
+
 def _changed_context(
     current: DestinationVerificationContext,
     *,
