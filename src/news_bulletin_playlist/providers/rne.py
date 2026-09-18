@@ -37,7 +37,7 @@ def _parse_time(value: str) -> tuple[int, int] | None:
     if "." in compact:
         hour_s, minute_s = compact.split(".", 1)
         hour, minute = int(hour_s), int(minute_s)
-    elif len(compact) in {3, 4} and int(compact) > 23:
+    elif len(compact) in {3, 4}:
         hour, minute = divmod(int(compact), 100)
     else:
         hour, minute = int(compact), 0

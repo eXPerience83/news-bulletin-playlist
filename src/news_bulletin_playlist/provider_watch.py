@@ -21,7 +21,10 @@ _MIN_PARSE_RATIO = 0.5
 _RETRYABLE_HTTP = frozenset({429, 500, 502, 503, 504})
 _RETRY_DELAYS_SECONDS = (0.0, 2.0, 5.0)
 _ONDACERO_TITLE_PREFIX = "las noticias de onda cero"
-_FALLBACK_TEXT_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6", "a", "p", "span", "li"})
+_FALLBACK_TITLE_UNIT_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6", "a", "p", "li"})
+_FALLBACK_CONTEXT_TAGS = frozenset({"div", "article", "section", "header"})
+_FALLBACK_INLINE_TAGS = frozenset({"span", "strong", "em", "b", "i"})
+_FALLBACK_CAPTURE_TAGS = _FALLBACK_TITLE_UNIT_TAGS | _FALLBACK_CONTEXT_TAGS | _FALLBACK_INLINE_TAGS
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +37,7 @@ class ContractResult:
 
 
 class _FallbackTitleHTMLParser(HTMLParser):
-    """Extract complete text units; never detach a bulletin-looking substring."""
+    """Extract complete title units without promoting nested formatting fragments."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -44,7 +47,7 @@ class _FallbackTitleHTMLParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del attrs
         normalized = tag.casefold()
-        if normalized in _FALLBACK_TEXT_TAGS:
+        if normalized in _FALLBACK_CAPTURE_TAGS:
             self._captures.append((normalized, []))
 
     def handle_data(self, data: str) -> None:
@@ -58,15 +61,35 @@ class _FallbackTitleHTMLParser(HTMLParser):
             if capture_tag != normalized:
                 continue
             self._captures.pop(index)
-            # Nested supported tags are formatting fragments of the enclosing title unit.
-            # Their text is already accumulated into every active ancestor capture, so emitting
-            # the nested fragment independently could make a promotional/suffixed headline pass
-            # the provider-watch ratio using text that never existed as a complete title.
-            if self._captures:
-                break
             text = " ".join("".join(parts).split()).strip()
-            if text:
+            if not text:
+                break
+
+            if capture_tag in _FALLBACK_INLINE_TAGS:
+                # Inline text is authoritative only when it is not nested inside a broader
+                # candidate unit/context. Otherwise surrounding text may turn a valid-looking
+                # fragment into a promo/special that the complete-title parser must reject.
+                if any(
+                    ancestor_tag in _FALLBACK_TITLE_UNIT_TAGS
+                    or ancestor_tag in _FALLBACK_CONTEXT_TAGS
+                    for ancestor_tag, _ancestor_parts in self._captures
+                ):
+                    break
                 self.titles.append(text)
+                break
+
+            if capture_tag in _FALLBACK_CONTEXT_TAGS and any(
+                ancestor_tag in _FALLBACK_CONTEXT_TAGS
+                for ancestor_tag, _ancestor_parts in self._captures
+            ):
+                # Nested structural wrappers are not independent title evidence. Defer to the
+                # outer bounded context so any surrounding promo/special text remains attached.
+                break
+
+            # Semantic title tags and top-level bounded structural contexts are emitted with all
+            # descendant text. The later prefix filter and recovery parser still validate the
+            # complete candidate rather than a nested fragment.
+            self.titles.append(text)
             break
 
 
@@ -77,11 +100,12 @@ def extract_rss_titles(payload: bytes) -> list[str]:
         if _local_name(item.tag) != "item":
             continue
         for child in item:
-            if _local_name(child.tag) == "title" and child.text:
-                title = child.text.strip()
-                if title:
-                    titles.append(title)
-                break
+            if _local_name(child.tag) != "title":
+                continue
+            title = "".join(child.itertext()).strip()
+            if title:
+                titles.append(title)
+            break
     return titles
 
 
@@ -146,7 +170,7 @@ def fetch_feed(url: str, timeout: float = 20.0) -> bytes:
             last_error = exc
             if attempt == len(_RETRY_DELAYS_SECONDS):
                 raise
-    raise RuntimeError(f"feed retries exhausted: {last_error}")
+    raise RuntimeError("feed retries exhausted") from last_error
 
 
 def check_provider(provider: ProviderConfig) -> ContractResult:
@@ -160,7 +184,7 @@ def check_provider(provider: ProviderConfig) -> ContractResult:
                 False,
                 0,
                 0,
-                f"feed unavailable or invalid after retries: {feed_error}",
+                f"feed unavailable or invalid after retries: {_safe_error_detail(feed_error)}",
             )
         try:
             fallback_payload = fetch_feed(provider.contract_fallback_url)
@@ -171,7 +195,9 @@ def check_provider(provider: ProviderConfig) -> ContractResult:
                 False,
                 0,
                 0,
-                f"feed failed ({feed_error}); fallback failed ({fallback_error})",
+                "feed failed "
+                f"({_safe_error_detail(feed_error)}); fallback failed "
+                f"({_safe_error_detail(fallback_error)})",
             )
         result = evaluate_titles(provider.provider_id, provider.parser, titles)
         return ContractResult(
@@ -205,7 +231,7 @@ def check_catalog_source(source: SourceDefinition) -> ContractResult:
             False,
             0,
             0,
-            f"runtime collection contract failed: {exc}",
+            f"runtime collection contract failed: {_safe_error_detail(exc)}",
         )
 
     sampled = min(len(editions), _SAMPLE_SIZE)
@@ -216,6 +242,29 @@ def check_catalog_source(source: SourceDefinition) -> ContractResult:
         sampled,
         f"runtime normalized {len(editions)} canonical editions",
     )
+
+
+def _safe_error_detail(exc: BaseException) -> str:
+    """Return bounded failure metadata without provider-controlled exception text or URLs."""
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, ET.ParseError):
+        return "invalid XML"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, TimeoutError):
+            return "timeout"
+        return "network error"
+    if isinstance(exc, OSError):
+        return "network I/O error"
+    if isinstance(exc, KeyError):
+        return "configuration error"
+    if isinstance(exc, ValueError):
+        return "invalid provider payload"
+    return type(exc).__name__
 
 
 def format_report(results: list[ContractResult]) -> str:

@@ -544,7 +544,7 @@ def _normalize_rss_source_observed(
         )
 
     editions: list[CanonicalEdition] = []
-    seen_native_ids: set[str] = set()
+    seen_eligible_native_ids: set[str] = set()
     missing_required_fields_count = 0
     filter_rejected_count = 0
     duplicate_native_id_count = 0
@@ -576,15 +576,22 @@ def _normalize_rss_source_observed(
             if collection_filter is not None and not collection_filter.accepts(title):
                 filter_rejected_count += 1
                 continue
-            if source_native_id in seen_native_ids:
-                duplicate_native_id_count += 1
-                continue
 
             try:
                 published_at = _parse_published_at(published_text, source.timezone)
             except ValueError:
                 invalid_published_at_count += 1
                 continue
+
+            # Drift health is defined over unique source-native items that actually reach
+            # semantic title parsing. The first item with a given native id that survives
+            # required-field/filter/publication validation is authoritative for this cycle;
+            # later copies are diagnostics-only duplicates and must not inflate attempted/
+            # rejected counts or change the parse outcome.
+            if source_native_id in seen_eligible_native_ids:
+                duplicate_native_id_count += 1
+                continue
+            seen_eligible_native_ids.add(source_native_id)
 
             edition_at = None
             if parser is not None:
@@ -612,7 +619,6 @@ def _normalize_rss_source_observed(
                     duration_seconds=_duration_seconds(item),
                 )
             )
-            seen_native_ids.add(source_native_id)
     except (
         OSError,
         TimeoutError,

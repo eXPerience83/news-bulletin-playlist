@@ -128,6 +128,53 @@ def test_runtime_drift_threshold_is_strictly_below_half() -> None:
     assert source.collection_diagnostics.rss_title_parser_rejected_count == 2
 
 
+def test_rejected_duplicate_native_id_does_not_inflate_drift_denominator() -> None:
+    valid = "Las noticias de la SER, 09:30 (17/09/2026)"
+    published = "Thu, 17 Sep 2026 07:35:00 +0000"
+    payload = (
+        "<rss><channel>"
+        f"<item><guid>good</guid><title>{valid}</title><pubDate>{published}</pubDate></item>"
+        f"<item><guid>bad</guid><title>PROMO</title><pubDate>{published}</pubDate></item>"
+        f"<item><guid>bad</guid><title>PROMO</title><pubDate>{published}</pubDate></item>"
+        "</channel></rss>"
+    ).encode()
+
+    result = collect_required_sources(_config(), fetcher=lambda _url: payload)
+    source = result.sources[0]
+    diagnostics = source.collection_diagnostics
+
+    assert source.ok is True
+    assert len(source.editions) == 1
+    assert diagnostics.failure_reason is None
+    assert diagnostics.rss_duplicate_native_id_count == 1
+    assert diagnostics.rss_title_parser_attempted_count == 2
+    assert diagnostics.rss_title_parser_exact_count == 1
+    assert diagnostics.rss_title_parser_rejected_count == 1
+
+
+def test_first_parse_eligible_duplicate_native_id_is_authoritative_for_cycle() -> None:
+    valid = "Las noticias de la SER, 09:30 (17/09/2026)"
+    published = "Thu, 17 Sep 2026 07:35:00 +0000"
+    payload = (
+        "<rss><channel>"
+        f"<item><guid>shared</guid><title>PROMO</title><pubDate>{published}</pubDate></item>"
+        f"<item><guid>shared</guid><title>{valid}</title><pubDate>{published}</pubDate></item>"
+        f"<item><guid>good</guid><title>{valid}</title><pubDate>{published}</pubDate></item>"
+        "</channel></rss>"
+    ).encode()
+
+    result = collect_required_sources(_config(), fetcher=lambda _url: payload)
+    source = result.sources[0]
+    diagnostics = source.collection_diagnostics
+
+    assert source.ok is True
+    assert [edition.source_native_id for edition in source.editions] == ["good"]
+    assert diagnostics.rss_duplicate_native_id_count == 1
+    assert diagnostics.rss_title_parser_attempted_count == 2
+    assert diagnostics.rss_title_parser_exact_count == 1
+    assert diagnostics.rss_title_parser_rejected_count == 1
+
+
 def test_release_date_title_strategy_is_not_subject_to_semantic_parser_drift() -> None:
     result = collect_required_sources(
         _config("release_date_title"),
