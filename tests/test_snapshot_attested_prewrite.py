@@ -19,7 +19,12 @@ from news_bulletin_playlist.models import (
     SourceSelection,
 )
 from news_bulletin_playlist.persistence import SQLiteStore
-from news_bulletin_playlist.reconciliation import reconcile_spotify_playlist
+from news_bulletin_playlist.reconciliation import (
+    MutationOutcome,
+    ReconciliationEvidence,
+    SpotifyReconciliationError,
+    reconcile_spotify_playlist,
+)
 from news_bulletin_playlist.snapshot_pending import (
     PendingSnapshotConfirmation,
     PendingSnapshotJournal,
@@ -212,6 +217,49 @@ def test_snapshot_failure_falls_back_without_authorizing_the_shortcut(tmp_path: 
     assert client.snapshot_calls == 3
     assert len(client.item_calls) == 4
     assert client.writes == 1
+
+
+def test_fast_path_readback_failure_never_qualifies_the_mutation(tmp_path: Path) -> None:
+    class ReadbackFailureSpotify(_Spotify):
+        def playlist_items(
+            self,
+            playlist_id: str,
+            *,
+            limit: int = 50,
+            offset: int = 0,
+        ) -> dict[str, Any]:
+            if self.writes:
+                raise SpotifyTransportError("readback unavailable")
+            return super().playlist_items(playlist_id, limit=limit, offset=offset)
+
+    playlist = _playlist()
+    desired = _desired(playlist, 49)
+    old = _desired(playlist, 49, suffix="old")
+    store = _store(tmp_path)
+    _seed_attestation(store, playlist, old.uris)
+    client = ReadbackFailureSpotify(old.uris, ["snapshot-a"])
+    evidence = ReconciliationEvidence()
+
+    with pytest.raises(SpotifyReconciliationError, match="readback playlist_items transport failure"):
+        reconcile_spotify_playlist(
+            client,
+            playlist,
+            desired,
+            store=store,
+            snapshot_attested_prewrite=True,
+            evidence=evidence,
+        )
+
+    assert client.snapshot_calls == 1
+    assert client.item_calls == []
+    assert client.writes == 1
+    assert evidence.mutation_outcome is MutationOutcome.UNKNOWN
+    assert evidence.remote_evidence_qualified is False
+    attestation = store.get_playlist_attestation(playlist.id)
+    assert attestation is not None
+    assert attestation.snapshot_id == "snapshot-a"
+    assert attestation.desired_fingerprint == playlist_attestation_fingerprint(old.uris)
+    assert PendingSnapshotJournal(store).get(playlist.id) is None
 
 
 def test_attestation_for_current_desired_never_authorizes_dirty_prewrite_shortcut(
