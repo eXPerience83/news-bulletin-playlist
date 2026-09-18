@@ -1426,6 +1426,7 @@ class EngineRunner:
                     and pending is None
                     and state.last_verified_at is not None
                     and state.next_audit_at is not None
+                    and now >= state.last_verified_at
                 )
 
             if (
