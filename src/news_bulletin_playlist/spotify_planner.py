@@ -290,11 +290,12 @@ class SpotifyPlannerJournal:
                 raise PersistenceError("Spotify planner verification context changed or missing")
 
     def begin_destination_verification(self, playlist_id: str) -> None:
-        """Invalidate confirmation before a reconciliation that may mutate remotely."""
+        """Invalidate durable shortcut authority before remote reconciliation begins."""
         with self._connection("begin Spotify destination verification") as connection:
             cursor = connection.execute(
                 """UPDATE spotify_planner_destination_state
-                   SET confirmed_desired_fingerprint=NULL, dirty=1
+                   SET confirmed_desired_fingerprint=NULL, dirty=1,
+                       last_verified_at=NULL, next_audit_at=NULL
                    WHERE playlist_id=?""",
                 (playlist_id,),
             )

@@ -342,7 +342,7 @@ class SoftRetentionEngineRunner(EngineRunner):
             return plan
         # A restart intentionally loses the six-hour runtime lease. Verify the physical baseline
         # snapshot-first instead of turning that safety check into an expiry-only mutation.
-        return replace(plan, audit_only=True)
+        return replace(plan, audit_only=True, snapshot_attested_prewrite=False)
 
     def _destination_verification_context(
         self,

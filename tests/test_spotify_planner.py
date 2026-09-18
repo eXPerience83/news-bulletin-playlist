@@ -207,6 +207,8 @@ def test_unknown_a_to_b_to_a_never_revives_old_confirmation(tmp_path: Path) -> N
     assert in_flight is not None
     assert in_flight.dirty
     assert in_flight.confirmed_desired_fingerprint is None
+    assert in_flight.last_verified_at is None
+    assert in_flight.next_audit_at is None
     changed = _observe(journal, SHA_B)
     assert changed.confirmed_desired_fingerprint is None
     journal.mark_destination_unknown("playlist")
