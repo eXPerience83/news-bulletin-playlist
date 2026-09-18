@@ -240,7 +240,10 @@ def test_fast_path_readback_failure_never_qualifies_the_mutation(tmp_path: Path)
     client = ReadbackFailureSpotify(old.uris, ["snapshot-a"])
     evidence = ReconciliationEvidence()
 
-    with pytest.raises(SpotifyReconciliationError, match="readback playlist_items transport failure"):
+    with pytest.raises(
+        SpotifyReconciliationError,
+        match="readback playlist_items transport failure",
+    ):
         reconcile_spotify_playlist(
             client,
             playlist,
