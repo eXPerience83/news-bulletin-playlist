@@ -81,8 +81,7 @@ class _FallbackTitleHTMLParser(HTMLParser):
                 break
 
             if capture_tag in _FALLBACK_TITLE_UNIT_TAGS and any(
-                ancestor_tag in _FALLBACK_TITLE_UNIT_TAGS
-                or ancestor_tag in _FALLBACK_INLINE_TAGS
+                ancestor_tag in _FALLBACK_TITLE_UNIT_TAGS or ancestor_tag in _FALLBACK_INLINE_TAGS
                 for ancestor_tag, _ancestor_parts in self._captures
             ):
                 # Nested semantic/inline candidates are fragments of the enclosing title unit.
