@@ -85,6 +85,7 @@ class _Spotify:
         self.fail_playlist = fail_playlist
         self.show_calls = 0
         self.playlist_reads: list[str] = []
+        self.snapshot_reads: list[str] = []
         self.replacements: list[tuple[str, tuple[str, ...]]] = []
         self.items: dict[str, list[str]] = {}
         self.snapshots: dict[str, str] = {}
@@ -143,6 +144,7 @@ class _Spotify:
         return {"snapshot_id": snapshot}
 
     def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+        self.snapshot_reads.append(playlist_id)
         return {"snapshot_id": self.snapshots.get(playlist_id, "snapshot-initial")}
 
 
@@ -1312,7 +1314,7 @@ def test_title_parser_drift_carries_forward_lkg_without_spotify_work(tmp_path: P
 
     def drifted_rss() -> bytes:
         items = (
-            ("ser-1", SER_TITLE),
+            ("ser-1", "Las noticias de la SER, 11:01 (30/08/2026)"),
             ("ser-2", "SER DEPORTES - 12:00 (30/08/2026)"),
             ("ser-3", "new unreviewed SER title shape"),
         )
@@ -1339,11 +1341,20 @@ def test_title_parser_drift_carries_forward_lkg_without_spotify_work(tmp_path: P
     )
 
     first = runner.run_cycle()
-    provider_counts = (auth.calls, spotify.show_calls, len(spotify.playlist_reads))
+    persisted_before = runner.store.get_edition(SourceId("ser"), "ser-1")
+    provider_counts = (
+        auth.calls,
+        spotify.show_calls,
+        len(spotify.playlist_reads),
+        len(spotify.snapshot_reads),
+        len(spotify.replacements),
+    )
     drift = True
     second = runner.run_cycle()
 
     assert first.ok
+    assert persisted_before is not None
+    assert persisted_before.title == SER_TITLE
     assert not second.ok
     assert not second.sources[0].collection_ok
     diagnostics = second.sources[0].collection_diagnostics
@@ -1351,11 +1362,66 @@ def test_title_parser_drift_carries_forward_lkg_without_spotify_work(tmp_path: P
     assert diagnostics.rss_title_parser_attempted_count == 3
     assert diagnostics.rss_title_parser_exact_count == 1
     assert diagnostics.rss_title_parser_rejected_count == 2
+    assert runner.store.get_edition(SourceId("ser"), "ser-1") == persisted_before
     assert second.playlists[0].ok
     assert second.playlists[0].desired_count == 1
     assert second.playlists[0].wrote is False
     assert spotify.items["destination-first"] == [SER_URI]
-    assert (auth.calls, spotify.show_calls, len(spotify.playlist_reads)) == provider_counts
+    assert (
+        auth.calls,
+        spotify.show_calls,
+        len(spotify.playlist_reads),
+        len(spotify.snapshot_reads),
+        len(spotify.replacements),
+    ) == provider_counts
+
+
+def test_first_title_parser_drift_preserves_existing_destination_without_lkg_or_spotify_io(
+    tmp_path: Path,
+) -> None:
+    spotify = _Spotify()
+    auth = _Auth()
+    existing_uri = "spotify:episode:0000000000000000000002"
+    spotify.items["destination-first"] = [existing_uri]
+
+    body = "".join(
+        "<item>"
+        f"<guid>ser-{index}</guid>"
+        f"<title>{title}</title>"
+        "<pubDate>Sun, 30 Aug 2026 09:05:00 +0000</pubDate>"
+        "</item>"
+        for index, title in enumerate(
+            (
+                SER_TITLE,
+                "SER DEPORTES - 12:00 (30/08/2026)",
+                "new unreviewed SER title shape",
+            ),
+            start=1,
+        )
+    )
+    payload = f"<rss><channel>{body}</channel></rss>".encode()
+
+    runner = EngineRunner(
+        _config("first"),
+        _store(tmp_path),
+        auth,
+        fetcher=lambda _url: payload,
+        client_factory=lambda _token: spotify,
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_cycle()
+
+    assert not result.ok
+    assert result.sources[0].collection_diagnostics.failure_reason == "title_parser_drift"
+    assert result.playlists[0].wrote is None
+    assert "destination preserved" in (result.playlists[0].error or "")
+    assert spotify.items["destination-first"] == [existing_uri]
+    assert auth.calls == 0
+    assert spotify.show_calls == 0
+    assert spotify.playlist_reads == []
+    assert spotify.snapshot_reads == []
+    assert spotify.replacements == []
 
 
 def test_first_source_failure_preserves_existing_destination_without_lkg(
