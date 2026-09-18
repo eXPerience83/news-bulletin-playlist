@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from test_shadow_planner_review import setup
 
 from news_bulletin_playlist.desired_state import DesiredPlaylistItem, DesiredPlaylistState
