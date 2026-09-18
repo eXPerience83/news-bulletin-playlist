@@ -20,6 +20,7 @@ from news_bulletin_playlist.provider_watch import (
     extract_rss_titles,
     format_report,
 )
+from news_bulletin_playlist.providers.ondacero import OndaCeroParser
 from news_bulletin_playlist.providers.ser import SerParser
 from news_bulletin_playlist.registry import ProviderConfig
 
@@ -191,14 +192,14 @@ def test_provider_watch_sanitizes_malformed_http_and_uses_fallback(
         provider_id="ondacero",
         feed_url="https://example.test/feed",
         spotify_show_id="show",
-        parser=SerParser(),
+        parser=OndaCeroParser(),
         contract_fallback_url="https://example.test/fallback",
     )
 
     result = check_provider(provider)
     report = format_report([result])
 
-    assert result.ok is False
+    assert result.ok is True
     assert calls == ["https://example.test/feed", "https://example.test/fallback"]
     assert "checked official fallback page after RSS failure" in report
     assert marker not in report
