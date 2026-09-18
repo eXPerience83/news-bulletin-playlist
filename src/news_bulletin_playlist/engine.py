@@ -165,6 +165,7 @@ class _DestinationWorkPlan:
     needs_remote: bool
     state_available: bool = True
     audit_only: bool = False
+    snapshot_attested_prewrite: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -989,6 +990,7 @@ class EngineRunner:
                             )
                             + 1
                         ),
+                        snapshot_attested_prewrite=destination_plan.snapshot_attested_prewrite,
                         evidence=evidence,
                     )
                 desired = build_desired_state_from_store(
@@ -1392,14 +1394,17 @@ class EngineRunner:
                 and state.auth_context_fingerprint == expected.auth_context_fingerprint
                 and state.observed_desired_fingerprint == expected.desired_fingerprint
             )
+            snapshot_attested_prewrite = False
             if state.dirty and not state.unknown and context_matches:
+                pending_available = True
                 try:
                     pending = PendingSnapshotJournal(self.store).get(playlist.id)
                 except PersistenceError:
-                    # This read exists only to authorize the optional 60-second local deferral.
-                    # If it is unavailable, preserve the pre-existing conservative provider flow
-                    # while retaining the shadow planner's fail-closed diagnostic state.
+                    # This read exists only to authorize optional shortcuts. If it is
+                    # unavailable, preserve the pre-existing conservative provider flow while
+                    # retaining the planner's fail-closed diagnostic state.
                     self._planner_shadow = PlannerShadowResult.unsafe()
+                    pending_available = False
                     pending = None
                 if (
                     pending is not None
@@ -1411,12 +1416,17 @@ class EngineRunner:
                     < pending.created_at + _PENDING_SNAPSHOT_CONFIRMATION_DELAY
                     and now < pending.expires_at
                 ):
-                    # Exact ordered-item readback already proved the write content.  Keep
-                    # pending non-authoritative and revoke the runtime lease, but do not
-                    # create provider work solely to re-read a snapshot during Spotify's
-                    # immediate propagation window.
+                    # Exact ordered-item readback already proved the write content. Keep pending
+                    # non-authoritative and revoke the runtime lease, but do not create provider
+                    # work solely to re-read a snapshot during Spotify's propagation window.
                     self.destination_leases.revoke(playlist.id)
                     return _DestinationWorkPlan(needs_remote=False)
+                snapshot_attested_prewrite = bool(
+                    pending_available
+                    and pending is None
+                    and state.last_verified_at is not None
+                    and state.next_audit_at is not None
+                )
 
             if (
                 not context_matches
@@ -1427,7 +1437,10 @@ class EngineRunner:
                 or state.next_audit_at is None
                 or now < state.last_verified_at
             ):
-                return _DestinationWorkPlan(needs_remote=True)
+                return _DestinationWorkPlan(
+                    needs_remote=True,
+                    snapshot_attested_prewrite=snapshot_attested_prewrite,
+                )
             if PendingSnapshotJournal(self.store).get(playlist.id) is not None:
                 self.destination_leases.revoke(playlist.id)
                 return _DestinationWorkPlan(needs_remote=True)
