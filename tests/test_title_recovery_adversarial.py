@@ -162,6 +162,7 @@ def test_unicode_confusables_do_not_change_product_identity(
         (SerParser(), "Laſ noticias de la SER, 09:30 (17/09/2026)"),
         (SerParser(), "Las notİcias de la SER, 09:30 (17/09/2026)"),
         (SerParser(), "Las notıcias de la SER, 09:30 (17/09/2026)"),
+        (SerParser(), "Las notI\u0307cias de la SER, 09:30 (17/09/2026)"),
         (
             OndaCeroParser(),
             "Las notİcias de Onda Cero de las 09:30h (17/09/2026)",
