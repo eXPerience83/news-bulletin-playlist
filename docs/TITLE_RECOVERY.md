@@ -40,7 +40,9 @@ syntax. They require separate provider evidence before becoming an allowed recov
 Python's Unicode case-insensitive regex engine also treats a small set of non-ASCII letters as ASCII
 I/i/S/K equivalents (U+0130, U+0131, U+017F and U+212A). Recovery rejects those characters, including
 canonical decompositions that NFC would compose into one of them, before the historical strict regex
-runs, so IGNORECASE cannot silently broaden provider/product identity.
+runs. The guard is repeated after the complete reviewed normalization chain and the final candidate is
+NFC-composed again, so removing an allowed zero-width character cannot create a new confusable only
+after the first check.
 
 ## Provider compatibility profiles
 
@@ -60,7 +62,10 @@ Two-digit-year policy is intentionally provider-specific:
   (`00..68 -> 2000..2068`, `69..99 -> 1969..1999`);
 - COPE and RFI require four-digit years.
 
-These policies are covered explicitly rather than hidden behind one global pivot.
+These policies are covered explicitly rather than hidden behind one global pivot. RNE's historical
+compact time forms use HMM/HHMM semantics for every three- or four-digit token: the last two digits
+are always minutes. Leading zeros therefore do not change `0015` into `15:00`; it is
+equivalent to `00.15`.
 
 ## Bounded input
 
@@ -72,9 +77,12 @@ strict providers share the same pre-regex guard.
 
 ## Runtime drift guard
 
-Runtime mode counters use a single `parse_with_recovery()` attempt per title. The denominator is the
-number of items that actually reach title parsing, after required-field, collection-filter,
-duplicate-native-id and publication-timestamp validation. It is not the raw RSS item count.
+Runtime mode counters use a single `parse_with_recovery()` attempt per unique eligible native
+identity. The denominator is the number of source-native items that actually reach title parsing,
+after required-field, collection-filter and publication-timestamp validation and after duplicate
+native identities are removed. The first occurrence of a native id that reaches this parsing boundary
+is authoritative for that collection cycle; later copies are counted as duplicates and cannot inflate
+attempted/rejected counts or change drift health. It is not the raw RSS item count.
 
 The fail-closed material-drift guard currently applies only to the dedicated bulletin parsers
 `rne`, `ser` and `ondacero`:
@@ -90,12 +98,16 @@ subjected to this dedicated-feed threshold merely because non-target programmes 
 ## Provider watch
 
 Provider-watch evaluates the same recovery contract. Its title sample is capped at six and uses the
-same 50% acceptance boundary. Onda Cero's HTML fallback extracts complete outer title units, keeps
-nested formatting inside that unit, and passes the complete title through recovery. It never treats a
-valid-looking nested substring as an independent bulletin.
+same 50% acceptance boundary. Onda Cero's HTML fallback extracts complete semantic title units or
+bounded structural contexts, keeps nested formatting inside that unit, and passes the complete text
+through recovery. Nested inline/context fragments are not promoted independently when an enclosing
+context may add promo/special text. RSS title extraction likewise uses complete descendant text rather
+than only the first XML text node, keeping provider-watch aligned with runtime normalization.
 
 The fallback's lightweight Onda Cero prefilter uses the same safe syntax normalization so harmless
-Unicode whitespace does not prevent a valid complete title from reaching the parser.
+Unicode whitespace does not prevent a valid complete title from reaching the parser. Provider-watch
+failure reports expose only bounded error classes/status codes; upstream exception strings, URLs and
+arbitrary provider payload text are not copied into incident reports.
 
 ## Diagnostics and request budget
 
