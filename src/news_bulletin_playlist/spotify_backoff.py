@@ -308,7 +308,7 @@ class SpotifyRateLimitJournal:
 
 
 class SpotifyRateLimitGuardAuth:
-    """Skip token work after RSS collection while a durable Web API cooldown is active."""
+    """Skip Spotify token work while a durable Web API cooldown is active."""
 
     def __init__(
         self,
@@ -336,6 +336,11 @@ class SpotifyRateLimitGuardAuth:
                 _emit_backoff(self.diagnostics, state, backoff_state="active", occurred_at=observed)
                 raise SpotifyRateLimitBackoffActive(_active_message(state))
             return self.provider.get_access_token(now=now)
+
+    def planner_authorization_context(self) -> str | None:
+        reader = getattr(self.provider, "planner_authorization_context", None)
+        value = reader() if callable(reader) else None
+        return value if isinstance(value, str) and value else None
 
     def acquire_provider_session(
         self, *, now: datetime | None = None
