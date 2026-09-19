@@ -5,12 +5,11 @@ are the episode authority, and persisted Spotify episode IDs/URIs are the runtim
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -414,10 +413,8 @@ class EngineRunner:
             playlist_outcomes.append(outcome)
             episodes = self.first_journal.list_episodes()
 
-        try:
+        with suppress(PersistenceError):
             self.first_journal.prune(before=started_at - SPOTIFY_FIRST_STATE_RETENTION)
-        except PersistenceError:
-            pass
 
         ordered_sources = tuple(source_outcomes[source.id] for source in required)
         ok = all(source.ok for source in ordered_sources) and all(
@@ -450,10 +447,13 @@ class EngineRunner:
             if source.id in changed:
                 plan.append((source.id, RefreshReason.CHANGE))
                 continue
-            if public is not None and public.last_change_at is not None:
-                if public.last_change_at > local.last_refresh_at:
-                    plan.append((source.id, RefreshReason.CHANGE))
-                    continue
+            if (
+                public is not None
+                and public.last_change_at is not None
+                and public.last_change_at > local.last_refresh_at
+            ):
+                plan.append((source.id, RefreshReason.CHANGE))
+                continue
             due = (
                 public.audit_due(now=now, inactivity=self.source_inactivity)
                 if public is not None
