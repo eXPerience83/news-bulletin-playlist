@@ -104,7 +104,6 @@ def _source(*, show_ids: tuple[str, ...] = (SHOW_ID,)) -> SourceDefinition:
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,
         parser_id=ParserId("ser"),
-        endpoint_url="https://legacy.example.test/feed.xml",
         external_references=tuple(
             ExternalReference("spotify", "show", show_id) for show_id in show_ids
         ),
