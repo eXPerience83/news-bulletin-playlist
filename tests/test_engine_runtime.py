@@ -24,14 +24,20 @@ from news_bulletin_playlist.engine_runtime import (
     OperationalHealthHandler,
     ReloadingEngineCycleRunner,
     _load_runtime_config,
-    _local_skips_enabled,
     _operational_status_page,
-    _public_detector_shadow_enabled,
     _runtime_interval,
+    _spotify_inactivity,
     serve,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.persistence import SQLiteStore
+from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
+from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
+from news_bulletin_playlist.spotify.public_detector import (
+    PublicDetectorJournal,
+    PublicDetectorShadow,
+)
 from news_bulletin_playlist.runtime import AdminSecurity
 from news_bulletin_playlist.spotify.auth import (
     PRODUCTION_SCOPES,
@@ -117,7 +123,6 @@ sources:
     timezone: Europe/Madrid
     enabled: true
     parser_id: ser
-    endpoint_url: https://example.test/ser.xml
     external_references:
       - system: spotify
         resource_type: show
@@ -143,6 +148,27 @@ def _store(tmp_path: Path) -> SQLiteStore:
     return store
 
 
+def _reloading_runner(tmp_path: Path, auth: _NeverAuth) -> ReloadingEngineCycleRunner:
+    store = _store(tmp_path)
+    diagnostic_store = DiagnosticEventStore(store.path)
+    diagnostic_store.initialize()
+    diagnostics = OperationalDiagnostics(diagnostic_store)
+    detector_journal = PublicDetectorJournal(store)
+    detector_journal.initialize()
+    first_journal = SpotifyFirstJournal(store)
+    first_journal.initialize()
+    detector = PublicDetectorShadow(detector_journal, diagnostics)
+    return ReloadingEngineCycleRunner(
+        tmp_path,
+        {},
+        store,
+        auth,  # type: ignore[arg-type]
+        detector,
+        detector_journal,
+        first_journal,
+    )
+
+
 def test_runtime_interval_defaults_to_ten_minutes() -> None:
     assert _runtime_interval({}) == timedelta(minutes=10)
     assert _runtime_interval({"NEWS_PLAYLIST_INTERVAL_SECONDS": "600"}) == timedelta(minutes=10)
@@ -155,24 +181,15 @@ def test_runtime_interval_rejects_tight_retry_values() -> None:
         _runtime_interval({"NEWS_PLAYLIST_INTERVAL_SECONDS": "fast"})
 
 
-def test_local_skip_kill_switch_defaults_on_and_parses_explicit_values() -> None:
-    assert _local_skips_enabled({})
-    assert _local_skips_enabled({"NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS": "yes"})
-    assert not _local_skips_enabled({"NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS": "0"})
-    with pytest.raises(RuntimeError, match="must be a boolean"):
-        _local_skips_enabled({"NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS": "sometimes"})
-
-
-def test_public_detector_shadow_defaults_off_and_parses_explicit_values() -> None:
-    assert not _public_detector_shadow_enabled({})
-    assert _public_detector_shadow_enabled({"NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW": "yes"})
-    assert not _public_detector_shadow_enabled(
-        {"NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW": "0"}
+def test_spotify_inactivity_defaults_to_24_hours_and_is_configurable() -> None:
+    assert _spotify_inactivity({}) == timedelta(hours=24)
+    assert _spotify_inactivity({"NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS": "12"}) == timedelta(
+        hours=12
     )
-    with pytest.raises(RuntimeError, match="must be a boolean"):
-        _public_detector_shadow_enabled(
-            {"NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW": "sometimes"}
-        )
+    with pytest.raises(RuntimeError, match="must be at least 1"):
+        _spotify_inactivity({"NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS": "0"})
+    with pytest.raises(RuntimeError, match="must be an integer"):
+        _spotify_inactivity({"NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS": "daily"})
 
 
 def test_runtime_config_is_optional_until_production_file_exists(tmp_path: Path) -> None:
@@ -203,7 +220,7 @@ def test_reloading_runner_revalidates_config_each_cycle(tmp_path: Path) -> None:
     assert _load_runtime_config(tmp_path, {}) is not None
 
     auth = _NeverAuth()
-    runner = ReloadingEngineCycleRunner(tmp_path, {}, _store(tmp_path), auth)
+    runner = _reloading_runner(tmp_path, auth)
     config_path.write_text("schema_version: 999\nsources: []\nplaylists: []\n", encoding="utf-8")
 
     result = runner.run_cycle()
@@ -250,11 +267,14 @@ def test_operational_status_page_reports_cycle_without_secret_material() -> None
         sources=(
             SourceCycleOutcome(
                 source_id=SourceId("ser"),
-                collection_ok=False,
-                matching_ok=True,
-                edition_count=0,
-                matched_count=1,
+                ok=False,
+                episode_count=1,
+                refreshed=False,
+                refresh_reason="change",
+                api_request_count=0,
                 last_success_at=NOW - timedelta(minutes=10),
+                detector_ok=False,
+                detector_changed=True,
                 error="source unavailable",
             ),
         ),
@@ -281,7 +301,7 @@ def test_operational_status_page_reports_cycle_without_secret_material() -> None
     assert "Connected" in body
     assert "2026-08-30T10:10:00Z" in body
     assert "source unavailable" in body
-    assert "0 fetched / 1 matched" in body
+    assert "1 cached / 0 API requests" in body
     assert "1 desired / 1 verified" in body
     assert "unchanged" in body
     for secret in (
