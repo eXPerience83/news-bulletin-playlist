@@ -26,8 +26,12 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "backoff_source",
         "backoff_state",
         "candidate_count",
+        "api_episode_id",
+        "api_request_count",
         "catalogue_calls",
         "catalogue_audit_due",
+        "catalogue_complete",
+        "catalogue_coverage_proven",
         "catalogue_inspected",
         "catalogue_requested",
         "catalogue_request_count",
@@ -36,7 +40,17 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "catalogue_prewrite_request_count",
         "collection_failure_reason",
         "desired_count",
+        "comparison_equivalent",
+        "comparison_valid",
         "duration_ms",
+        "duration_unavailable_count",
+        "episode_added_count",
+        "episode_count",
+        "episode_unchanged_count",
+        "episode_updated_count",
+        "equivalent_playlist_count",
+        "extra_count",
+        "filter_rejected_count",
         "duration_seconds",
         "eligibility_reason",
         "edition_count",
@@ -45,8 +59,20 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "failure_reason",
         "gt_30m",
         "http_status",
+        "order_difference_count",
+        "parser_fallback_count",
         "provider",
+        "refresh_reason",
+        "refresh_source_count",
         "service",
+        "shadow_count",
+        "shadow_fingerprint",
+        "shadow_playlist_count",
+        "spotify_release_date",
+        "spotify_release_date_precision",
+        "timestamp_source",
+        "detector_api_match",
+        "false_negative_reason",
         "request_item_count",
         "request_payload_bytes",
         "valid_uri_count",
@@ -79,8 +105,11 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "m5_lt8",
         "m8_lt10",
         "match_reason",
+        "legacy_count",
+        "legacy_fingerprint",
         "matched_count",
         "matching_evaluated_count",
+        "missing_count",
         "matching_plan_conservative",
         "matching_reason_coalesced_unresolved_count",
         "matching_reason_evidence_recovery_count",
@@ -176,6 +205,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "configuration_error",
             "desired_state_error",
             "pagination_error",
+            "persistence_error",
             "reconciliation_error",
             "response_shape_error",
             "snapshot_error",
@@ -207,6 +237,12 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "unknown_reconciliation_error",
             "verification_mismatch",
         }
+    ),
+    "refresh_reason": frozenset({"bootstrap", "change", "inactivity_audit"}),
+    "timestamp_source": frozenset({"title", "first_seen"}),
+    "spotify_release_date_precision": frozenset({"day", "month", "year"}),
+    "false_negative_reason": frozenset(
+        {"api_semantic_newer", "api_release_day_newer", "detector_id_missing"}
     ),
     "detector_outcome": frozenset(
         {
@@ -774,10 +810,12 @@ def _normalize_details(
             if key in {"retry_not_before", "next_retry_at", "first_failure_at", "last_failure_at"}:
                 normalized[key] = _normalize_detail_timestamp(value)
                 continue
-            if key == "desired_fingerprint" and re.fullmatch(r"[0-9a-f]{64}", value):
+            if key in {"desired_fingerprint", "legacy_fingerprint", "shadow_fingerprint"} and re.fullmatch(
+                r"[0-9a-f]{64}", value
+            ):
                 normalized[key] = value
                 continue
-            if key in {"spotify_episode_id", "spotify_previous_episode_id"}:
+            if key in {"spotify_episode_id", "spotify_previous_episode_id", "api_episode_id"}:
                 if re.fullmatch(r"[A-Za-z0-9]{22}", value) is None:
                     raise ValueError(f"diagnostic detail {key} contains an invalid Spotify id")
                 normalized[key] = value
@@ -789,7 +827,7 @@ def _normalize_details(
             }:
                 normalized[key] = _normalize_bounded_text(value, key, max_length=1000)
                 continue
-            if key == "public_release_date":
+            if key in {"public_release_date", "spotify_release_date"}:
                 normalized[key] = _normalize_bounded_text(value, key, max_length=128)
                 continue
             allowed_values = _ALLOWED_DETAIL_STRING_VALUES.get(key)
