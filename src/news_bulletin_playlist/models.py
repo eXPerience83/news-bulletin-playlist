@@ -18,7 +18,6 @@ DEFAULT_DURATION_MAX_SECONDS = 1800
 
 class OrderingPolicy(StrEnum):
     EDITION_AT_DESC = "edition_at_desc"
-    PUBLISHED_AT_DESC = "published_at_desc"
 
 
 class EditorialScope(StrEnum):
