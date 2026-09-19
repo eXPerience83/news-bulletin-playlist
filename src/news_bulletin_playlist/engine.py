@@ -1,45 +1,29 @@
+"""Authoritative Spotify-first engine.
+
+The public Spotify surface is only a change detector. Official Spotify Web API show catalogues
+are the episode authority, and persisted Spotify episode IDs/URIs are the runtime identity.
+"""
 from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 import threading
 import time
-from collections.abc import Callable, Collection, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any, Protocol
-from zoneinfo import ZoneInfo
+from typing import Protocol
 
-from news_bulletin_playlist.collection import (
-    CollectionDiagnostics,
-    FeedFetcher,
-    collect_required_sources,
-    fetch_feed,
-    required_sources,
-)
-from news_bulletin_playlist.desired_state import (
-    DesiredPlaylistState,
-    DesiredStateError,
-    DurationEligibilityDecision,
-    authoritative_playlist_time,
-)
-from news_bulletin_playlist.models import (
-    CanonicalEdition,
-    EngineConfig,
-    PlaylistDefinition,
-    PlaylistId,
-    SourceDefinition,
-    SourceId,
-)
-from news_bulletin_playlist.persistence import MatchStatus, PersistenceError, SQLiteStore
+from news_bulletin_playlist.desired_state import DurationEligibilityDecision
+from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId, SourceId
+from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
     MutationOutcome,
-    ReconciliationEvidence,
+    PlaylistReconciliationResult,
+    SpotifyPlaylistClient,
     SpotifyReconciliationError,
-    build_desired_state_from_store,
     reconcile_spotify_playlist,
 )
 from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
@@ -49,61 +33,60 @@ from news_bulletin_playlist.spotify.client import (
     SpotifyClient,
     SpotifyTransportError,
 )
-from news_bulletin_playlist.spotify.matcher import (
+from news_bulletin_playlist.spotify.first_catalogue import (
     DEFAULT_MAX_PAGES,
-    DEFAULT_PAGE_SIZE,
-    MatchConfigurationError,
-    MatchEvaluationIntent,
-    MatchResponseError,
-    SourceMatchResult,
-    SpotifyCatalogueResult,
-    fetch_show_catalogue,
-    match_source_editions,
+    CatalogueResponseError,
+    SpotifyCatalogueClient,
+    fetch_source_catalogue,
+)
+from news_bulletin_playlist.spotify.first_desired import (
+    SpotifyFirstDesiredBuild,
+    build_spotify_first_desired_state,
+    desired_fingerprint,
+)
+from news_bulletin_playlist.spotify.first_models import RefreshReason, as_utc
+from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
+from news_bulletin_playlist.spotify.public_detector import (
+    PublicDetectorCycleSummary,
+    PublicDetectorJournal,
+    PublicDetectorShadow,
     spotify_show_id,
 )
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 from news_bulletin_playlist.spotify_backoff import (
-    SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE,
-    SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE,
+    ProviderAuthorizationSession,
     SpotifyBackoffAuthProvider,
-    SpotifyBackoffClient,
+    SpotifyRateLimitBackoffActive,
     SpotifyRateLimitGuardAuth,
     SpotifyRateLimitGuardClient,
     SpotifyRateLimitJournal,
-    is_spotify_rate_limit_suppressed,
-)
-from news_bulletin_playlist.spotify_destination_audit import (
-    audit_spotify_playlist_snapshot_first,
+    SpotifyRateLimitStateUnavailable,
+    SpotifyRateLimitSuppressed,
 )
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
-from news_bulletin_playlist.spotify_planner import (
-    CatalogueState,
-    DestinationState,
-    DestinationVerificationContext,
-    PlannerReason,
-    PlannerShadowResult,
-    SpotifyPlannerJournal,
-    catalogue_context_fingerprint,
-    destination_context_fingerprint,
-    matched_recovery_planning_reason,
-    matching_input_fingerprint,
-    plan_shadow_cycle,
-    playlist_config_fingerprint,
-    stable_fingerprint,
-    unresolved_planning_reason,
-)
 
 DEFAULT_ENGINE_INTERVAL = timedelta(minutes=10)
-_CATALOGUE_CONTRACT_VERSION = 1
-_PENDING_SNAPSHOT_CONFIRMATION_DELAY = timedelta(seconds=60)
+DEFAULT_SOURCE_INACTIVITY = timedelta(hours=24)
+DEFAULT_DESTINATION_AUDIT = timedelta(hours=6)
+SPOTIFY_FIRST_STATE_RETENTION = timedelta(days=30)
 
 
 class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
-    """Authentication surface required by the production engine."""
+    def acquire_provider_session(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> ProviderAuthorizationSession: ...
+
+    def planner_authorization_context(self) -> str | None: ...
 
 
-class SpotifyEngineClient(SpotifyBackoffClient, Protocol):
-    """Combined Spotify catalogue/playlist surface required by the production engine."""
+class SpotifyEngineClient(
+    SpotifyCatalogueClient,
+    SpotifyPlaylistClient,
+    Protocol,
+):
+    pass
 
 
 class EngineCycleRunner(Protocol):
@@ -112,252 +95,32 @@ class EngineCycleRunner(Protocol):
 
 SpotifyClientFactory = Callable[[str], SpotifyEngineClient]
 Clock = Callable[[], datetime]
-MonotonicClock = Callable[[], float]
-PlaylistSkipGuard = Callable[[PlaylistDefinition], bool]
+PlaylistMutationGuard = Callable[
+    [PlaylistDefinition],
+    AbstractContextManager[None],
+]
 
 
 class EngineCycleAlreadyRunning(RuntimeError):
-    """Raised when a second cycle is requested while one is still executing."""
-
-
-@dataclass(frozen=True, slots=True)
-class SourceMatchingDiagnostics:
-    matching_work_count: int = 0
-    matching_evaluated_count: int = 0
-    matching_reason_new_match_count: int = 0
-    matching_reason_input_changed_count: int = 0
-    matching_reason_retry_due_count: int = 0
-    matching_reason_coalesced_unresolved_count: int = 0
-    retry_due_evaluated_count: int = 0
-    retry_due_resolved_to_matched_count: int = 0
-    retry_due_still_pending_count: int = 0
-    retry_due_still_ambiguous_count: int = 0
-    coalesced_unresolved_evaluated_count: int = 0
-    coalesced_unresolved_resolved_to_matched_count: int = 0
-    coalesced_unresolved_still_pending_count: int = 0
-    coalesced_unresolved_still_ambiguous_count: int = 0
-    matching_reason_evidence_recovery_count: int = 0
-    matching_reason_missing_evidence_count: int = 0
-    unresolved_relevant_count: int = 0
-    catalogue_audit_due: bool = False
-    matching_plan_conservative: bool = False
-    catalogue_requested: bool = False
-    catalogue_inspected: bool = False
-    catalogue_request_count: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class _SourceMatchingPlan:
-    evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent]
-    catalogue_audit_due: bool
-    retry_due_identities: frozenset[tuple[SourceId, str]] = frozenset()
-    coalesced_unresolved_identities: frozenset[tuple[SourceId, str]] = frozenset()
-    conservative: bool = False
-    diagnostics: SourceMatchingDiagnostics = field(default_factory=SourceMatchingDiagnostics)
-
-    @property
-    def needs_catalogue(self) -> bool:
-        return bool(self.evaluation_intents) or self.catalogue_audit_due or self.conservative
-
-
-@dataclass(frozen=True, slots=True)
-class _DestinationWorkPlan:
-    needs_remote: bool
-    state_available: bool = True
-    audit_only: bool = False
-    snapshot_attested_prewrite: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class _DestinationRuntimeLease:
-    context: DestinationVerificationContext
-    expires_at: float
-
-
-class DestinationRuntimeLeaseRegistry:
-    """Keep at most one exact-context destination verification lease per process."""
-
-    def __init__(self) -> None:
-        self._leases: dict[PlaylistId, _DestinationRuntimeLease] = {}
-        self._lock = threading.Lock()
-
-    def allows(
-        self,
-        playlist_id: PlaylistId,
-        expected: DestinationVerificationContext,
-        *,
-        monotonic_now: float,
-    ) -> bool:
-        with self._lock:
-            lease = self._leases.get(playlist_id)
-            if lease is None:
-                return False
-            if lease.context != expected or monotonic_now >= lease.expires_at:
-                self._leases.pop(playlist_id, None)
-                return False
-            return True
-
-    def publish(
-        self,
-        playlist_id: PlaylistId,
-        expected: DestinationVerificationContext,
-        *,
-        verified_monotonic: float,
-    ) -> None:
-        with self._lock:
-            self._leases[playlist_id] = _DestinationRuntimeLease(
-                expected,
-                verified_monotonic + timedelta(hours=6).total_seconds(),
-            )
-
-    def revoke(self, playlist_id: PlaylistId) -> None:
-        with self._lock:
-            self._leases.pop(playlist_id, None)
-
-    def revoke_unless(
-        self, playlist_id: PlaylistId, expected: DestinationVerificationContext
-    ) -> None:
-        with self._lock:
-            lease = self._leases.get(playlist_id)
-            if lease is not None and lease.context != expected:
-                self._leases.pop(playlist_id, None)
-
-
-@dataclass(frozen=True, slots=True)
-class _CatalogueObservation:
-    requested: bool = False
-    inspected: bool = False
-    request_count: int = 0
-
-
-class _CycleCatalogueCoordinator:
-    """Share one bounded show inspection across compatible consumers in a cycle."""
-
-    def __init__(self, client: SpotifyEngineClient, auth_context: str) -> None:
-        self.client = client
-        self.auth_context = auth_context
-        self._cache: dict[tuple[str, str, str, int, int, int], object] = {}
-        self._positive_cache: dict[tuple[str, str, str, int, int, int], SpotifyCatalogueResult] = {}
-        self._observations: dict[SourceId, _CatalogueObservation] = {}
-
-    def get(self, source: SourceDefinition) -> tuple[SpotifyCatalogueResult, int]:
-        result, request_count, _ = self._get(source, required_uris=None)
-        return result, request_count
-
-    def get_for_uris(
-        self, source: SourceDefinition, required_uris: Collection[str]
-    ) -> tuple[SpotifyCatalogueResult, int, bool]:
-        required = frozenset(required_uris)
-        if not required:
-            raise ValueError("required_uris must not be empty")
-        return self._get(source, required_uris=required)
-
-    def _cache_key(self, source: SourceDefinition) -> tuple[str, str, str, int, int, int]:
-        return (
-            spotify_show_id(source),
-            self.auth_context,
-            "user-token/account",
-            DEFAULT_PAGE_SIZE,
-            DEFAULT_MAX_PAGES,
-            _CATALOGUE_CONTRACT_VERSION,
-        )
-
-    def _get(
-        self,
-        source: SourceDefinition,
-        *,
-        required_uris: frozenset[str] | None,
-    ) -> tuple[SpotifyCatalogueResult, int, bool]:
-        key = self._cache_key(source)
-        show_id = key[0]
-        cached = self._cache.get(key)
-        if isinstance(cached, Exception):
-            raise cached
-        if isinstance(cached, SpotifyCatalogueResult):
-            self._record_observation(source.id, request_count=0, inspected=True)
-            return cached, 0, True
-
-        if required_uris is not None:
-            positive = self._positive_cache.get(key)
-            if positive is not None and required_uris.issubset(positive.candidate_uris):
-                self._record_observation(source.id, request_count=0, inspected=True)
-                return positive, 0, False
-
-        delegated_before = self._delegated_show_episodes_count()
-        try:
-            result = fetch_show_catalogue(
-                self.client,
-                show_id,
-                page_size=DEFAULT_PAGE_SIZE,
-                max_pages=DEFAULT_MAX_PAGES,
-                required_uris=required_uris,
-            )
-        except (MatchResponseError, SpotifyApiError, SpotifyTransportError) as exc:
-            self._record_observation(
-                source.id,
-                request_count=self._delegated_delta(delegated_before),
-                inspected=False,
-            )
-            self._cache[key] = exc
-            raise
-        request_count = self._delegated_delta(delegated_before)
-        if request_count is None:
-            request_count = result.request_count
-        self._record_observation(source.id, request_count=request_count, inspected=True)
-
-        full_bounded_inspection = result.complete or result.request_count >= DEFAULT_MAX_PAGES
-        if full_bounded_inspection:
-            self._cache[key] = result
-        elif required_uris is not None:
-            self._positive_cache[key] = result
-        return result, request_count, full_bounded_inspection
-
-    def observation(self, source_id: SourceId) -> _CatalogueObservation:
-        return self._observations.get(source_id, _CatalogueObservation())
-
-    def _delegated_show_episodes_count(self) -> int | None:
-        value = getattr(self.client, "show_episodes_delegated_count", None)
-        return value if isinstance(value, int) and value >= 0 else None
-
-    def _delegated_delta(self, before: int | None) -> int | None:
-        after = self._delegated_show_episodes_count()
-        if before is None or after is None or after < before:
-            return None
-        return after - before
-
-    def _record_observation(
-        self,
-        source_id: SourceId,
-        *,
-        request_count: int | None,
-        inspected: bool,
-    ) -> None:
-        current = self.observation(source_id)
-        count = 0 if request_count is None else max(request_count, 0)
-        self._observations[source_id] = _CatalogueObservation(
-            requested=current.requested or count > 0,
-            inspected=current.inspected or inspected,
-            request_count=current.request_count + count,
-        )
+    """Raised when a second engine cycle overlaps the current cycle."""
 
 
 @dataclass(frozen=True, slots=True)
 class SourceCycleOutcome:
     source_id: SourceId
-    collection_ok: bool
-    matching_ok: bool | None
-    edition_count: int
-    matched_count: int
+    ok: bool
+    episode_count: int
+    refreshed: bool
+    refresh_reason: str | None
+    api_request_count: int
     last_success_at: datetime | None
+    detector_ok: bool
+    detector_changed: bool
+    detector_false_negative: bool = False
+    parser_fallback_count: int = 0
+    filter_rejected_count: int = 0
+    removed_count: int = 0
     error: str | None = None
-    matching_diagnostics: SourceMatchingDiagnostics = field(
-        default_factory=SourceMatchingDiagnostics
-    )
-    collection_diagnostics: CollectionDiagnostics = field(default_factory=CollectionDiagnostics)
-
-    @property
-    def ok(self) -> bool:
-        return self.collection_ok and self.matching_ok is not False
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,16 +133,15 @@ class PlaylistCycleOutcome:
     last_success_at: datetime | None
     error: str | None = None
     duration_decisions: tuple[DurationEligibilityDecision, ...] = ()
+    duration_unavailable_count: int = 0
     request_item_count: int | None = None
     request_payload_bytes: int | None = None
     valid_uri_count: int | None = None
     invalid_uri_count: int | None = None
     duplicate_count: int | None = None
     desired_fingerprint: str | None = None
-    desired_changed_since_previous_attempt: bool | None = None
-    consecutive_failure_count: int | None = None
-    first_failure_at: datetime | None = None
-    last_failure_at: datetime | None = None
+    local_skip: bool = False
+    stale_escalation: bool = False
     write_outcome: str | None = None
 
 
@@ -391,12 +153,6 @@ class EngineCycleResult:
     sources: tuple[SourceCycleOutcome, ...]
     playlists: tuple[PlaylistCycleOutcome, ...]
     error: str | None = None
-    planner_shadow: PlannerShadowResult | None = None
-    provider_work_planned: bool = False
-    provider_session_created: bool = False
-    destinations_skipped: int = 0
-    destinations_remote: int = 0
-    destinations_preserved: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,7 +164,7 @@ class OperationalStatusSnapshot:
 
 
 class OperationalStatus:
-    """Thread-safe in-memory status shared by the scheduler and read-only Web UI."""
+    """Thread-safe status shared by the scheduler and read-only HTTP surfaces."""
 
     def __init__(self, *, configured: bool) -> None:
         self._configured = configured
@@ -448,64 +204,66 @@ class OperationalStatus:
 
 
 class EngineRunner:
-    """Execute one complete fetch-once, persist-once, multi-playlist production cycle."""
+    """Execute one complete Spotify-first source/destination cycle."""
 
     def __init__(
         self,
         config: EngineConfig,
         store: SQLiteStore,
         auth: SpotifyAuthProvider,
+        public_detector: PublicDetectorShadow,
+        detector_journal: PublicDetectorJournal,
+        first_journal: SpotifyFirstJournal,
         *,
-        fetcher: FeedFetcher = fetch_feed,
         client_factory: SpotifyClientFactory | None = None,
         clock: Clock | None = None,
-        playlist_mutation_guard: (
-            Callable[[PlaylistDefinition], AbstractContextManager[None]] | None
-        ) = None,
+        playlist_mutation_guard: PlaylistMutationGuard | None = None,
         request_metrics: SpotifyRequestMetrics | None = None,
-        local_skips_enabled: bool = True,
-        destination_leases: DestinationRuntimeLeaseRegistry | None = None,
-        monotonic_clock: MonotonicClock = time.monotonic,
-        playlist_skip_guard: PlaylistSkipGuard | None = None,
+        source_inactivity: timedelta = DEFAULT_SOURCE_INACTIVITY,
+        destination_audit: timedelta = DEFAULT_DESTINATION_AUDIT,
+        max_catalogue_pages: int = DEFAULT_MAX_PAGES,
     ) -> None:
+        if source_inactivity <= timedelta(0):
+            raise ValueError("source inactivity threshold must be positive")
+        if destination_audit <= timedelta(0):
+            raise ValueError("destination audit threshold must be positive")
+        if max_catalogue_pages <= 0:
+            raise ValueError("max catalogue pages must be positive")
+
         self.config = config
         self.store = store
-        self.fetcher = fetcher
+        self.raw_auth = auth
+        self.public_detector = public_detector
+        self.detector_journal = detector_journal
+        self.first_journal = first_journal
         self.clock = clock or _utc_now
+        self.playlist_mutation_guard = playlist_mutation_guard
+        self.source_inactivity = source_inactivity
+        self.destination_audit = destination_audit
+        self.max_catalogue_pages = max_catalogue_pages
         self.rate_limit_journal = SpotifyRateLimitJournal(store)
-        self.request_metrics = request_metrics or SpotifyRequestMetrics(store.path)
-        self.request_metrics.initialize()
-        self.local_skips_enabled = local_skips_enabled
-        self.destination_leases = destination_leases or DestinationRuntimeLeaseRegistry()
-        self.monotonic_clock = monotonic_clock
-        self.playlist_skip_guard = playlist_skip_guard
-        self.planner_journal = SpotifyPlannerJournal(store)
-        self._planner_auth_reader = getattr(auth, "planner_authorization_context", None)
-        self._shadow_auth_context: str | None = None
         self.auth = SpotifyRateLimitGuardAuth(
             auth,
             self.rate_limit_journal,
             clock=self.clock,
         )
-        base_client_factory = client_factory or partial(
+        self.request_metrics = request_metrics or SpotifyRequestMetrics(store.path)
+        self.request_metrics.initialize()
+
+        base_factory = client_factory or partial(
             _spotify_client,
             metrics=self.request_metrics,
         )
 
-        def guarded_client_factory(access_token: str) -> SpotifyEngineClient:
+        def guarded_factory(access_token: str) -> SpotifyEngineClient:
             return SpotifyRateLimitGuardClient(
-                base_client_factory(access_token),
+                base_factory(access_token),
                 self.rate_limit_journal,
                 clock=self.clock,
             )
 
-        self.client_factory = guarded_client_factory
-        self.playlist_mutation_guard = playlist_mutation_guard
+        self.client_factory = guarded_factory
         self._cycle_lock = threading.Lock()
-        # Operational diagnostics only: these observations intentionally reset on process restart.
-        self._previous_desired_fingerprints: dict[PlaylistId, str] = {}
-        self._playlist_failure_streaks: dict[PlaylistId, tuple[int, datetime]] = {}
-        self._planner_shadow = PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
 
     def run_cycle(self) -> EngineCycleResult:
         if not self._cycle_lock.acquire(blocking=False):
@@ -516,1450 +274,585 @@ class EngineRunner:
             self._cycle_lock.release()
 
     def _run_cycle(self) -> EngineCycleResult:
-        started_at = _as_utc(self.clock())
-        self._planner_shadow = PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
+        started_at = as_utc(self.clock())
+        required = _required_sources(self.config)
+        detector = self.public_detector.observe_sources(
+            required,
+            observed_at=started_at,
+        )
+        refresh_plan = self._refresh_plan(
+            detector,
+            now=started_at,
+        )
+
+        session: ProviderAuthorizationSession | None = None
+        client: SpotifyEngineClient | None = None
         source_outcomes: dict[SourceId, SourceCycleOutcome] = {}
+
+        if refresh_plan:
+            try:
+                session = self.auth.acquire_provider_session(now=started_at)
+                client = self.client_factory(session.access_token)
+            except (
+                SpotifyAuthError,
+                PersistenceError,
+                SpotifyRateLimitBackoffActive,
+                SpotifyRateLimitStateUnavailable,
+            ) as exc:
+                source_outcomes.update(
+                    self._source_authorization_failure(
+                        required,
+                        refresh_plan,
+                        detector,
+                        exc,
+                    )
+                )
+            else:
+                for source_id, reason in refresh_plan:
+                    source = next(source for source in required if source.id == source_id)
+                    source_outcomes[source.id] = self._refresh_source(
+                        source,
+                        reason,
+                        detector,
+                        client,
+                        now=started_at,
+                    )
+
+        for source in required:
+            if source.id not in source_outcomes:
+                source_outcomes[source.id] = self._unchanged_source_outcome(
+                    source.id,
+                    detector,
+                    now=started_at,
+                )
+
         playlist_outcomes: list[PlaylistCycleOutcome] = []
-        unsafe_source_ids: set[SourceId] = set()
-        persistence_rejected_source_ids: set[SourceId] = set()
-        matching_evaluated_counts: dict[SourceId, int] = {}
-
-        try:
-            collection = collect_required_sources(self.config, fetcher=self.fetcher)
-            collected_at = _as_utc(self.clock())
-            for result in collection.sources:
-                previous_source_state = self.store.get_source_state(result.source_id)
-                if not result.ok and (
-                    previous_source_state is None or previous_source_state.last_success_at is None
-                ):
-                    unsafe_source_ids.add(result.source_id)
-                if result.ok:
-                    self.store.upsert_editions(result.editions, observed_at=collected_at)
-                self.store.record_source_run(
-                    result.source_id,
-                    started_at=started_at,
-                    finished_at=collected_at,
-                    ok=result.ok,
-                    edition_count=len(result.editions),
-                    error=result.error,
-                )
-                source_state = self.store.get_source_state(result.source_id)
-                source_outcomes[result.source_id] = SourceCycleOutcome(
-                    source_id=result.source_id,
-                    collection_ok=result.ok,
-                    matching_ok=None,
-                    edition_count=len(result.editions),
-                    matched_count=0,
-                    last_success_at=(
-                        None if source_state is None else source_state.last_success_at
-                    ),
-                    error=result.error,
-                    collection_diagnostics=result.collection_diagnostics,
-                )
-        except PersistenceError as exc:
-            return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
-
-        self._planner_shadow = self._compute_shadow_plan(collected_at)
-
-        matching_now = _as_utc(self.clock())
-        try:
-            source_editions, source_plans = self._build_source_work(matching_now)
-        except PersistenceError as exc:
-            return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
-        self._apply_source_plan_diagnostics(source_outcomes, source_plans)
-
-        matching_work = any(
-            plan.needs_catalogue and source_id not in unsafe_source_ids
-            for source_id, plan in source_plans.items()
-        )
-        destination_work_ids, persistence_blocked = self._plan_destinations(
-            matching_now, unsafe_source_ids
-        )
-        destination_work = bool(destination_work_ids)
-        cannot_safely_use_provider = bool(persistence_blocked) and not destination_work
-        if (
-            not matching_work
-            and not destination_work
-            and (self.local_skips_enabled or cannot_safely_use_provider)
-        ):
-            return self._finish_local_only_cycle(
-                started_at,
-                source_outcomes,
-                source_editions,
-                unsafe_source_ids,
-                persistence_blocked,
-                matching_now,
-            )
-
-        try:
-            authorization_session = self.auth.acquire_provider_session(now=_as_utc(self.clock()))
-        except SpotifyAuthError as exc:
-            return self._authorization_failure(
-                started_at,
-                source_outcomes,
-                playlist_outcomes,
-                exc,
-            )
-
-        if authorization_session.authorization_context != self._shadow_auth_context:
-            self._shadow_auth_context = authorization_session.authorization_context
-            for playlist in self.config.playlists:
-                self.destination_leases.revoke(playlist.id)
-            try:
-                source_editions, source_plans = self._build_source_work(matching_now)
-            except PersistenceError as exc:
-                return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
-            self._apply_source_plan_diagnostics(source_outcomes, source_plans)
-            destination_work_ids, persistence_blocked = self._plan_destinations(
-                matching_now, unsafe_source_ids
-            )
-
-        client = self.client_factory(authorization_session.access_token)
-        catalogue_coordinator = _CycleCatalogueCoordinator(
-            client,
-            authorization_session.authorization_context,
-        )
-        remote_destination_ids: set[PlaylistId] = set()
-        for source in required_sources(self.config):
-            had_durable_match = False
-            try:
-                editions = source_editions[source.id]
-                had_durable_match = any(
-                    self.store.get_spotify_episode_uri(
-                        edition.source_id,
-                        edition.source_native_id,
-                    )
-                    is not None
-                    for edition in editions
-                )
-                plan = source_plans[source.id]
-                catalogue = None
-                catalogue_request_count = 0
-                if plan.needs_catalogue:
-                    catalogue, catalogue_request_count = catalogue_coordinator.get(source)
-                if editions:
-                    match_result = match_source_editions(
-                        client,
-                        self.store,
-                        source,
-                        editions,
-                        now=matching_now,
-                        catalogue=catalogue,
-                        evaluation_intents=plan.evaluation_intents,
-                        validate_cached=catalogue is not None,
-                        catalogue_request_count=catalogue_request_count,
-                        on_fresh_evaluation=partial(
-                            self._record_matching_evaluation,
-                            matching_evaluated_counts,
-                            source.id,
-                        ),
-                    )
-                    plan = replace(
-                        plan,
-                        diagnostics=self._matching_yield_diagnostics(plan, match_result),
-                    )
-                    source_plans[source.id] = plan
-                    matched_count = sum(
-                        outcome.spotify_episode_uri is not None for outcome in match_result.outcomes
-                    )
-                    self._observe_matching_result(
-                        source,
-                        match_result,
-                        matching_now,
-                        evaluation_intents=plan.evaluation_intents,
-                    )
-                    if match_result.persistence_rejected:
-                        persistence_rejected_source_ids.add(source.id)
-                        unsafe_source_ids.add(source.id)
-                else:
-                    matched_count = 0
-                    if catalogue is not None:
-                        self._observe_catalogue_inspection(source, matching_now)
-                current = source_outcomes.get(source.id)
-                if current is not None:
-                    source_outcomes[source.id] = replace(
-                        current,
-                        matching_ok=True,
-                        matched_count=matched_count,
-                    )
-            except (
-                MatchConfigurationError,
-                MatchResponseError,
-                SpotifyApiError,
-                SpotifyTransportError,
-            ) as exc:
-                suppressed = is_spotify_rate_limit_suppressed(exc)
-                if not had_durable_match:
-                    unsafe_source_ids.add(source.id)
-                current = source_outcomes.get(source.id)
-                if current is not None:
-                    source_outcomes[source.id] = replace(
-                        current,
-                        matching_ok=None if suppressed else False,
-                        error=_combine_errors(
-                            current.error,
-                            SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE
-                            if suppressed
-                            else str(exc),
-                        ),
-                    )
-            except PersistenceError as exc:
-                self._apply_source_catalogue_diagnostics(
-                    source_outcomes,
-                    source_plans,
-                    catalogue_coordinator,
-                    matching_evaluated_counts,
-                )
-                return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
-
-        self._apply_source_catalogue_diagnostics(
-            source_outcomes,
-            source_plans,
-            catalogue_coordinator,
-            matching_evaluated_counts,
-        )
-
-        def fatal_playlist_result(error: PersistenceError) -> EngineCycleResult:
-            self._apply_source_catalogue_diagnostics(
-                source_outcomes,
-                source_plans,
-                catalogue_coordinator,
-                matching_evaluated_counts,
-            )
-            return self._fatal_result(started_at, source_outcomes, playlist_outcomes, error)
+        episodes = self.first_journal.list_episodes()
+        sources = {source.id: source for source in self.config.sources}
 
         for playlist in self.config.playlists:
             if not playlist.enabled:
                 continue
-            playlist_started_at = _as_utc(self.clock())
-            desired_count = 0
-            request_diagnostics: dict[str, Any] = {}
-            rejected_for_playlist = tuple(
-                source_id
-                for source_id in playlist.source_selection.explicit
-                if source_id in persistence_rejected_source_ids
-                or self._source_has_persistence_rejection_barrier(
-                    source_id, playlist, playlist_started_at
-                )
-            )
-            unsafe_for_playlist = tuple(
-                source_id
-                for source_id in playlist.source_selection.explicit
-                if source_id in unsafe_source_ids or source_id in rejected_for_playlist
-            )
-            if playlist.id in persistence_blocked:
-                playlist_started_at = _as_utc(self.clock())
-                error = "destination preserved because planner persistence is unavailable"
-                self.store.record_playlist_run(
-                    playlist.id,
-                    started_at=playlist_started_at,
-                    finished_at=_as_utc(self.clock()),
-                    ok=False,
-                    desired_count=0,
-                    applied_count=0,
-                    error=error,
-                )
+
+            if not self._playlist_sources_ready(playlist, now=started_at):
                 playlist_outcomes.append(
-                    PlaylistCycleOutcome(
-                        playlist_id=playlist.id,
-                        ok=False,
-                        desired_count=0,
-                        applied_count=None,
-                        wrote=None,
-                        last_success_at=None,
-                        error=error,
-                        write_outcome="not_attempted",
-                    )
-                )
-                continue
-            if unsafe_for_playlist:
-                try:
-                    try:
-                        desired = build_desired_state_from_store(
-                            self.store,
-                            playlist,
-                            now=playlist_started_at,
-                            source_timezones=self._source_timezones(),
-                        )
-                        desired_count = len(desired.items)
-                    except DesiredStateError:
-                        desired_count = 0
-                    if rejected_for_playlist:
-                        reason = (
-                            "destination preserved because a Spotify matching repair was "
-                            "rejected by durable persistence for source(s): "
-                            + ", ".join(str(source_id) for source_id in rejected_for_playlist)
-                        )
-                    else:
-                        reason = (
-                            "destination preserved because no last-known-good state is available "
-                            "for source(s): "
-                            + ", ".join(str(source_id) for source_id in unsafe_for_playlist)
-                        )
-                    playlist_finished_at = _as_utc(self.clock())
-                    self.store.record_playlist_run(
-                        playlist.id,
-                        started_at=playlist_started_at,
-                        finished_at=playlist_finished_at,
-                        ok=False,
-                        desired_count=desired_count,
-                        applied_count=0,
-                        error=reason,
-                    )
-                    playlist_state = self.store.get_playlist_state(playlist.id)
-                except PersistenceError as exc:
-                    return fatal_playlist_result(exc)
-                playlist_outcomes.append(
-                    PlaylistCycleOutcome(
-                        playlist_id=playlist.id,
-                        ok=False,
-                        desired_count=desired_count,
-                        applied_count=None,
-                        wrote=None,
-                        last_success_at=(
-                            None if playlist_state is None else playlist_state.last_success_at
-                        ),
-                        error=reason,
+                    self._preserved_playlist_outcome(
+                        playlist,
+                        "destination preserved because Spotify-first source state is incomplete",
+                        now=started_at,
                     )
                 )
                 continue
 
-            evidence = ReconciliationEvidence()
-            verification_context = None
-            try:
-                desired = build_desired_state_from_store(
-                    self.store,
-                    playlist,
-                    now=playlist_started_at,
-                    source_timezones=self._source_timezones(),
-                )
-                desired_count = len(desired.items)
-                request_diagnostics = self._request_diagnostics(playlist.id, desired.uris)
-                verification_context = self._observe_desired_state(playlist, desired.uris)
-                if verification_context is None:
-                    self.destination_leases.revoke(playlist.id)
-                    error = (
-                        "destination preserved because final desired state could not be persisted"
-                    )
-                    self.store.record_playlist_run(
-                        playlist.id,
-                        started_at=playlist_started_at,
-                        finished_at=_as_utc(self.clock()),
-                        ok=False,
-                        desired_count=desired_count,
-                        applied_count=0,
-                        error=error,
-                    )
-                    playlist_outcomes.append(
-                        PlaylistCycleOutcome(
-                            playlist_id=playlist.id,
-                            ok=False,
-                            desired_count=desired_count,
-                            applied_count=None,
-                            wrote=None,
-                            last_success_at=None,
-                            error=error,
-                            write_outcome="not_attempted",
-                        )
-                    )
-                    continue
-                destination_plan = self._destination_work_plan(
-                    playlist, playlist_started_at, verification_context
-                )
-                if not destination_plan.state_available:
-                    error = "destination preserved because planner persistence is unavailable"
-                    self.store.record_playlist_run(
-                        playlist.id,
-                        started_at=playlist_started_at,
-                        finished_at=_as_utc(self.clock()),
-                        ok=False,
-                        desired_count=desired_count,
-                        applied_count=0,
-                        error=error,
-                    )
-                    playlist_outcomes.append(
-                        PlaylistCycleOutcome(
-                            playlist_id=playlist.id,
-                            ok=False,
-                            desired_count=desired_count,
-                            applied_count=None,
-                            wrote=None,
-                            last_success_at=None,
-                            error=error,
-                            write_outcome="not_attempted",
-                        )
-                    )
-                    continue
-                if self.local_skips_enabled and not destination_plan.needs_remote:
-                    if self._local_skip_still_authorized(playlist, verification_context):
-                        playlist_finished_at = _as_utc(self.clock())
-                        self.store.record_playlist_run(
-                            playlist.id,
-                            started_at=playlist_started_at,
-                            finished_at=playlist_finished_at,
-                            ok=True,
-                            desired_count=desired_count,
-                            applied_count=desired_count,
-                        )
-                        playlist_state = self.store.get_playlist_state(playlist.id)
-                        playlist_outcomes.append(
-                            PlaylistCycleOutcome(
-                                playlist_id=playlist.id,
-                                ok=True,
-                                desired_count=desired_count,
-                                applied_count=desired_count,
-                                wrote=False,
-                                last_success_at=(
-                                    None
-                                    if playlist_state is None
-                                    else playlist_state.last_success_at
-                                ),
-                                duration_decisions=desired.duration_decisions,
-                                **request_diagnostics,
-                                write_outcome="skipped",
-                            )
-                        )
-                    else:
-                        error = "destination preserved because local skip authority changed"
-                        self.store.record_playlist_run(
-                            playlist.id,
-                            started_at=playlist_started_at,
-                            finished_at=_as_utc(self.clock()),
-                            ok=False,
-                            desired_count=desired_count,
-                            applied_count=0,
-                            error=error,
-                        )
-                        playlist_outcomes.append(
-                            PlaylistCycleOutcome(
-                                playlist_id=playlist.id,
-                                ok=False,
-                                desired_count=desired_count,
-                                applied_count=None,
-                                wrote=None,
-                                last_success_at=None,
-                                error=error,
-                                duration_decisions=desired.duration_decisions,
-                                **request_diagnostics,
-                                write_outcome="not_attempted",
-                            )
-                        )
-                    continue
-                if not self._authorization_context_matches(
-                    authorization_session.authorization_context
-                ):
-                    self.destination_leases.revoke(playlist.id)
-                    raise SpotifyReconciliationError(
-                        "Spotify authorization changed during cycle; destination preserved"
-                    )
-                self.destination_leases.revoke(playlist.id)
-                remote_destination_ids.add(playlist.id)
-                reconciled = None
-                if destination_plan.audit_only:
-                    reconciled = audit_spotify_playlist_snapshot_first(
-                        client,
-                        playlist,
-                        desired,
-                        store=self.store,
-                        observed_at=playlist_started_at,
-                    )
-                if reconciled is None:
-                    self._begin_destination_verification_required(playlist.id)
-                    mutation_guard = partial(
-                        self._provider_mutation_guard,
-                        playlist,
-                        authorization_session.authorization_context,
-                    )
-                    reconciled = reconcile_spotify_playlist(
-                        client,
-                        playlist,
-                        desired,
-                        store=self.store,
-                        mutation_guard=mutation_guard,
-                        prepare_write=partial(
-                            self._prepare_playlist_write,
-                            playlist,
-                            catalogue_coordinator,
-                            matching_evaluated_counts,
-                            playlist_started_at,
-                        ),
-                        prewrite_iteration_limit=(
-                            sum(
-                                len(self.store.list_editions(source_id=source_id))
-                                for source_id in playlist.source_selection.explicit
-                            )
-                            + 1
-                        ),
-                        snapshot_attested_prewrite=destination_plan.snapshot_attested_prewrite,
-                        evidence=evidence,
-                    )
-                desired = build_desired_state_from_store(
-                    self.store,
-                    playlist,
-                    now=playlist_started_at,
-                    source_timezones=self._source_timezones(),
-                )
-                desired_count = len(desired.items)
-                request_diagnostics = self._request_diagnostics(playlist.id, desired.uris)
-                verification_context = self._observe_desired_state(playlist, desired.uris)
-                playlist_finished_at = _as_utc(self.clock())
-                reconciled_fingerprint = (
-                    None
-                    if reconciled.verified_desired_uris is None
-                    else stable_fingerprint(reconciled.verified_desired_uris)
-                )
-                confirmed = self._observe_destination_result(
-                    playlist,
-                    verified=(
-                        reconciled.remote_evidence_qualified
-                        and verification_context is not None
-                        and verification_context.desired_fingerprint == reconciled_fingerprint
-                        and self._authorization_context_matches(
-                            authorization_session.authorization_context
-                        )
-                    ),
-                    unknown=reconciled.mutation_outcome is MutationOutcome.UNKNOWN,
-                    expected=verification_context,
-                    observed_at=playlist_finished_at,
-                )
-                if confirmed and verification_context is not None:
-                    self.destination_leases.publish(
-                        playlist.id,
-                        verification_context,
-                        verified_monotonic=self.monotonic_clock(),
-                    )
-                else:
-                    self.destination_leases.revoke(playlist.id)
-                self.store.record_playlist_run(
-                    playlist.id,
-                    started_at=playlist_started_at,
-                    finished_at=playlist_finished_at,
-                    ok=True,
-                    desired_count=reconciled.desired_count,
-                    applied_count=reconciled.applied_count or 0,
-                )
-                playlist_state = self.store.get_playlist_state(playlist.id)
-                self._playlist_failure_streaks.pop(playlist.id, None)
-                playlist_outcomes.append(
-                    PlaylistCycleOutcome(
-                        playlist_id=playlist.id,
-                        ok=True,
-                        desired_count=reconciled.desired_count,
-                        applied_count=reconciled.applied_count,
-                        wrote=reconciled.wrote,
-                        last_success_at=(
-                            None if playlist_state is None else playlist_state.last_success_at
-                        ),
-                        error=reconciled.warning,
-                        duration_decisions=desired.duration_decisions,
-                        **request_diagnostics,
-                        write_outcome=("verified" if reconciled.wrote else "not_attempted"),
-                    )
-                )
-            except (
-                DesiredStateError,
-                SpotifyApiError,
-                SpotifyTransportError,
-                SpotifyReconciliationError,
-            ) as exc:
-                playlist_finished_at = _as_utc(self.clock())
-                error_message = (
-                    SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE
-                    if is_spotify_rate_limit_suppressed(exc)
-                    else str(exc)
-                )
-                self._observe_destination_result(
-                    playlist,
-                    verified=False,
-                    unknown=evidence.mutation_outcome is MutationOutcome.UNKNOWN,
-                    observed_at=playlist_finished_at,
-                )
-                self.destination_leases.revoke(playlist.id)
-                try:
-                    self.store.record_playlist_run(
-                        playlist.id,
-                        started_at=playlist_started_at,
-                        finished_at=playlist_finished_at,
-                        ok=False,
-                        desired_count=desired_count,
-                        applied_count=0,
-                        error=error_message,
-                    )
-                    playlist_state = self.store.get_playlist_state(playlist.id)
-                except PersistenceError as persistence_exc:
-                    return fatal_playlist_result(persistence_exc)
-                failure_count, first_failure_at = self._record_failure(
-                    playlist.id, playlist_finished_at
-                )
-                playlist_outcomes.append(
-                    PlaylistCycleOutcome(
-                        playlist_id=playlist.id,
-                        ok=False,
-                        desired_count=desired_count,
-                        applied_count=None,
-                        wrote=None,
-                        last_success_at=(
-                            None if playlist_state is None else playlist_state.last_success_at
-                        ),
-                        error=error_message,
-                        **request_diagnostics,
-                        consecutive_failure_count=failure_count,
-                        first_failure_at=first_failure_at,
-                        last_failure_at=playlist_finished_at,
-                        write_outcome=(
-                            "unknown"
-                            if evidence.mutation_outcome is MutationOutcome.UNKNOWN
-                            else None
-                        ),
-                    )
-                )
-            except PersistenceError as exc:
-                return fatal_playlist_result(exc)
-
-        self._apply_source_catalogue_diagnostics(
-            source_outcomes,
-            source_plans,
-            catalogue_coordinator,
-            matching_evaluated_counts,
-        )
-        finished_at = _as_utc(self.clock())
-        try:
-            self._prune_operational_history(finished_at)
-        except PersistenceError as exc:
-            return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
-
-        sources = tuple(
-            source_outcomes[source.id]
-            for source in required_sources(self.config)
-            if source.id in source_outcomes
-        )
-        playlists = tuple(playlist_outcomes)
-        failed_sources = sum(not outcome.ok for outcome in sources)
-        failed_playlists = sum(not outcome.ok for outcome in playlists)
-        ok = failed_sources == 0 and failed_playlists == 0
-        cycle_error: str | None = None
-        if not ok:
-            cycle_error = (
-                f"cycle completed with {failed_sources} source failure(s) and "
-                f"{failed_playlists} playlist failure(s)"
+            build = build_spotify_first_desired_state(
+                playlist,
+                episodes,
+                sources=sources,
+                now=started_at,
             )
-        return EngineCycleResult(
-            started_at=started_at,
-            finished_at=finished_at,
-            ok=ok,
-            sources=sources,
-            playlists=playlists,
-            error=cycle_error,
-            planner_shadow=self._planner_shadow,
-            provider_work_planned=True,
-            provider_session_created=True,
-            destinations_skipped=sum(outcome.write_outcome == "skipped" for outcome in playlists),
-            destinations_remote=len(remote_destination_ids),
-            destinations_preserved=sum(not outcome.ok for outcome in playlists),
-        )
+            desired = build.desired
+            fingerprint = desired_fingerprint(desired.uris)
 
-    def _authorization_failure(
-        self,
-        started_at: datetime,
-        source_outcomes: dict[SourceId, SourceCycleOutcome],
-        playlist_outcomes: list[PlaylistCycleOutcome],
-        error: SpotifyAuthError,
-    ) -> EngineCycleResult:
-        message = str(error)
-        for playlist in self.config.playlists:
-            if not playlist.enabled:
-                continue
-            attempt_at = _as_utc(self.clock())
-            desired_count = 0
-            try:
-                try:
-                    desired = build_desired_state_from_store(
-                        self.store,
-                        playlist,
-                        now=attempt_at,
-                        source_timezones=self._source_timezones(),
-                    )
-                    desired_count = len(desired.items)
-                except DesiredStateError:
-                    desired_count = 0
-                self.store.record_playlist_run(
-                    playlist.id,
-                    started_at=attempt_at,
-                    finished_at=attempt_at,
-                    ok=False,
-                    desired_count=desired_count,
-                    applied_count=0,
-                    error=message,
-                )
-                playlist_state = self.store.get_playlist_state(playlist.id)
-            except PersistenceError as exc:
-                return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
-            playlist_outcomes.append(
-                PlaylistCycleOutcome(
-                    playlist_id=playlist.id,
-                    ok=False,
-                    desired_count=desired_count,
-                    applied_count=None,
-                    wrote=None,
-                    last_success_at=(
-                        None if playlist_state is None else playlist_state.last_success_at
-                    ),
-                    error=message,
-                )
-            )
-
-        finished_at = _as_utc(self.clock())
-        try:
-            self._prune_operational_history(finished_at)
-        except PersistenceError as exc:
-            return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
-
-        return EngineCycleResult(
-            started_at=started_at,
-            finished_at=finished_at,
-            ok=False,
-            sources=tuple(
-                source_outcomes[source.id]
-                for source in required_sources(self.config)
-                if source.id in source_outcomes
-            ),
-            playlists=tuple(playlist_outcomes),
-            error=message,
-            planner_shadow=self._planner_shadow,
-            provider_work_planned=True,
-            provider_session_created=False,
-            destinations_preserved=len(playlist_outcomes),
-        )
-
-    def _fatal_result(
-        self,
-        started_at: datetime,
-        source_outcomes: dict[SourceId, SourceCycleOutcome],
-        playlist_outcomes: list[PlaylistCycleOutcome],
-        error: PersistenceError,
-    ) -> EngineCycleResult:
-        return EngineCycleResult(
-            started_at=started_at,
-            finished_at=_as_utc(self.clock()),
-            ok=False,
-            sources=tuple(source_outcomes.values()),
-            playlists=tuple(playlist_outcomes),
-            error=str(error),
-            planner_shadow=self._planner_shadow,
-        )
-
-    def _compute_shadow_plan(self, now: datetime) -> PlannerShadowResult:
-        self._shadow_auth_context = None
-        try:
-            if self._planner_auth_reader is None:
-                return PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
-            self._shadow_auth_context = self._planner_auth_reader()
-            if self._shadow_auth_context is None:
-                return PlannerShadowResult.unsafe(PlannerReason.MISSING_EVIDENCE)
-            matching_cutoff = self._matching_cutoff(now)
-            source_reasons: list[tuple[str, PlannerReason]] = []
-            additional_reasons: set[PlannerReason] = set()
-            catalogue_states: list[CatalogueState | None] = []
-            for source in required_sources(self.config):
-                context = catalogue_context_fingerprint(source, self._shadow_auth_context)
-                state = self.planner_journal.get_catalogue(context)
-                if state is None:
-                    additional_reasons.add(PlannerReason.MISSING_EVIDENCE)
-                elif state.contract_fingerprint != context:
-                    additional_reasons.add(PlannerReason.INVALIDATED_CONTEXT)
-                    state = None
-                catalogue_states.append(state)
-                for edition in self.store.list_editions(source_id=source.id):
-                    if edition.published_at < matching_cutoff:
-                        break
-                    if edition.published_at > now:
-                        continue
-                    identity = f"{source.id!s}\0{edition.source_native_id}"
-                    match = self.store.get_match_state(source.id, edition.source_native_id)
-                    if match is None:
-                        source_reasons.append((identity, PlannerReason.NEW_MATCH))
-                        continue
-                    fingerprint = matching_input_fingerprint(source, edition)
-                    prior_input = self.planner_journal.get_match_input(
-                        str(source.id), edition.source_native_id
-                    )
-                    if prior_input is None:
-                        if match.status is MatchStatus.MATCHED:
-                            recovery = self.planner_journal.get_matched_recovery(
-                                str(source.id), edition.source_native_id
-                            )
-                            recovery_reason = matched_recovery_planning_reason(
-                                recovery,
-                                input_fingerprint=fingerprint,
-                                now=now,
-                            )
-                            if recovery_reason is PlannerReason.CLOCK_ROLLBACK:
-                                additional_reasons.add(recovery_reason)
-                            if recovery_reason is not None:
-                                source_reasons.append((identity, recovery_reason))
-                            continue
-                        source_reasons.append((identity, PlannerReason.INPUT_CHANGED))
-                        continue
-                    if prior_input.input_fingerprint != fingerprint:
-                        source_reasons.append((identity, PlannerReason.INPUT_CHANGED))
-                        continue
-                    if match.status is MatchStatus.MATCHED:
-                        if (
-                            match.spotify_episode_uri is None
-                            or not is_spotify_episode_uri(match.spotify_episode_uri)
-                            or match.spotify_duration_seconds is None
-                        ):
-                            source_reasons.append((identity, PlannerReason.INPUT_CHANGED))
-                        continue
-                    retry = self.planner_journal.get_unresolved(
-                        str(source.id), edition.source_native_id
-                    )
-                    retry_reason = unresolved_planning_reason(
-                        retry, input_fingerprint=fingerprint, now=now
-                    )
-                    if retry_reason is PlannerReason.CLOCK_ROLLBACK:
-                        additional_reasons.add(retry_reason)
-                    elif retry_reason is not None:
-                        source_reasons.append((identity, retry_reason))
-
-            destinations: list[DestinationState] = []
-            pending_count = 0
-            auth_context = self._shadow_auth_context
-            pending_journal = PendingSnapshotJournal(self.store)
-            active_playlist_ids: list[str] = []
-            for playlist in self.config.playlists:
-                if not playlist.enabled:
-                    continue
-                active_playlist_ids.append(str(playlist.id))
-                desired = build_desired_state_from_store(
-                    self.store,
-                    playlist,
-                    now=now,
-                    source_timezones=self._source_timezones(),
-                )
-                previous_destination = self.planner_journal.get_destination(str(playlist.id))
-                destination_context = destination_context_fingerprint(playlist)
-                config_fingerprint = playlist_config_fingerprint(playlist)
-                if previous_destination is None:
-                    additional_reasons.add(PlannerReason.MISSING_EVIDENCE)
-                elif (
-                    previous_destination.destination_context_fingerprint != destination_context
-                    or previous_destination.config_fingerprint != config_fingerprint
-                    or previous_destination.auth_context_fingerprint != auth_context
-                ):
-                    additional_reasons.add(PlannerReason.INVALIDATED_CONTEXT)
-                destination_state = self.planner_journal.observe_destination(
-                    playlist_id=str(playlist.id),
-                    destination_context_fingerprint=destination_context,
-                    config_fingerprint=config_fingerprint,
-                    auth_context_fingerprint=auth_context,
-                    desired_fingerprint=stable_fingerprint(desired.uris),
-                )
-                destinations.append(destination_state)
-                if pending_journal.get(playlist.id) is not None:
-                    pending_count += 1
-            self.planner_journal.retain_contexts(
-                catalogue_contexts=(
-                    catalogue_context_fingerprint(source, auth_context)
-                    for source in required_sources(self.config)
-                ),
-                playlist_ids=active_playlist_ids,
-            )
-            return plan_shadow_cycle(
-                source_reasons=source_reasons,
-                destination_states=destinations,
-                catalogue_states=catalogue_states,
-                pending_verification_count=pending_count,
-                now=now,
-                additional_reasons=additional_reasons,
-            )
-        except Exception:
-            # Isolated shadow boundary: never mask the existing provider flow.
-            return PlannerShadowResult.unsafe()
-
-    def _destination_work_plan(
-        self,
-        playlist: PlaylistDefinition,
-        now: datetime,
-        expected: DestinationVerificationContext,
-    ) -> _DestinationWorkPlan:
-        try:
-            state = self.planner_journal.get_destination(str(playlist.id))
-            if state is None:
-                return _DestinationWorkPlan(needs_remote=True)
-
-            context_matches = (
-                state.destination_context_fingerprint == expected.destination_context_fingerprint
-                and state.config_fingerprint == expected.config_fingerprint
-                and state.auth_context_fingerprint == expected.auth_context_fingerprint
-                and state.observed_desired_fingerprint == expected.desired_fingerprint
-            )
-            snapshot_attested_prewrite = False
-            if state.dirty and not state.unknown and context_matches:
-                pending_available = True
-                try:
-                    pending = PendingSnapshotJournal(self.store).get(playlist.id)
-                except PersistenceError:
-                    # This read exists only to authorize optional shortcuts. If it is
-                    # unavailable, preserve the pre-existing conservative provider flow while
-                    # retaining the planner's fail-closed diagnostic state.
-                    self._planner_shadow = PlannerShadowResult.unsafe()
-                    pending_available = False
-                    pending = None
-                if (
-                    pending is not None
-                    and pending.readback_exact
-                    and pending.destination_id == playlist.destination.external_id
-                    and pending.desired_fingerprint == expected.desired_fingerprint
-                    and pending.created_at
-                    <= now
-                    < pending.created_at + _PENDING_SNAPSHOT_CONFIRMATION_DELAY
-                    and now < pending.expires_at
-                ):
-                    # Exact ordered-item readback already proved the write content. Keep pending
-                    # non-authoritative and revoke the runtime lease, but do not create provider
-                    # work solely to re-read a snapshot during Spotify's propagation window.
-                    self.destination_leases.revoke(playlist.id)
-                    return _DestinationWorkPlan(needs_remote=False)
-                snapshot_attested_prewrite = bool(
-                    pending_available
-                    and pending is None
-                    and state.last_verified_at is not None
-                    and state.next_audit_at is not None
-                    and now >= state.last_verified_at
-                )
-
-            if (
-                not context_matches
-                or state.confirmed_desired_fingerprint != expected.desired_fingerprint
-                or state.dirty
-                or state.unknown
-                or state.last_verified_at is None
-                or state.next_audit_at is None
-                or now < state.last_verified_at
+            if self._can_skip_destination(
+                playlist,
+                fingerprint,
+                now=started_at,
             ):
-                return _DestinationWorkPlan(
-                    needs_remote=True,
-                    snapshot_attested_prewrite=snapshot_attested_prewrite,
-                )
-            if PendingSnapshotJournal(self.store).get(playlist.id) is not None:
-                self.destination_leases.revoke(playlist.id)
-                return _DestinationWorkPlan(needs_remote=True)
-            if now >= state.next_audit_at:
-                return _DestinationWorkPlan(needs_remote=True, audit_only=True)
-            return _DestinationWorkPlan(
-                needs_remote=not self.destination_leases.allows(
-                    playlist.id,
-                    expected,
-                    monotonic_now=self.monotonic_clock(),
-                )
-            )
-        except PersistenceError, ValueError:
-            self.destination_leases.revoke(playlist.id)
-            self._planner_shadow = PlannerShadowResult.unsafe()
-            return _DestinationWorkPlan(needs_remote=False, state_available=False)
-
-    def _begin_destination_verification_required(self, playlist_id: PlaylistId) -> None:
-        """Durably remove skip authority before reconciliation can reach a mutation."""
-        self.destination_leases.revoke(playlist_id)
-        try:
-            self.planner_journal.begin_destination_verification(str(playlist_id))
-        except sqlite3.Error as exc:
-            raise PersistenceError("cannot invalidate Spotify destination evidence") from exc
-
-    def _finish_local_only_cycle(
-        self,
-        started_at: datetime,
-        source_outcomes: dict[SourceId, SourceCycleOutcome],
-        source_editions: Mapping[SourceId, tuple[CanonicalEdition, ...]],
-        unsafe_source_ids: set[SourceId],
-        persistence_blocked: set[PlaylistId],
-        now: datetime,
-    ) -> EngineCycleResult:
-        playlist_outcomes: list[PlaylistCycleOutcome] = []
-        try:
-            for source in required_sources(self.config):
-                current = source_outcomes.get(source.id)
-                if current is None:
-                    continue
-                editions = source_editions.get(source.id, ())
-                matched = sum(
-                    self.store.get_spotify_episode_uri(edition.source_id, edition.source_native_id)
-                    is not None
-                    for edition in editions
-                )
-                source_outcomes[source.id] = replace(
-                    current,
-                    matching_ok=None if source.id in unsafe_source_ids else True,
-                    matched_count=matched,
-                )
-            for playlist in self.config.playlists:
-                if not playlist.enabled:
-                    continue
-                desired = build_desired_state_from_store(
-                    self.store,
-                    playlist,
-                    now=now,
-                    source_timezones=self._source_timezones(),
-                )
-                unsafe = tuple(
-                    source_id
-                    for source_id in playlist.source_selection.explicit
-                    if source_id in unsafe_source_ids
-                )
-                error = None
-                ok = not unsafe and playlist.id not in persistence_blocked
-                if playlist.id in persistence_blocked:
-                    error = "destination preserved because planner persistence is unavailable"
-                elif unsafe:
-                    error = (
-                        "destination preserved because no last-known-good state is available "
-                        "for source(s): " + ", ".join(str(value) for value in unsafe)
-                    )
-                elif not self._local_skip_still_authorized(
-                    playlist,
-                    self._destination_verification_context(playlist, desired.uris),
-                ):
-                    error = "destination preserved because local skip authority changed"
-                    ok = False
-                finished = _as_utc(self.clock())
                 self.store.record_playlist_run(
                     playlist.id,
-                    started_at=now,
-                    finished_at=finished,
-                    ok=ok,
+                    started_at=started_at,
+                    finished_at=started_at,
+                    ok=True,
                     desired_count=len(desired.items),
-                    applied_count=0 if not ok else len(desired.items),
-                    error=error,
+                    applied_count=len(desired.items),
                 )
                 state = self.store.get_playlist_state(playlist.id)
                 playlist_outcomes.append(
-                    PlaylistCycleOutcome(
-                        playlist_id=playlist.id,
-                        ok=ok,
-                        desired_count=len(desired.items),
-                        applied_count=None if not ok else len(desired.items),
-                        wrote=None if not ok else False,
+                    self._playlist_outcome(
+                        playlist,
+                        build,
+                        ok=True,
+                        applied_count=len(desired.items),
+                        wrote=False,
                         last_success_at=None if state is None else state.last_success_at,
-                        error=error,
-                        duration_decisions=desired.duration_decisions,
-                        **self._request_diagnostics(playlist.id, desired.uris),
-                        write_outcome="skipped" if ok else "not_attempted",
+                        fingerprint=fingerprint,
+                        local_skip=True,
+                        write_outcome="skipped",
                     )
                 )
-            self._prune_operational_history(now)
-        except (PersistenceError, DesiredStateError) as exc:
-            if isinstance(exc, PersistenceError):
-                return self._fatal_result(started_at, source_outcomes, playlist_outcomes, exc)
-            return EngineCycleResult(
-                started_at=started_at,
-                finished_at=_as_utc(self.clock()),
-                ok=False,
-                sources=tuple(source_outcomes.values()),
-                playlists=tuple(playlist_outcomes),
-                error=str(exc),
-                planner_shadow=self._planner_shadow,
+                continue
+
+            if session is None or client is None:
+                try:
+                    session = self.auth.acquire_provider_session(now=started_at)
+                    client = self.client_factory(session.access_token)
+                except (
+                    SpotifyAuthError,
+                    PersistenceError,
+                    SpotifyRateLimitBackoffActive,
+                    SpotifyRateLimitStateUnavailable,
+                ) as exc:
+                    playlist_outcomes.append(
+                        self._preserved_playlist_outcome(
+                            playlist,
+                            _safe_error(exc),
+                            build=build,
+                            fingerprint=fingerprint,
+                            now=started_at,
+                        )
+                    )
+                    continue
+
+            outcome = self._reconcile_playlist(
+                playlist,
+                build,
+                fingerprint,
+                client,
+                session,
+                now=started_at,
             )
-        sources = tuple(
-            source_outcomes[source.id]
-            for source in required_sources(self.config)
-            if source.id in source_outcomes
+            playlist_outcomes.append(outcome)
+            episodes = self.first_journal.list_episodes()
+
+        try:
+            self.first_journal.prune(before=started_at - SPOTIFY_FIRST_STATE_RETENTION)
+        except PersistenceError:
+            pass
+
+        ordered_sources = tuple(source_outcomes[source.id] for source in required)
+        ok = all(source.ok for source in ordered_sources) and all(
+            playlist.ok for playlist in playlist_outcomes
         )
-        ok = all(outcome.ok for outcome in sources) and all(
-            outcome.ok for outcome in playlist_outcomes
-        )
+        finished_at = as_utc(self.clock())
         return EngineCycleResult(
             started_at=started_at,
-            finished_at=_as_utc(self.clock()),
+            finished_at=finished_at,
             ok=ok,
-            sources=sources,
+            sources=ordered_sources,
             playlists=tuple(playlist_outcomes),
-            error=None if ok else "cycle completed with local source failure(s)",
-            planner_shadow=self._planner_shadow,
-            provider_work_planned=False,
-            provider_session_created=False,
-            destinations_skipped=sum(outcome.ok for outcome in playlist_outcomes),
-            destinations_remote=0,
-            destinations_preserved=sum(not outcome.ok for outcome in playlist_outcomes),
+            error=None if ok else "cycle completed with preserved or degraded work",
         )
 
-    def _source_matching_plan(
+    def _refresh_plan(
         self,
-        source: SourceDefinition,
-        editions: tuple[CanonicalEdition, ...],
+        detector: PublicDetectorCycleSummary,
+        *,
         now: datetime,
-    ) -> _SourceMatchingPlan:
-        """Turn Phase-2 evidence into conservative Phase-3 catalogue work."""
-        try:
-            if self._shadow_auth_context is None:
-                raise PersistenceError("Spotify planner authorization context unavailable")
-            contract = catalogue_context_fingerprint(source, self._shadow_auth_context)
-            catalogue = self.planner_journal.get_catalogue(contract)
-            audit_due = (
-                catalogue is None
-                or catalogue.contract_fingerprint != contract
-                or catalogue.last_verified_at is None
-                or catalogue.next_audit_at is None
-                or now < catalogue.last_verified_at
-                or now >= catalogue.next_audit_at
-            )
-            intents: dict[tuple[SourceId, str], MatchEvaluationIntent] = {}
-            retry_due_identities: set[tuple[SourceId, str]] = set()
-            coalescing_candidates: list[tuple[SourceId, str]] = []
-            new_match_count = 0
-            input_changed_count = 0
-            retry_due_count = 0
-            evidence_recovery_count = 0
-            missing_evidence_count = 0
-            unresolved_relevant_count = 0
-            for edition in editions:
-                match = self.store.get_match_state(source.id, edition.source_native_id)
-                fingerprint = matching_input_fingerprint(source, edition)
-                prior_input = self.planner_journal.get_match_input(
-                    str(source.id), edition.source_native_id
-                )
-                if match is None:
-                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                    new_match_count += 1
-                    continue
-                if match.status is not MatchStatus.MATCHED:
-                    unresolved_relevant_count += 1
-                if prior_input is None:
-                    if match.status is MatchStatus.MATCHED:
-                        recovery = self.planner_journal.get_matched_recovery(
-                            str(source.id), edition.source_native_id
-                        )
-                        reason = matched_recovery_planning_reason(
-                            recovery,
-                            input_fingerprint=fingerprint,
-                            now=now,
-                        )
-                        if reason is PlannerReason.INPUT_CHANGED:
-                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                            input_changed_count += 1
-                        elif reason in {
-                            PlannerReason.MISSING_EVIDENCE,
-                            PlannerReason.RETRY_DUE,
-                        }:
-                            intents[edition.identity] = MatchEvaluationIntent.EVIDENCE_RECOVERY
-                            evidence_recovery_count += 1
-                    else:
-                        retry = self.planner_journal.get_unresolved(
-                            str(source.id), edition.source_native_id
-                        )
-                        reason = unresolved_planning_reason(
-                            retry,
-                            input_fingerprint=fingerprint,
-                            now=now,
-                        )
-                        if reason is PlannerReason.MISSING_EVIDENCE:
-                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                            missing_evidence_count += 1
-                        elif reason is PlannerReason.INPUT_CHANGED:
-                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                            input_changed_count += 1
-                        elif reason is PlannerReason.RETRY_DUE:
-                            intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                            retry_due_identities.add(edition.identity)
-                            retry_due_count += 1
-                        elif reason is None:
-                            coalescing_candidates.append(edition.identity)
-                    continue
-                if prior_input.input_fingerprint != fingerprint:
-                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                    input_changed_count += 1
-                    continue
-                if match.status is MatchStatus.MATCHED:
-                    if (
-                        match.spotify_episode_uri is None
-                        or not is_spotify_episode_uri(match.spotify_episode_uri)
-                        or match.spotify_duration_seconds is None
-                    ):
-                        intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                        missing_evidence_count += 1
-                    continue
-                retry = self.planner_journal.get_unresolved(
-                    str(source.id), edition.source_native_id
-                )
-                reason = unresolved_planning_reason(
-                    retry,
-                    input_fingerprint=fingerprint,
-                    now=now,
-                )
-                if reason is PlannerReason.MISSING_EVIDENCE:
-                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                    missing_evidence_count += 1
-                elif reason is PlannerReason.INPUT_CHANGED:
-                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                    input_changed_count += 1
-                elif reason is PlannerReason.RETRY_DUE:
-                    intents[edition.identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                    retry_due_identities.add(edition.identity)
-                    retry_due_count += 1
-                elif reason is None:
-                    coalescing_candidates.append(edition.identity)
-
-            primary_needs_catalogue = bool(intents) or audit_due
-            coalesced_unresolved_identities = (
-                frozenset(coalescing_candidates) if primary_needs_catalogue else frozenset()
-            )
-            if primary_needs_catalogue:
-                for identity in coalesced_unresolved_identities:
-                    intents[identity] = MatchEvaluationIntent.SEMANTIC_REEVALUATION
-            coalesced_unresolved_count = len(coalesced_unresolved_identities)
-
-            diagnostics = SourceMatchingDiagnostics(
-                matching_work_count=len(intents),
-                matching_reason_new_match_count=new_match_count,
-                matching_reason_input_changed_count=input_changed_count,
-                matching_reason_retry_due_count=retry_due_count,
-                matching_reason_coalesced_unresolved_count=coalesced_unresolved_count,
-                matching_reason_evidence_recovery_count=evidence_recovery_count,
-                matching_reason_missing_evidence_count=missing_evidence_count,
-                unresolved_relevant_count=unresolved_relevant_count,
-                catalogue_audit_due=audit_due,
-            )
-            return _SourceMatchingPlan(
-                intents,
-                audit_due,
-                retry_due_identities=frozenset(retry_due_identities),
-                coalesced_unresolved_identities=coalesced_unresolved_identities,
-                diagnostics=diagnostics,
-            )
-        except Exception:
-            intents = {
-                edition.identity: MatchEvaluationIntent.EVIDENCE_RECOVERY for edition in editions
-            }
-            return _SourceMatchingPlan(
-                intents,
-                True,
-                conservative=True,
-                diagnostics=SourceMatchingDiagnostics(
-                    matching_work_count=len(intents),
-                    catalogue_audit_due=True,
-                    matching_plan_conservative=True,
-                ),
-            )
-
-    @staticmethod
-    def _apply_source_plan_diagnostics(
-        source_outcomes: dict[SourceId, SourceCycleOutcome],
-        source_plans: Mapping[SourceId, _SourceMatchingPlan],
-    ) -> None:
-        for source_id, plan in source_plans.items():
-            current = source_outcomes.get(source_id)
-            if current is not None:
-                source_outcomes[source_id] = replace(current, matching_diagnostics=plan.diagnostics)
-
-    @staticmethod
-    def _record_matching_evaluation(
-        counts: dict[SourceId, int],
-        source_id: SourceId,
-        _outcome: Any,
-    ) -> None:
-        counts[source_id] = counts.get(source_id, 0) + 1
-
-    @staticmethod
-    def _matching_yield_diagnostics(
-        plan: _SourceMatchingPlan,
-        result: SourceMatchResult,
-    ) -> SourceMatchingDiagnostics:
-        outcomes = {outcome.edition.identity: outcome for outcome in result.outcomes}
-
-        def classify(
-            identities: frozenset[tuple[SourceId, str]],
-        ) -> tuple[int, int, int, int]:
-            evaluated = tuple(outcomes[identity] for identity in identities if identity in outcomes)
-            return (
-                len(evaluated),
-                sum(outcome.status is MatchStatus.MATCHED for outcome in evaluated),
-                sum(outcome.status is MatchStatus.PENDING for outcome in evaluated),
-                sum(outcome.status is MatchStatus.AMBIGUOUS for outcome in evaluated),
-            )
-
-        retry_evaluated, retry_matched, retry_pending, retry_ambiguous = classify(
-            plan.retry_due_identities
-        )
-        (
-            coalesced_evaluated,
-            coalesced_matched,
-            coalesced_pending,
-            coalesced_ambiguous,
-        ) = classify(plan.coalesced_unresolved_identities)
-        return replace(
-            plan.diagnostics,
-            retry_due_evaluated_count=retry_evaluated,
-            retry_due_resolved_to_matched_count=retry_matched,
-            retry_due_still_pending_count=retry_pending,
-            retry_due_still_ambiguous_count=retry_ambiguous,
-            coalesced_unresolved_evaluated_count=coalesced_evaluated,
-            coalesced_unresolved_resolved_to_matched_count=coalesced_matched,
-            coalesced_unresolved_still_pending_count=coalesced_pending,
-            coalesced_unresolved_still_ambiguous_count=coalesced_ambiguous,
-        )
-
-    @staticmethod
-    def _apply_source_catalogue_diagnostics(
-        source_outcomes: dict[SourceId, SourceCycleOutcome],
-        source_plans: Mapping[SourceId, _SourceMatchingPlan],
-        coordinator: _CycleCatalogueCoordinator,
-        matching_evaluated_counts: Mapping[SourceId, int],
-    ) -> None:
-        for source_id, plan in source_plans.items():
-            current = source_outcomes.get(source_id)
-            if current is None:
+    ) -> tuple[tuple[SourceId, RefreshReason], ...]:
+        changed = set(detector.changed_source_ids)
+        plan: list[tuple[SourceId, RefreshReason]] = []
+        for source in _required_sources(self.config):
+            local = self.first_journal.get_source_state(source.id)
+            public = self.detector_journal.get(source.id, spotify_show_id(source))
+            if local is None or local.spotify_show_id != spotify_show_id(source):
+                plan.append((source.id, RefreshReason.BOOTSTRAP))
                 continue
-            observation = coordinator.observation(source_id)
-            source_outcomes[source_id] = replace(
-                current,
-                matching_diagnostics=replace(
-                    plan.diagnostics,
-                    matching_evaluated_count=matching_evaluated_counts.get(source_id, 0),
-                    catalogue_requested=observation.requested,
-                    catalogue_inspected=observation.inspected,
-                    catalogue_request_count=observation.request_count,
+            if source.id in changed:
+                plan.append((source.id, RefreshReason.CHANGE))
+                continue
+            if public is not None and public.last_change_at is not None:
+                if public.last_change_at > local.last_refresh_at:
+                    plan.append((source.id, RefreshReason.CHANGE))
+                    continue
+            due = (
+                public.audit_due(now=now, inactivity=self.source_inactivity)
+                if public is not None
+                else now - local.last_refresh_at >= self.source_inactivity
+            )
+            if due:
+                plan.append((source.id, RefreshReason.INACTIVITY_AUDIT))
+        return tuple(plan)
+
+    def _refresh_source(
+        self,
+        source,
+        reason: RefreshReason,
+        detector: PublicDetectorCycleSummary,
+        client: SpotifyEngineClient,
+        *,
+        now: datetime,
+    ) -> SourceCycleOutcome:
+        cutoff = now - timedelta(hours=_max_retention(self.config, source.id))
+        public = self.detector_journal.get(source.id, spotify_show_id(source))
+        try:
+            snapshot = fetch_source_catalogue(
+                client,
+                source,
+                now=now,
+                cutoff=cutoff,
+                max_pages=self.max_catalogue_pages,
+            )
+            counts = self.first_journal.replace_source_episodes(
+                source.id,
+                snapshot.episodes,
+                coverage_proven=snapshot.coverage_proven,
+            )
+            self.first_journal.record_refresh(
+                source,
+                refreshed_at=now,
+                reason=reason,
+                detector_episode_id=None if public is None else public.last_episode_id,
+                api_episode_id=snapshot.api_latest_id,
+                request_count=snapshot.request_count,
+                complete=snapshot.complete,
+                coverage_proven=snapshot.coverage_proven,
+                coverage_cutoff_at=cutoff,
+            )
+            self.detector_journal.mark_catalogue_refresh(
+                source.id,
+                spotify_show_id(source),
+                refreshed_at=now,
+            )
+            false_negative = _possible_false_negative(
+                reason,
+                None if public is None else public.last_episode_id,
+                snapshot.api_latest_id,
+            )
+            return SourceCycleOutcome(
+                source_id=source.id,
+                ok=snapshot.coverage_proven,
+                episode_count=len(snapshot.episodes),
+                refreshed=True,
+                refresh_reason=reason.value,
+                api_request_count=snapshot.request_count,
+                last_success_at=now,
+                detector_ok=_detector_ok(public, now),
+                detector_changed=source.id in detector.changed_source_ids,
+                detector_false_negative=false_negative,
+                parser_fallback_count=snapshot.parser_fallback_count,
+                filter_rejected_count=snapshot.filter_rejected_count,
+                removed_count=counts.removed,
+                error=(
+                    None
+                    if snapshot.coverage_proven
+                    else "official Spotify catalogue did not prove retention-window coverage"
                 ),
             )
-
-    def _build_source_work(
-        self, now: datetime
-    ) -> tuple[
-        dict[SourceId, tuple[CanonicalEdition, ...]],
-        dict[SourceId, _SourceMatchingPlan],
-    ]:
-        matching_cutoff = self._matching_cutoff(now)
-        source_editions: dict[SourceId, tuple[CanonicalEdition, ...]] = {}
-        source_plans: dict[SourceId, _SourceMatchingPlan] = {}
-        for source in required_sources(self.config):
-            editions = tuple(
-                edition
-                for edition in self.store.list_editions(source_id=source.id)
-                if matching_cutoff <= edition.published_at <= now
+        except (
+            CatalogueResponseError,
+            SpotifyApiError,
+            SpotifyTransportError,
+            SpotifyRateLimitSuppressed,
+            PersistenceError,
+            ValueError,
+        ) as exc:
+            state = self.first_journal.get_source_state(source.id)
+            return SourceCycleOutcome(
+                source_id=source.id,
+                ok=state is not None and state.coverage_proven,
+                episode_count=len(
+                    self.first_journal.list_episodes(source_ids=(source.id,))
+                ),
+                refreshed=False,
+                refresh_reason=reason.value,
+                api_request_count=0,
+                last_success_at=None if state is None else state.last_refresh_at,
+                detector_ok=_detector_ok(public, now),
+                detector_changed=source.id in detector.changed_source_ids,
+                error=_safe_error(exc),
             )
-            source_editions[source.id] = editions
-            source_plans[source.id] = self._source_matching_plan(source, editions, now)
-        return source_editions, source_plans
 
-    def _edition_has_persistence_rejection_barrier(
-        self,
-        source: SourceDefinition,
-        edition: CanonicalEdition,
-    ) -> bool:
-        """Return whether a rejected transition still protects the current durable match."""
-        barrier = self.planner_journal.get_persistence_rejection_barrier(
-            str(source.id), edition.source_native_id
-        )
-        if barrier is None:
-            return False
-        match = self.store.get_match_state(source.id, edition.source_native_id)
-        if barrier.protects(match):
-            return True
-        # The durable match advanced since the rejection (for example an accepted repair before
-        # a crash could clear planner state). The old barrier no longer protects that new row.
-        self.planner_journal.clear_persistence_rejection_barrier(
-            str(source.id), edition.source_native_id
-        )
-        return False
-
-    def _source_has_persistence_rejection_barrier(
+    def _unchanged_source_outcome(
         self,
         source_id: SourceId,
-        playlist: PlaylistDefinition,
+        detector: PublicDetectorCycleSummary,
+        *,
         now: datetime,
-    ) -> bool:
-        source = next(
-            (candidate for candidate in required_sources(self.config) if candidate.id == source_id),
-            None,
-        )
-        if source is None:
-            return False
-        retention_cutoff = now - timedelta(hours=playlist.retention_hours)
-        return any(
-            # Safety follows this destination's retention authority, not the matching window.
-            # A corrected pubDate must not hide a still-relevant semantic edition. Future
-            # editions also remain protected across rollback, even with an empty desired state.
-            authoritative_playlist_time(edition, playlist.ordering) > retention_cutoff
-            and self._edition_has_persistence_rejection_barrier(source, edition)
-            for edition in self.store.list_editions(source_id=source_id)
+    ) -> SourceCycleOutcome:
+        source = next(source for source in _required_sources(self.config) if source.id == source_id)
+        public = self.detector_journal.get(source.id, spotify_show_id(source))
+        state = self.first_journal.get_source_state(source_id)
+        episodes = self.first_journal.list_episodes(source_ids=(source_id,))
+        return SourceCycleOutcome(
+            source_id=source_id,
+            ok=state is not None and state.coverage_proven,
+            episode_count=len(episodes),
+            refreshed=False,
+            refresh_reason=None,
+            api_request_count=0,
+            last_success_at=None if state is None else state.last_refresh_at,
+            detector_ok=_detector_ok(public, now),
+            detector_changed=source_id in detector.changed_source_ids,
+            error=None if state is not None else "Spotify-first source has no persisted catalogue",
         )
 
-    def _plan_destinations(
-        self, now: datetime, unsafe_source_ids: set[SourceId]
-    ) -> tuple[set[PlaylistId], set[PlaylistId]]:
-        destination_work: set[PlaylistId] = set()
-        persistence_blocked: set[PlaylistId] = set()
-        for playlist in self.config.playlists:
-            if not playlist.enabled or any(
-                source_id in unsafe_source_ids for source_id in playlist.source_selection.explicit
+    def _source_authorization_failure(
+        self,
+        required,
+        plan: tuple[tuple[SourceId, RefreshReason], ...],
+        detector: PublicDetectorCycleSummary,
+        exc: Exception,
+    ) -> dict[SourceId, SourceCycleOutcome]:
+        planned = dict(plan)
+        outcomes: dict[SourceId, SourceCycleOutcome] = {}
+        now = as_utc(self.clock())
+        for source in required:
+            reason = planned.get(source.id)
+            if reason is None:
+                continue
+            state = self.first_journal.get_source_state(source.id)
+            public = self.detector_journal.get(source.id, spotify_show_id(source))
+            outcomes[source.id] = SourceCycleOutcome(
+                source_id=source.id,
+                ok=state is not None and state.coverage_proven,
+                episode_count=len(
+                    self.first_journal.list_episodes(source_ids=(source.id,))
+                ),
+                refreshed=False,
+                refresh_reason=reason.value,
+                api_request_count=0,
+                last_success_at=None if state is None else state.last_refresh_at,
+                detector_ok=_detector_ok(public, now),
+                detector_changed=source.id in detector.changed_source_ids,
+                error=_safe_error(exc),
+            )
+        return outcomes
+
+    def _playlist_sources_ready(
+        self,
+        playlist: PlaylistDefinition,
+        *,
+        now: datetime,
+    ) -> bool:
+        cutoff = now - timedelta(hours=playlist.retention_hours)
+        sources = {source.id: source for source in self.config.sources}
+        for source_id in playlist.source_selection.explicit:
+            source = sources.get(source_id)
+            if source is None:
+                return False
+            state = self.first_journal.get_source_state(source_id)
+            if (
+                state is None
+                or state.spotify_show_id != spotify_show_id(source)
+                or not state.coverage_proven
+                or state.coverage_cutoff_at > cutoff
             ):
-                continue
-            try:
-                provisional = build_desired_state_from_store(
-                    self.store,
-                    playlist,
-                    now=now,
-                    source_timezones=self._source_timezones(),
-                )
-            except PersistenceError, DesiredStateError:
-                self.destination_leases.revoke(playlist.id)
-                persistence_blocked.add(playlist.id)
-                continue
-            expected = self._observe_desired_state(playlist, provisional.uris)
-            if expected is None:
-                persistence_blocked.add(playlist.id)
-                continue
-            plan = self._destination_work_plan(playlist, now, expected)
-            if not plan.state_available:
-                persistence_blocked.add(playlist.id)
-            elif plan.needs_remote:
-                destination_work.add(playlist.id)
-        return destination_work, persistence_blocked
+                return False
+        return True
 
-    def _authorization_context_matches(self, expected: str) -> bool:
-        reader = self._planner_auth_reader
-        if reader is None:
-            return False
-        try:
-            current = reader()
-            return isinstance(current, str) and current == expected
-        except Exception:
-            return False
-
-    def _destination_verification_context(
-        self, playlist: PlaylistDefinition, desired_uris: tuple[str, ...]
-    ) -> DestinationVerificationContext | None:
-        if self._shadow_auth_context is None:
-            return None
-        return DestinationVerificationContext(
-            stable_fingerprint(desired_uris),
-            destination_context_fingerprint(playlist),
-            playlist_config_fingerprint(playlist),
-            self._shadow_auth_context,
-        )
-
-    def _local_skip_still_authorized(
+    def _can_skip_destination(
         self,
         playlist: PlaylistDefinition,
-        expected: DestinationVerificationContext | None,
+        fingerprint: str,
+        *,
+        now: datetime,
     ) -> bool:
-        if expected is None or not self._authorization_context_matches(
-            expected.auth_context_fingerprint
-        ):
-            self.destination_leases.revoke(playlist.id)
+        if PendingSnapshotJournal(self.store).get(playlist.id) is not None:
             return False
-        guard = self.playlist_skip_guard
+        state = self.first_journal.get_destination_verification(playlist.id)
+        return bool(
+            state is not None
+            and state.destination_id == playlist.destination.external_id
+            and state.desired_fingerprint == fingerprint
+            and state.verified_at <= now
+            and now - state.verified_at < self.destination_audit
+        )
+
+    def _reconcile_playlist(
+        self,
+        playlist: PlaylistDefinition,
+        build: SpotifyFirstDesiredBuild,
+        fingerprint: str,
+        client: SpotifyEngineClient,
+        session: ProviderAuthorizationSession,
+        *,
+        now: datetime,
+    ) -> PlaylistCycleOutcome:
+        desired = build.desired
+        stale_escalation = False
         try:
-            config_matches = guard is None or guard(playlist)
-        except Exception:
-            config_matches = False
-        if not config_matches:
-            self.destination_leases.revoke(playlist.id)
-            return False
-        return True
+            result = reconcile_spotify_playlist(
+                client,
+                playlist,
+                desired,
+                store=self.store,
+                mutation_guard=partial(
+                    self._provider_mutation_guard,
+                    playlist,
+                    session.authorization_context,
+                ),
+                prepare_write=lambda _current: self._rebuild_desired(playlist, now=now),
+                snapshot_attested_prewrite=True,
+            )
+        except SpotifyReconciliationError as exc:
+            retry = self._stale_rejection_retry(
+                playlist,
+                desired,
+                client,
+                session,
+                exc,
+                now=now,
+            )
+            if retry is None:
+                return self._record_playlist_failure(
+                    playlist,
+                    build,
+                    fingerprint,
+                    exc,
+                    now=now,
+                )
+            result, build = retry
+            desired = build.desired
+            fingerprint = desired_fingerprint(desired.uris)
+            stale_escalation = True
+        except (
+            SpotifyApiError,
+            SpotifyTransportError,
+            SpotifyRateLimitSuppressed,
+            PersistenceError,
+        ) as exc:
+            return self._record_playlist_failure(
+                playlist,
+                build,
+                fingerprint,
+                exc,
+                now=now,
+            )
+
+        if result.remote_evidence_qualified:
+            self.first_journal.record_destination_verification(
+                playlist.id,
+                destination_id=playlist.destination.external_id,
+                desired_fingerprint=fingerprint,
+                verified_at=now,
+            )
+        else:
+            self.first_journal.clear_destination_verification(playlist.id)
+
+        self.store.record_playlist_run(
+            playlist.id,
+            started_at=now,
+            finished_at=now,
+            ok=result.ok,
+            desired_count=result.desired_count,
+            applied_count=0 if result.applied_count is None else result.applied_count,
+            error=result.error or result.warning,
+        )
+        state = self.store.get_playlist_state(playlist.id)
+        return self._playlist_outcome(
+            playlist,
+            build,
+            ok=result.ok,
+            applied_count=result.applied_count,
+            wrote=result.wrote,
+            last_success_at=None if state is None else state.last_success_at,
+            fingerprint=fingerprint,
+            stale_escalation=stale_escalation,
+            error=result.error or result.warning,
+            write_outcome=result.mutation_outcome.value,
+        )
+
+    def _stale_rejection_retry(
+        self,
+        playlist: PlaylistDefinition,
+        old_desired,
+        client: SpotifyEngineClient,
+        session: ProviderAuthorizationSession,
+        exc: SpotifyReconciliationError,
+        *,
+        now: datetime,
+    ) -> tuple[PlaylistReconciliationResult, SpotifyFirstDesiredBuild] | None:
+        if _caused_by_http_status(exc) != 400:
+            return None
+
+        selected = set(playlist.source_selection.explicit)
+        sources = {
+            source.id: source
+            for source in _required_sources(self.config)
+            if source.id in selected
+        }
+        cutoff = now - timedelta(hours=playlist.retention_hours)
+
+        try:
+            for source in sources.values():
+                snapshot = fetch_source_catalogue(
+                    client,
+                    source,
+                    now=now,
+                    cutoff=cutoff,
+                    max_pages=self.max_catalogue_pages,
+                )
+                if not snapshot.coverage_proven:
+                    return None
+                self.first_journal.replace_source_episodes(
+                    source.id,
+                    snapshot.episodes,
+                    coverage_proven=True,
+                )
+                public = self.detector_journal.get(source.id, spotify_show_id(source))
+                self.first_journal.record_refresh(
+                    source,
+                    refreshed_at=now,
+                    reason=RefreshReason.STALE_ESCALATION,
+                    detector_episode_id=None if public is None else public.last_episode_id,
+                    api_episode_id=snapshot.api_latest_id,
+                    request_count=snapshot.request_count,
+                    complete=snapshot.complete,
+                    coverage_proven=True,
+                    coverage_cutoff_at=cutoff,
+                )
+                self.detector_journal.mark_catalogue_refresh(
+                    source.id,
+                    spotify_show_id(source),
+                    refreshed_at=now,
+                )
+
+            build = self._rebuild_build(playlist, now=now)
+            removed = set(old_desired.uris) - set(build.desired.uris)
+            if not removed:
+                return None
+
+            result = reconcile_spotify_playlist(
+                client,
+                playlist,
+                build.desired,
+                store=self.store,
+                mutation_guard=partial(
+                    self._provider_mutation_guard,
+                    playlist,
+                    session.authorization_context,
+                ),
+                prepare_write=lambda _current: self._rebuild_desired(playlist, now=now),
+                snapshot_attested_prewrite=False,
+            )
+            return result, build
+        except (
+            CatalogueResponseError,
+            SpotifyApiError,
+            SpotifyTransportError,
+            SpotifyRateLimitSuppressed,
+            PersistenceError,
+            SpotifyReconciliationError,
+            ValueError,
+        ):
+            return None
+
+    def _rebuild_build(
+        self,
+        playlist: PlaylistDefinition,
+        *,
+        now: datetime,
+    ) -> SpotifyFirstDesiredBuild:
+        return build_spotify_first_desired_state(
+            playlist,
+            self.first_journal.list_episodes(),
+            sources={source.id: source for source in self.config.sources},
+            now=now,
+        )
+
+    def _rebuild_desired(
+        self,
+        playlist: PlaylistDefinition,
+        *,
+        now: datetime,
+    ):
+        return self._rebuild_build(playlist, now=now).desired
 
     @contextmanager
     def _provider_mutation_guard(
-        self, playlist: PlaylistDefinition, authorization_context: str
+        self,
+        playlist: PlaylistDefinition,
+        authorization_context: str,
     ) -> Iterator[None]:
         if not self._authorization_context_matches(authorization_context):
             raise SpotifyReconciliationError(
@@ -1975,394 +868,127 @@ class EngineRunner:
                 )
             yield
 
-    def _observe_catalogue_inspection(
-        self, source: SourceDefinition, observed_at: datetime
-    ) -> None:
+    def _authorization_context_matches(self, expected: str) -> bool:
         try:
-            if self._shadow_auth_context is None:
-                return
-            contract = catalogue_context_fingerprint(source, self._shadow_auth_context)
-            self.planner_journal.verify_catalogue(contract, contract, verified_at=observed_at)
+            current = self.raw_auth.planner_authorization_context()
         except Exception:
-            self._planner_shadow = PlannerShadowResult.unsafe()
+            return False
+        return isinstance(current, str) and current == expected
 
-    def _prepare_playlist_write(
+    def _record_playlist_failure(
         self,
         playlist: PlaylistDefinition,
-        catalogue_coordinator: _CycleCatalogueCoordinator,
-        matching_evaluated_counts: dict[SourceId, int],
-        observed_at: datetime,
-        desired: DesiredPlaylistState,
-    ) -> DesiredPlaylistState:
-        """Validate every mapping selected for a possible mutation, then rebuild desired."""
-        sources = {source.id: source for source in required_sources(self.config)}
-        catalogues: dict[SourceId, tuple[SpotifyCatalogueResult, int]] = {}
-        required_uris_by_source: dict[SourceId, set[str]] = {}
-        for item in desired.items:
-            required_uris_by_source.setdefault(item.source_id, set()).add(item.spotify_episode_uri)
-        try:
-            for item in desired.items:
-                source = sources.get(item.source_id)
-                if source is None:
-                    raise SpotifyReconciliationError(
-                        "Spotify prewrite validation could not resolve a configured source"
-                    )
-                edition = self.store.get_edition(item.source_id, item.source_native_id)
-                if edition is None:
-                    raise SpotifyReconciliationError(
-                        "Spotify prewrite validation lost its canonical edition; "
-                        "destination preserved"
-                    )
-                if self._edition_has_persistence_rejection_barrier(source, edition):
-                    raise SpotifyReconciliationError(
-                        "Spotify prewrite validation found a temporally rejected matching repair; "
-                        "destination preserved"
-                    )
-                current = self.store.get_match_state(item.source_id, item.source_native_id)
-                if (
-                    current is None
-                    or current.status is not MatchStatus.MATCHED
-                    or current.spotify_episode_uri != item.spotify_episode_uri
-                ):
-                    return build_desired_state_from_store(
-                        self.store,
-                        playlist,
-                        now=observed_at,
-                        source_timezones=self._source_timezones(),
-                    )
-
-                cached_catalogue = catalogues.get(source.id)
-                if cached_catalogue is None:
-                    catalogue, request_count, full_bounded_inspection = (
-                        catalogue_coordinator.get_for_uris(
-                            source, required_uris_by_source[source.id]
-                        )
-                    )
-                    cached_catalogue = (catalogue, request_count)
-                    catalogues[source.id] = cached_catalogue
-                    if full_bounded_inspection:
-                        self._observe_catalogue_inspection(source, observed_at)
-                catalogue, request_count = cached_catalogue
-                if item.spotify_episode_uri in catalogue.candidate_uris:
-                    continue
-                if not catalogue.can_prove_absence:
-                    raise SpotifyReconciliationError(
-                        "Spotify prewrite validation could not establish mapping presence; "
-                        "destination preserved"
-                    )
-
-                result = match_source_editions(
-                    catalogue_coordinator.client,
-                    self.store,
-                    source,
-                    (edition,),
-                    now=observed_at,
-                    catalogue=catalogue,
-                    evaluation_intents={
-                        edition.identity: MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                    },
-                    validate_cached=True,
-                    catalogue_request_count=request_count,
-                    on_fresh_evaluation=partial(
-                        self._record_matching_evaluation,
-                        matching_evaluated_counts,
-                        source.id,
-                    ),
-                )
-                self._observe_matching_result(
-                    source,
-                    result,
-                    observed_at,
-                    evaluation_intents={
-                        edition.identity: MatchEvaluationIntent.SEMANTIC_REEVALUATION
-                    },
-                )
-                if result.persistence_rejected:
-                    raise SpotifyReconciliationError(
-                        "Spotify prewrite validation could not durably apply matching evidence; "
-                        "destination preserved"
-                    )
-
-            return build_desired_state_from_store(
-                self.store,
-                playlist,
-                now=observed_at,
-                source_timezones=self._source_timezones(),
-            )
-        except (PersistenceError, MatchConfigurationError, MatchResponseError) as exc:
-            raise SpotifyReconciliationError(
-                "Spotify prewrite mapping validation failed; destination preserved"
-            ) from exc
-
-    def _observe_matching_result(
-        self,
-        source: SourceDefinition,
-        result: SourceMatchResult,
-        observed_at: datetime,
+        build: SpotifyFirstDesiredBuild,
+        fingerprint: str,
+        exc: Exception,
         *,
-        evaluation_intents: Mapping[tuple[SourceId, str], MatchEvaluationIntent] | None = None,
-    ) -> None:
-        try:
-            if self._shadow_auth_context is None:
-                return
-            contract = catalogue_context_fingerprint(source, self._shadow_auth_context)
-            if result.catalogue_inspected:
-                self.planner_journal.verify_catalogue(contract, contract, verified_at=observed_at)
-            for outcome in result.outcomes:
-                edition = outcome.edition
-                input_fingerprint = matching_input_fingerprint(source, edition)
-                explicit_evaluation = bool(
-                    evaluation_intents is not None and edition.identity in evaluation_intents
-                )
-                rejection_barrier = self._edition_has_persistence_rejection_barrier(source, edition)
-                shadow_matched_rejection_barrier = bool(
-                    rejection_barrier
-                    and outcome.status is MatchStatus.MATCHED
-                    and not explicit_evaluation
-                )
-                if outcome.persistence_rejected:
-                    # A newer durable match rejected this wall-clock observation. Persist a
-                    # dedicated safety barrier before touching retry scheduling: fingerprints and
-                    # retry timestamps may legitimately change while the rejected transition is
-                    # still unresolved.
-                    durable_match = self.store.get_match_state(
-                        edition.source_id, edition.source_native_id
-                    )
-                    if durable_match is None:
-                        raise PersistenceError(
-                            "rejected Spotify match repair has no durable state to protect"
-                        )
-                    self.planner_journal.record_persistence_rejection_barrier(
-                        durable_match, rejected_at=observed_at
-                    )
-                    self.planner_journal.clear_match_input(
-                        str(edition.source_id), edition.source_native_id
-                    )
-                    if shadow_matched_rejection_barrier:
-                        # Another edition may have paid for this catalogue and caused a fresh
-                        # complete-absence check for this one. That incidental rejection must not
-                        # rebase the already-durable repair deadline.
-                        continue
-                    self.planner_journal.clear_matched_recovery(
-                        str(edition.source_id), edition.source_native_id
-                    )
-                    self.planner_journal.clear_unresolved(
-                        str(edition.source_id), edition.source_native_id
-                    )
-                    if outcome.status is MatchStatus.MATCHED:
-                        self.planner_journal.record_matched_recovery(
-                            source_id=str(edition.source_id),
-                            source_native_id=edition.source_native_id,
-                            input_fingerprint=input_fingerprint,
-                            attempted_at=observed_at,
-                        )
-                    else:
-                        self.planner_journal.record_unresolved(
-                            source_id=str(edition.source_id),
-                            source_native_id=edition.source_native_id,
-                            input_fingerprint=input_fingerprint,
-                            status=outcome.status,
-                            attempted_at=observed_at,
-                        )
-                    continue
-                if shadow_matched_rejection_barrier:
-                    # Shadow qualification may invalidate positive evidence, but only an explicit
-                    # evaluation may resolve or replace a temporally rejected repair. In
-                    # particular, an exact shadow result must not turn scheduling metadata into
-                    # authority or remove the destination barrier.
-                    if outcome.planner_input_evidence_qualified is False:
-                        self.planner_journal.clear_match_input(
-                            str(edition.source_id), edition.source_native_id
-                        )
-                    continue
-                if outcome.planner_input_evidence_qualified is True:
-                    self.planner_journal.observe_match_input(
-                        source_id=str(edition.source_id),
-                        source_native_id=edition.source_native_id,
-                        input_fingerprint=input_fingerprint,
-                        observed_at=observed_at,
-                    )
-                    self.planner_journal.clear_matched_recovery(
-                        str(edition.source_id), edition.source_native_id
-                    )
-                    if explicit_evaluation and rejection_barrier:
-                        # A conclusive explicit evaluation is authority to resolve the barrier.
-                        # Shadow observations never take this path. Accepted state transitions also
-                        # make the protected durable-row snapshot differ and are cleared lazily.
-                        self.planner_journal.clear_persistence_rejection_barrier(
-                            str(edition.source_id), edition.source_native_id
-                        )
-                elif outcome.planner_input_evidence_qualified is False:
-                    self.planner_journal.clear_match_input(
-                        str(edition.source_id), edition.source_native_id
-                    )
-                    # A shadow-only contradiction can invalidate positive match-input evidence,
-                    # but it did not attempt the repair whose temporal rejection created the
-                    # durable destination barrier. Preserve that barrier until an explicit
-                    # evaluation resolves it.
-                    if explicit_evaluation or not rejection_barrier:
-                        self.planner_journal.clear_matched_recovery(
-                            str(edition.source_id), edition.source_native_id
-                        )
-                if outcome.status is MatchStatus.MATCHED:
-                    self.planner_journal.clear_unresolved(
-                        str(edition.source_id), edition.source_native_id
-                    )
-                    if (
-                        result.catalogue_inspected
-                        and outcome.planner_input_evidence_qualified is None
-                    ):
-                        prior_input = self.planner_journal.get_match_input(
-                            str(edition.source_id), edition.source_native_id
-                        )
-                        if (
-                            prior_input is not None
-                            and prior_input.input_fingerprint != input_fingerprint
-                        ):
-                            self.planner_journal.clear_match_input(
-                                str(edition.source_id), edition.source_native_id
-                            )
-                            prior_input = None
-                        if prior_input is None and not (
-                            rejection_barrier and not explicit_evaluation
-                        ):
-                            self.planner_journal.record_matched_recovery(
-                                source_id=str(edition.source_id),
-                                source_native_id=edition.source_native_id,
-                                input_fingerprint=input_fingerprint,
-                                attempted_at=observed_at,
-                            )
-                else:
-                    self.planner_journal.clear_matched_recovery(
-                        str(edition.source_id), edition.source_native_id
-                    )
-                if outcome.status is not MatchStatus.MATCHED and not outcome.from_cache:
-                    self.planner_journal.record_unresolved(
-                        source_id=str(edition.source_id),
-                        source_native_id=edition.source_native_id,
-                        input_fingerprint=input_fingerprint,
-                        status=outcome.status,
-                        attempted_at=observed_at,
-                    )
-        except Exception:
-            # Shadow evidence is fail-closed on its next read and cannot alter provider behavior.
-            self._planner_shadow = PlannerShadowResult.unsafe()
-
-    def _observe_destination_result(
-        self,
-        playlist: PlaylistDefinition,
-        *,
-        verified: bool,
-        unknown: bool,
-        observed_at: datetime,
-        expected: DestinationVerificationContext | None = None,
-    ) -> bool:
-        try:
-            if unknown:
-                self.destination_leases.revoke(playlist.id)
-                self.planner_journal.mark_destination_unknown(str(playlist.id))
-            elif (
-                verified
-                and expected is not None
-                and PendingSnapshotJournal(self.store).get(playlist.id) is None
-            ):
-                self.planner_journal.verify_destination(
-                    str(playlist.id), expected=expected, verified_at=observed_at
-                )
-                return True
-        except Exception:
-            self.destination_leases.revoke(playlist.id)
-            self._planner_shadow = PlannerShadowResult.unsafe()
-        return False
-
-    def _begin_destination_verification(self, playlist_id: PlaylistId) -> None:
-        try:
-            self.planner_journal.begin_destination_verification(str(playlist_id))
-        except Exception:
-            self._planner_shadow = PlannerShadowResult.unsafe()
-
-    def _observe_desired_state(
-        self, playlist: PlaylistDefinition, desired_uris: tuple[str, ...]
-    ) -> DestinationVerificationContext | None:
-        try:
-            expected = self._destination_verification_context(playlist, desired_uris)
-            if expected is None:
-                return None
-            self.destination_leases.revoke_unless(playlist.id, expected)
-            self.planner_journal.observe_destination(
-                playlist_id=str(playlist.id),
-                destination_context_fingerprint=expected.destination_context_fingerprint,
-                config_fingerprint=expected.config_fingerprint,
-                auth_context_fingerprint=expected.auth_context_fingerprint,
-                desired_fingerprint=expected.desired_fingerprint,
-            )
-            return expected
-        except Exception:
-            self.destination_leases.revoke(playlist.id)
-            self._planner_shadow = PlannerShadowResult.unsafe()
-            return None
-
-    def _prune_operational_history(self, now: datetime) -> None:
-        self.store.prune_operational_history(
-            now=now,
-            protected_identities=self._protected_identities(now),
+        now: datetime,
+    ) -> PlaylistCycleOutcome:
+        self.first_journal.clear_destination_verification(playlist.id)
+        self.store.record_playlist_run(
+            playlist.id,
+            started_at=now,
+            finished_at=now,
+            ok=False,
+            desired_count=len(build.desired.items),
+            applied_count=0,
+            error=_safe_error(exc),
+        )
+        state = self.store.get_playlist_state(playlist.id)
+        return self._playlist_outcome(
+            playlist,
+            build,
+            ok=False,
+            applied_count=None,
+            wrote=None,
+            last_success_at=None if state is None else state.last_success_at,
+            fingerprint=fingerprint,
+            error=_safe_error(exc),
+            write_outcome=MutationOutcome.NOT_ATTEMPTED.value,
         )
 
-    def _source_timezones(self) -> Mapping[SourceId, ZoneInfo]:
-        return {source.id: source.timezone for source in self.config.sources}
+    def _preserved_playlist_outcome(
+        self,
+        playlist: PlaylistDefinition,
+        error: str,
+        *,
+        build: SpotifyFirstDesiredBuild | None = None,
+        fingerprint: str | None = None,
+        now: datetime,
+    ) -> PlaylistCycleOutcome:
+        desired_count = 0 if build is None else len(build.desired.items)
+        self.store.record_playlist_run(
+            playlist.id,
+            started_at=now,
+            finished_at=now,
+            ok=False,
+            desired_count=desired_count,
+            applied_count=0,
+            error=error,
+        )
+        state = self.store.get_playlist_state(playlist.id)
+        if build is None:
+            return PlaylistCycleOutcome(
+                playlist_id=playlist.id,
+                ok=False,
+                desired_count=0,
+                applied_count=None,
+                wrote=None,
+                last_success_at=None if state is None else state.last_success_at,
+                error=error,
+                desired_fingerprint=fingerprint,
+                write_outcome=MutationOutcome.NOT_ATTEMPTED.value,
+            )
+        return self._playlist_outcome(
+            playlist,
+            build,
+            ok=False,
+            applied_count=None,
+            wrote=None,
+            last_success_at=None if state is None else state.last_success_at,
+            fingerprint=fingerprint or desired_fingerprint(build.desired.uris),
+            error=error,
+            write_outcome=MutationOutcome.NOT_ATTEMPTED.value,
+        )
 
-    def _request_diagnostics(
-        self, playlist_id: PlaylistId, uris: tuple[str, ...]
-    ) -> dict[str, Any]:
-        encoded = json.dumps({"uris": list(uris)}).encode("utf-8")
-        fingerprint = hashlib.sha256(
-            json.dumps(uris, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        previous = self._previous_desired_fingerprints.get(playlist_id)
-        self._previous_desired_fingerprints[playlist_id] = fingerprint
+    def _playlist_outcome(
+        self,
+        playlist: PlaylistDefinition,
+        build: SpotifyFirstDesiredBuild,
+        *,
+        ok: bool,
+        applied_count: int | None,
+        wrote: bool | None,
+        last_success_at: datetime | None,
+        fingerprint: str,
+        local_skip: bool = False,
+        stale_escalation: bool = False,
+        error: str | None = None,
+        write_outcome: str | None = None,
+    ) -> PlaylistCycleOutcome:
+        uris = build.desired.uris
+        encoded = json.dumps({"uris": list(uris)}, separators=(",", ":")).encode("utf-8")
         valid = sum(is_spotify_episode_uri(uri) for uri in uris)
-        return {
-            "request_item_count": len(uris),
-            "request_payload_bytes": len(encoded),
-            "valid_uri_count": valid,
-            "invalid_uri_count": len(uris) - valid,
-            "duplicate_count": len(uris) - len(set(uris)),
-            "desired_fingerprint": fingerprint,
-            "desired_changed_since_previous_attempt": (
-                None if previous is None else previous != fingerprint
-            ),
-        }
-
-    def _record_failure(
-        self, playlist_id: PlaylistId, occurred_at: datetime
-    ) -> tuple[int, datetime]:
-        prior = self._playlist_failure_streaks.get(playlist_id)
-        result = (1, occurred_at) if prior is None else (prior[0] + 1, prior[1])
-        self._playlist_failure_streaks[playlist_id] = result
-        return result
-
-    def _matching_cutoff(self, now: datetime) -> datetime:
-        enabled = [
-            playlist.retention_hours for playlist in self.config.playlists if playlist.enabled
-        ]
-        retention_hours = max(enabled, default=48)
-        return now - timedelta(hours=retention_hours)
-
-    def _protected_identities(self, now: datetime) -> set[tuple[SourceId, str]]:
-        """Protect canonical state still eligible for any configured playlist window."""
-        protected: set[tuple[SourceId, str]] = set()
-        for playlist in self.config.playlists:
-            if not playlist.enabled:
-                continue
-            cutoff = now - timedelta(hours=playlist.retention_hours)
-            for source_id in playlist.source_selection.explicit:
-                for edition in self.store.list_editions(source_id=source_id):
-                    # Playlist relevance follows the playlist's own temporal authority.
-                    # Canonical physical age is handled separately by SQLite via last_seen_at.
-                    ordering_at = authoritative_playlist_time(edition, playlist.ordering)
-                    if cutoff < ordering_at <= now:
-                        protected.add(edition.identity)
-        return protected
+        return PlaylistCycleOutcome(
+            playlist_id=playlist.id,
+            ok=ok,
+            desired_count=len(uris),
+            applied_count=applied_count,
+            wrote=wrote,
+            last_success_at=last_success_at,
+            error=error,
+            duration_decisions=build.desired.duration_decisions,
+            duration_unavailable_count=build.duration_unavailable_count,
+            request_item_count=len(uris),
+            request_payload_bytes=len(encoded),
+            valid_uri_count=valid,
+            invalid_uri_count=len(uris) - valid,
+            duplicate_count=len(uris) - len(set(uris)),
+            desired_fingerprint=fingerprint,
+            local_skip=local_skip,
+            stale_escalation=stale_escalation,
+            write_outcome=write_outcome,
+        )
 
 
 class EngineScheduler:
@@ -2385,7 +1011,6 @@ class EngineScheduler:
         self._wake_event = threading.Event()
 
     def wake(self) -> None:
-        """Request an early next cycle, for example immediately after successful OAuth."""
         self._wake_event.set()
 
     def run(self, stop_event: threading.Event) -> None:
@@ -2393,8 +1018,8 @@ class EngineScheduler:
             self.status.begin_cycle()
             try:
                 result = self.runner.run_cycle()
-            except Exception as exc:  # noqa: BLE001 - keep the long-lived scheduler alive safely
-                observed_at = _as_utc(self.clock())
+            except Exception as exc:  # noqa: BLE001
+                observed_at = as_utc(self.clock())
                 result = EngineCycleResult(
                     started_at=observed_at,
                     finished_at=observed_at,
@@ -2408,14 +1033,15 @@ class EngineScheduler:
                 self.status.finish_cycle(result, next_run_at=None)
                 break
 
-            next_run_at = _as_utc(self.clock()) + self.interval
-            self.status.finish_cycle(result, next_run_at=next_run_at)
+            self.status.finish_cycle(
+                result,
+                next_run_at=as_utc(self.clock()) + self.interval,
+            )
             self._wait_for_wake_or_stop(stop_event)
 
         self.status.set_next_run(None)
 
     def _wait_for_wake_or_stop(self, stop_event: threading.Event) -> None:
-        """Wait for cadence or wake while keeping external stop requests responsive."""
         deadline = time.monotonic() + self.interval.total_seconds()
         while not stop_event.is_set():
             remaining = deadline - time.monotonic()
@@ -2426,19 +1052,93 @@ class EngineScheduler:
                 return
 
 
-def _spotify_client(access_token: str, *, metrics: SpotifyRequestMetrics) -> SpotifyEngineClient:
+def _required_sources(config: EngineConfig):
+    required_ids = {
+        source_id
+        for playlist in config.playlists
+        if playlist.enabled
+        for source_id in playlist.source_selection.explicit
+    }
+    return tuple(
+        source for source in config.sources if source.enabled and source.id in required_ids
+    )
+
+
+def _max_retention(config: EngineConfig, source_id: SourceId) -> int:
+    return max(
+        (
+            playlist.retention_hours
+            for playlist in config.playlists
+            if playlist.enabled and source_id in playlist.source_selection.explicit
+        ),
+        default=48,
+    )
+
+
+def _detector_ok(public, observed_at: datetime) -> bool:
+    if public is None:
+        return False
+    return bool(
+        public.last_detector_success_at is not None
+        and (
+            public.last_failure_at is None
+            or public.last_detector_success_at >= public.last_failure_at
+        )
+        and public.last_detector_success_at <= observed_at
+    )
+
+
+def _possible_false_negative(
+    reason: RefreshReason,
+    detector_episode_id: str | None,
+    api_latest_id: str | None,
+) -> bool:
+    return bool(
+        reason is RefreshReason.INACTIVITY_AUDIT
+        and detector_episode_id is not None
+        and api_latest_id is not None
+        and detector_episode_id != api_latest_id
+    )
+
+
+def _caused_by_http_status(exc: BaseException) -> int | None:
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, SpotifyApiError):
+            return current.status
+        current = current.__cause__
+    return None
+
+
+def _safe_error(exc: Exception) -> str:
+    if isinstance(exc, SpotifyRateLimitBackoffActive):
+        return "Spotify rate-limit cooldown is active; destination preserved"
+    if isinstance(exc, SpotifyRateLimitStateUnavailable):
+        return "Spotify rate-limit state is unavailable; destination preserved"
+    if isinstance(exc, SpotifyRateLimitSuppressed):
+        return "Spotify request suppressed by global rate-limit cooldown"
+    if isinstance(exc, SpotifyApiError):
+        return f"Spotify API request failed (http_status={exc.status})"
+    if isinstance(exc, SpotifyTransportError):
+        return "Spotify request failed due to a transport error"
+    if isinstance(exc, CatalogueResponseError):
+        return "Spotify catalogue response was invalid"
+    if isinstance(exc, PersistenceError):
+        return "Spotify-first persistence is unavailable"
+    if isinstance(exc, SpotifyReconciliationError):
+        return str(exc)
+    if isinstance(exc, SpotifyAuthError):
+        return "Spotify authorization is unavailable"
+    return type(exc).__name__
+
+
+def _spotify_client(
+    access_token: str,
+    *,
+    metrics: SpotifyRequestMetrics,
+) -> SpotifyEngineClient:
     return SpotifyClient(access_token=access_token, metrics=metrics)
-
-
-def _combine_errors(first: str | None, second: str) -> str:
-    return second if first is None else f"{first}; {second}"
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("engine timestamps must be timezone-aware")
-    return value.astimezone(UTC)
