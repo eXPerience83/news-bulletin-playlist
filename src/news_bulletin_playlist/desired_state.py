@@ -136,7 +136,7 @@ def build_playlist_desired_state(
                 "desired state Spotify duration unavailable for matched edition "
                 f"{edition.source_id!s}/{edition.source_native_id}"
             )
-        decision = _duration_decision(
+        decision = duration_eligibility_decision(
             playlist,
             edition,
             duration,
@@ -206,9 +206,9 @@ def build_multi_playlist_desired_states(
     )
 
 
-def _duration_decision(
+def duration_eligibility_decision(
     playlist: PlaylistDefinition,
-    edition: CanonicalEdition,
+    edition: CanonicalEdition | DesiredPlaylistItem,
     duration_seconds: int,
     *,
     source_timezones: Mapping[SourceId, ZoneInfo],
@@ -255,7 +255,7 @@ def _duration_decision(
 
 
 def _matching_duration_exception(
-    edition: CanonicalEdition,
+    edition: CanonicalEdition | DesiredPlaylistItem,
     exceptions: Sequence[DurationPolicyException],
     *,
     source_timezones: Mapping[SourceId, ZoneInfo],
