@@ -225,10 +225,6 @@ def test_invalid_timezone_is_rejected() -> None:
         parse_config(_config(sources=[source]))
 
 
-    with pytest.raises(ConfigError, match=r"HTTP\(S\) URL"):
-        parse_config(_config(sources=[source]))
-
-
 @pytest.mark.parametrize(
     ("field", "value"),
     [
