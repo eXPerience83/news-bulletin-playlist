@@ -4,7 +4,6 @@ import html
 import os
 import signal
 import threading
-import time
 import urllib.parse
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
