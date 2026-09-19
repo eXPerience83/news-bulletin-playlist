@@ -8,6 +8,7 @@ from typing import cast
 
 from news_bulletin_playlist.collection import required_sources
 from news_bulletin_playlist.desired_state import DesiredStateError
+from news_bulletin_playlist.diagnostics import DiagnosticSeverity
 from news_bulletin_playlist.models import EngineConfig, PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
