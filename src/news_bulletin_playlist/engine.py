@@ -16,8 +16,14 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Protocol
 
-from news_bulletin_playlist.desired_state import DurationEligibilityDecision
-from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId, SourceId
+from news_bulletin_playlist.desired_state import DesiredPlaylistState, DurationEligibilityDecision
+from news_bulletin_playlist.models import (
+    EngineConfig,
+    PlaylistDefinition,
+    PlaylistId,
+    SourceDefinition,
+    SourceId,
+)
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
     MutationOutcome,
@@ -50,6 +56,7 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorCycleSummary,
     PublicDetectorJournal,
     PublicDetectorShadow,
+    PublicDetectorState,
     spotify_show_id,
 )
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
@@ -466,7 +473,7 @@ class EngineRunner:
 
     def _refresh_source(
         self,
-        source,
+        source: SourceDefinition,
         reason: RefreshReason,
         detector: PublicDetectorCycleSummary,
         client: SpotifyEngineClient,
@@ -577,7 +584,7 @@ class EngineRunner:
 
     def _source_authorization_failure(
         self,
-        required,
+        required: tuple[SourceDefinition, ...],
         plan: tuple[tuple[SourceId, RefreshReason], ...],
         detector: PublicDetectorCycleSummary,
         exc: Exception,
@@ -742,7 +749,7 @@ class EngineRunner:
     def _stale_rejection_retry(
         self,
         playlist: PlaylistDefinition,
-        old_desired,
+        old_desired: DesiredPlaylistState,
         client: SpotifyEngineClient,
         session: ProviderAuthorizationSession,
         exc: SpotifyReconciliationError,
@@ -840,7 +847,7 @@ class EngineRunner:
         playlist: PlaylistDefinition,
         *,
         now: datetime,
-    ):
+    ) -> DesiredPlaylistState:
         return self._rebuild_build(playlist, now=now).desired
 
     @contextmanager
@@ -1047,7 +1054,7 @@ class EngineScheduler:
                 return
 
 
-def _required_sources(config: EngineConfig):
+def _required_sources(config: EngineConfig) -> tuple[SourceDefinition, ...]:
     required_ids = {
         source_id
         for playlist in config.playlists
@@ -1070,7 +1077,7 @@ def _max_retention(config: EngineConfig, source_id: SourceId) -> int:
     )
 
 
-def _detector_ok(public, observed_at: datetime) -> bool:
+def _detector_ok(public: PublicDetectorState | None, observed_at: datetime) -> bool:
     if public is None:
         return False
     return bool(
