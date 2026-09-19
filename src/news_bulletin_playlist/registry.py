@@ -1,4 +1,5 @@
 """Registry for Spotify-first title parsers and deterministic product filters."""
+
 from __future__ import annotations
 
 from news_bulletin_playlist.providers.base import RecoveryTitleParser, TitleParser
