@@ -106,7 +106,7 @@ The Phase-1 playlist templates are intentionally broader than the source labels:
 | Proposed classification | Bulletin/source | Status | Current research note |
 | --- | --- | --- | --- |
 | `ES · NAT · es-ES` | COPE — boletines | `blocked` | Frequent concise bulletins and parser research exist, but deterministic Spotify show identity remains unverified. |
-| `CA · MIX · en` | CBC — World Report | `verified / blocked-runtime` | Feed/show/matching are deterministic in current samples, but the official RSS timed out after all provider-watch retries in two independent GitHub runner regions; do not promote until the runtime collection endpoint is reliably reachable. |
+| `CA · MIX · en` | CBC — World Report | `verified / re-evaluate` | The former runtime blocker was RSS availability, which no longer applies to Spotify-first. Re-check current official Spotify catalogue cadence/parser/duration behavior before any promotion; do not promote automatically from legacy evidence alone. |
 | `CZ · NAT · es` | Chequia en 30 minutos | `blocked / #138` | Feed and show are known, but nullable Spotify catalogue entries require the dedicated global safety policy. |
 | `FR · REG · es-419` | RFI Español — Noticias de América | `candidate` | Americas-regional Spanish product; useful for a future Latin-American scope, not default `INT · ES`. |
 | `DE · NAT · de` | Tagesschau in 100 Sekunden | `candidate` | Multiple very short updates per day; verify feed identity and deterministic Spotify path. |
@@ -160,7 +160,7 @@ catalog. For each review:
 2. classify origin, editorial scope and language independently;
 3. measure representative episode durations, rejecting predominantly long-form products;
 4. revisit `candidate`, `blocked` and `research` entries;
-5. re-check implemented feeds, cadence, title patterns and Spotify catalogue identities;
+5. re-check implemented Spotify show identities, catalogue cadence, title patterns and filters;
 6. update this document and #53 with meaningful evidence/status changes;
 7. open focused implementation work only for sources actually selected for rollout.
 
