@@ -1,4 +1,5 @@
 """Official Spotify Web API show-catalogue ingestion for the Spotify-first runtime."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -91,9 +92,7 @@ def fetch_source_catalogue(
 
     for candidate in candidates:
         api_ids.append(candidate.episode_id)
-        periods.append(
-            release_period(candidate.release_date, candidate.release_date_precision)
-        )
+        periods.append(release_period(candidate.release_date, candidate.release_date_precision))
         if collection_filter is not None and not collection_filter.accepts(candidate.title):
             filter_rejected += 1
             continue
@@ -263,8 +262,7 @@ def _provable_latest_id(episodes: list[SpotifyFirstEpisode]) -> str | None:
     for candidate in episodes:
         candidate_start, _ = _evidence_period(candidate)
         if all(
-            other is candidate or candidate_start > _evidence_period(other)[1]
-            for other in episodes
+            other is candidate or candidate_start > _evidence_period(other)[1] for other in episodes
         ):
             return candidate.spotify_episode_id
     return None
