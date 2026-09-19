@@ -463,6 +463,7 @@ class PublicDetectorJournal:
             else:
                 outcome = PublicDetectorOutcome.UNCHANGED
 
+            last_change_at: datetime | None
             if outcome in {
                 PublicDetectorOutcome.BOOTSTRAP,
                 PublicDetectorOutcome.CHANGED,
@@ -552,6 +553,7 @@ class PublicDetectorJournal:
                 )
                 latest_known = max(known_timestamps, default=None)
             if latest_known is not None and failed < latest_known:
+                assert previous is not None
                 return previous
             failures = 1 if previous is None else previous.consecutive_detector_failures + 1
             connection.execute(
@@ -609,7 +611,7 @@ class PublicDetectorJournal:
         source_id: SourceId,
         spotify_show_id: str,
     ) -> sqlite3.Row | None:
-        return connection.execute(
+        row = connection.execute(
             """
             SELECT source_id, spotify_show_id, last_episode_id, last_episode_title,
                    last_public_release_date_raw, last_public_observed_at,
@@ -621,6 +623,7 @@ class PublicDetectorJournal:
             """,
             (str(source_id), spotify_show_id),
         ).fetchone()
+        return cast(sqlite3.Row | None, row)
 
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
