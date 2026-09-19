@@ -819,10 +819,11 @@ def _normalize_details(
             if key in {"retry_not_before", "next_retry_at", "first_failure_at", "last_failure_at"}:
                 normalized[key] = _normalize_detail_timestamp(value)
                 continue
-            if (
-                key in {"desired_fingerprint", "legacy_fingerprint", "shadow_fingerprint"}
-                and re.fullmatch(r"[0-9a-f]{64}", value)
-            ):
+            if key in {
+                "desired_fingerprint",
+                "legacy_fingerprint",
+                "shadow_fingerprint",
+            } and re.fullmatch(r"[0-9a-f]{64}", value):
                 normalized[key] = value
                 continue
             if key in {"spotify_episode_id", "spotify_previous_episode_id", "api_episode_id"}:
