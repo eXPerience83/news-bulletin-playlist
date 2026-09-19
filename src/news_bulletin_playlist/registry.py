@@ -1,6 +1,5 @@
+"""Registry for Spotify-first title parsers and deterministic product filters."""
 from __future__ import annotations
-
-from dataclasses import dataclass
 
 from news_bulletin_playlist.providers.base import RecoveryTitleParser, TitleParser
 from news_bulletin_playlist.providers.cnn import CnnParser
@@ -15,50 +14,6 @@ from news_bulletin_playlist.providers.rfi import RfiJournalMondeParser
 from news_bulletin_playlist.providers.rne import RneParser
 from news_bulletin_playlist.providers.ser import SerParser
 
-
-@dataclass(frozen=True, slots=True)
-class ProviderConfig:
-    provider_id: str
-    feed_url: str
-    spotify_show_id: str
-    parser: RecoveryTitleParser
-    contract_fallback_url: str | None = None
-
-
-CORE_PROVIDERS: tuple[ProviderConfig, ...] = (
-    ProviderConfig(
-        provider_id="ser",
-        feed_url="https://fapi-top.prisasd.com/podcast/playser/boletines.xml",
-        spotify_show_id="4EwwdoHHYmbt49UXODQMpi",
-        parser=SerParser(),
-    ),
-    ProviderConfig(
-        provider_id="rne",
-        feed_url="https://api.rtve.es/api/adapter/programas/1750/audios.rss",
-        spotify_show_id="0UgidTKsoaHiHDARuPQNW1",
-        parser=RneParser(),
-    ),
-    ProviderConfig(
-        provider_id="ondacero",
-        feed_url=(
-            "https://www.ondacero.es/rss/podcast/mount/"
-            "ATRESMEDIA_LAS_NOTICIAS_EN_ONDA_CERO_P/fastly"
-        ),
-        spotify_show_id="0tjEexypyczHXW9vE3SU3P",
-        parser=OndaCeroParser(),
-        contract_fallback_url="https://www.ondacero.es/podcast/programas/boletines/",
-    ),
-    ProviderConfig(
-        provider_id="cnn",
-        feed_url="https://feeds.megaphone.fm/WMHY5696831164",
-        spotify_show_id="0vDgnorbpBr65YZzFVVouE",
-        parser=CnnParser(),
-    ),
-)
-
-
-# P1 configuration resolves parsers here and does not depend on the transitional
-# CORE_PROVIDERS registry, which remains for P0 watch/probe compatibility only.
 RECOVERY_TITLE_PARSERS: dict[str, RecoveryTitleParser] = {
     "ser": SerParser(),
     "rne": RneParser(),
@@ -71,8 +26,7 @@ TITLE_PARSERS: dict[str, TitleParser] = {
     **RECOVERY_TITLE_PARSERS,
     "release_date_title": ReleaseDateTitleParser(),
 }
-
-COLLECTION_FILTERS = {
+COLLECTION_FILTERS: dict[str, CollectionFilter] = {
     "un_news_es_minutes": UnNewsEsMinutesFilter(),
 }
 
