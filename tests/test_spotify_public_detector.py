@@ -399,8 +399,11 @@ def test_shadow_logs_change_only_on_identity_transition_and_oembed_on_change(
     third = shadow.observe_sources((source,), observed_at=NOW + timedelta(minutes=2))
 
     assert (first.changed_count, first.unchanged_count, first.failure_count) == (1, 0, 0)
+    assert first.changed_source_ids == (SourceId("source"),)
     assert (second.changed_count, second.unchanged_count, second.failure_count) == (0, 1, 0)
+    assert second.changed_source_ids == ()
     assert (third.changed_count, third.unchanged_count, third.failure_count) == (1, 0, 0)
+    assert third.changed_source_ids == (SourceId("source"),)
     assert client.observe_calls == 3
     assert client.oembed_calls == 2
 
