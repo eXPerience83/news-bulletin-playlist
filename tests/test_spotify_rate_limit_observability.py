@@ -73,5 +73,3 @@ def test_active_spotify_backoff_is_reported_as_destination_preserved(tmp_path: P
         "write_decision": "preserved",
     }
     assert all(event.event_name != "playlist_reconciliation_failed" for event in events)
-
-
