@@ -1,4 +1,5 @@
 """Command-line entrypoint for the application runtime."""
+
 from __future__ import annotations
 
 import argparse
