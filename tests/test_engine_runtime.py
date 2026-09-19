@@ -234,7 +234,7 @@ def test_reloading_runner_fails_closed_if_config_disappears(tmp_path: Path) -> N
     config_path = tmp_path / DEFAULT_CONFIG_FILENAME
     config_path.write_text(_valid_config(), encoding="utf-8")
     auth = _NeverAuth()
-    runner = ReloadingEngineCycleRunner(tmp_path, {}, _store(tmp_path), auth)
+    runner = _reloading_runner(tmp_path, auth)
     config_path.unlink()
 
     result = runner.run_cycle()
