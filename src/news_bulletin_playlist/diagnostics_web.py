@@ -365,10 +365,16 @@ def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
                 {
                     "source_id": str(source.source_id),
                     "ok": source.ok,
-                    "collection_ok": source.collection_ok,
-                    "matching_ok": source.matching_ok,
-                    "edition_count": source.edition_count,
-                    "matched_count": source.matched_count,
+                    "episode_count": source.episode_count,
+                    "refreshed": source.refreshed,
+                    "refresh_reason": source.refresh_reason,
+                    "api_request_count": source.api_request_count,
+                    "detector_ok": source.detector_ok,
+                    "detector_changed": source.detector_changed,
+                    "detector_false_negative": source.detector_false_negative,
+                    "parser_fallback_count": source.parser_fallback_count,
+                    "filter_rejected_count": source.filter_rejected_count,
+                    "removed_count": source.removed_count,
                     "last_success_at": _optional_timestamp(source.last_success_at),
                 }
                 for source in cycle.sources
