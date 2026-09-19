@@ -1,4 +1,5 @@
 """Pure desired-state construction from persisted Spotify-first episode state."""
+
 from __future__ import annotations
 
 import hashlib
