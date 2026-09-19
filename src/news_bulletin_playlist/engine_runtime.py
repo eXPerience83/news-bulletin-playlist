@@ -466,14 +466,12 @@ def _playlist_write_contract(
                 str(source.timezone),
                 str(source.parser_id),
                 source.collection_filter_id,
-                source.endpoint_url,
                 tuple(
                     sorted(
                         (reference.system, reference.resource_type, reference.external_id)
                         for reference in source.external_references
                     )
                 ),
-                source.spotify_release_delay_days,
             )
         )
     return (
