@@ -99,7 +99,7 @@ The initial `INT · DE` and `INT · PL` playlist templates are therefore experim
 
 | Candidate | Classification | Status / reason |
 | --- | --- | --- |
-| CBC — World Report | `CA · MIX · en` | Verified deterministic feed/show/matching evidence, but blocked from runtime promotion because the official RSS did not meet the normal provider-watch fetch contract |
+| CBC — World Report | `CA · MIX · en` | Legacy evidence was strong, and the former RSS-only blocker no longer applies; re-verify current Spotify catalogue/parser/duration behavior before promotion |
 | BBC Global News Podcast | `GB · INT · en` | **Long-form**; not promoted under the concise-source rule |
 | RFI Español — Noticias de América | `FR · REG · es-419` | Regional Americas product; potentially useful for a future Latin-American playlist, not a default global-Spanish source |
 | Chequia en 30 minutos | `CZ · NAT · es` pending spoken-locale confirmation | Deferred to #138: Spotify's current catalogue has unavailable/null slots and must retain fail-closed handling |
@@ -110,17 +110,16 @@ Other candidates such as France 24, COPE or additional national broadcasters sho
 
 Before a source is added to the built-in catalog, record evidence for all of the following:
 
-- stable feed/discovery endpoint;
-- deterministic source-native identity;
-- deterministic Spotify show identity;
-- matching strategy that does not depend on global search;
+- exactly one deterministic Spotify show identity;
+- official catalogue behavior sufficient to cover the playlist retention window safely;
 - provider/product origin;
 - editorial scope (`LOC`, `REG`, `NAT`, `INT`, or `MIX`);
 - language/locale tag;
 - representative recent duration profile (`Concise`, `Mixed`, or `Long-form`);
 - normal publication cadence;
+- parser behavior for semantic title timestamps and any required content filter;
 - geographic/editorial fit for at least one managed playlist;
-- any known release delay or title/timestamp quirks;
-- safe behavior when the source or Spotify catalogue is temporarily unavailable.
+- any known release-delay, release-date precision or title/timestamp quirks;
+- safe behavior when the public detector or official Spotify catalogue is temporarily unavailable.
 
 A recognizable brand, broad news coverage, or the existence of a podcast feed is not by itself enough for promotion.
