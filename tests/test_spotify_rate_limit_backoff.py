@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import io
 import threading
-import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -13,12 +11,6 @@ from _spotify_catalogue import catalogue_page
 
 from news_bulletin_playlist.desired_state import DesiredPlaylistItem, DesiredPlaylistState
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
-from news_bulletin_playlist.diagnostics_web import (
-    DiagnosticFilters,
-    build_diagnostic_bundle,
-    render_diagnostics_page,
-)
-from news_bulletin_playlist.engine import EngineRunner
 from news_bulletin_playlist.models import (
     AdapterId,
     CountryCode,
@@ -41,8 +33,6 @@ from news_bulletin_playlist.reconciliation import (
 from news_bulletin_playlist.spotify.client import SpotifyApiError
 from news_bulletin_playlist.spotify_backoff import (
     DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS,
-    SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE,
-    SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE,
     SpotifyRateLimitBackoffActive,
     SpotifyRateLimitGuardAuth,
     SpotifyRateLimitGuardClient,
