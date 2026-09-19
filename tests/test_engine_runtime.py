@@ -26,6 +26,7 @@ from news_bulletin_playlist.engine_runtime import (
     _load_runtime_config,
     _local_skips_enabled,
     _operational_status_page,
+    _public_detector_shadow_enabled,
     _runtime_interval,
     serve,
 )
@@ -160,6 +161,20 @@ def test_local_skip_kill_switch_defaults_on_and_parses_explicit_values() -> None
     assert not _local_skips_enabled({"NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS": "0"})
     with pytest.raises(RuntimeError, match="must be a boolean"):
         _local_skips_enabled({"NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS": "sometimes"})
+
+
+def test_public_detector_shadow_defaults_off_and_parses_explicit_values() -> None:
+    assert not _public_detector_shadow_enabled({})
+    assert _public_detector_shadow_enabled(
+        {"NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW": "yes"}
+    )
+    assert not _public_detector_shadow_enabled(
+        {"NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW": "0"}
+    )
+    with pytest.raises(RuntimeError, match="must be a boolean"):
+        _public_detector_shadow_enabled(
+            {"NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW": "sometimes"}
+        )
 
 
 def test_runtime_config_is_optional_until_production_file_exists(tmp_path: Path) -> None:
