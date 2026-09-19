@@ -113,7 +113,7 @@ def test_catalog_probe_only_uses_deep_paging_for_rne() -> None:
     assert run_catalog_probe(client) == 0
     counts = Counter(show_id for show_id, _, _ in client.calls)
     for source in BUILTIN_CATALOG.sources:
-        expected = 4 if provider.source_id == "rne" else 1
+        expected = 4 if str(source.id) == "rne" else 1
         assert counts[spotify_show_id(source)] == expected
 
 
