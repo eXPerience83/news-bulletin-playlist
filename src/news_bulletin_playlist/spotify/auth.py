@@ -374,13 +374,11 @@ class SpotifyAuthService:
             self.transport.metrics = metrics
 
     def planner_authorization_context(self) -> str | None:
-        """Read non-secret grant provenance without refreshing OAuth or contacting Spotify."""
-        from news_bulletin_playlist.spotify_planner import authorization_context_fingerprint
-
+        """Return stable non-secret authorization provenance without contacting Spotify."""
         record = self.store.load()
         if record is None or record.status is not CredentialStatus.ACTIVE:
             return None
-        return authorization_context_fingerprint(record.authorized_at)
+        return _authorization_context_fingerprint(record.authorized_at)
 
     def authorization_state(self) -> AuthorizationState:
         if self._reauthorization_required:
@@ -716,6 +714,24 @@ def _is_loopback_hostname(hostname: str) -> bool:
         return ipaddress.ip_address(hostname).is_loopback
     except ValueError:
         return False
+
+
+def _authorization_context_fingerprint(authorized_at: datetime) -> str:
+    timestamp = _as_utc(authorized_at).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    payload = json.dumps(
+        {
+            "v": 1,
+            "values": [
+                "spotify-authorization-v2",
+                timestamp,
+                "user-token/account",
+            ],
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _as_utc(value: datetime) -> datetime:
