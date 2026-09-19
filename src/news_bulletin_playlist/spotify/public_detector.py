@@ -53,8 +53,34 @@ class PublicShowTransportError(PublicShowDetectorError):
     """Raised when the public Spotify resource cannot be reached safely."""
 
 
+class PublicShowResponseFailureReason(StrEnum):
+    """Bounded reason for a public-response contract failure."""
+
+    RESPONSE_TOO_LARGE = "response_too_large"
+    EMBED_NOT_UTF8 = "embed_not_utf8"
+    EMBED_HTML_PARSE = "embed_html_parse"
+    NEXT_DATA_COUNT = "next_data_count"
+    NEXT_DATA_JSON = "next_data_json"
+    EMBED_SHAPE = "embed_shape"
+    EMBED_ENTITY_TYPE = "embed_entity_type"
+    EMBED_FIELD = "embed_field"
+    EMBED_ENTITY_VALIDATION = "embed_entity_validation"
+    OEMBED_JSON = "oembed_json"
+    OEMBED_SHAPE = "oembed_shape"
+    OEMBED_TITLE = "oembed_title"
+
+
 class PublicShowResponseError(PublicShowDetectorError):
     """Raised when the public Spotify response no longer satisfies the detector contract."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: PublicShowResponseFailureReason,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +127,10 @@ class UrllibPublicShowTransport:
         if status != 200:
             raise PublicShowHttpError(status)
         if len(body) > self.max_response_bytes:
-            raise PublicShowResponseError("Spotify public show response exceeded the size limit")
+            raise PublicShowResponseError(
+                "Spotify public show response exceeded the size limit",
+                reason=PublicShowResponseFailureReason.RESPONSE_TOO_LARGE,
+            )
         return PublicHttpResponse(status=status, content_type=content_type, body=body)
 
 
@@ -258,7 +287,10 @@ class PublicShowClient:
         try:
             html = response.body.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise PublicShowResponseError("Spotify Embed response was not UTF-8") from exc
+            raise PublicShowResponseError(
+                "Spotify Embed response was not UTF-8",
+                reason=PublicShowResponseFailureReason.EMBED_NOT_UTF8,
+            ) from exc
         return parse_public_show_embed(
             html,
             source_id=source_id,
@@ -274,10 +306,21 @@ class PublicShowClient:
         try:
             decoded = json.loads(response.body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise PublicShowResponseError("Spotify oEmbed response was not valid JSON") from exc
+            raise PublicShowResponseError(
+                "Spotify oEmbed response was not valid JSON",
+                reason=PublicShowResponseFailureReason.OEMBED_JSON,
+            ) from exc
         if not isinstance(decoded, dict):
-            raise PublicShowResponseError("Spotify oEmbed response was not an object")
-        return _bounded_text(decoded.get("title"), "Spotify oEmbed title", max_length=1000)
+            raise PublicShowResponseError(
+                "Spotify oEmbed response was not an object",
+                reason=PublicShowResponseFailureReason.OEMBED_SHAPE,
+            )
+        return _bounded_text(
+            decoded.get("title"),
+            "Spotify oEmbed title",
+            max_length=1000,
+            reason=PublicShowResponseFailureReason.OEMBED_TITLE,
+        )
 
 
 def parse_public_show_embed(
@@ -293,29 +336,46 @@ def parse_public_show_embed(
         parser.feed(html)
         parser.close()
     except Exception as exc:
-        raise PublicShowResponseError("Spotify Embed HTML could not be parsed") from exc
+        raise PublicShowResponseError(
+            "Spotify Embed HTML could not be parsed",
+            reason=PublicShowResponseFailureReason.EMBED_HTML_PARSE,
+        ) from exc
     payload = parser.payload
     if payload is None:
-        raise PublicShowResponseError("Spotify Embed did not contain exactly one __NEXT_DATA__")
+        raise PublicShowResponseError(
+            "Spotify Embed did not contain exactly one __NEXT_DATA__",
+            reason=PublicShowResponseFailureReason.NEXT_DATA_COUNT,
+        )
 
     try:
         root = json.loads(payload)
     except json.JSONDecodeError as exc:
-        raise PublicShowResponseError("Spotify Embed __NEXT_DATA__ was invalid JSON") from exc
+        raise PublicShowResponseError(
+            "Spotify Embed __NEXT_DATA__ was invalid JSON",
+            reason=PublicShowResponseFailureReason.NEXT_DATA_JSON,
+        ) from exc
 
     entity = _object_path(root, ("props", "pageProps", "state", "data", "entity"))
     entity_type = _bounded_text(entity.get("type"), "Spotify Embed entity type", max_length=32)
     if entity_type != "episode":
-        raise PublicShowResponseError("Spotify Embed entity was not an episode")
+        raise PublicShowResponseError(
+            "Spotify Embed entity was not an episode",
+            reason=PublicShowResponseFailureReason.EMBED_ENTITY_TYPE,
+        )
 
     episode_id = _bounded_text(entity.get("id"), "Spotify episode id", max_length=64)
-    _require_episode_id(episode_id)
+    try:
+        _require_episode_id(episode_id)
+    except ValueError as exc:
+        raise PublicShowResponseError(
+            "Spotify episode id was invalid",
+            reason=PublicShowResponseFailureReason.EMBED_FIELD,
+        ) from exc
     episode_uri = _optional_text(entity.get("uri"), "Spotify episode URI", max_length=128)
     name = _bounded_text(entity.get("name"), "Spotify episode name", max_length=1000)
     title = _bounded_text(entity.get("title"), "Spotify episode title", max_length=1000)
-    release_date = _optional_text(
+    release_date = _optional_public_release_date(
         entity.get("releaseDate"),
-        "Spotify public releaseDate",
         max_length=128,
     )
     duration = _optional_non_negative_int(entity.get("duration"), "Spotify episode duration")
@@ -338,7 +398,10 @@ def parse_public_show_embed(
             observed_at=observed_at,
         )
     except ValueError as exc:
-        raise PublicShowResponseError("Spotify Embed episode entity failed validation") from exc
+        raise PublicShowResponseError(
+            "Spotify Embed episode entity failed validation",
+            reason=PublicShowResponseFailureReason.EMBED_ENTITY_VALIDATION,
+        ) from exc
 
 
 def spotify_show_id(source: SourceDefinition) -> str:
@@ -708,13 +771,14 @@ class PublicDetectorShadow:
                     outcome="transport_failure",
                 )
                 continue
-            except PublicShowResponseError:
+            except PublicShowResponseError as exc:
                 failure_count += 1
                 self._record_failure(
                     source.id,
                     show_id,
                     observed,
                     outcome="response_failure",
+                    response_reason=exc.reason,
                 )
                 continue
             except PersistenceError:
@@ -729,6 +793,13 @@ class PublicDetectorShadow:
             if candidate_changed:
                 try:
                     oembed_title = self.client.oembed_title(show_id)
+                except PublicShowResponseError as exc:
+                    self._emit_failure(
+                        source.id,
+                        "oembed_failure",
+                        observed_at=observed,
+                        response_reason=exc.reason,
+                    )
                 except PublicShowDetectorError:
                     self._emit_failure(
                         source.id,
@@ -809,6 +880,7 @@ class PublicDetectorShadow:
         *,
         outcome: str,
         http_status: int | None = None,
+        response_reason: PublicShowResponseFailureReason | None = None,
     ) -> None:
         try:
             state = self.journal.record_failure(
@@ -825,6 +897,8 @@ class PublicDetectorShadow:
         }
         if http_status is not None:
             details["http_status"] = http_status
+        if response_reason is not None:
+            details["detector_response_reason"] = response_reason.value
         self.diagnostics.emit(
             occurred_at=observed_at,
             severity=DiagnosticSeverity.WARNING,
@@ -840,7 +914,11 @@ class PublicDetectorShadow:
         outcome: str,
         *,
         observed_at: datetime,
+        response_reason: PublicShowResponseFailureReason | None = None,
     ) -> None:
+        details: dict[str, DiagnosticValue] = {"detector_outcome": outcome}
+        if response_reason is not None:
+            details["detector_response_reason"] = response_reason.value
         self.diagnostics.emit(
             occurred_at=observed_at,
             severity=DiagnosticSeverity.WARNING,
@@ -851,7 +929,7 @@ class PublicDetectorShadow:
                 else "public_detector_failed"
             ),
             source_id=str(source_id),
-            details={"detector_outcome": outcome},
+            details=details,
         )
 
     def _emit_change(
@@ -894,16 +972,28 @@ def _object_path(root: object, path: tuple[str, ...]) -> dict[str, object]:
     value = root
     for key in path:
         if not isinstance(value, dict):
-            raise PublicShowResponseError("Spotify Embed __NEXT_DATA__ shape changed")
+            raise PublicShowResponseError(
+                "Spotify Embed __NEXT_DATA__ shape changed",
+                reason=PublicShowResponseFailureReason.EMBED_SHAPE,
+            )
         value = value.get(key)
     if not isinstance(value, dict):
-        raise PublicShowResponseError("Spotify Embed episode entity was missing")
+        raise PublicShowResponseError(
+            "Spotify Embed episode entity was missing",
+            reason=PublicShowResponseFailureReason.EMBED_SHAPE,
+        )
     return cast(dict[str, object], value)
 
 
-def _bounded_text(value: object, label: str, *, max_length: int) -> str:
+def _bounded_text(
+    value: object,
+    label: str,
+    *,
+    max_length: int,
+    reason: PublicShowResponseFailureReason = PublicShowResponseFailureReason.EMBED_FIELD,
+) -> str:
     if not isinstance(value, str) or not value or len(value) > max_length:
-        raise PublicShowResponseError(f"{label} was missing or invalid")
+        raise PublicShowResponseError(f"{label} was missing or invalid", reason=reason)
     return value
 
 
@@ -911,15 +1001,41 @@ def _optional_text(value: object, label: str, *, max_length: int) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value or len(value) > max_length:
-        raise PublicShowResponseError(f"{label} was invalid")
+        raise PublicShowResponseError(
+            f"{label} was invalid",
+            reason=PublicShowResponseFailureReason.EMBED_FIELD,
+        )
     return value
+
+
+def _optional_public_release_date(value: object, *, max_length: int) -> str | None:
+    """Normalize the supported public releaseDate shapes without making it identity-critical."""
+    candidate: object
+    if value is None:
+        return None
+    if isinstance(value, str):
+        candidate = value
+    elif isinstance(value, dict) and set(value) == {"isoString"}:
+        candidate = value.get("isoString")
+    else:
+        return None
+
+    if not isinstance(candidate, str):
+        return None
+    stripped = candidate.strip()
+    if not stripped or len(stripped) > max_length:
+        return None
+    return stripped
 
 
 def _optional_non_negative_int(value: object, label: str) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise PublicShowResponseError(f"{label} was invalid")
+        raise PublicShowResponseError(
+            f"{label} was invalid",
+            reason=PublicShowResponseFailureReason.EMBED_FIELD,
+        )
     return value
 
 

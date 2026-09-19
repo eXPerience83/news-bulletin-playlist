@@ -30,6 +30,7 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicShowConfigurationError,
     PublicShowHttpError,
     PublicShowResponseError,
+    PublicShowResponseFailureReason,
     parse_public_show_embed,
     spotify_show_id,
 )
@@ -46,6 +47,7 @@ def _embed_html(
     title: str = "Bulletin 12:00",
     show_id: str = SHOW_ID,
     entity_type: str = "episode",
+    release_date: object = "2026-09-19T10:00:00Z",
 ) -> str:
     payload = {
         "props": {
@@ -58,7 +60,7 @@ def _embed_html(
                             "uri": f"spotify:episode:{episode_id}",
                             "name": title,
                             "title": title,
-                            "releaseDate": "2026-09-19T10:00:00Z",
+                            "releaseDate": release_date,
                             "duration": 180000,
                             "relatedEntityUri": f"spotify:show:{show_id}",
                         }
@@ -188,35 +190,102 @@ def test_parse_public_show_embed_extracts_valid_episode_entity() -> None:
 
 
 @pytest.mark.parametrize(
-    ("html", "message"),
+    ("html", "message", "reason"),
     [
-        ("<html></html>", "__NEXT_DATA__"),
+        (
+            "<html></html>",
+            "__NEXT_DATA__",
+            PublicShowResponseFailureReason.NEXT_DATA_COUNT,
+        ),
         (
             '<script id="__NEXT_DATA__">{bad json</script>',
             "invalid JSON",
+            PublicShowResponseFailureReason.NEXT_DATA_JSON,
         ),
-        (_embed_html(entity_type="show"), "not an episode"),
+        (
+            _embed_html(entity_type="show"),
+            "not an episode",
+            PublicShowResponseFailureReason.EMBED_ENTITY_TYPE,
+        ),
     ],
 )
-def test_parse_public_show_embed_rejects_invalid_contract(html: str, message: str) -> None:
-    with pytest.raises(PublicShowResponseError, match=message):
+def test_parse_public_show_embed_rejects_invalid_contract(
+    html: str,
+    message: str,
+    reason: PublicShowResponseFailureReason,
+) -> None:
+    with pytest.raises(PublicShowResponseError, match=message) as exc_info:
         parse_public_show_embed(
             html,
             source_id=SourceId("source"),
             spotify_show_id=SHOW_ID,
             observed_at=NOW,
         )
+
+    assert exc_info.value.reason is reason
+
+
+def test_parse_public_show_embed_supports_release_date_iso_string_object() -> None:
+    observation = parse_public_show_embed(
+        _embed_html(release_date={"isoString": "2026-09-19T18:31:00Z"}),
+        source_id=SourceId("source"),
+        spotify_show_id=SHOW_ID,
+        observed_at=NOW,
+    )
+
+    assert observation.episode_id == EPISODE_A
+    assert observation.release_date_raw == "2026-09-19T18:31:00Z"
+
+
+@pytest.mark.parametrize(
+    "release_date",
+    [
+        "",
+        123,
+        {"isoString": ""},
+        {"isoString": 123},
+        {"unexpected": "2026-09-19T10:00:00Z"},
+        {"isoString": "2026-09-19T10:00:00Z", "extra": "field"},
+    ],
+)
+def test_parse_public_show_embed_tolerates_unsupported_release_date_metadata(
+    release_date: object,
+) -> None:
+    observation = parse_public_show_embed(
+        _embed_html(release_date=release_date),
+        source_id=SourceId("source"),
+        spotify_show_id=SHOW_ID,
+        observed_at=NOW,
+    )
+
+    assert observation.episode_id == EPISODE_A
+    assert observation.release_date_raw is None
 
 
 def test_parse_public_show_embed_rejects_duplicate_next_data() -> None:
     html = _embed_html() + _embed_html()
-    with pytest.raises(PublicShowResponseError, match="exactly one"):
+    with pytest.raises(PublicShowResponseError, match="exactly one") as exc_info:
         parse_public_show_embed(
             html,
             source_id=SourceId("source"),
             spotify_show_id=SHOW_ID,
             observed_at=NOW,
         )
+
+    assert exc_info.value.reason is PublicShowResponseFailureReason.NEXT_DATA_COUNT
+
+
+def test_parse_public_show_embed_wraps_invalid_episode_id() -> None:
+    html = _embed_html(episode_id="invalid")
+    with pytest.raises(PublicShowResponseError, match="episode id was invalid") as exc_info:
+        parse_public_show_embed(
+            html,
+            source_id=SourceId("source"),
+            spotify_show_id=SHOW_ID,
+            observed_at=NOW,
+        )
+
+    assert exc_info.value.reason is PublicShowResponseFailureReason.EMBED_FIELD
 
 
 def test_public_show_client_reads_embed_and_oembed_without_auth_headers() -> None:
@@ -417,6 +486,37 @@ def test_shadow_logs_change_only_on_identity_transition_and_oembed_on_change(
     assert latest.details["spotify_episode_id"] == EPISODE_B
     assert latest.details["spotify_episode_title"] == "Bulletin 13:00"
     assert latest.details["oembed_matches"] is True
+
+
+def test_shadow_response_failure_emits_bounded_reason(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    diagnostics, diagnostic_store = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(_observation(EPISODE_A))
+    client = _SequenceClient(
+        [
+            PublicShowResponseError(
+                "Spotify Embed __NEXT_DATA__ shape changed",
+                reason=PublicShowResponseFailureReason.EMBED_SHAPE,
+            )
+        ]
+    )
+    shadow = PublicDetectorShadow(journal, diagnostics, client=client)  # type: ignore[arg-type]
+
+    summary = shadow.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+
+    assert summary.failure_count == 1
+    event = next(
+        event
+        for event in diagnostic_store.list_events(limit=10)
+        if event.event_name == "public_detector_failed"
+    )
+    assert event.details == {
+        "consecutive_failure_count": 1,
+        "detector_outcome": "response_failure",
+        "detector_response_reason": "embed_shape",
+    }
 
 
 def test_shadow_failure_preserves_identity_and_emits_bounded_diagnostic(tmp_path: Path) -> None:
