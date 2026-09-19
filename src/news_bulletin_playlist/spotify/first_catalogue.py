@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 from news_bulletin_playlist.models import SourceDefinition
 from news_bulletin_playlist.registry import get_collection_filter, get_title_parser
-from news_bulletin_playlist.spotify.first_state import (
+from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
     TimestampSource,
     as_utc,
