@@ -322,9 +322,7 @@ def test_journal_preserves_last_known_good_on_failure_and_recovers(tmp_path: Pat
 def test_journal_ignores_stale_success_and_failure_replays(tmp_path: Path) -> None:
     journal = PublicDetectorJournal(_store(tmp_path))
     journal.initialize()
-    journal.record_success(
-        _observation(EPISODE_B, observed_at=NOW + timedelta(minutes=10))
-    )
+    journal.record_success(_observation(EPISODE_B, observed_at=NOW + timedelta(minutes=10)))
 
     stale_success = journal.record_success(
         _observation(EPISODE_A, observed_at=NOW + timedelta(minutes=5))
@@ -347,9 +345,7 @@ def test_inactivity_audit_uses_change_or_catalogue_refresh_not_unchanged_poll(
     journal = PublicDetectorJournal(_store(tmp_path))
     journal.initialize()
     journal.record_success(_observation(EPISODE_A))
-    journal.record_success(
-        _observation(EPISODE_A, observed_at=NOW + timedelta(hours=20))
-    )
+    journal.record_success(_observation(EPISODE_A, observed_at=NOW + timedelta(hours=20)))
 
     state = journal.get(SourceId("source"), SHOW_ID)
     assert state is not None
