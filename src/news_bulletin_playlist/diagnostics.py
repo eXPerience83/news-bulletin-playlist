@@ -19,6 +19,9 @@ MAX_DIAGNOSTIC_QUERY_LIMIT = 500
 MAX_DIAGNOSTIC_EXPORT_EVENTS = 10_000
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]+$")
+# Keep legacy RSS/matching/planner keys allowlisted so diagnostic rows persisted by
+# released versions remain renderable and exportable after a Spotify-first upgrade.
+# Current runtime emitters do not use those legacy fields.
 _ALLOWED_DETAIL_KEYS = frozenset(
     {
         "accepted_count",
