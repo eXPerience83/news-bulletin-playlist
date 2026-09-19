@@ -225,8 +225,30 @@ def test_parse_public_show_embed_rejects_invalid_contract(
     assert exc_info.value.reason is reason
 
 
-@pytest.mark.parametrize("release_date", [{"isoString": "2026-09-19T10:00:00Z"}, "", 123])
-def test_parse_public_show_embed_tolerates_noncritical_release_date_drift(
+def test_parse_public_show_embed_supports_release_date_iso_string_object() -> None:
+    observation = parse_public_show_embed(
+        _embed_html(release_date={"isoString": "2026-09-19T18:31:00Z"}),
+        source_id=SourceId("source"),
+        spotify_show_id=SHOW_ID,
+        observed_at=NOW,
+    )
+
+    assert observation.episode_id == EPISODE_A
+    assert observation.release_date_raw == "2026-09-19T18:31:00Z"
+
+
+@pytest.mark.parametrize(
+    "release_date",
+    [
+        "",
+        123,
+        {"isoString": ""},
+        {"isoString": 123},
+        {"unexpected": "2026-09-19T10:00:00Z"},
+        {"isoString": "2026-09-19T10:00:00Z", "extra": "field"},
+    ],
+)
+def test_parse_public_show_embed_tolerates_unsupported_release_date_metadata(
     release_date: object,
 ) -> None:
     observation = parse_public_show_embed(
