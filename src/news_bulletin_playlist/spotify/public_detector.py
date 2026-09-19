@@ -742,9 +742,7 @@ class PublicDetectorShadow:
                 continue
 
             observed_count += 1
-            recovered_failures = (
-                0 if previous is None else previous.consecutive_detector_failures
-            )
+            recovered_failures = 0 if previous is None else previous.consecutive_detector_failures
             if update.outcome in {PublicDetectorOutcome.BOOTSTRAP, PublicDetectorOutcome.CHANGED}:
                 changed_count += 1
                 self._emit_change(update, observation, oembed_title=oembed_title)
@@ -858,16 +856,12 @@ class PublicDetectorShadow:
     ) -> None:
         previous = update.previous
         oembed_matches = (
-            None
-            if oembed_title is None
-            else oembed_title in {observation.title, observation.name}
+            None if oembed_title is None else oembed_title in {observation.title, observation.name}
         )
         details: dict[str, DiagnosticValue] = {
             "detector_outcome": update.outcome.value,
             "spotify_episode_id": observation.episode_id,
-            "spotify_previous_episode_id": (
-                None if previous is None else previous.last_episode_id
-            ),
+            "spotify_previous_episode_id": (None if previous is None else previous.last_episode_id),
             "spotify_episode_title": observation.original_title,
             "spotify_previous_episode_title": (
                 None if previous is None else previous.last_episode_title
@@ -880,9 +874,7 @@ class PublicDetectorShadow:
         self.diagnostics.emit(
             occurred_at=observation.observed_at,
             severity=(
-                DiagnosticSeverity.WARNING
-                if oembed_matches is False
-                else DiagnosticSeverity.INFO
+                DiagnosticSeverity.WARNING if oembed_matches is False else DiagnosticSeverity.INFO
             ),
             component="spotify.public_detector",
             event_name="public_detector_changed",
@@ -971,9 +963,7 @@ def _state_from_row(row: sqlite3.Row) -> PublicDetectorState:
         last_detector_success_at=_stored_optional_timestamp(row["last_detector_success_at"]),
         last_change_at=_stored_optional_timestamp(row["last_change_at"]),
         last_failure_at=_stored_optional_timestamp(row["last_failure_at"]),
-        last_catalogue_refresh_at=_stored_optional_timestamp(
-            row["last_catalogue_refresh_at"]
-        ),
+        last_catalogue_refresh_at=_stored_optional_timestamp(row["last_catalogue_refresh_at"]),
         consecutive_detector_failures=failures,
         detector_schema_version=schema_version,
         last_oembed_title=_stored_optional_text(row["last_oembed_title"], "last_oembed_title"),
