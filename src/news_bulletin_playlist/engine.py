@@ -540,9 +540,7 @@ class EngineRunner:
             return SourceCycleOutcome(
                 source_id=source.id,
                 ok=state is not None and state.coverage_proven,
-                episode_count=len(
-                    self.first_journal.list_episodes(source_ids=(source.id,))
-                ),
+                episode_count=len(self.first_journal.list_episodes(source_ids=(source.id,))),
                 refreshed=False,
                 refresh_reason=reason.value,
                 api_request_count=0,
@@ -757,9 +755,7 @@ class EngineRunner:
 
         selected = set(playlist.source_selection.explicit)
         sources = {
-            source.id: source
-            for source in _required_sources(self.config)
-            if source.id in selected
+            source.id: source for source in _required_sources(self.config) if source.id in selected
         }
         cutoff = now - timedelta(hours=playlist.retention_hours)
 
