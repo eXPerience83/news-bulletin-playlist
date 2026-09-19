@@ -165,9 +165,7 @@ def test_local_skip_kill_switch_defaults_on_and_parses_explicit_values() -> None
 
 def test_public_detector_shadow_defaults_off_and_parses_explicit_values() -> None:
     assert not _public_detector_shadow_enabled({})
-    assert _public_detector_shadow_enabled(
-        {"NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW": "yes"}
-    )
+    assert _public_detector_shadow_enabled({"NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW": "yes"})
     assert not _public_detector_shadow_enabled(
         {"NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW": "0"}
     )
