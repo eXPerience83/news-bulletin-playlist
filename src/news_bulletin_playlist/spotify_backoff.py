@@ -23,9 +23,6 @@ SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX = "Spotify rate-limit backoff active until "
 SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE = (
     "destination preserved because Spotify rate-limit backoff is active"
 )
-SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE = (
-    "Spotify matching skipped because rate-limit backoff is active"
-)
 
 _TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS spotify_rate_limit_backoff (
