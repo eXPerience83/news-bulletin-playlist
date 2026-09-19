@@ -8,12 +8,10 @@ from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticS
 from news_bulletin_playlist.engine import (
     EngineCycleResult,
     PlaylistCycleOutcome,
-    SourceCycleOutcome,
 )
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
-from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
-from news_bulletin_playlist.spotify_backoff import SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE
 
 NOW = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
 
