@@ -1,4 +1,5 @@
 """Translate Spotify-first engine outcomes into bounded operational diagnostics."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -45,7 +46,9 @@ class InstrumentedEngineCycleRunner:
         self.request_metrics = (
             request_metrics
             if request_metrics is not None
-            else discovered if isinstance(discovered, SpotifyRequestMetrics) else None
+            else discovered
+            if isinstance(discovered, SpotifyRequestMetrics)
+            else None
         )
 
     def run_cycle(self) -> EngineCycleResult:
