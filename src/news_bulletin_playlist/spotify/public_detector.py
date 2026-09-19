@@ -374,7 +374,7 @@ def parse_public_show_embed(
     episode_uri = _optional_text(entity.get("uri"), "Spotify episode URI", max_length=128)
     name = _bounded_text(entity.get("name"), "Spotify episode name", max_length=1000)
     title = _bounded_text(entity.get("title"), "Spotify episode title", max_length=1000)
-    release_date = _optional_metadata_text(
+    release_date = _optional_public_release_date(
         entity.get("releaseDate"),
         max_length=128,
     )
@@ -1008,11 +1008,21 @@ def _optional_text(value: object, label: str, *, max_length: int) -> str | None:
     return value
 
 
-def _optional_metadata_text(value: object, *, max_length: int) -> str | None:
-    """Return bounded non-empty optional metadata without making detector identity fail."""
-    if not isinstance(value, str):
+def _optional_public_release_date(value: object, *, max_length: int) -> str | None:
+    """Normalize the supported public releaseDate shapes without making it identity-critical."""
+    candidate: object
+    if value is None:
         return None
-    stripped = value.strip()
+    if isinstance(value, str):
+        candidate = value
+    elif isinstance(value, dict) and set(value) == {"isoString"}:
+        candidate = value.get("isoString")
+    else:
+        return None
+
+    if not isinstance(candidate, str):
+        return None
+    stripped = candidate.strip()
     if not stripped or len(stripped) > max_length:
         return None
     return stripped
