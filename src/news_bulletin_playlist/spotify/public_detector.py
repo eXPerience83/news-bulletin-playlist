@@ -17,7 +17,7 @@ from http.client import HTTPException
 from types import TracebackType
 from typing import Protocol, cast
 
-from news_bulletin_playlist.diagnostics import DiagnosticSeverity
+from news_bulletin_playlist.diagnostics import DiagnosticSeverity, DiagnosticValue
 from news_bulletin_playlist.models import SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
@@ -535,11 +535,22 @@ class PublicDetectorJournal:
             self._ensure_table(connection)
             row = self._select(connection, source_id, show_id)
             previous = None if row is None else _state_from_row(row)
-            if (
-                previous is not None
-                and previous.last_failure_at is not None
-                and failed < previous.last_failure_at
-            ):
+            latest_known = (
+                None
+                if previous is None
+                else max(
+                    (
+                        value
+                        for value in (
+                            previous.last_failure_at,
+                            previous.last_detector_success_at,
+                        )
+                        if value is not None
+                    ),
+                    default=None,
+                )
+            )
+            if latest_known is not None and failed < latest_known:
                 return previous
             failures = 1 if previous is None else previous.consecutive_detector_failures + 1
             connection.execute(
@@ -800,7 +811,7 @@ class PublicDetectorShadow:
         except PersistenceError:
             self._emit_failure(source_id, "persistence_failure", observed_at=observed_at)
             return
-        details: dict[str, str | int | bool | None] = {
+        details: dict[str, DiagnosticValue] = {
             "detector_outcome": outcome,
             "consecutive_failure_count": state.consecutive_detector_failures,
         }
@@ -826,7 +837,11 @@ class PublicDetectorShadow:
             occurred_at=observed_at,
             severity=DiagnosticSeverity.WARNING,
             component="spotify.public_detector",
-            event_name="public_detector_failed",
+            event_name=(
+                "public_detector_oembed_failed"
+                if outcome == "oembed_failure"
+                else "public_detector_failed"
+            ),
             source_id=str(source_id),
             details={"detector_outcome": outcome},
         )
@@ -844,7 +859,7 @@ class PublicDetectorShadow:
             if oembed_title is None
             else oembed_title in {observation.title, observation.name}
         )
-        details: dict[str, str | int | bool | None] = {
+        details: dict[str, DiagnosticValue] = {
             "detector_outcome": update.outcome.value,
             "spotify_episode_id": observation.episode_id,
             "spotify_previous_episode_id": (
