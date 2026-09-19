@@ -207,7 +207,6 @@ def _config_payload(exception_source: str = "ser", exception_max: int = 1800):
                 "timezone": "Europe/Madrid",
                 "enabled": True,
                 "parser_id": "ser",
-                "endpoint_url": "https://example.invalid/feed",
             }
         ],
         "playlists": [
