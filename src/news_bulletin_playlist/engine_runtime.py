@@ -17,7 +17,7 @@ from types import FrameType
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.collection import FeedFetcher, fetch_feed
+from news_bulletin_playlist.collection import FeedFetcher, fetch_feed, required_sources
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.effective_config import (
     CONFIG_PATH_ENV,
@@ -78,6 +78,10 @@ from news_bulletin_playlist.spotify.client import (
     SpotifyClient,
     SpotifyTransportError,
 )
+from news_bulletin_playlist.spotify.public_detector import (
+    PublicDetectorJournal,
+    PublicDetectorShadow,
+)
 from news_bulletin_playlist.spotify_backoff import (
     ProviderAuthorizationSession,
     SpotifyRateLimitBackoffActive,
@@ -90,6 +94,7 @@ from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
 _INTERVAL_SECONDS_ENV = "NEWS_PLAYLIST_INTERVAL_SECONDS"
 _SPOTIFY_LOCAL_SKIPS_ENV = "NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS"
+_SPOTIFY_PUBLIC_DETECTOR_SHADOW_ENV = "NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW"
 _MIN_RUNTIME_INTERVAL = timedelta(minutes=1)
 _SCHEDULER_SHUTDOWN_WAIT_SECONDS = 10.0
 _BUNDLED_COVER_DIR = Path("/opt/news-bulletin-playlist/covers")
@@ -346,6 +351,7 @@ class ReloadingEngineCycleRunner:
         request_metrics: SpotifyRequestMetrics | None = None,
         local_skips_enabled: bool = True,
         monotonic_clock: MonotonicClock = time.monotonic,
+        public_detector_shadow: PublicDetectorShadow | None = None,
     ) -> None:
         self.data_dir = data_dir
         self.environ = environ
@@ -359,6 +365,7 @@ class ReloadingEngineCycleRunner:
         self.local_skips_enabled = local_skips_enabled
         self.destination_leases = DestinationRuntimeLeaseRegistry()
         self.monotonic_clock = monotonic_clock
+        self.public_detector_shadow = public_detector_shadow
 
     def run_cycle(self) -> EngineCycleResult:
         started_at = datetime.now(UTC)
@@ -394,7 +401,7 @@ class ReloadingEngineCycleRunner:
         playlist_skip_guard = (
             None if synchronization is None else partial(self._playlist_skip_guard, config)
         )
-        return EngineRunner(
+        result = EngineRunner(
             config,
             self.store,
             self.auth,
@@ -408,6 +415,25 @@ class ReloadingEngineCycleRunner:
             monotonic_clock=self.monotonic_clock,
             playlist_skip_guard=playlist_skip_guard,
         ).run_cycle()
+
+        public_detector = self.public_detector_shadow
+        if public_detector is not None:
+            observed_at = datetime.now(UTC) if self.clock is None else self.clock()
+            try:
+                public_detector.observe_sources(
+                    required_sources(config),
+                    observed_at=observed_at,
+                )
+            except (PersistenceError, RuntimeError, ValueError):
+                # Shadow-only evidence must never alter the authoritative legacy cycle.
+                public_detector.diagnostics.emit(
+                    occurred_at=observed_at,
+                    severity=DiagnosticSeverity.ERROR,
+                    component="spotify.public_detector",
+                    event_name="public_detector_shadow_failed",
+                    details={"phase": "verification"},
+                )
+        return result
 
     def _playlist_skip_guard(
         self,
@@ -1068,6 +1094,24 @@ def serve(
     )
     lifecycle: EngineLifecycleController | None = None
     if auth_provider is not None:
+        public_detector_shadow: PublicDetectorShadow | None = None
+        if _public_detector_shadow_enabled(env):
+            detector_journal = PublicDetectorJournal(store)
+            try:
+                detector_journal.initialize()
+            except PersistenceError:
+                diagnostics.emit(
+                    occurred_at=datetime.now(UTC),
+                    severity=DiagnosticSeverity.ERROR,
+                    component="spotify.public_detector",
+                    event_name="public_detector_shadow_disabled",
+                    details={"phase": "persistence"},
+                )
+            else:
+                public_detector_shadow = PublicDetectorShadow(
+                    detector_journal,
+                    diagnostics,
+                )
         base_runner = ReloadingEngineCycleRunner(
             data_dir,
             env,
@@ -1076,6 +1120,7 @@ def serve(
             configuration_synchronization,
             request_metrics=request_metrics,
             local_skips_enabled=_local_skips_enabled(env),
+            public_detector_shadow=public_detector_shadow,
         )
         runner = InstrumentedEngineCycleRunner(base_runner, diagnostics)
         lifecycle = EngineLifecycleController(
@@ -1238,6 +1283,15 @@ def _local_skips_enabled(environ: Mapping[str, str]) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     raise RuntimeError(f"{_SPOTIFY_LOCAL_SKIPS_ENV} must be a boolean value")
+
+
+def _public_detector_shadow_enabled(environ: Mapping[str, str]) -> bool:
+    value = environ.get(_SPOTIFY_PUBLIC_DETECTOR_SHADOW_ENV, "0").strip().casefold()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{_SPOTIFY_PUBLIC_DETECTOR_SHADOW_ENV} must be a boolean value")
 
 
 def _operational_status_page(
