@@ -5,10 +5,9 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 from pathlib import Path
 
-from news_bulletin_playlist.models import CanonicalEdition, PlaylistId, SourceId
+from news_bulletin_playlist.models import PlaylistId, SourceId
 
 DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
@@ -18,14 +17,6 @@ LATEST_SCHEMA_VERSION = 7
 
 class PersistenceError(RuntimeError):
     """Raised when durable state cannot be read or updated safely."""
-
-
-class MatchStatus(StrEnum):
-    """Persistent Spotify catalogue matching state for one canonical edition."""
-
-    MATCHED = "matched"
-    PENDING = "pending"
-    AMBIGUOUS = "ambiguous"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,17 +42,6 @@ class PlaylistAttestation:
     snapshot_id: str
     desired_fingerprint: str
     updated_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class EditionMatch:
-    source_id: SourceId
-    source_native_id: str
-    status: MatchStatus
-    spotify_episode_uri: str | None
-    diagnostics: str | None
-    updated_at: datetime
-    spotify_duration_seconds: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,110 +419,6 @@ class SQLiteStore:
             """
         )
 
-    def upsert_editions(
-        self,
-        editions: Iterable[CanonicalEdition],
-        *,
-        observed_at: datetime,
-    ) -> None:
-        """Persist canonical editions once globally, keyed by source-native identity."""
-        observed = _format_timestamp(observed_at)
-        rows = [
-            (
-                str(edition.source_id),
-                edition.source_native_id,
-                edition.title,
-                _format_timestamp(edition.published_at),
-                _format_optional_timestamp(edition.edition_at),
-                edition.duration_seconds,
-                observed,
-                observed,
-            )
-            for edition in editions
-        ]
-        if not rows:
-            return
-
-        sql = """
-        INSERT INTO canonical_editions (
-            source_id,
-            source_native_id,
-            title,
-            published_at,
-            edition_at,
-            duration_seconds,
-            first_seen_at,
-            last_seen_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_id, source_native_id) DO UPDATE SET
-            title = CASE
-                WHEN excluded.last_seen_at >= canonical_editions.last_seen_at
-                THEN excluded.title ELSE canonical_editions.title
-            END,
-            published_at = CASE
-                WHEN excluded.last_seen_at >= canonical_editions.last_seen_at
-                THEN excluded.published_at ELSE canonical_editions.published_at
-            END,
-            edition_at = CASE
-                WHEN excluded.last_seen_at >= canonical_editions.last_seen_at
-                THEN excluded.edition_at ELSE canonical_editions.edition_at
-            END,
-            duration_seconds = CASE
-                WHEN excluded.last_seen_at >= canonical_editions.last_seen_at
-                THEN excluded.duration_seconds ELSE canonical_editions.duration_seconds
-            END,
-            last_seen_at = MAX(canonical_editions.last_seen_at, excluded.last_seen_at)
-        """
-        with self._connection("upsert canonical editions") as connection:
-            connection.executemany(sql, rows)
-
-    def get_edition(
-        self,
-        source_id: SourceId,
-        source_native_id: str,
-    ) -> CanonicalEdition | None:
-        """Load one canonical edition by stable source identity."""
-        with self._connection("read canonical edition") as connection:
-            row = connection.execute(
-                """
-                SELECT source_id, source_native_id, title, published_at, edition_at,
-                       duration_seconds
-                FROM canonical_editions
-                WHERE source_id = ? AND source_native_id = ?
-                """,
-                (str(source_id), source_native_id),
-            ).fetchone()
-        return None if row is None else _edition_from_row(row)
-
-    def list_editions(
-        self,
-        *,
-        source_id: SourceId | None = None,
-    ) -> tuple[CanonicalEdition, ...]:
-        """List canonical editions without introducing playlist-specific copies."""
-        with self._connection("list canonical editions") as connection:
-            if source_id is None:
-                rows = connection.execute(
-                    """
-                    SELECT source_id, source_native_id, title, published_at, edition_at,
-                           duration_seconds
-                    FROM canonical_editions
-                    ORDER BY published_at DESC, source_id, source_native_id
-                    """
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    """
-                    SELECT source_id, source_native_id, title, published_at, edition_at,
-                           duration_seconds
-                    FROM canonical_editions
-                    WHERE source_id = ?
-                    ORDER BY published_at DESC, source_native_id
-                    """,
-                    (str(source_id),),
-                ).fetchall()
-        return tuple(_edition_from_row(row) for row in rows)
-
     def record_source_run(
         self,
         source_id: SourceId,
@@ -623,99 +499,6 @@ class SQLiteStore:
             last_success_at=_parse_optional_timestamp(row["last_success_at"]),
             last_error=_optional_str(row["last_error"]),
         )
-
-    def set_match_state(
-        self,
-        source_id: SourceId,
-        source_native_id: str,
-        *,
-        status: MatchStatus,
-        updated_at: datetime,
-        spotify_episode_uri: str | None = None,
-        spotify_duration_seconds: int | None = None,
-        diagnostics: str | None = None,
-    ) -> bool:
-        """Persist matching state and report whether the temporal guard applied it."""
-        if status is MatchStatus.MATCHED:
-            if spotify_episode_uri is None or not spotify_episode_uri.strip():
-                raise ValueError("matched state requires spotify_episode_uri")
-        elif spotify_episode_uri is not None:
-            raise ValueError("non-matched state must not store spotify_episode_uri")
-        if spotify_duration_seconds is not None and spotify_duration_seconds < 0:
-            raise ValueError("spotify_duration_seconds must be non-negative")
-        if status is not MatchStatus.MATCHED and spotify_duration_seconds is not None:
-            raise ValueError("non-matched state must not store spotify_duration_seconds")
-
-        with self._connection("set Spotify match state") as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO spotify_matches (
-                    source_id,
-                    source_native_id,
-                    status,
-                    spotify_episode_uri,
-                    spotify_duration_seconds,
-                    diagnostics,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(source_id, source_native_id) DO UPDATE SET
-                    status = excluded.status,
-                    spotify_episode_uri = excluded.spotify_episode_uri,
-                    spotify_duration_seconds = excluded.spotify_duration_seconds,
-                    diagnostics = excluded.diagnostics,
-                    updated_at = excluded.updated_at
-                WHERE excluded.updated_at >= spotify_matches.updated_at
-                """,
-                (
-                    str(source_id),
-                    source_native_id,
-                    status.value,
-                    spotify_episode_uri,
-                    spotify_duration_seconds,
-                    diagnostics,
-                    _format_timestamp(updated_at),
-                ),
-            )
-            return cursor.rowcount > 0
-
-    def get_match_state(
-        self,
-        source_id: SourceId,
-        source_native_id: str,
-    ) -> EditionMatch | None:
-        """Load persistent Spotify matching state for one canonical edition."""
-        with self._connection("read Spotify match state") as connection:
-            row = connection.execute(
-                """
-                SELECT source_id, source_native_id, status, spotify_episode_uri,
-                       spotify_duration_seconds, diagnostics, updated_at
-                FROM spotify_matches
-                WHERE source_id = ? AND source_native_id = ?
-                """,
-                (str(source_id), source_native_id),
-            ).fetchone()
-        if row is None:
-            return None
-        return EditionMatch(
-            source_id=SourceId(_row_str(row, "source_id")),
-            source_native_id=_row_str(row, "source_native_id"),
-            status=MatchStatus(_row_str(row, "status")),
-            spotify_episode_uri=_optional_str(row["spotify_episode_uri"]),
-            spotify_duration_seconds=_optional_int(row["spotify_duration_seconds"]),
-            diagnostics=_optional_str(row["diagnostics"]),
-            updated_at=_parse_timestamp(_row_str(row, "updated_at")),
-        )
-
-    def get_spotify_episode_uri(
-        self,
-        source_id: SourceId,
-        source_native_id: str,
-    ) -> str | None:
-        """Return the durable Spotify episode URI only for a matched edition."""
-        match = self.get_match_state(source_id, source_native_id)
-        if match is None or match.status is not MatchStatus.MATCHED:
-            return None
-        return match.spotify_episode_uri
 
     def record_playlist_run(
         self,
@@ -976,30 +759,12 @@ class SQLiteStore:
                 connection.close()
 
 
-def _edition_from_row(row: sqlite3.Row) -> CanonicalEdition:
-    duration = row["duration_seconds"]
-    if duration is not None and not isinstance(duration, int):
-        raise PersistenceError("duration_seconds is not an integer")
-    return CanonicalEdition(
-        source_id=SourceId(_row_str(row, "source_id")),
-        source_native_id=_row_str(row, "source_native_id"),
-        title=_row_str(row, "title"),
-        published_at=_parse_timestamp(_row_str(row, "published_at")),
-        edition_at=_parse_optional_timestamp(row["edition_at"]),
-        duration_seconds=duration,
-    )
-
-
 def _run_timestamps(started_at: datetime, finished_at: datetime) -> tuple[str, str]:
     started = _format_timestamp(started_at)
     finished = _format_timestamp(finished_at)
     if finished_at < started_at:
         raise ValueError("finished_at must not be before started_at")
     return started, finished
-
-
-def _format_optional_timestamp(value: datetime | None) -> str | None:
-    return None if value is None else _format_timestamp(value)
 
 
 def _format_timestamp(value: datetime) -> str:
