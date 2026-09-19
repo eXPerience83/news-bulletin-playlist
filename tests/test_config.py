@@ -17,7 +17,6 @@ def _source(source_id: str = "ser", *, enabled: bool = True) -> dict[str, object
         "timezone": "Europe/Madrid",
         "enabled": enabled,
         "parser_id": source_id,
-        "endpoint_url": "https://example.com/feed.xml",
     }
 
 
@@ -60,8 +59,6 @@ def test_example_config_is_valid_and_uses_real_source_contracts() -> None:
         "cope",
     ]
     assert config.sources[-1].enabled is False
-    assert config.sources[-1].endpoint_url is None
-    assert all("example.invalid" not in (source.endpoint_url or "") for source in config.sources)
     cnn = next(source for source in config.sources if source.id == SourceId("cnn"))
     assert tuple(map(str, cnn.languages)) == ("es-ES",)
     assert config.playlists[0].display_name == "Noticias en Español"
@@ -188,7 +185,6 @@ sources:
     timezone: Europe/Oslo
     enabled: true
     parser_id: ser
-    endpoint_url: https://example.com/feed.xml
 playlists:
   - id: norway_news
     display_name: Norway News
@@ -228,18 +224,6 @@ def test_invalid_timezone_is_rejected() -> None:
     with pytest.raises(ConfigError, match="unknown IANA timezone"):
         parse_config(_config(sources=[source]))
 
-
-@pytest.mark.parametrize(
-    "endpoint",
-    [
-        "https://:443/feed.xml",
-        "https://example.com:invalid/feed.xml",
-        "https://[broken/feed.xml",
-    ],
-)
-def test_malformed_endpoint_url_is_rejected(endpoint: str) -> None:
-    source = _source()
-    source["endpoint_url"] = endpoint
 
     with pytest.raises(ConfigError, match=r"HTTP\(S\) URL"):
         parse_config(_config(sources=[source]))
