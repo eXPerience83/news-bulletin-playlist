@@ -80,6 +80,14 @@ def test_playlist_defaults_are_48_hours_100_episodes_and_newest_first() -> None:
     assert playlist.ordering is OrderingPolicy.EDITION_AT_DESC
 
 
+def test_legacy_published_at_ordering_is_rejected() -> None:
+    playlist = _playlist()
+    playlist["ordering"] = "published_at_desc"
+
+    with pytest.raises(ConfigError, match="unsupported policy"):
+        parse_config(_config(playlists=[playlist]))
+
+
 def test_country_and_language_are_independent_metadata() -> None:
     cnn = _source("cnn")
     cnn["countries"] = ["US"]
