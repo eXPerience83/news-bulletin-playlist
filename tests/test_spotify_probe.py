@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from news_bulletin_playlist.registry import CORE_PROVIDERS
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.spotify.probe import reconcile_playlist_items, run_catalog_probe
+from news_bulletin_playlist.spotify.public_detector import spotify_show_id
 
 
 @dataclass
@@ -82,12 +83,12 @@ class FakeCatalogClient:
 
     def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, object]:
         self.calls.append((show_id, limit, offset))
-        provider_id = next(
-            provider.provider_id
-            for provider in CORE_PROVIDERS
-            if provider.spotify_show_id == show_id
+        source_id = next(
+            str(source.id)
+            for source in BUILTIN_CATALOG.sources
+            if spotify_show_id(source) == show_id
         )
-        if provider_id == "rne":
+        if source_id == "rne":
             return {
                 "items": [
                     {
@@ -99,7 +100,7 @@ class FakeCatalogClient:
                 "next": "next-page" if offset < 150 else None,
             }
         return {
-            "items": [{"release_date": "2026-08-29", "name": provider_id, "id": provider_id}],
+            "items": [{"release_date": "2026-08-29", "name": source_id, "id": source_id}],
             "next": "next-page",
         }
 
@@ -111,14 +112,14 @@ def test_catalog_probe_only_uses_deep_paging_for_rne() -> None:
     client = FakeCatalogClient()
     assert run_catalog_probe(client) == 0
     counts = Counter(show_id for show_id, _, _ in client.calls)
-    for provider in CORE_PROVIDERS:
-        expected = 4 if provider.provider_id == "rne" else 1
-        assert counts[provider.spotify_show_id] == expected
+    for source in BUILTIN_CATALOG.sources:
+        expected = 4 if provider.source_id == "rne" else 1
+        assert counts[spotify_show_id(source)] == expected
 
 
 @dataclass
 class InvalidCatalogClient(FakeCatalogClient):
-    invalid_show_id: str = CORE_PROVIDERS[0].spotify_show_id
+    invalid_show_id: str = spotify_show_id(BUILTIN_CATALOG.sources[0])
 
     def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, object]:
         if show_id == self.invalid_show_id:
