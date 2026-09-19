@@ -424,7 +424,7 @@ class ReloadingEngineCycleRunner:
                     required_sources(config),
                     observed_at=observed_at,
                 )
-            except (PersistenceError, RuntimeError, ValueError):
+            except PersistenceError, RuntimeError, ValueError:
                 # Shadow-only evidence must never alter the authoritative legacy cycle.
                 public_detector.diagnostics.emit(
                     occurred_at=observed_at,
