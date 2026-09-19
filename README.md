@@ -3,7 +3,7 @@
 Open-source service for dynamic news bulletin playlists across countries and languages,
 with Spotify as the first destination.
 
-> Pre-release. The P1 production multi-playlist engine is complete; the current release step is validating the managed multi-playlist catalog in production. This project is not affiliated with or endorsed by Spotify or any news provider.
+> Pre-release. The runtime is Spotify-first: public Spotify state is a change signal and the official Spotify Web API show catalogue is the episode authority. This project is not affiliated with or endorsed by Spotify or any news provider.
 
 ## Goal
 
@@ -13,9 +13,9 @@ Spanish-language news is the first implementation and validation target. The arc
 
 Core architectural invariant:
 
-> **Fetch once -> normalize once -> store once -> distribute to many playlists.**
+> **Detect changes -> refresh only what is due -> persist Spotify episodes -> compute locally -> reconcile safely.**
 
-A provider/source is independent from a playlist and may feed several playlists. A single engine run fetches each required source once, normalizes and persists it once, then evaluates and reconciles every configured destination playlist independently.
+A source is independent from a playlist and may feed several playlists. Public Spotify observation is used only to decide whether a source catalogue needs refreshing. The official Spotify Web API show catalogue supplies episode IDs, URIs and metadata; unchanged sources reuse durable local state, then every configured destination playlist is evaluated and reconciled independently.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contract and invariants. Notable product/runtime changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -23,14 +23,14 @@ Initial product defaults:
 
 - keep episodes published within the last **48 hours**;
 - cap a playlist at **100 episodes**;
-- order by semantic edition timestamp (`edition_at`) when available, falling back to source publication timestamp (`published_at`), newest first;
+- order by parsed semantic edition timestamp (`edition_at`) when available; otherwise preserve explicit Spotify release-date/first-seen provenance without inventing minute precision;
 - make the maximum episode duration a **per-managed-playlist setting** editable from `/admin/`;
 - use **30 minutes / 1800 seconds as the current general default for every playlist**;
 - prefer bulletin sources whose normal publishing format is concise; a source that is predominantly long-form is not promoted merely because individual episodes might fit under 30 minutes;
 - retain operational metadata locally for **30 days**;
 - run the production engine approximately every **10 minutes**;
 - never download or store podcast audio;
-- treat RSS/provider metadata as the timing source and Spotify as the playlist destination;
+- use Spotify episode ID/URI as canonical runtime identity and the official show catalogue as episode authority;
 - allow playlist-specific policies to override defaults when required.
 
 The 30-minute ceiling is deliberately provisional while the catalog is being observed in production. Sanitized diagnostics record duration exclusions, accepted editions of at least 20 minutes and per-source/per-playlist duration histograms. Issue #132 uses that evidence to decide the eventual default hard ceiling. Occasional long editions from an otherwise concise bulletin source are acceptable; sources whose usual product is long-form are not.
@@ -53,7 +53,7 @@ See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the current Spotify platfor
 
 ## Initial providers
 
-The runtime catalog is intentionally stricter than the research list: a source needs a stable feed, a deterministic Spotify-show identity/matching contract and a bulletin-like publishing format suitable for the playlist.
+The runtime catalog is intentionally stricter than the research list: a source needs one deterministic Spotify show identity, suitable title/filter rules and a bulletin-like publishing format suitable for the playlist.
 
 Source research and the admin UI classify each product on three independent axes:
 
@@ -130,15 +130,15 @@ CI runs `ruff check .`, `ruff format --check .`, mypy and pytest on Python 3.14.
 
 Normal operation separates immutable application knowledge from installation-owned choices. The image ships a built-in catalog of supported sources and managed playlist templates; `/data/managed-state.json` stores only the playlists activated by this installation, their Spotify destination IDs, enabled/paused state, metadata/cover choices, explicit many-to-many source membership and per-playlist duration ceiling. Updating the image can therefore add supported sources/templates without overwriting existing local selections.
 
-The managed state is compiled with the built-in catalog into the same `EngineConfig` used by the production engine. Ordinary administration happens through `/admin/`: built-in source definitions can be assigned or unassigned from playlists but are not deleted from the catalog, and a source selected by several active playlists is still fetched only once per engine cycle. Duration-only changes are local playlist policy and do not require a Spotify reconnect or metadata write.
+The managed state is compiled with the built-in catalog into the same `EngineConfig` used by the production engine. Ordinary administration happens through `/admin/`: built-in source definitions can be assigned or unassigned from playlists but are not deleted from the catalog. A source selected by several active playlists is refreshed at most once when a detector change, inactivity audit or explicit stale-item escalation makes that catalogue due; unchanged source state is reused locally. Duration-only changes are local playlist policy and do not require a Spotify reconnect or metadata write.
 
-The schema-v1 full-YAML loader remains an **advanced/manual compatibility path**, not the default first-run workflow. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is retained for that compatibility path. An explicit `NEWS_PLAYLIST_CONFIG` selects a legacy YAML file; otherwise the runtime prefers `/data/managed-state.json` when present and only falls back to the default legacy `/data/news-bulletin-playlist.yaml`. If managed state and that default legacy YAML both exist, startup fails closed rather than guessing which configuration should win.
+The schema-v1 full-YAML loader remains an **advanced/manual compatibility path**, not the default first-run workflow. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is retained for that path. An explicit `NEWS_PLAYLIST_CONFIG` selects a YAML configuration; otherwise the runtime prefers `/data/managed-state.json` when present and falls back to `/data/news-bulletin-playlist.yaml`. If managed state and that default YAML both exist, startup fails closed rather than guessing which configuration should win.
 
-The current built-in runtime source IDs are `ser`, `rne`, `ondacero`, `abc`, `cnn`, `un_news_en`, `reuters_world`, `nplus_univision`, `dw_actualidad`, `un_news_es`, `rfi_fr`, `dlf_news` and `rmf_fakty`. Research candidates remain outside ordinary selectable production configuration until their feed, Spotify identity, matching contract, editorial scope and typical episode duration have been checked.
+The current built-in runtime source IDs are `ser`, `rne`, `ondacero`, `abc`, `cnn`, `un_news_en`, `reuters_world`, `nplus_univision`, `dw_actualidad`, `un_news_es`, `rfi_fr`, `dlf_news` and `rmf_fakty`. Research candidates remain outside ordinary selectable production configuration until their Spotify show identity, catalogue behavior, parser/filter contract, editorial scope and typical episode duration have been checked.
 
-Canonical editions are identified only by `(source_id, source_native_id)`. Titles and timestamps are metadata, never identity. Canonical timestamps are timezone-aware UTC values. Spotify show references are source catalogue metadata and are intentionally distinct from writable playlist destinations.
+Spotify episode ID/URI is the canonical runtime episode identity. Titles, release-date metadata, parsed `edition_at`, first-seen timestamps and timestamp provenance are metadata, never an alternative identity. Spotify show references identify read-only source catalogues and remain distinct from writable playlist destinations.
 
-A cycle uses durable canonical/match state when building desired playlists. Therefore a transient source failure does not erase still-valid recent episodes; they age out naturally at the playlist retention boundary. Destination failures are isolated so one Spotify playlist cannot block another. If a source or Spotify catalogue lookup fails before enough last-known-good state exists to establish a safe desired state, the affected destination is preserved with zero reconciliation writes rather than treating an empty desired state as authoritative.
+A cycle builds desired playlists from durable Spotify-first episode state. Therefore a detector/catalogue failure does not erase still-valid recent episodes; they age out naturally at the playlist retention boundary. Normal detector changes refresh only the changed source. Inactivity audits are configurable and exceptional stale/unavailable-item evidence may refresh other relevant catalogues. Destination failures are isolated so one Spotify playlist cannot block another, and unsafe/ambiguous outcomes preserve the existing destination rather than treating missing evidence as authoritative emptiness.
 
 Spotify playlist descriptions are plain text from the Web API contract. Managed descriptions stay attribution-free locally; when metadata is created or explicitly synchronized, the runtime appends one bounded project line containing `https://github.com/eXPerience83/news-bulletin-playlist`. Whether a Spotify client renders that URL as clickable is client behavior and is not assumed by the application.
 
@@ -154,7 +154,7 @@ The production administration surface must sit behind HTTPS. Configure `NEWS_PLA
 
 ## Roadmap
 
-The completed production-engine roadmap is recorded in the [P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13).
+The original RSS/matching implementation roadmap is recorded in the [P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13) for historical context. The current Spotify-first architecture supersedes that ingestion/matching path; issues #253-#258 record the detector, catalogue-ingestion, cutover and retirement work.
 
 1. **P0 — validated foundation** — provider contracts and watchdog, hardened container/TrueNAS runtime, plus Spotify catalogue/write probes.
 2. **P1 — production multi-playlist engine — complete**:
