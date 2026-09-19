@@ -82,6 +82,7 @@ class UpsertCounts:
     added: int
     updated: int
     unchanged: int
+    removed: int = 0
 
 
 def release_period(value: str, precision: str) -> tuple[date, date]:
