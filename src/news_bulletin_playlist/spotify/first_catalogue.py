@@ -10,7 +10,6 @@ from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
     TimestampSource,
     as_utc,
-    episode_order_key,
     release_period,
     spotify_id,
 )
@@ -85,21 +84,42 @@ def fetch_source_catalogue(
         )
         fallbacks += int(parsed is None)
 
-    latest = max(episodes, key=_api_recency_key, default=None)
+    latest_id = _provable_latest_id(episodes)
     return CatalogueSnapshot(
         episodes=tuple(episodes),
         request_count=catalogue.request_count,
         complete=catalogue.complete,
         coverage_proven=catalogue.complete or _boundary_covers(periods, cutoff),
         api_ids=tuple(ids),
-        api_latest_id=None if latest is None else latest.spotify_episode_id,
+        api_latest_id=latest_id,
         parser_fallback_count=fallbacks,
         filter_rejected_count=rejected,
     )
 
 
-def _api_recency_key(episode: SpotifyFirstEpisode) -> tuple[int, int, int]:
-    return episode_order_key(episode)[:3]
+def _provable_latest_id(episodes: list[SpotifyFirstEpisode]) -> str | None:
+    """Return an episode ID only when stored timing evidence proves it is newest."""
+    if not episodes:
+        return None
+    for candidate in episodes:
+        candidate_start, _candidate_end = _evidence_period(candidate)
+        if all(
+            other is candidate or candidate_start > _evidence_period(other)[1]
+            for other in episodes
+        ):
+            return candidate.spotify_episode_id
+    return None
+
+
+def _evidence_period(episode: SpotifyFirstEpisode) -> tuple[datetime, datetime]:
+    if episode.edition_at is not None:
+        return episode.edition_at, episode.edition_at
+    start, end = release_period(episode.release_date_raw, episode.release_date_precision)
+    timezone = episode.first_seen_at.tzinfo
+    return (
+        datetime.combine(start, datetime.min.time(), tzinfo=timezone),
+        datetime.combine(end, datetime.max.time(), tzinfo=timezone),
+    )
 
 
 def _boundary_covers(periods: list[tuple[date, date]], cutoff: datetime) -> bool:
