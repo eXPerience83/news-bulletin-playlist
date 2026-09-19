@@ -36,8 +36,8 @@ code change reviewed through the normal PR, CI and provider-contract process.
 | --- | --- |
 | `research` | Market/source is still being explored; no sufficiently strong candidate is established. |
 | `candidate` | A plausible bulletin has been identified but still needs full deterministic verification. |
-| `verified` | Feed/catalogue/cadence/duration and matching feasibility have been checked; implementation may still be pending. |
-| `implemented` | The source is present in the built-in runtime catalog with parser/matching support and tests. |
+| `verified` | Spotify show/catalogue identity, cadence, duration and parser/filter feasibility have been checked; implementation may still be pending. |
+| `implemented` | The source is present in the built-in runtime catalog with Spotify-first parser/filter support and tests. |
 | `blocked` | The source is useful, but a required deterministic path is missing or unsuitable. |
 | `rejected` | The source was evaluated and does not fit the product; keep the reason so it is not repeatedly rediscovered. |
 
@@ -56,18 +56,18 @@ the long-term default ceiling.
 
 Before moving a source from research/candidate into the runtime catalog, verify and record at least:
 
-- official programme/feed identity and stable collection URL;
+- official programme/product identity and exactly one stable Spotify show identity;
 - provider/product origin;
 - editorial scope (`LOC`, `REG`, `NAT`, `INT`, or `MIX`);
 - language/locale tag;
-- current publication cadence from real recent editions;
+- current publication cadence from real recent Spotify editions;
 - representative duration profile and meaningful outliers;
-- stable source identity/GUID behaviour;
 - source timezone and edition-time/title pattern;
-- deterministic Spotify show/catalogue identity when Spotify is the destination;
-- deterministic source-edition to Spotify-episode matching without global search guesses;
-- compatibility with the engine's existing failure-safety model;
-- parser/matcher/provider-watch tests appropriate to the source.
+- title parser behavior against current Spotify episode titles;
+- any collection/content filter required to isolate the intended bulletin product;
+- catalogue pagination/retention behavior compatible with safe Spotify-first coverage;
+- compatibility with the engine's detector, persistence, rate-limit and write-safety model;
+- focused parser/filter/catalogue tests appropriate to the source.
 
 Promotion should be done by a focused implementation PR. Updating research notes alone must never
 change production behaviour.
@@ -106,7 +106,7 @@ The Phase-1 playlist templates are intentionally broader than the source labels:
 | Proposed classification | Bulletin/source | Status | Current research note |
 | --- | --- | --- | --- |
 | `ES · NAT · es-ES` | COPE — boletines | `blocked` | Frequent concise bulletins and parser research exist, but deterministic Spotify show identity remains unverified. |
-| `CA · MIX · en` | CBC — World Report | `verified / blocked-runtime` | Feed/show/matching are deterministic in current samples, but the official RSS timed out after all provider-watch retries in two independent GitHub runner regions; do not promote until the runtime collection endpoint is reliably reachable. |
+| `CA · MIX · en` | CBC — World Report | `verified / re-evaluate` | The former runtime blocker was RSS availability, which no longer applies to Spotify-first. Re-check current official Spotify catalogue cadence/parser/duration behavior before any promotion; do not promote automatically from legacy evidence alone. |
 | `CZ · NAT · es` | Chequia en 30 minutos | `blocked / #138` | Feed and show are known, but nullable Spotify catalogue entries require the dedicated global safety policy. |
 | `FR · REG · es-419` | RFI Español — Noticias de América | `candidate` | Americas-regional Spanish product; useful for a future Latin-American scope, not default `INT · ES`. |
 | `DE · NAT · de` | Tagesschau in 100 Sekunden | `candidate` | Multiple very short updates per day; verify feed identity and deterministic Spotify path. |
@@ -160,7 +160,7 @@ catalog. For each review:
 2. classify origin, editorial scope and language independently;
 3. measure representative episode durations, rejecting predominantly long-form products;
 4. revisit `candidate`, `blocked` and `research` entries;
-5. re-check implemented feeds, cadence, title patterns and Spotify catalogue identities;
+5. re-check implemented Spotify show identities, catalogue cadence, title patterns and filters;
 6. update this document and #53 with meaningful evidence/status changes;
 7. open focused implementation work only for sources actually selected for rollout.
 

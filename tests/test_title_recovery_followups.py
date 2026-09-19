@@ -4,7 +4,6 @@ from datetime import datetime
 
 import pytest
 
-from news_bulletin_playlist.provider_watch import evaluate_titles
 from news_bulletin_playlist.providers.cnn import CnnParser
 from news_bulletin_playlist.providers.common import MADRID, NEW_YORK
 from news_bulletin_playlist.providers.ondacero import OndaCeroParser
@@ -193,26 +192,3 @@ def test_recovery_preserves_dst_interpretation_of_exact_parser() -> None:
     assert recovered.parsed is not None
     assert recovered.parsed.edition_at == exact.edition_at
     assert recovered.parsed.edition_at.fold == exact.edition_at.fold
-
-
-def test_provider_watch_threshold_counts_exact_and_recovered_equally() -> None:
-    exact = "Las noticias de la SER, 09:30 (17/09/2026)"
-    recovered = "Las noticias de la SER - 9.30 17-09-26"
-    rejected = "SER DEPORTES - 09:30 (17/09/2026)"
-
-    healthy = evaluate_titles(
-        "ser",
-        SerParser(),
-        [exact, exact, recovered, rejected, rejected, rejected],
-    )
-    unhealthy = evaluate_titles(
-        "ser",
-        SerParser(),
-        [exact, recovered, rejected, rejected, rejected, rejected],
-    )
-
-    assert healthy.ok is True
-    assert healthy.parsed == 3
-    assert "recovered 1/6" in healthy.detail
-    assert unhealthy.ok is False
-    assert unhealthy.parsed == 2

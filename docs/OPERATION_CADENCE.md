@@ -1,57 +1,86 @@
-# Operational cadence and watchdog roles
+# Operational cadence
 
-The project has three deliberately separate recurring activities. They solve different problems and
-must not be substituted for one another.
+The Spotify-first runtime separates **engine cadence** from **catalogue refresh cadence**.
 
-## Production Docker scheduler — approximately every 10 minutes
+A ten-minute engine tick does not mean every source catalogue is read every ten minutes.
 
-The long-lived application process on TrueNAS owns normal collection and playlist maintenance. It
-runs one complete engine cycle immediately after startup and then every 600 seconds by default.
+## Production engine scheduler — approximately every 10 minutes
 
-A production cycle collects the union of required sources, normalizes and matches editions, builds
-desired playlist state and reconciles Spotify destinations. This is the only recurring mechanism
-that mutates the managed production playlists.
+The long-lived application process on TrueNAS owns playlist maintenance.
 
-The runtime cadence is configured with `NEWS_PLAYLIST_INTERVAL_SECONDS`; the production default is
-600 seconds. GitHub Actions is **not** the production playlist scheduler.
+It runs one cycle immediately after startup and then every 600 seconds by default. The interval is
+configured with `NEWS_PLAYLIST_INTERVAL_SECONDS`.
 
-## Provider Watch GitHub Action — approximately every 6 hours
+Each cycle:
 
-`.github/workflows/provider-watch.yml` is an independent known-contract canary. Its scheduled run is
-`17 */6 * * *`, or roughly four checks per day. GitHub may delay scheduled workflows, so exact
-wall-clock execution is not a product requirement.
+1. loads the effective managed/manual configuration;
+2. observes the public detector state for required sources;
+3. decides which official Spotify catalogues, if any, are due;
+4. refreshes only those catalogues;
+5. reuses durable local state for unchanged sources;
+6. computes complete desired playlist state locally;
+7. reconciles each destination independently where required;
+8. records bounded diagnostics/request accounting.
 
-Provider Watch checks whether already-supported upstream feed/title/parser contracts still behave as
-expected. It does not reconcile Spotify playlists and does not mutate production runtime state.
+GitHub Actions is **not** the production playlist scheduler.
 
-The workflow also keeps its existing immediate paths:
+## Change-triggered catalogue refresh — event-driven within engine cycles
 
-- relevant pushes to `main` run the contract check;
-- `workflow_dispatch` allows an explicit manual run;
-- a failed contract check opens or updates the single
-  `[provider-watch] Upstream contract check failed` incident;
-- a later successful check closes that incident automatically;
-- the workflow remains visibly failed while an upstream incident is active.
+The normal source refresh trigger is a public Spotify latest-episode identity transition.
+
+When source S changes, only source S's official Spotify Web API show catalogue is refreshed in the
+normal path. A source selected by several playlists is still refreshed once and its persisted state
+is shared by all of them.
+
+The detector may advance across more than one publication. The official catalogue refresh is
+responsible for recovering all relevant episodes needed to cover retention; the detector itself is
+not an episode catalogue.
+
+## Inactivity audit — default 24 hours
+
+A source that has had no successful detector transition/catalogue refresh for the configured
+inactivity threshold becomes due for an independent official catalogue audit.
+
+The default is 24 hours and is configured with
+`NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS`.
+
+This is not a fixed daily poll. If normal detector changes keep causing successful catalogue
+refreshes, the inactivity audit deadline keeps moving and no extra audit is needed.
+
+An audit can detect a public-detector false negative. If official API state is newer than the
+detector evidence, the runtime records that discrepancy and refreshes the source state.
+
+## Stale-item escalation — exceptional
+
+A deterministic stale/unavailable desired-item failure may cause the engine to refresh the other
+relevant catalogues for the affected playlist before rebuilding desired state.
+
+This is not a normal cadence and must not be used as a generic response to all write errors.
+
+Ambiguous mutating transport/5xx failures continue through readback/snapshot resolution instead.
+HTTP 429 continues through the shared global cooldown.
 
 ## Source catalog review — monthly initially, later quarterly
 
-Source discovery and qualitative re-evaluation are tracked by issue #55. This review searches for
-new or better bulletin sources, revisits candidates/blocked sources and verifies that the catalog
-still represents the best available product choices.
+Editorial/source discovery is slower than runtime maintenance.
 
-This is intentionally slower than Provider Watch because it is research/curation rather than an
-availability alarm. While European coverage is expanding, review monthly; once the main
-country/language combinations are stable, move to quarterly. Extra reviews may be run after major
-broadcaster/feed or Spotify-catalog changes.
+Review candidates, blocked products and source quality monthly while coverage is expanding; move to
+quarterly once the main country/language combinations are stable. Additional review is appropriate
+after material Spotify/provider product changes.
+
+Research review does not mutate production playlists by itself. Promotion into the built-in catalog
+is a normal code change with CI/tests.
 
 ## Summary
 
 | Activity | Normal cadence | Purpose | Mutates production playlists? |
 | --- | --- | --- | --- |
-| Docker/TrueNAS engine | ~10 minutes | Collect, match and reconcile managed playlists | Yes |
-| Provider Watch Action | ~6 hours | Detect breakage of known upstream contracts | No |
-| Source catalog review (#55) | Monthly, later quarterly | Discover/re-evaluate sources | No |
+| Engine scheduler | ~10 minutes | Detect changes, compute desired state, reconcile when needed | Yes |
+| Changed-source catalogue refresh | On detector transition | Refresh only the changed source from official Spotify API | Indirectly |
+| Inactivity audit | After configured inactivity (24 h default) | Detect missed public-detector changes | Indirectly |
+| Stale-item escalation | Only on deterministic evidence | Repair stale locally persisted catalogue state | Indirectly |
+| Source catalog review | Monthly, later quarterly | Discover/re-evaluate products | No |
 
-Keeping these roles separate prevents a GitHub outage or delayed scheduled Action from affecting
-normal playlist updates, while still preserving an independent upstream-contract warning system and
-a slower editorial/source-research loop.
+The key quota invariant is that scheduler frequency and Web API catalogue frequency are different:
+frequent local cycles are acceptable because unchanged sources do not require authenticated catalogue
+reads.

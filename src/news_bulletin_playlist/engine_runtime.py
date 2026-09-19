@@ -4,7 +4,6 @@ import html
 import os
 import signal
 import threading
-import time
 import urllib.parse
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -17,7 +16,6 @@ from types import FrameType
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.collection import FeedFetcher, fetch_feed, required_sources
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.effective_config import (
     CONFIG_PATH_ENV,
@@ -27,12 +25,10 @@ from news_bulletin_playlist.effective_config import (
 from news_bulletin_playlist.engine import (
     DEFAULT_ENGINE_INTERVAL,
     Clock,
-    DestinationRuntimeLeaseRegistry,
     EngineCycleResult,
     EngineCycleRunner,
     EngineRunner,
     EngineScheduler,
-    MonotonicClock,
     OperationalStatus,
     OperationalStatusSnapshot,
     SpotifyAuthProvider,
@@ -78,6 +74,7 @@ from news_bulletin_playlist.spotify.client import (
     SpotifyClient,
     SpotifyTransportError,
 )
+from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorJournal,
     PublicDetectorShadow,
@@ -93,8 +90,7 @@ from news_bulletin_playlist.spotify_backoff import (
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
 _INTERVAL_SECONDS_ENV = "NEWS_PLAYLIST_INTERVAL_SECONDS"
-_SPOTIFY_LOCAL_SKIPS_ENV = "NEWS_PLAYLIST_SPOTIFY_LOCAL_SKIPS"
-_SPOTIFY_PUBLIC_DETECTOR_SHADOW_ENV = "NEWS_PLAYLIST_SPOTIFY_PUBLIC_DETECTOR_SHADOW"
+_SPOTIFY_INACTIVITY_HOURS_ENV = "NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS"
 _MIN_RUNTIME_INTERVAL = timedelta(minutes=1)
 _SCHEDULER_SHUTDOWN_WAIT_SECONDS = 10.0
 _BUNDLED_COVER_DIR = Path("/opt/news-bulletin-playlist/covers")
@@ -335,7 +331,7 @@ class EngineLifecycleController:
 
 
 class ReloadingEngineCycleRunner:
-    """Snapshot durable configuration per cycle and guard only remote playlist mutations."""
+    """Reload managed configuration per cycle and run the authoritative Spotify-first engine."""
 
     def __init__(
         self,
@@ -343,29 +339,28 @@ class ReloadingEngineCycleRunner:
         environ: Mapping[str, str],
         store: SQLiteStore,
         auth: SpotifyAuthProvider,
+        public_detector: PublicDetectorShadow,
+        detector_journal: PublicDetectorJournal,
+        first_journal: SpotifyFirstJournal,
         configuration_synchronization: ConfigurationSynchronization | None = None,
         *,
-        fetcher: FeedFetcher = fetch_feed,
         client_factory: SpotifyClientFactory | None = None,
         clock: Clock | None = None,
         request_metrics: SpotifyRequestMetrics | None = None,
-        local_skips_enabled: bool = True,
-        monotonic_clock: MonotonicClock = time.monotonic,
-        public_detector_shadow: PublicDetectorShadow | None = None,
+        source_inactivity: timedelta = timedelta(hours=24),
     ) -> None:
         self.data_dir = data_dir
         self.environ = environ
         self.store = store
         self.auth = auth
+        self.public_detector = public_detector
+        self.detector_journal = detector_journal
+        self.first_journal = first_journal
         self.configuration_synchronization = configuration_synchronization
-        self.fetcher = fetcher
         self.client_factory = client_factory
         self.clock = clock
         self.request_metrics = request_metrics
-        self.local_skips_enabled = local_skips_enabled
-        self.destination_leases = DestinationRuntimeLeaseRegistry()
-        self.monotonic_clock = monotonic_clock
-        self.public_detector_shadow = public_detector_shadow
+        self.source_inactivity = source_inactivity
 
     def run_cycle(self) -> EngineCycleResult:
         started_at = datetime.now(UTC)
@@ -398,64 +393,19 @@ class ReloadingEngineCycleRunner:
         playlist_mutation_guard = (
             None if synchronization is None else partial(self._playlist_mutation_guard, config)
         )
-        playlist_skip_guard = (
-            None if synchronization is None else partial(self._playlist_skip_guard, config)
-        )
-        result = EngineRunner(
+        return EngineRunner(
             config,
             self.store,
             self.auth,
-            fetcher=self.fetcher,
+            self.public_detector,
+            self.detector_journal,
+            self.first_journal,
             client_factory=self.client_factory,
             clock=self.clock,
             playlist_mutation_guard=playlist_mutation_guard,
             request_metrics=self.request_metrics,
-            local_skips_enabled=self.local_skips_enabled,
-            destination_leases=self.destination_leases,
-            monotonic_clock=self.monotonic_clock,
-            playlist_skip_guard=playlist_skip_guard,
+            source_inactivity=self.source_inactivity,
         ).run_cycle()
-
-        public_detector = self.public_detector_shadow
-        if public_detector is not None:
-            observed_at = datetime.now(UTC) if self.clock is None else self.clock()
-            try:
-                public_detector.observe_sources(
-                    required_sources(config),
-                    observed_at=observed_at,
-                )
-            except PersistenceError, RuntimeError, ValueError:
-                # Shadow-only evidence must never alter the authoritative legacy cycle.
-                public_detector.diagnostics.emit(
-                    occurred_at=observed_at,
-                    severity=DiagnosticSeverity.ERROR,
-                    component="spotify.public_detector",
-                    event_name="public_detector_shadow_failed",
-                    details={"phase": "verification"},
-                )
-        return result
-
-    def _playlist_skip_guard(
-        self,
-        expected_config: EngineConfig,
-        expected_playlist: PlaylistDefinition,
-    ) -> bool:
-        """Confirm the current item contract before a local skip uses this cycle's snapshot."""
-        synchronization = self.configuration_synchronization
-        if synchronization is None:
-            return False
-        expected_contract = _playlist_write_contract(expected_config, expected_playlist.id)
-        with synchronization.hold():
-            try:
-                current_config = _load_runtime_config(self.data_dir, self.environ)
-            except RuntimeError:
-                return False
-            current_contract = (
-                None
-                if current_config is None
-                else _playlist_write_contract(current_config, expected_playlist.id)
-            )
-        return current_contract == expected_contract
 
     @contextmanager
     def _playlist_mutation_guard(
@@ -516,14 +466,12 @@ def _playlist_write_contract(
                 str(source.timezone),
                 str(source.parser_id),
                 source.collection_filter_id,
-                source.endpoint_url,
                 tuple(
                     sorted(
                         (reference.system, reference.resource_type, reference.external_id)
                         for reference in source.external_references
                     )
                 ),
-                source.spotify_release_delay_days,
             )
         )
     return (
@@ -1094,33 +1042,29 @@ def serve(
     )
     lifecycle: EngineLifecycleController | None = None
     if auth_provider is not None:
-        public_detector_shadow: PublicDetectorShadow | None = None
-        if _public_detector_shadow_enabled(env):
-            detector_journal = PublicDetectorJournal(store)
-            try:
-                detector_journal.initialize()
-            except PersistenceError:
-                diagnostics.emit(
-                    occurred_at=datetime.now(UTC),
-                    severity=DiagnosticSeverity.ERROR,
-                    component="spotify.public_detector",
-                    event_name="public_detector_shadow_disabled",
-                    details={"phase": "persistence"},
-                )
-            else:
-                public_detector_shadow = PublicDetectorShadow(
-                    detector_journal,
-                    diagnostics,
-                )
+        detector_journal = PublicDetectorJournal(store)
+        first_journal = SpotifyFirstJournal(store)
+        try:
+            detector_journal.initialize()
+            first_journal.initialize()
+        except PersistenceError as exc:
+            raise RuntimeError("Spotify-first runtime state could not be initialized") from exc
+
+        public_detector = PublicDetectorShadow(
+            detector_journal,
+            diagnostics,
+        )
         base_runner = ReloadingEngineCycleRunner(
             data_dir,
             env,
             store,
             auth_provider,
+            public_detector,
+            detector_journal,
+            first_journal,
             configuration_synchronization,
             request_metrics=request_metrics,
-            local_skips_enabled=_local_skips_enabled(env),
-            public_detector_shadow=public_detector_shadow,
+            source_inactivity=_spotify_inactivity(env),
         )
         runner = InstrumentedEngineCycleRunner(base_runner, diagnostics)
         lifecycle = EngineLifecycleController(
@@ -1276,22 +1220,15 @@ def _runtime_interval(environ: Mapping[str, str]) -> timedelta:
     return interval
 
 
-def _local_skips_enabled(environ: Mapping[str, str]) -> bool:
-    value = environ.get(_SPOTIFY_LOCAL_SKIPS_ENV, "1").strip().casefold()
-    if value in {"1", "true", "yes", "on"}:
-        return True
-    if value in {"0", "false", "no", "off"}:
-        return False
-    raise RuntimeError(f"{_SPOTIFY_LOCAL_SKIPS_ENV} must be a boolean value")
-
-
-def _public_detector_shadow_enabled(environ: Mapping[str, str]) -> bool:
-    value = environ.get(_SPOTIFY_PUBLIC_DETECTOR_SHADOW_ENV, "0").strip().casefold()
-    if value in {"1", "true", "yes", "on"}:
-        return True
-    if value in {"0", "false", "no", "off"}:
-        return False
-    raise RuntimeError(f"{_SPOTIFY_PUBLIC_DETECTOR_SHADOW_ENV} must be a boolean value")
+def _spotify_inactivity(environ: Mapping[str, str]) -> timedelta:
+    raw = environ.get(_SPOTIFY_INACTIVITY_HOURS_ENV, "24").strip()
+    try:
+        hours = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{_SPOTIFY_INACTIVITY_HOURS_ENV} must be an integer") from exc
+    if hours < 1:
+        raise RuntimeError(f"{_SPOTIFY_INACTIVITY_HOURS_ENV} must be at least 1")
+    return timedelta(hours=hours)
 
 
 def _operational_status_page(
@@ -1386,7 +1323,7 @@ def _source_rows(cycle: EngineCycleResult | None) -> str:
             f"<td><code>{html.escape(str(source.source_id))}</code></td>"
             f"<td>{result}</td>"
             f"<td>{_format_optional_time(source.last_success_at)}</td>"
-            f"<td>{source.edition_count} fetched / {source.matched_count} matched</td>"
+            f"<td>{source.episode_count} cached / {source.api_request_count} API requests</td>"
             f"<td>{_escape_optional(source.error)}</td>"
             "</tr>"
         )

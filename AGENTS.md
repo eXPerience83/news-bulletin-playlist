@@ -70,15 +70,16 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 ## Architecture invariants
 
 - One engine can drive multiple playlists, countries and languages.
-- The current authoritative production path remains the legacy RSS -> Spotify matching engine until
-  the Spotify-first shadow/cutover work is explicitly approved.
-- The target architecture is Spotify-first: an unauthenticated public Spotify show observation is
+- The authoritative production architecture is Spotify-first. Runtime playlist decisions must not
+  depend on RSS collection, RSS-native identities, RSS-to-Spotify matching or PENDING/AMBIGUOUS
+  matching retries.
+- An unauthenticated public Spotify show observation is
   used only as a **change signal**; when that episode identity changes, the official Spotify Web API
   catalogue is the episode-data authority for the refreshed source.
 - The public Embed/oEmbed surfaces are never the episode catalogue/content source. Do not scrape a
   historical episode list from HTML; persist only the bounded latest-episode detector evidence
   required to decide whether an official catalogue refresh is needed.
-- In the Spotify-first path, Spotify episode ID/URI is the canonical runtime episode identity. Do
+- Spotify episode ID/URI is the canonical runtime episode identity. Do
   not create a new RSS identity that then needs matching back to Spotify.
 - A normal detector change refreshes only the changed source catalogue. Reuse persisted state for
   unchanged sources and apply playlist retention/ordering locally; do not fan out into all source
@@ -93,6 +94,8 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - Do not download or store audio.
 - Persisted Spotify episode URIs must satisfy the shared episode-URI invariant before reuse.
 - A failed source or destination must not unnecessarily block independent sources/playlists.
+- Released legacy SQLite tables may remain inert for upgrade compatibility, but legacy rows must
+  never participate in current runtime decisions.
 
 ## Documentation and external contracts
 

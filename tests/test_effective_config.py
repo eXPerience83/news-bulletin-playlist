@@ -30,7 +30,6 @@ sources:
     timezone: Europe/Madrid
     enabled: true
     parser_id: ser
-    endpoint_url: https://example.test/ser.xml
     external_references:
       - system: spotify
         resource_type: show

@@ -1,7 +1,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from news_bulletin_playlist.provider_watch import evaluate_titles
 from news_bulletin_playlist.providers.rne import RneParser
 
 MADRID = ZoneInfo("Europe/Madrid")
@@ -51,19 +50,3 @@ def test_rne_dotted_date_rejects_unsupported_year_width_and_invalid_date() -> No
 
     assert parser.parse("NOTICIAS RNE - 16.09.026 - 19.00H") is None
     assert parser.parse("NOTICIAS RNE - 31.02.26 - 19.00H") is None
-
-
-def test_provider_watch_accepts_current_rne_recent_titles() -> None:
-    titles = [
-        "NOTICIAS RNE - 17.09.2026. - 00.00H",
-        "NOTICIAS RNE - 16.09.2026 - 21.00H",
-        "NOTICIAS RNE - 16.09.26 - 19.00H",
-        "RNE NOTICIAS - 16.09.2026 - 18.00H",
-        "RNE NOTICIAS - 16.09.2026 - 17.00H",
-        "RNE NOTICIAS - 16.09.2026 - 16.00H",
-    ]
-
-    result = evaluate_titles("rne", RneParser(), titles)
-
-    assert result.ok
-    assert result.parsed == 6

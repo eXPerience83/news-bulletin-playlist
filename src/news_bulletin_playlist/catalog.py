@@ -17,7 +17,7 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
 )
-from news_bulletin_playlist.registry import has_collection_filter
+from news_bulletin_playlist.registry import has_collection_filter, has_title_parser
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,10 +53,10 @@ class BuiltInCatalog:
             raise ValueError("built-in catalog contains duplicate playlist template ids")
         known_sources = set(source_ids)
         for source in self.sources:
-            if not source.enabled or source.endpoint_url is None or not source.endpoint_url.strip():
-                raise ValueError(
-                    f"built-in source {source.id} must be operational and have an endpoint"
-                )
+            if not source.enabled:
+                raise ValueError(f"built-in source {source.id} must be enabled")
+            if not has_title_parser(str(source.parser_id)):
+                raise ValueError(f"built-in source {source.id} has an unknown title parser")
             spotify_show_ids = {
                 reference.external_id.strip()
                 for reference in source.external_references
@@ -116,7 +116,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("ser"),
         editorial_scope=EditorialScope.NATIONAL,
-        endpoint_url="https://fapi-top.prisasd.com/podcast/playser/boletines.xml",
         external_references=(ExternalReference("spotify", "show", "4EwwdoHHYmbt49UXODQMpi"),),
     ),
     SourceDefinition(
@@ -128,9 +127,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("rne"),
         editorial_scope=EditorialScope.NATIONAL,
-        endpoint_url="https://api.rtve.es/api/adapter/programas/1750/audios.rss",
         external_references=(ExternalReference("spotify", "show", "0UgidTKsoaHiHDARuPQNW1"),),
-        spotify_release_delay_days=1,
     ),
     SourceDefinition(
         id=SourceId("ondacero"),
@@ -141,10 +138,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("ondacero"),
         editorial_scope=EditorialScope.NATIONAL,
-        endpoint_url=(
-            "https://www.ondacero.es/rss/podcast/mount/"
-            "ATRESMEDIA_LAS_NOTICIAS_EN_ONDA_CERO_P/fastly"
-        ),
         external_references=(ExternalReference("spotify", "show", "0tjEexypyczHXW9vE3SU3P"),),
     ),
     SourceDefinition(
@@ -156,7 +149,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("release_date_title"),
         editorial_scope=EditorialScope.NATIONAL,
-        endpoint_url="https://omny.fm/shows/las-noticias-de-abc-1/playlists/podcast.rss",
         external_references=(ExternalReference("spotify", "show", "0cLJl7pvrr1bkUaKiVRggf"),),
     ),
     SourceDefinition(
@@ -168,7 +160,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("cnn"),
         editorial_scope=EditorialScope.INTERNATIONAL,
-        endpoint_url="https://feeds.megaphone.fm/WMHY5696831164",
         external_references=(ExternalReference("spotify", "show", "0vDgnorbpBr65YZzFVVouE"),),
     ),
     SourceDefinition(
@@ -180,7 +171,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("release_date_title"),
         editorial_scope=EditorialScope.INTERNATIONAL,
-        endpoint_url="https://news.un.org/feed/subscribe/en/audio-product/all/audio-rss.xml",
         external_references=(ExternalReference("spotify", "show", "3bCQUj5TafN5ichR8gXpFI"),),
     ),
     SourceDefinition(
@@ -192,7 +182,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("release_date_title"),
         editorial_scope=EditorialScope.INTERNATIONAL,
-        endpoint_url="https://feeds.megaphone.fm/reutersworldnews",
         external_references=(ExternalReference("spotify", "show", "1alpjXkCUjn3Y9fR5xl8fZ"),),
     ),
     SourceDefinition(
@@ -204,7 +193,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("release_date_title"),
         editorial_scope=EditorialScope.INTERNATIONAL,
-        endpoint_url="https://feeds.simplecast.com/CC3CSCi5",
         external_references=(ExternalReference("spotify", "show", "7G8CEhjsTshZeGtPLcuW6T"),),
     ),
     SourceDefinition(
@@ -216,7 +204,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("release_date_title"),
         editorial_scope=EditorialScope.INTERNATIONAL,
-        endpoint_url="https://rss.dw.com/xml/podcast_actualidad_en_analisis",
         external_references=(ExternalReference("spotify", "show", "7CzHDusNXRICUXuefIXbxd"),),
     ),
     SourceDefinition(
@@ -229,7 +216,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         parser_id=ParserId("release_date_title"),
         collection_filter_id="un_news_es_minutes",
         editorial_scope=EditorialScope.INTERNATIONAL,
-        endpoint_url="https://news.un.org/feed/subscribe/es/audio-product/all/audio-rss.xml",
         external_references=(ExternalReference("spotify", "show", "77hGWK2o0NYsdS8WuXiLo6"),),
     ),
     SourceDefinition(
@@ -241,10 +227,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("rfi_journal_monde"),
         editorial_scope=EditorialScope.INTERNATIONAL,
-        endpoint_url=(
-            "https://apis.rfi.fr/products/get_product/fov-rfi-fr-get-journaux-podcast-v2-monde?"
-            "token_application=975d23b8-7a07-11e8-9f62-005056a90194"
-        ),
         external_references=(ExternalReference("spotify", "show", "6y3v3GWUBwANr9hK9m1frF"),),
     ),
     SourceDefinition(
@@ -256,7 +238,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("release_date_title"),
         editorial_scope=EditorialScope.MIXED,
-        endpoint_url="https://www.deutschlandfunk.de/nachrichten-108.xml",
         external_references=(ExternalReference("spotify", "show", "4eYPgoQH9VLTfgAxIbwHqs"),),
     ),
     SourceDefinition(
@@ -268,7 +249,6 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         enabled=True,
         parser_id=ParserId("release_date_title"),
         editorial_scope=EditorialScope.MIXED,
-        endpoint_url="https://www.rmf24.pl/podcast/fakty/feed",
         external_references=(ExternalReference("spotify", "show", "2BeZqsvzZUSldlZWvjeGe3"),),
     ),
 )

@@ -111,14 +111,17 @@ The ZIP contains:
 - `manifest.json` — bundle format/privacy metadata.
 
 It does not contain the raw SQLite database, environment variables, Docker logs, OAuth callback
-URLs, provider response bodies, RSS titles/GUIDs/links, Spotify episode URI lists, or credential
-files.
+URLs, provider response bodies, unbounded episode-title/URI collections, or credential files.
 
-Source/playlist events intentionally retain only bounded operational evidence such as RSS funnel
-counts, title-parser mode/rejection counts, matching-plan/evaluation counters, request counts,
-allow-listed reconciliation reasons, duration histograms and preservation decisions. Correlate
+Source/playlist events intentionally retain only bounded operational evidence such as detector
+outcomes, refresh reasons, catalogue/request counts, coverage flags, parser/filter counters,
+duration histograms, allow-listed reconciliation reasons and preservation decisions. Correlate
 these with `cycle_id`, `source_id` and `playlist_id`; do not add raw provider text merely to make
 an incident easier to inspect.
+
+The diagnostic allowlist still recognizes fields emitted by released RSS/matching/planner versions
+so historical rows already stored in SQLite remain readable after upgrade. Those legacy keys are
+compatibility-only and are not evidence that the old runtime path is still active.
 
 ## Secret-handling contract
 

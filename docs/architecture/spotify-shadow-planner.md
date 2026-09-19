@@ -1,5 +1,11 @@
 # Spotify shadow planner
 
+> **Historical / superseded.** This document records the legacy RSS/matching planner design.
+> The authoritative runtime is now Spotify-first; see `docs/ARCHITECTURE.md`. Planner/matching
+> tables may remain in released SQLite schemas only for upgrade compatibility and do not
+> participate in current runtime decisions.
+
+
 Issue #158 introduced the durable local planner and its bounded
 `spotify_planner_shadow_decision` event. Phase 3 consumes its catalogue and retry evidence to
 suppress unnecessary show-catalogue reads. Phase 4 uses the same evidence for operational

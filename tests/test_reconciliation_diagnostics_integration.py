@@ -23,7 +23,6 @@ from news_bulletin_playlist.reconciliation import (
 )
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.client import SpotifyApiError
-from news_bulletin_playlist.spotify_planner import PlannerReason, PlannerShadowResult
 
 NOW = datetime(2026, 9, 2, 17, 51, 12, tzinfo=UTC)
 SECRET = "access-token-sentinel-never-export"
@@ -35,58 +34,6 @@ class _Runner:
 
     def run_cycle(self) -> EngineCycleResult:
         return self.result
-
-
-def test_shadow_planner_diagnostic_is_bounded_and_exportable(tmp_path: Path) -> None:
-    secret = "access-token-shadow-sentinel"
-    store = DiagnosticEventStore(tmp_path / "state.sqlite3")
-    store.initialize()
-    output = io.StringIO()
-    logger = logging.Logger("test-shadow-planner-diagnostic")
-    logger.addHandler(logging.StreamHandler(output))
-    result = EngineCycleResult(
-        started_at=NOW,
-        finished_at=NOW,
-        ok=True,
-        sources=(),
-        playlists=(),
-        planner_shadow=PlannerShadowResult(
-            would_need_spotify=True,
-            would_allow_local_skip=False,
-            reasons=(PlannerReason.DIRTY, PlannerReason.PENDING_VERIFICATION),
-            matching_work_count=0,
-            matching_source_count=0,
-            dirty_destination_count=1,
-            catalogue_audit_due_count=0,
-            destination_audit_due_count=0,
-            safety_blocker_count=1,
-        ),
-    )
-    diagnostics = OperationalDiagnostics(store, logger=logger)
-    InstrumentedEngineCycleRunner(_Runner(result), diagnostics, clock=lambda: NOW).run_cycle()
-    event = next(
-        event
-        for event in store.list_events(limit=10)
-        if event.event_name == "spotify_planner_shadow_decision"
-    )
-    assert event.details["planner_shadow_enabled"] is True
-    assert event.details["planner_reason_dirty"] is True
-    assert event.details["planner_reason_pending_verification"] is True
-    assert event.details["planner_would_allow_local_skip"] is False
-
-    page = render_diagnostics_page(events=(event,), filters=DiagnosticFilters(hours=24, limit=200))
-    bundle = build_diagnostic_bundle(
-        events=(event,),
-        generated_at=NOW,
-        last_cycle=result,
-        retention_days=30,
-        max_events=10_000,
-    )
-    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
-        exported = b"\n".join(archive.read(name) for name in archive.namelist())
-    combined = b"\n".join((page, exported, output.getvalue().encode()))
-    assert b"spotify_planner_shadow_decision" in combined
-    assert secret.encode() not in combined
 
 
 def test_live_shape_failure_is_safe_in_store_ui_and_zip(tmp_path: Path) -> None:
@@ -134,6 +81,9 @@ def test_live_shape_failure_is_safe_in_store_ui_and_zip(tmp_path: Path) -> None:
     )
     assert playlist_event.details == {
         "desired_count": 80,
+        "duration_unavailable_count": 0,
+        "local_skip": False,
+        "stale_escalation": False,
         "failure_class": "pagination_error",
         "failure_reason": "playlist_pagination_truncated",
         "phase": "prewrite",
@@ -238,10 +188,6 @@ def test_ambiguous_502_request_metrics_are_sanitized_in_store_ui_and_zip(
                 invalid_uri_count=0,
                 duplicate_count=0,
                 desired_fingerprint="a" * 64,
-                desired_changed_since_previous_attempt=False,
-                consecutive_failure_count=7,
-                first_failure_at=NOW - timedelta(hours=1),
-                last_failure_at=NOW,
                 write_outcome="unknown",
             ),
         ),

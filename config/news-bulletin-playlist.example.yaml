@@ -16,7 +16,6 @@ sources:
     timezone: Europe/Madrid
     enabled: true
     parser_id: ser
-    endpoint_url: https://fapi-top.prisasd.com/podcast/playser/boletines.xml
     external_references:
       - system: spotify
         resource_type: show
@@ -29,7 +28,6 @@ sources:
     timezone: Europe/Madrid
     enabled: true
     parser_id: rne
-    endpoint_url: https://api.rtve.es/api/adapter/programas/1750/audios.rss
     external_references:
       - system: spotify
         resource_type: show
@@ -42,7 +40,6 @@ sources:
     timezone: Europe/Madrid
     enabled: true
     parser_id: ondacero
-    endpoint_url: https://www.ondacero.es/rss/podcast/mount/ATRESMEDIA_LAS_NOTICIAS_EN_ONDA_CERO_P/fastly
     external_references:
       - system: spotify
         resource_type: show
@@ -55,7 +52,6 @@ sources:
     timezone: Europe/Madrid
     enabled: true
     parser_id: release_date_title
-    endpoint_url: https://omny.fm/shows/las-noticias-de-abc-1/playlists/podcast.rss
     external_references:
       - system: spotify
         resource_type: show
@@ -68,7 +64,6 @@ sources:
     timezone: America/New_York
     enabled: true
     parser_id: cnn
-    endpoint_url: https://feeds.megaphone.fm/WMHY5696831164
     external_references:
       - system: spotify
         resource_type: show

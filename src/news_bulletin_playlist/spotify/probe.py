@@ -4,12 +4,13 @@ import os
 import sys
 from typing import Any
 
-from news_bulletin_playlist.registry import CORE_PROVIDERS
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
     SpotifyClient,
     SpotifyTransportError,
 )
+from news_bulletin_playlist.spotify.public_detector import spotify_show_id
 
 _RNE_DUPLICATE_DATE = "2026-08-25"
 _RNE_DUPLICATE_TIME_TOKENS = ("18.00", "18:00")
@@ -64,25 +65,25 @@ def _first_show_page(client: SpotifyClient, show_id: str) -> list[dict[str, Any]
 
 def run_catalog_probe(client: SpotifyClient) -> int:
     failures = 0
-    for provider in CORE_PROVIDERS:
+    for source in BUILTIN_CATALOG.sources:
         try:
-            if provider.provider_id == "rne":
-                items = _show_episodes_for_investigation(client, provider.spotify_show_id)
+            if str(source.id) == "rne":
+                items = _show_episodes_for_investigation(client, spotify_show_id(source))
             else:
-                items = _first_show_page(client, provider.spotify_show_id)
+                items = _first_show_page(client, spotify_show_id(source))
         except (SpotifyApiError, SpotifyTransportError) as exc:
-            print(f"FAIL {provider.provider_id}: {_format_error(exc)}")
+            print(f"FAIL {str(source.id)}: {_format_error(exc)}")
             failures += 1
             continue
         except RuntimeError as exc:
-            print(f"FAIL {provider.provider_id}: invalid Spotify response ({exc})")
+            print(f"FAIL {str(source.id)}: invalid Spotify response ({exc})")
             failures += 1
             continue
-        print(f"\n[{provider.provider_id}] {len(items)} episode(s) returned")
+        print(f"\n[{str(source.id)}] {len(items)} episode(s) returned")
         for item in items[:5]:
             print(f"  {_episode_summary(item)}")
 
-        if provider.provider_id == "rne":
+        if str(source.id) == "rne":
             matches = [
                 item
                 for item in items
@@ -166,15 +167,15 @@ def reconcile_playlist_items(
 
 def run_write_probe(client: SpotifyClient) -> int:
     latest_uris: list[str] = []
-    for provider in CORE_PROVIDERS:
-        page = client.show_episodes(provider.spotify_show_id, limit=1)
+    for source in BUILTIN_CATALOG.sources:
+        page = client.show_episodes(spotify_show_id(source), limit=1)
         try:
             items = _require_items(page, context="Spotify show episodes response")
         except RuntimeError as exc:
-            print(f"FAIL write probe: invalid response for {provider.provider_id} ({exc})")
+            print(f"FAIL write probe: invalid response for {str(source.id)} ({exc})")
             return 1
         if not items or not isinstance(items[0], dict) or not items[0].get("uri"):
-            print(f"FAIL write probe: no latest URI for {provider.provider_id}")
+            print(f"FAIL write probe: no latest URI for {str(source.id)}")
             return 1
         latest_uris.append(str(items[0]["uri"]))
 

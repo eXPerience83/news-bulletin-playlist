@@ -16,15 +16,12 @@ from news_bulletin_playlist.reconciliation import SpotifyPlaylistClient
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
-from news_bulletin_playlist.spotify.matcher import SpotifyCatalogClient
+from news_bulletin_playlist.spotify.first_catalogue import SpotifyCatalogueClient
 
 DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS = 30 * 60
 SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX = "Spotify rate-limit backoff active until "
 SPOTIFY_RATE_LIMIT_PRESERVED_MESSAGE = (
     "destination preserved because Spotify rate-limit backoff is active"
-)
-SPOTIFY_RATE_LIMIT_MATCHING_DEFERRED_MESSAGE = (
-    "Spotify matching skipped because rate-limit backoff is active"
 )
 
 _TABLE_SQL = """
@@ -53,7 +50,7 @@ T = TypeVar("T")
 Clock = Callable[[], datetime]
 
 
-class SpotifyBackoffClient(SpotifyCatalogClient, SpotifyPlaylistClient, Protocol):
+class SpotifyBackoffClient(SpotifyCatalogueClient, SpotifyPlaylistClient, Protocol):
     """Combined Spotify catalogue/playlist surface guarded by runtime backoff."""
 
 
@@ -308,7 +305,7 @@ class SpotifyRateLimitJournal:
 
 
 class SpotifyRateLimitGuardAuth:
-    """Skip token work after RSS collection while a durable Web API cooldown is active."""
+    """Skip Spotify token work while a durable Web API cooldown is active."""
 
     def __init__(
         self,
@@ -336,6 +333,11 @@ class SpotifyRateLimitGuardAuth:
                 _emit_backoff(self.diagnostics, state, backoff_state="active", occurred_at=observed)
                 raise SpotifyRateLimitBackoffActive(_active_message(state))
             return self.provider.get_access_token(now=now)
+
+    def planner_authorization_context(self) -> str | None:
+        reader = getattr(self.provider, "planner_authorization_context", None)
+        value = reader() if callable(reader) else None
+        return value if isinstance(value, str) and value else None
 
     def acquire_provider_session(
         self, *, now: datetime | None = None

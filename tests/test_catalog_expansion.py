@@ -82,7 +82,6 @@ def test_expanded_sources_have_deterministic_spotify_show_references() -> None:
             if ref.system == "spotify" and ref.resource_type == "show"
         )
         assert len(spotify_refs) == 1
-        assert source.endpoint_url
 
 
 def test_wave_one_source_identity_and_unresolved_spanish_classification() -> None:

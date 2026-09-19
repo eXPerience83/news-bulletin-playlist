@@ -10,7 +10,7 @@ A provider title expresses the bulletin's local wall-clock time in the source's 
 
 The configured `SourceDefinition.timezone` is authoritative when that title is parsed. The resulting edition timestamp is then normalized and compared as an absolute instant for retention and playlist chronology.
 
-For playlists configured with `edition_at_desc`, ordering uses `edition_at` and falls back to RSS `published_at` only when no reliable semantic edition timestamp exists.
+`edition_at_desc` is the only supported ordering contract. When an exact `edition_at` is available it is authoritative. When it is unavailable, Spotify-first ordering uses the official Spotify release-date precision together with local `first_seen_at` evidence; it never invents an exact minute.
 
 The visible episode title must therefore **not** be used on its own to decide whether an item is chronologically misplaced.
 
@@ -56,8 +56,8 @@ Before changing parser or ordering code, check these points in order:
 2. Confirm the source timezone configured for that provider.
 3. Confirm that the title parser produced the expected local `edition_at`.
 4. Convert that instant to the timezone relevant to the playlist/audience when comparing it visually with local bulletins.
-5. Confirm the playlist ordering policy (`edition_at_desc` versus `published_at_desc`).
-6. Only treat the item as misplaced if its canonical timestamp is wrong or the desired-state ordering does not follow that timestamp.
+5. If no exact `edition_at` exists, inspect the Spotify release-date value/precision and local `first_seen_at` provenance rather than assuming an exact publication minute.
+6. Only treat the item as misplaced if the parsed semantic time/provenance is wrong or the Spotify-first ordering helper does not follow that evidence.
 
 This check is especially important for international sources because Spotify normally preserves the provider's original title and does not rewrite the displayed clock into the listener's local timezone.
 
@@ -65,4 +65,4 @@ This check is especially important for international sources because Spotify nor
 
 The CNN example above is a useful human-readable regression case. If `CNN 5 cosas 09/02/26 6am` appears around the 12:00 Spanish bulletins, that is expected behavior. A future implementation change should not "fix" this by sorting the literal `6am` as though it were 06:00 in Spain.
 
-See also [`ARCHITECTURE.md`](ARCHITECTURE.md), especially the collection and desired-state contracts that define source timezone authority and semantic `edition_at` ordering.
+See also [`ARCHITECTURE.md`](ARCHITECTURE.md), especially the detector/catalogue, timestamp and desired-state contracts that define source timezone authority and semantic `edition_at` ordering.

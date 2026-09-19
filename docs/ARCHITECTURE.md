@@ -1,306 +1,369 @@
 # Architecture
 
-This document defines the architectural invariants of News Bulletin Playlist. These constraints are intentional and should be preserved as the project evolves.
+## Current status
 
-## Product shape
+The authoritative runtime is **Spotify-first**.
 
-News Bulletin Playlist is **one engine that manages many playlists**.
+Runtime playlist decisions do not depend on RSS collection, RSS-native episode identity,
+RSS-to-Spotify matching or per-edition `PENDING` / `AMBIGUOUS` matching retries.
 
-Spanish-language news is the first implementation and validation target, not a permanent architectural boundary. The same runtime must be able to manage playlists for multiple countries and languages without duplicating the application or running one complete collector per playlist.
+The current authority split is:
 
-Current managed-catalog validation covers Spanish plus initial English, French, German and Polish playlists. Further expansion should reuse the same engine and source model.
+- the unauthenticated public Spotify surface is a bounded **change detector only**;
+- the official Spotify Web API show catalogue is the **episode metadata authority**;
+- Spotify episode ID/URI is the **canonical runtime episode identity**;
+- durable local Spotify-first state is the authority for unchanged sources between catalogue
+  refreshes;
+- the existing reconciliation/readback machinery is the authority for determining whether a
+  destination mutation safely applied.
 
-## Core invariant
+Released legacy SQLite tables are intentionally not dropped merely because the current runtime no
+longer reads them. They may remain inert so upgrades from released schemas stay boring and safe.
 
-> **Fetch once -> normalize once -> store once -> distribute to many playlists.**
+Historical P0/P1 and shadow-planner documents describe earlier implementation stages. They are useful
+for provenance, but they are not the current runtime contract when they conflict with this document.
 
-A provider/source is independent from a playlist. A source can feed zero, one or many playlists. A playlist selects sources or normalized editions according to configuration and policy.
+## Core invariants
 
-The engine must not fetch or parse the same source independently for every playlist that uses it.
+1. One process can maintain multiple playlists, countries and languages.
+2. A source is global and may be selected by several playlists.
+3. A normal source change refreshes **only that source's** official Spotify catalogue.
+4. Unchanged sources reuse persisted local episode state.
+5. Playlist retention, duration eligibility, ordering and source selection are computed locally.
+6. Spotify episode ID/URI is identity; title/timestamps are metadata.
+7. Detector failure, catalogue failure or incomplete evidence must not be converted into an
+   authoritative empty playlist.
+8. Deterministic stale/unavailable-item evidence may escalate catalogue refreshes; ambiguous writes
+   may not.
+9. Mutating transport/5xx failures remain ambiguous until readback/snapshot evidence resolves them.
+10. HTTP 429 uses one shared durable Spotify cooldown. No component may bypass it with ad-hoc retry.
+11. A failing source or destination must not unnecessarily block independent sources/playlists.
+12. Audio is never downloaded or stored.
 
-## Spotify-first migration (2026-09)
+## Runtime topology
 
-The current production engine still uses provider/RSS discovery plus Spotify matching while the
-replacement is validated in shadow. The target architecture is now Spotify-first:
+The supported deployment is one long-lived Python 3.14 process.
 
-1. Poll the public Spotify show Embed without OAuth and extract only the bounded latest-episode
-   identity used as a change signal.
-2. If that episode ID is unchanged, do not create a Spotify Web API catalogue request.
-3. If it changed, read the official Spotify show catalogue for that source, ingest every relevant
-   episode in the retention window and persist Spotify episode IDs/URIs as canonical runtime
-   identities.
-4. Reuse persisted state for every unchanged source, expire episodes outside the playlist retention
-   window locally and compute the complete desired playlist.
-5. A normal source change must not trigger catalogue reads for every other source.
-6. Independent false-negative audits are inactivity-triggered rather than fixed-period while normal
-   detector changes continue.
+It owns:
 
-The public Embed/oEmbed surface is a **detector only**, never the episode catalogue. Raw Embed
-`ETag` and whole-document hashes are known to be volatile and are not change keys. The primary
-candidate is the latest public episode `entity.id`; oEmbed title is secondary corroboration.
+- the read-only status/health surface;
+- the protected administration and OAuth callback surface;
+- one sequential engine scheduler;
+- the local SQLite state under `/data`;
+- managed installation state under `/data/managed-state.json`.
 
-Until the Spotify-first shadow/cutover gates in #253/#254/#255 are complete, the legacy path remains
-authoritative and no shadow detector result may write or reorder a production playlist.
+The default engine interval is approximately ten minutes. GitHub Actions is not the production
+playlist scheduler.
 
-## Main domains
+The runtime may be unconfigured: with no active managed playlist it remains healthy and does not
+invent provider work.
 
-### Source / provider
+## Configuration model
 
-A source describes where bulletin metadata comes from and how it is interpreted.
+Application-owned source/catalog knowledge is separate from installation-owned playlist choices.
 
-Source configuration and metadata should be capable of representing at least:
+The built-in source catalog defines, for each supported source:
 
-- stable source/provider identifier;
-- provider/display name;
-- feed or discovery endpoint;
-- country or countries;
-- language or languages;
-- bulletin/category type;
-- parser / normalization rules;
-- source-specific timezone when required;
-- enabled/disabled state;
-- priority or quality metadata when required.
+- stable source ID;
+- country/language/editorial scope;
+- timezone;
+- title parser strategy;
+- optional collection/content filter;
+- exactly one Spotify `show` external reference.
 
-Country and language are separate dimensions. For example, an English-language playlist may combine sources from several countries, while a UK playlist may apply a country-specific selection.
+A normal Spotify-first source has no runtime RSS endpoint requirement.
 
-A source's geographic origin is also separate from its editorial scope. A source produced outside Spain may be suitable for a Spanish-language playlist when its bulletin is genuinely global/international; a geographically narrow regional product is not automatically suitable merely because it is published in Spanish.
+Managed state stores installation choices such as:
 
-### Canonical edition
+- active/paused playlist state;
+- Spotify destination ID;
+- playlist metadata and cover choices;
+- explicit source membership;
+- per-playlist duration ceiling.
 
-Provider-specific metadata is converted to a provider-independent canonical representation before playlist selection.
+The protected `/admin/` UI is the normal configuration path.
 
-Playlist logic must not depend directly on provider-specific title formats, RSS quirks or parsing rules.
+Schema-v1 YAML remains an advanced/manual compatibility path. It uses the same Spotify-first source
+model and does not require `endpoint_url`. If managed state and the default YAML both exist,
+startup fails closed rather than guessing which configuration is authoritative.
 
-### Playlist definition
+## Source selection and catalogue promotion
 
-A playlist is configuration/policy, not its own collector.
+Playlist country/language metadata does not implicitly select sources. Explicit source membership is
+authoritative for the current schema.
 
-Each playlist may independently define:
+A research candidate is promoted to the built-in runtime catalog only after the project has
+sufficient evidence for:
 
-- destination playlist identity;
-- display name and description;
-- source selection and/or selectors;
-- countries;
-- languages;
-- retention window;
-- maximum number of episodes;
-- maximum episode duration;
-- ordering policy;
-- inclusion/exclusion rules.
+- one stable Spotify show identity;
+- suitable bulletin/news-summary editorial scope and cadence;
+- parser behavior on current Spotify episode titles;
+- any required collection/content filter;
+- representative duration behavior;
+- source timezone/language/country classification;
+- failure behavior compatible with the runtime safety model.
 
-The current defaults are 48 hours of playlist retention, a maximum of 100 episodes, a 30-minute episode ceiling and 30 days of internal operational metadata unless a playlist explicitly overrides them.
+A predominantly long-form show is not promoted merely because some episodes fit below a playlist
+duration ceiling.
 
-## Editorial independence and monetization invariant
+## Public detector
 
-Playlist membership and ordering must be determined by documented editorial/source-selection rules, freshness and playlist policy — **never by payment or other compensation**.
+The public detector exists to reduce authenticated Web API work.
 
-The engine must not implement or expose:
+For each source it observes bounded latest-episode evidence from the public Spotify surface and
+persists detector state. It does **not** scrape or reconstruct a historical episode catalogue.
 
-- paid placement in a Spotify playlist;
-- sponsor-funded inclusion or guaranteed inclusion;
-- paid boosts, paid priority or compensation-dependent ordering;
-- rules where donations, sponsorships or payments influence the name or content of a Spotify playlist.
+A detector identity transition is a signal that the source's official catalogue is due for refresh.
 
-This is an architectural constraint, not merely a launch-policy choice. Spotify states that accepting or offering compensation to influence a user playlist or its content is not permitted.
+The detector can skip intermediate publications. That is safe because a subsequent official
+catalogue refresh ingests all relevant episodes needed to cover the retention window rather than
+only the episode seen by the detector.
 
-Possible future monetization of the **software or a separate non-streaming service** is a different concern and must remain technically and conceptually separate from playlist composition. It may only be considered if the deployment's Spotify access mode and the then-current Spotify Developer Policy permit it.
+Detector failures preserve last-known-good episode state and never authorize destructive playlist
+changes.
 
-As of 2026-08-27, Spotify Development Mode is intended for learning, experimentation and personal **non-commercial** projects and must not be relied on as the foundation for building or scaling a business. Therefore the current Development Mode deployment is treated as non-commercial.
+## Official Spotify catalogue refresh
 
-Relevant Spotify references:
+The official Spotify Web API show catalogue is the episode authority.
 
-- https://developer.spotify.com/blog/2026-02-06-update-on-developer-access-and-platform-security
-- https://developer.spotify.com/policy
-- https://developer.spotify.com/documentation/web-api/concepts/quota-modes
-- https://artists.spotify.com/en/blog/behind-the-playlists-your-questions-answered-by-our-playlist-editors
+A source catalogue refresh can occur for these reasons:
 
-Before any future commercial launch, these constraints must be re-verified against the current Spotify terms and access model. Commercialization must not require changing the editorial-independence invariant above.
+- **bootstrap** — no usable Spotify-first source state exists yet;
+- **change** — the public detector observed a new latest episode identity;
+- **inactivity audit** — no detector transition/catalogue refresh has occurred for the configured
+  inactivity threshold;
+- **stale escalation** — deterministic destination evidence requires refreshing other relevant
+  sources before retrying a desired state.
 
-## Engine cycle
+The default inactivity threshold is 24 hours and is configurable through the runtime environment.
 
-A normal engine run should conceptually perform these stages:
+A normal detector change must not fan out into reads of every source catalogue. The engine refreshes
+the changed source, persists its updated relevant catalogue and recomputes complete playlists from
+that source plus unchanged local source state.
 
-1. Load global configuration, source registry and playlist definitions.
-2. Determine the union of sources needed by all enabled playlists.
-3. Fetch each required source once.
-4. Parse and normalize editions once.
-5. Persist canonical operational state once.
-6. Evaluate every enabled playlist against the canonical data.
-7. Reconcile each destination playlist independently.
-8. Apply playlist-specific ordering, retention and limits.
-9. Record source-level and playlist-level results/errors.
+Catalogue traversal is bounded and must prove coverage of the configured retention window before
+old local episode rows are treated as absent. If safe coverage cannot be established, the runtime
+preserves prior state rather than deleting unseen items as if absence had been proven.
 
-This may later use concurrency internally, but concurrency must not change the single-engine / shared-fetch model.
+Request/page counts are diagnostic/accounting data and must remain bounded.
 
-## Failure isolation
+## Spotify-first episode model
 
-A failing source must not prevent unrelated sources from being processed.
+The durable episode model stores:
 
-A failing destination playlist must not prevent other playlists from being reconciled during the same engine run.
+- `source_id`;
+- Spotify show ID;
+- Spotify episode ID;
+- Spotify episode URI;
+- original title;
+- parsed `edition_at` when exact semantic time can be established;
+- explicit timestamp provenance;
+- Spotify release-date value and precision;
+- duration in seconds when available;
+- local `first_seen_at`;
+- local `last_seen_at`.
 
-Errors must therefore be attributable at least to source/provider and playlist where applicable.
+Spotify episode ID/URI is canonical identity.
 
-## Idempotency
+Two episodes may have similar or identical visible titles/timestamps and still remain distinct if
+Spotify gives them distinct episode IDs.
 
-Running the engine repeatedly with unchanged upstream data should converge on the same playlist state and must not create duplicates or unnecessary churn.
+Persisted episode URI and ID must agree with the shared Spotify episode-URI invariant before reuse.
 
-## Configuration over duplication
+## Timestamp policy
 
-Adding a new country, language or playlist should normally require:
+Title parsing is preferred when a source parser can recover an exact editorial date/time.
 
-1. adding/reusing source definitions;
-2. adding a playlist definition or selector;
-3. adding parser/provider code only where a genuinely new source format requires it.
+When exact title parsing succeeds:
 
-It should **not** require copying the application, forking the engine, or creating a country-specific runtime implementation.
+- normalize the resulting instant to UTC;
+- store it as `edition_at`;
+- record timestamp provenance as `title`.
 
-## Source-promotion invariant
+When exact parsing is unavailable:
 
-The runtime catalog is deliberately stricter than the research list. A candidate source is promoted only when all of these are sufficiently established:
+- preserve the original Spotify release-date value and precision;
+- preserve local first-seen time;
+- record explicit fallback provenance;
+- never invent minute precision.
 
-- stable provider/feed identity;
-- deterministic Spotify show identity and matching contract;
-- language and editorial/geographic scope appropriate to at least one playlist;
-- a normal publishing format that behaves like a bulletin or concise news summary.
+Public Embed/oEmbed release dates are not treated as a universal publication timestamp.
 
-The playlist's 30-minute ceiling is a safety/policy boundary, **not** permission to add long-form shows. A source whose usual product is predominantly long-form should remain outside the default runtime catalog even if some individual episodes happen to fit below 30 minutes. Occasional longer editions from an otherwise concise source are acceptable and are handled by playlist duration policy.
+The only supported playlist ordering contract is semantic newest-first
+(`edition_at_desc`). Episodes with exact `edition_at` use it; fallback episodes use the
+Spotify-first ordering helper built from release-date precision plus local first-seen evidence.
 
-This distinction prevents the catalog from drifting from “news bulletins” into generic news podcasts merely because a duration threshold happens to permit them.
+## Collection/content filters
 
-## P1.1 domain and configuration contract
+Source-specific parser and collection filters remain supported where they are semantically useful
+against Spotify catalogue metadata.
 
-Schema version 1 defines four separate concepts:
+These are not remnants of RSS matching. They are part of selecting the intended bulletin product
+from a Spotify show when a provider mixes several products or title forms.
 
-- `SourceDefinition`: a global source/provider definition with stable ID, parser, endpoint,
-  country/language metadata and optional external catalogue references;
-- `CanonicalEdition`: one source-native asset identified by `(source_id, source_native_id)`, with
-  its source title plus UTC `published_at` and optional UTC `edition_at` metadata;
-- `PlaylistDefinition`: editorial metadata, an explicit source selection and per-playlist policy;
-- `DestinationReference`: the adapter and writable external destination for a playlist.
+A filter/parser failure must be observable and bounded. It must not silently convert uncertain
+input into an authoritative empty source state.
 
-An external catalogue reference, such as a Spotify show ID, is not a destination. The source
-parser ID is likewise separate from the destination adapter ID.
+## Spotify-first persistence
 
-The YAML schema is represented by the non-production example in
-[`config/news-bulletin-playlist.example.yaml`](../config/news-bulletin-playlist.example.yaml).
-The following is a deliberately minimal, self-consistent excerpt:
+`SpotifyFirstJournal` owns current authoritative episode/source/destination evidence.
 
-```yaml
-schema_version: 1
-sources:
-  - id: cnn
-    display_name: CNN 5 Cosas
-    countries: [US]
-    languages: [es]
-    timezone: America/New_York
-    enabled: true
-    parser_id: cnn
-    endpoint_url: https://feeds.megaphone.fm/WMHY5696831164
+Its current tables hold:
 
-playlists:
-  - id: spain_spanish_news
-    display_name: Noticias en Español
-    description: Boletines de España y una selección internacional en español
-    languages: [es]
-    countries: [ES]
-    enabled: true
-    source_selection:
-      explicit: [cnn]
-    destination:
-      adapter_id: spotify
-      external_id: replace-with-provisioned-playlist-id
-    retention_hours: 48
-    max_episodes: 100
-    duration_policy:
-      default_max_seconds: 1800
-    ordering: edition_at_desc
-```
+- Spotify-first episode state;
+- per-source last refresh/reason/coverage evidence;
+- per-playlist destination verification fingerprints.
 
-`source_selection.explicit` is authoritative in schema version 1. Playlist countries and languages
-are independent editorial metadata and do not implicitly filter explicitly selected sources.
-Selectors may later evaluate source dimensions, but selectors are deliberately not part of P1.1.
+Source catalogue replacement is conservative:
 
-The default playlist policy is 48 retention hours, 100 episodes, a 1800-second duration ceiling and descending semantic bulletin time (`edition_at`), falling back to RSS `published_at` only when no reliable edition timestamp exists. `published_at_desc` remains available as an explicit legacy ordering policy. `CORE_PROVIDERS` remains temporarily available to the P0 provider watch and Spotify probes; new P1 code resolves parsers independently and does not consume that legacy tuple.
+- episodes are upserted by Spotify episode identity;
+- unseen local episodes are removed only when catalogue coverage has been proven;
+- stale writes cannot regress newer `first_seen_at` / `last_seen_at` metadata.
 
-## P1.2 shared collection contract
+Operational source/playlist run history, playlist attestations, pending snapshot confirmation,
+rate-limit cooldown and diagnostics continue to use the shared SQLite database.
 
-The collection stage implements the first half of the core invariant without introducing playlist-specific collectors:
+### Legacy database compatibility
 
-- required sources are the union of explicit source selections across all enabled playlists;
-- each required enabled source is fetched and parsed at most once per collection cycle;
-- runtime collection uses the configured source endpoint, including Onda Cero's real RSS feed; watchdog-only webpage fallbacks are not production metadata authorities;
-- RSS/provider identity is preserved independently from title and timestamps. Native identity prefers `guid`/`id`, then the enclosure asset URL, then an editorial link when no stronger source-native identifier exists;
-- title/date/hour are never used to synthesize identity, so distinct native assets with identical visible metadata remain distinct;
-- RSS publication metadata produces `published_at`, while a provider title parser may produce editorial `edition_at`; sources without a trustworthy semantic timestamp may deliberately leave `edition_at` unset and use exact normalized title plus release-date matching downstream;
-- semantic title parsers use the recovery-first safety contract in [`TITLE_RECOVERY.md`](TITLE_RECOVERY.md): exact parsing remains authoritative, only reviewed syntax drift is recovered locally, and unresolved material drift is a source failure rather than an authoritative partial/empty batch;
-- the configured `SourceDefinition.timezone` is authoritative for interpreting local editorial wall clocks before the canonical model normalizes them to UTC;
-- collection returns an explicit success/failure result for each source. A malformed feed, failed fetch, missing required endpoint, or feed with no valid canonical bulletin editions is a source failure for that cycle rather than an invented empty-success state;
-- one source failure does not prevent unrelated sources from being collected;
-- RSS response bodies are bounded to 10 MiB before parsing so an unhealthy or misconfigured endpoint cannot consume unbounded process memory.
+Released migrations created tables for canonical RSS editions, Spotify matching and the old planner.
 
-P1.2 deliberately does not persist state, perform Spotify catalogue matching, apply playlist retention/order policy, or reconcile destinations. Those responsibilities belong to later P1 workstreams.
+Those schema migrations remain so an existing database can upgrade without destructive surgery.
+Current runtime code does not use those rows to decide source refreshes, desired playlists or
+destination writes.
 
-## P1.3 persistence contract
+Legacy diagnostic keys likewise remain allowlisted so already-persisted diagnostic history can be
+rendered/exported after upgrade. That compatibility surface must not be mistaken for an active
+legacy runtime path.
 
-Operational state is stored once in SQLite under `/data`, independent from any one playlist:
+## Desired playlist state
 
-- canonical editions are keyed globally by `(source_id, source_native_id)` and are never duplicated per playlist;
-- schema upgrades use a small explicit, repeatable migration mechanism rather than an ORM;
-- source run history, latest-attempt state and last-known-good timestamps are persisted separately;
-- Spotify matching state persists `matched`, `pending` and `ambiguous` outcomes plus diagnostics and the durable source-identity to Spotify episode URI mapping;
-- playlist run history and latest playlist state are persisted without owning copies of canonical editions;
-- logical writes are transactional and persistence failures surface as `PersistenceError` rather than being interpreted as an empty fresh state;
-- state updates are monotonic, so replaying older collection/matching/reconciliation work cannot regress newer canonical metadata, mappings, source status or playlist status;
-- source/playlist run history is eligible for deterministic 30-day pruning by its operational `finished_at` timestamp;
-- canonical retention is a separate 30-day lifecycle measured from local `last_seen_at`: provider-controlled `published_at`/`edition_at` determine episode semantics and playlist eligibility, but cannot make a source-native asset observed today physically stale in SQLite;
-- canonical editions whose `last_seen_at` is older than the retention boundary may be removed only when the caller explicitly supplies the identities that still need protection for playlist correctness. Playlist protection uses each playlist's own ordering authority and retention window. If that protection set is unknown, canonical state is retained by default;
-- the exact canonical cutoff is retained (`last_seen_at == cutoff` is not stale); only rows strictly older than it are eligible for deletion;
-- deleting an eligible canonical edition removes its dependent Spotify mapping and planner rows, including any persistence-rejection barrier, transactionally through the database relationships.
+Each enabled playlist is computed from persisted Spotify-first episodes for its explicit selected
+sources.
 
-The runtime initializes and migrates the database automatically under its persistent data directory on container start. P1.3 does not itself decide which collected editions to match or which playlist items to write.
+The normal policy is:
 
-## P1.4 deterministic Spotify matching contract
+- retain recent content for 48 hours;
+- cap the destination at 100 episodes;
+- apply the playlist's duration ceiling (currently 1800 seconds by default);
+- apply any explicit bounded duration exception;
+- sort newest-first under the semantic Spotify-first ordering policy;
+- deduplicate identical Spotify episode URIs at destination level.
 
-Matching maps already-persisted canonical source identities to Spotify episode URIs without changing source identity or publication metadata:
+Duration is destination eligibility, not episode identity.
 
-- each source resolves exactly one configured Spotify `show` external reference; enabled-source matching never falls back to global Spotify search;
-- persisted successful mappings are reused before any catalogue request;
-- recent `PENDING` or `AMBIGUOUS` outcomes are reused for a 15-minute retry grace to avoid repeated catalogue churn; a future persisted timestamp is also retained until the matcher clock catches up so P1.3 monotonicity cannot be violated;
-- unresolved editions are matched in a source batch, so Spotify catalogue pages are fetched once and reused across all editions for that source rather than once per bulletin;
-- catalogue traversal is deliberately bounded to two pages of at most 50 episodes each: 100 candidates maximum per source matching pass;
-- matching is scoped to the known show and reuses the source's existing title parser when a semantic title timestamp exists;
-- the configured source timezone remains authoritative when interpreting parsed Spotify title wall clocks;
-- Spotify release-date precision must be compatible with the canonical edition date before a candidate is viable;
-- when canonical `edition_at` is unavailable, only normalized exact-title equality plus a compatible Spotify release date inside the configured show is accepted;
-- duration may be recorded in matching diagnostics but never decides identity;
-- one viable candidate produces `MATCHED`; more than one produces `AMBIGUOUS`; none produces `PENDING`. A Spotify API/transport failure is not rewritten as `PENDING` and therefore cannot masquerade as a valid empty catalogue result;
-- all three match outcomes and useful diagnostics are persisted through P1.3;
-- distinct RNE source-native identities remain distinct even when Spotify represents them with the same episode URI. Destination-level URI deduplication, if required, belongs to playlist desired-state construction in P1.5.
+If Spotify duration is unavailable, that episode is excluded and counted as unavailable; it is not
+treated as proof that the whole source or playlist is empty.
 
-P1.4 does not write playlists, choose playlist retention/order policy, schedule engine runs or own the production OAuth lifecycle.
+A predominantly long-form source still belongs outside the default catalog even if individual
+episodes sometimes pass the duration filter.
+
+## Destination reconciliation
+
+Reconciliation compares the complete desired URI sequence with the Spotify destination.
+
+Unchanged desired state must cause zero writes.
+
+When a write is required, existing safety machinery remains authoritative:
+
+- pre-write destination reads are bounded and validated;
+- playlist mutations are serialized through the configured mutation guard;
+- exact readback verifies the resulting URI order;
+- snapshot attestations/fingerprints protect fast paths;
+- pending snapshot confirmation handles propagation uncertainty;
+- malformed/truncated/contradictory destination responses fail closed.
+
+A destination failure must not block reconciliation of independent playlists.
+
+## Stale-item escalation
+
+A normal write failure is **not** evidence that every source is stale.
+
+Full relevant-source refresh is exceptional and requires deterministic evidence that the desired
+state contains an unavailable/stale episode or equivalent safe catalogue evidence.
+
+On such evidence the engine may:
+
+1. refresh the other relevant source catalogues for the affected playlist;
+2. rebuild local retained/filter/order state;
+3. retry reconciliation under the same write guards.
+
+Ambiguous mutating failures do not enter this path until readback/snapshot evidence establishes what
+actually happened.
+
+## Rate limiting and request accounting
+
+Spotify Web API 429 responses activate one runtime-wide durable cooldown using `Retry-After` when
+valid, otherwise the conservative fallback deadline.
+
+While the cooldown is active:
+
+- new token/provider work that would reach Spotify is suppressed locally;
+- later same-cycle Spotify requests are suppressed;
+- existing destination/local state is preserved;
+- no component starts its own bypass retry loop.
+
+Request accounting distinguishes transmitted Web API/OAuth work from locally suppressed work.
+
+## Failure isolation and fail-closed behavior
+
+The runtime prefers preserving known-good state over destructive guesses.
+
+Examples:
+
+- detector failure -> preserve local episodes;
+- incomplete catalogue coverage -> do not delete unseen local episodes;
+- unavailable duration -> exclude/count the item, do not invent a duration;
+- malformed Spotify response -> fail that operation, do not interpret it as an empty catalogue;
+- ambiguous mutation -> read back before retry;
+- persistence failure -> surface failure, do not substitute empty state;
+- one source/destination failure -> continue independent work where safe.
+
+## Diagnostics and secrets
+
+Diagnostics are structured, bounded and allowlisted.
+
+Never expose or persist:
+
+- access/refresh tokens;
+- Authorization headers;
+- authorization codes;
+- PKCE verifiers;
+- admin passwords;
+- raw provider response bodies containing unknown material;
+- unbounded URI/title collections.
+
+Current diagnostics should expose enough source/playlist/request/refresh reason evidence to explain
+why a catalogue was or was not refreshed and why a destination was written, preserved or skipped.
+
+Legacy RSS/matching/planner diagnostic fields are retained only for already-persisted history from
+released versions.
+
+## Editorial independence
+
+Playlist membership and ordering are determined by documented source/editorial rules, freshness and
+playlist policy, never by payment, sponsorship or other compensation.
+
+Paid placement, guaranteed paid inclusion and compensation-dependent ordering are outside the
+architecture.
 
 ## Deployment invariant
 
-One deployed engine/container should be capable of updating multiple configured playlists in one scheduled execution. We should not require one Docker container, cron job or GitHub Actions workflow per playlist merely because the number of playlists grows.
+One deployed engine/container should normally update all configured playlists.
 
-Separate runtimes may still be supported later for scaling or isolation, but they are an operational choice, not the application model.
+Adding a country/language/playlist should require catalog/configuration work, not a copied
+application, country-specific engine or one scheduler/container per playlist.
 
-## First implementation vs. long-term architecture
+Separate runtimes may later be used for scaling or isolation, but that is an operational choice,
+not the application model.
 
-The first production validation began with one Spanish playlist. The managed catalog now exposes several language playlists, but that expansion still uses the same source/domain/persistence/scheduler model.
+## Historical implementation documents
 
-What is not acceptable is introducing assumptions into the shared domain model, persistence layer, scheduler or reconciliation engine that make `Spain`, `Spanish`, or `one playlist` mandatory concepts.
+The following may intentionally describe superseded paths and should be read as historical evidence
+unless explicitly updated to say otherwise:
 
-When implementation convenience conflicts with this invariant, prefer the smallest implementation that preserves the multi-playlist, multi-country, multi-language architecture.
+- `docs/P0_FINDINGS.md`;
+- `docs/P1_5_RECONCILIATION.md`;
+- `docs/architecture/spotify-shadow-planner.md`;
+- investigation notes under `docs/investigations/`.
 
-## Bulletin duration eligibility
-
-Duration is a common **per-playlist** eligibility policy, never provider-parser behavior. The current general default destination-side ceiling is **1800 seconds (30 minutes)**. Managed playlists persist their own maximum and `/admin/` can change it independently without a Spotify metadata write or reconnect.
-
-The general 30-minute ceiling currently has no built-in source/time exception. Earlier SER 08:00 exception logic remains supported by the generic policy model and legacy/manual configuration path, but is unnecessary while the default itself is 30 minutes. A future exception, if ever justified, must still be finite, explicit and narrower than a source-wide bypass.
-
-Final eligibility uses the matched destination episode duration (Spotify `duration_ms` converted to seconds). RSS/source duration remains diagnostic metadata only. If a matched destination duration is unavailable, desired-state construction fails closed and reconciliation preserves the existing destination rather than treating unknown metadata as an empty authoritative state.
-
-Diagnostics emit duration exclusions and accepted editions of at least 20 minutes. This is deliberate measurement: after enough production data, the project can decide whether the 30-minute ceiling should become tighter and/or whether a separate playlist for longer full-news editions is justified.
-
-The duration ceiling does not replace source curation. Predominantly long-form shows are rejected at catalog-promotion time under the source-promotion invariant above; the playlist filter handles occasional long editions from otherwise concise sources.
+The current runtime contract is this document plus the root `AGENTS.md` and tests.

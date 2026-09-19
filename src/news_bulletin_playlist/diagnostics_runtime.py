@@ -372,7 +372,7 @@ def _safe_operational_status_page(
   <h2>Sources</h2>
   <table>
     <thead><tr>
-      <th>Source</th><th>Result</th><th>Last success</th><th>Editions</th>
+      <th>Source</th><th>Result</th><th>Last refresh</th><th>Spotify state</th>
     </tr></thead>
     <tbody>{source_rows}</tbody>
   </table>
@@ -400,7 +400,7 @@ def _safe_source_rows(cycle: EngineCycleResult | None) -> str:
             f"<td><code>{html.escape(str(source.source_id))}</code></td>"
             f"<td>{result}</td>"
             f"<td>{_format_optional_time(source.last_success_at)}</td>"
-            f"<td>{source.edition_count} canonical / {source.matched_count} matched</td>"
+            f"<td>{source.episode_count} cached / {source.api_request_count} API requests</td>"
             "</tr>"
         )
     return "".join(rows)

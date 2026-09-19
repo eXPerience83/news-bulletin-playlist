@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,7 +10,6 @@ from _reconciliation import strict_reconcile_playlist_items
 from news_bulletin_playlist.desired_state import DesiredPlaylistItem, DesiredPlaylistState
 from news_bulletin_playlist.models import (
     AdapterId,
-    CanonicalEdition,
     CountryCode,
     DestinationReference,
     LanguageTag,
@@ -20,10 +18,8 @@ from news_bulletin_playlist.models import (
     SourceId,
     SourceSelection,
 )
-from news_bulletin_playlist.persistence import MatchStatus, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
-    build_desired_state_from_store,
     reconcile_spotify_destinations,
     reconcile_spotify_playlist,
 )
@@ -514,54 +510,6 @@ def test_one_destination_failure_does_not_block_another() -> None:
     assert results[1].ok is True
     assert results[1].wrote is True
     assert client.states["second"] == ["spotify:episode:second"]
-
-
-def test_failed_source_keeps_last_known_good_until_retention_expires(tmp_path: Path) -> None:
-    store = SQLiteStore(tmp_path / "state.sqlite3")
-    store.initialize()
-    playlist = _playlist("playlist")
-    edition = CanonicalEdition(
-        source_id=SourceId("ser"),
-        source_native_id="edition-1",
-        title="Bulletin",
-        published_at=NOW - timedelta(hours=2),
-        edition_at=NOW - timedelta(hours=2),
-    )
-    store.upsert_editions((edition,), observed_at=NOW - timedelta(hours=2))
-    store.set_match_state(
-        edition.source_id,
-        edition.source_native_id,
-        status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:edition-1",
-        spotify_duration_seconds=60,
-        diagnostics="matched",
-        updated_at=NOW - timedelta(hours=2),
-    )
-    store.record_source_run(
-        edition.source_id,
-        started_at=NOW - timedelta(hours=2),
-        finished_at=NOW - timedelta(hours=2) + timedelta(seconds=1),
-        ok=True,
-        edition_count=1,
-    )
-    store.record_source_run(
-        edition.source_id,
-        started_at=NOW - timedelta(minutes=1),
-        finished_at=NOW,
-        ok=False,
-        edition_count=0,
-        error="temporary upstream failure",
-    )
-
-    during_failure = build_desired_state_from_store(store, playlist, now=NOW)
-    after_expiry = build_desired_state_from_store(
-        store,
-        playlist,
-        now=NOW + timedelta(hours=47),
-    )
-
-    assert during_failure.uris == ("spotify:episode:edition-1",)
-    assert after_expiry.uris == ()
 
 
 def test_mutation_guard_covers_replace_only_and_not_spotify_reads() -> None:
