@@ -96,7 +96,6 @@ def _config() -> EngineConfig:
         timezone=ZoneInfo("UTC"),
         enabled=True,
         parser_id=ParserId("release_date_title"),
-        endpoint_url="https://example.test/news.xml",
         external_references=(ExternalReference("spotify", "show", "daily-show"),),
     )
     playlist = PlaylistDefinition(
