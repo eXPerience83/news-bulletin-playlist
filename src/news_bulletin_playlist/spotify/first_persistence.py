@@ -1,4 +1,5 @@
 """SQLite persistence for the authoritative Spotify-first runtime."""
+
 from __future__ import annotations
 
 import sqlite3
