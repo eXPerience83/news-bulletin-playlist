@@ -68,11 +68,14 @@ def _failed_cycle() -> EngineCycleResult:
         sources=(
             SourceCycleOutcome(
                 source_id=SourceId("rne"),
-                collection_ok=False,
-                matching_ok=None,
-                edition_count=0,
-                matched_count=0,
+                ok=False,
+                episode_count=0,
+                refreshed=False,
+                refresh_reason="change",
+                api_request_count=0,
                 last_success_at=None,
+                detector_ok=False,
+                detector_changed=True,
                 error=f"provider failed with {SECRET}",
             ),
         ),
