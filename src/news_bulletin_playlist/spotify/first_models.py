@@ -23,6 +23,7 @@ class RefreshReason(StrEnum):
     BOOTSTRAP = "bootstrap"
     CHANGE = "change"
     INACTIVITY_AUDIT = "inactivity_audit"
+    STALE_ESCALATION = "stale_escalation"
 
 
 @dataclass(frozen=True, slots=True)
