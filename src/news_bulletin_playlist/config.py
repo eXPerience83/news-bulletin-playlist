@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 from datetime import time
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml  # type: ignore[import-untyped]
@@ -134,7 +133,6 @@ def _parse_source(value: object, path: str) -> SourceDefinition:
             "timezone",
             "enabled",
             "parser_id",
-            "endpoint_url",
             "external_references",
         },
         path,
@@ -148,8 +146,6 @@ def _parse_source(value: object, path: str) -> SourceDefinition:
         timezone = ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError as exc:
         raise ConfigError(f"{path}.timezone: unknown IANA timezone {timezone_name!r}") from exc
-    endpoint = data.get("endpoint_url")
-    endpoint_url = None if endpoint is None else _http_url(endpoint, f"{path}.endpoint_url")
     references_raw = _sequence(data.get("external_references", ()), f"{path}.external_references")
     references = tuple(
         _parse_external_reference(item, f"{path}.external_references[{index}]")
@@ -169,7 +165,6 @@ def _parse_source(value: object, path: str) -> SourceDefinition:
         timezone=timezone,
         enabled=_boolean(_required(data, "enabled", path), f"{path}.enabled"),
         parser_id=ParserId(parser_id_value),
-        endpoint_url=endpoint_url,
         external_references=references,
     )
 
@@ -458,17 +453,4 @@ def _positive_integer(value: object, path: str) -> int:
     result = _integer(value, path)
     if result <= 0:
         raise ConfigError(f"{path}: must be positive")
-    return result
-
-
-def _http_url(value: object, path: str) -> str:
-    result = _nonempty_string(value, path)
-    try:
-        parsed = urlparse(result)
-        hostname = parsed.hostname
-        port = parsed.port
-    except ValueError as exc:
-        raise ConfigError(f"{path}: expected a valid HTTP(S) URL") from exc
-    if parsed.scheme not in {"http", "https"} or hostname is None or port == 0:
-        raise ConfigError(f"{path}: expected an HTTP(S) URL with a host")
     return result
