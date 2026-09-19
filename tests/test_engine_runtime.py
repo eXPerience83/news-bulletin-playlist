@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.engine import (
     EngineCycleResult,
     OperationalStatus,
@@ -30,21 +31,20 @@ from news_bulletin_playlist.engine_runtime import (
     serve,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
-from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.persistence import SQLiteStore
-from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
-from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
-from news_bulletin_playlist.spotify.public_detector import (
-    PublicDetectorJournal,
-    PublicDetectorShadow,
-)
 from news_bulletin_playlist.runtime import AdminSecurity
+from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.auth import (
     PRODUCTION_SCOPES,
     AuthorizationState,
     SpotifyAuthService,
     SpotifyCredentialStore,
     TokenResponse,
+)
+from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
+from news_bulletin_playlist.spotify.public_detector import (
+    PublicDetectorJournal,
+    PublicDetectorShadow,
 )
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
