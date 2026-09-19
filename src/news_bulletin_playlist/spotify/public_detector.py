@@ -461,11 +461,14 @@ class PublicDetectorJournal:
             else:
                 outcome = PublicDetectorOutcome.UNCHANGED
 
-            last_change_at = (
-                observation.observed_at
-                if outcome in {PublicDetectorOutcome.BOOTSTRAP, PublicDetectorOutcome.CHANGED}
-                else previous.last_change_at
-            )
+            if outcome in {
+                PublicDetectorOutcome.BOOTSTRAP,
+                PublicDetectorOutcome.CHANGED,
+            }:
+                last_change_at = observation.observed_at
+            else:
+                assert previous is not None
+                last_change_at = previous.last_change_at
             last_failure_at = None if previous is None else previous.last_failure_at
             last_catalogue_refresh_at = (
                 None if previous is None else previous.last_catalogue_refresh_at
@@ -535,21 +538,17 @@ class PublicDetectorJournal:
             self._ensure_table(connection)
             row = self._select(connection, source_id, show_id)
             previous = None if row is None else _state_from_row(row)
-            latest_known = (
-                None
-                if previous is None
-                else max(
-                    (
-                        value
-                        for value in (
-                            previous.last_failure_at,
-                            previous.last_detector_success_at,
-                        )
-                        if value is not None
-                    ),
-                    default=None,
+            latest_known: datetime | None = None
+            if previous is not None:
+                known_timestamps = tuple(
+                    value
+                    for value in (
+                        previous.last_failure_at,
+                        previous.last_detector_success_at,
+                    )
+                    if value is not None
                 )
-            )
+                latest_known = max(known_timestamps, default=None)
             if latest_known is not None and failed < latest_known:
                 return previous
             failures = 1 if previous is None else previous.consecutive_detector_failures + 1
