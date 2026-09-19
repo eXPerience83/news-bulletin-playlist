@@ -374,9 +374,8 @@ def parse_public_show_embed(
     episode_uri = _optional_text(entity.get("uri"), "Spotify episode URI", max_length=128)
     name = _bounded_text(entity.get("name"), "Spotify episode name", max_length=1000)
     title = _bounded_text(entity.get("title"), "Spotify episode title", max_length=1000)
-    release_date = _optional_text(
+    release_date = _optional_metadata_text(
         entity.get("releaseDate"),
-        "Spotify public releaseDate",
         max_length=128,
     )
     duration = _optional_non_negative_int(entity.get("duration"), "Spotify episode duration")
@@ -1007,6 +1006,16 @@ def _optional_text(value: object, label: str, *, max_length: int) -> str | None:
             reason=PublicShowResponseFailureReason.EMBED_FIELD,
         )
     return value
+
+
+def _optional_metadata_text(value: object, *, max_length: int) -> str | None:
+    """Return bounded non-empty optional metadata without making detector identity fail."""
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped or len(stripped) > max_length:
+        return None
+    return stripped
 
 
 def _optional_non_negative_int(value: object, label: str) -> int | None:
