@@ -3,6 +3,7 @@
 The public Spotify surface is only a change detector. Official Spotify Web API show catalogues
 are the episode authority, and persisted Spotify episode IDs/URIs are the runtime identity.
 """
+
 from __future__ import annotations
 
 import json
@@ -593,9 +594,7 @@ class EngineRunner:
             outcomes[source.id] = SourceCycleOutcome(
                 source_id=source.id,
                 ok=state is not None and state.coverage_proven,
-                episode_count=len(
-                    self.first_journal.list_episodes(source_ids=(source.id,))
-                ),
+                episode_count=len(self.first_journal.list_episodes(source_ids=(source.id,))),
                 refreshed=False,
                 refresh_reason=reason.value,
                 api_request_count=0,
