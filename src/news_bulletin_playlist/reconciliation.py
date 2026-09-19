@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import partial
 from typing import Any, Protocol
+
 from news_bulletin_playlist.desired_state import DesiredPlaylistState
 from news_bulletin_playlist.models import PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
