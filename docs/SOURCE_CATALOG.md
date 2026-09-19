@@ -36,8 +36,8 @@ code change reviewed through the normal PR, CI and provider-contract process.
 | --- | --- |
 | `research` | Market/source is still being explored; no sufficiently strong candidate is established. |
 | `candidate` | A plausible bulletin has been identified but still needs full deterministic verification. |
-| `verified` | Feed/catalogue/cadence/duration and matching feasibility have been checked; implementation may still be pending. |
-| `implemented` | The source is present in the built-in runtime catalog with parser/matching support and tests. |
+| `verified` | Spotify show/catalogue identity, cadence, duration and parser/filter feasibility have been checked; implementation may still be pending. |
+| `implemented` | The source is present in the built-in runtime catalog with Spotify-first parser/filter support and tests. |
 | `blocked` | The source is useful, but a required deterministic path is missing or unsuitable. |
 | `rejected` | The source was evaluated and does not fit the product; keep the reason so it is not repeatedly rediscovered. |
 
@@ -56,18 +56,18 @@ the long-term default ceiling.
 
 Before moving a source from research/candidate into the runtime catalog, verify and record at least:
 
-- official programme/feed identity and stable collection URL;
+- official programme/product identity and exactly one stable Spotify show identity;
 - provider/product origin;
 - editorial scope (`LOC`, `REG`, `NAT`, `INT`, or `MIX`);
 - language/locale tag;
-- current publication cadence from real recent editions;
+- current publication cadence from real recent Spotify editions;
 - representative duration profile and meaningful outliers;
-- stable source identity/GUID behaviour;
 - source timezone and edition-time/title pattern;
-- deterministic Spotify show/catalogue identity when Spotify is the destination;
-- deterministic source-edition to Spotify-episode matching without global search guesses;
-- compatibility with the engine's existing failure-safety model;
-- parser/matcher/provider-watch tests appropriate to the source.
+- title parser behavior against current Spotify episode titles;
+- any collection/content filter required to isolate the intended bulletin product;
+- catalogue pagination/retention behavior compatible with safe Spotify-first coverage;
+- compatibility with the engine's detector, persistence, rate-limit and write-safety model;
+- focused parser/filter/catalogue tests appropriate to the source.
 
 Promotion should be done by a focused implementation PR. Updating research notes alone must never
 change production behaviour.
