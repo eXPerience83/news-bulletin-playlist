@@ -2,22 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import partial
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo
-
-from news_bulletin_playlist.desired_state import (
-    DesiredPlaylistState,
-    authoritative_playlist_time,
-    build_playlist_desired_state,
-)
-from news_bulletin_playlist.models import OrderingPolicy, PlaylistDefinition, PlaylistId, SourceId
-from news_bulletin_playlist.persistence import EditionMatch, PersistenceError, SQLiteStore
+from news_bulletin_playlist.desired_state import DesiredPlaylistState
+from news_bulletin_playlist.models import PlaylistDefinition, PlaylistId
+from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.snapshot_pending import (
     PendingSnapshotConfirmation,
     PendingSnapshotJournal,
@@ -130,40 +124,6 @@ class _SpotifyPlaylistPage:
     items: list[object]
     next_url: str | None
     total: int
-
-
-def build_desired_state_from_store(
-    store: SQLiteStore,
-    playlist: PlaylistDefinition,
-    *,
-    now: datetime,
-    source_timezones: Mapping[SourceId, ZoneInfo] | None = None,
-) -> DesiredPlaylistState:
-    """Load only still-relevant durable state, then delegate to the pure builder."""
-    observed_at = _as_utc(now)
-    cutoff = observed_at - timedelta(hours=playlist.retention_hours)
-    editions = []
-    matches: dict[tuple[SourceId, str], EditionMatch] = {}
-
-    for source_id in playlist.source_selection.explicit:
-        for edition in store.list_editions(source_id=source_id):
-            ordering_at = authoritative_playlist_time(edition, playlist.ordering)
-            if playlist.ordering is OrderingPolicy.PUBLISHED_AT_DESC and ordering_at < cutoff:
-                break
-            if ordering_at < cutoff or ordering_at > observed_at:
-                continue
-            editions.append(edition)
-            match = store.get_match_state(edition.source_id, edition.source_native_id)
-            if match is not None:
-                matches[edition.identity] = match
-
-    return build_playlist_desired_state(
-        playlist,
-        editions,
-        matches,
-        now=observed_at,
-        source_timezones=source_timezones,
-    )
 
 
 def _reconcile_playlist_items(
