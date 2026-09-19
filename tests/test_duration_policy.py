@@ -11,8 +11,6 @@ from news_bulletin_playlist.desired_state import (
     DURATION_EXCEEDS_DEFAULT_MAX,
     DURATION_EXCEEDS_EXCEPTION_MAX,
     DURATION_EXCEPTION,
-    DesiredStateError,
-    build_playlist_desired_state,
 )
 from news_bulletin_playlist.managed_state import (
     ManagedState,
@@ -21,21 +19,25 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.models import (
     AdapterId,
-    CanonicalEdition,
     CountryCode,
     DestinationReference,
     DurationPolicy,
     DurationPolicyException,
+    ExternalReference,
     LanguageTag,
+    ParserId,
     PlaylistDefinition,
     PlaylistId,
+    SourceDefinition,
     SourceId,
     SourceSelection,
 )
-from news_bulletin_playlist.persistence import EditionMatch, MatchStatus
+from news_bulletin_playlist.spotify.first_desired import build_spotify_first_desired_state
+from news_bulletin_playlist.spotify.first_models import SpotifyFirstEpisode, TimestampSource
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
-MADRID = ZoneInfo("Europe/Madrid")
+SER_SHOW_ID = "A" * 22
+DW_SHOW_ID = "D" * 22
 
 
 def _playlist() -> PlaylistDefinition:
@@ -62,48 +64,75 @@ def _playlist() -> PlaylistDefinition:
     )
 
 
-def _edition(hour_utc: int, *, edition_at: datetime | None = None) -> CanonicalEdition:
-    semantic = edition_at if edition_at is not None else datetime(2026, 9, 3, hour_utc, tzinfo=UTC)
-    return CanonicalEdition(
-        source_id=SourceId("ser"),
-        source_native_id=f"ser-{hour_utc}",
-        title="SER bulletin",
-        published_at=datetime(2026, 9, 3, hour_utc, 2, tzinfo=UTC),
-        edition_at=semantic,
+def _source(
+    source_id: str = "ser",
+    *,
+    timezone: str = "Europe/Madrid",
+    parser_id: str = "ser",
+    show_id: str = SER_SHOW_ID,
+) -> SourceDefinition:
+    return SourceDefinition(
+        id=SourceId(source_id),
+        display_name=source_id,
+        countries=(CountryCode("ES"),),
+        languages=(LanguageTag("es"),),
+        timezone=ZoneInfo(timezone),
+        enabled=True,
+        parser_id=ParserId(parser_id),
+        external_references=(ExternalReference("spotify", "show", show_id),),
     )
 
 
-def _match(edition: CanonicalEdition, duration: int | None) -> EditionMatch:
-    return EditionMatch(
-        source_id=edition.source_id,
-        source_native_id=edition.source_native_id,
-        status=MatchStatus.MATCHED,
-        spotify_episode_uri=f"spotify:episode:{edition.source_native_id}",
-        diagnostics="matched",
-        updated_at=NOW,
-        spotify_duration_seconds=duration,
+def _episode(
+    hour_utc: int,
+    duration: int | None,
+    *,
+    source_id: str = "ser",
+    show_id: str = SER_SHOW_ID,
+    semantic_time: bool = True,
+) -> SpotifyFirstEpisode:
+    episode_id = f"{hour_utc:02d}" + "B" * 20
+    observed = datetime(2026, 9, 3, hour_utc, 2, tzinfo=UTC)
+    edition_at = datetime(2026, 9, 3, hour_utc, tzinfo=UTC) if semantic_time else None
+    return SpotifyFirstEpisode(
+        source_id=SourceId(source_id),
+        spotify_show_id=show_id,
+        spotify_episode_id=episode_id,
+        spotify_episode_uri=f"spotify:episode:{episode_id}",
+        title="Bulletin",
+        edition_at=edition_at,
+        timestamp_source=TimestampSource.TITLE if semantic_time else TimestampSource.FIRST_SEEN,
+        release_date_raw="2026-09-03",
+        release_date_precision="day",
+        duration_seconds=duration,
+        first_seen_at=observed,
+        last_seen_at=observed,
     )
 
 
-def _build(edition: CanonicalEdition, duration: int | None):
-    return build_playlist_desired_state(
-        _playlist(),
-        (edition,),
-        {edition.identity: _match(edition, duration)},
+def _build(
+    episode: SpotifyFirstEpisode,
+    *,
+    playlist: PlaylistDefinition | None = None,
+    source: SourceDefinition | None = None,
+):
+    selected_playlist = _playlist() if playlist is None else playlist
+    selected_source = _source() if source is None else source
+    return build_spotify_first_desired_state(
+        selected_playlist,
+        (episode,),
+        sources={selected_source.id: selected_source},
         now=NOW,
-        source_timezones={SourceId("ser"): MADRID},
     )
 
 
 def test_default_ceiling_accepts_480_and_rejects_481_seconds() -> None:
-    accepted = _edition(9)
-    state = _build(accepted, 480)
-    assert state.uris == ("spotify:episode:ser-9",)
+    accepted = _build(_episode(9, 480))
+    assert accepted.desired.uris == ("spotify:episode:" + "09" + "B" * 20,)
 
-    rejected = _edition(10)
-    state = _build(rejected, 481)
-    assert state.uris == ()
-    decision = state.duration_decisions[0]
+    rejected = _build(_episode(10, 481))
+    assert rejected.desired.uris == ()
+    decision = rejected.desired.duration_decisions[0]
     assert decision.reason == DURATION_EXCEEDS_DEFAULT_MAX
     assert decision.max_seconds == 480
 
@@ -120,65 +149,53 @@ def test_dw_long_episode_is_source_eligible_but_destination_duration_excludes_it
         destination=DestinationReference(AdapterId("spotify"), "playlist"),
         duration_policy=DurationPolicy(default_max_seconds=1800),
     )
-    edition = CanonicalEdition(
-        source_id=SourceId("dw_actualidad"),
-        source_native_id="dw-long",
-        title="DW analysis",
-        published_at=NOW,
-        edition_at=None,
+    source = _source(
+        "dw_actualidad",
+        timezone="Europe/Berlin",
+        parser_id="release_date_title",
+        show_id=DW_SHOW_ID,
     )
-    match = EditionMatch(
-        source_id=edition.source_id,
-        source_native_id=edition.source_native_id,
-        status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:dw-long",
-        spotify_duration_seconds=1_901,
-        diagnostics="matched",
-        updated_at=NOW,
+    episode = _episode(
+        11,
+        1901,
+        source_id="dw_actualidad",
+        show_id=DW_SHOW_ID,
+        semantic_time=False,
     )
-    state = build_playlist_desired_state(
-        playlist,
-        (edition,),
-        {edition.identity: match},
-        now=NOW,
-        source_timezones={SourceId("dw_actualidad"): ZoneInfo("Europe/Berlin")},
-    )
-    assert state.uris == ()
-    assert state.duration_decisions[0].reason == DURATION_EXCEEDS_DEFAULT_MAX
+
+    built = _build(episode, playlist=playlist, source=source)
+
+    assert built.desired.uris == ()
+    assert built.desired.duration_decisions[0].reason == DURATION_EXCEEDS_DEFAULT_MAX
 
 
 def test_ser_0800_exception_uses_source_timezone_and_is_bounded() -> None:
     # 06:00 UTC is 08:00 Europe/Madrid in September.
-    edition = _edition(6)
-    accepted = _build(edition, 1200)
-    assert accepted.uris == ("spotify:episode:ser-6",)
-    assert accepted.duration_decisions[0].reason == DURATION_EXCEPTION
-    assert accepted.duration_decisions[0].exception_id == "ser_morning_0800"
+    accepted = _build(_episode(6, 1200))
+    assert accepted.desired.uris == ("spotify:episode:" + "06" + "B" * 20,)
+    assert accepted.desired.duration_decisions[0].reason == DURATION_EXCEPTION
+    assert accepted.desired.duration_decisions[0].exception_id == "ser_morning_0800"
 
-    rejected = _build(edition, 1801)
-    assert rejected.uris == ()
-    assert rejected.duration_decisions[0].reason == DURATION_EXCEEDS_EXCEPTION_MAX
-    assert rejected.duration_decisions[0].max_seconds == 1800
+    rejected = _build(_episode(6, 1801))
+    assert rejected.desired.uris == ()
+    assert rejected.desired.duration_decisions[0].reason == DURATION_EXCEEDS_EXCEPTION_MAX
+    assert rejected.desired.duration_decisions[0].max_seconds == 1800
 
 
 def test_long_ser_non_0800_and_missing_semantic_time_do_not_match_exception() -> None:
-    seven_local = _edition(5)
-    assert _build(seven_local, 1200).duration_decisions[0].reason == (DURATION_EXCEEDS_DEFAULT_MAX)
+    seven_local = _build(_episode(5, 1200))
+    assert seven_local.desired.duration_decisions[0].reason == DURATION_EXCEEDS_DEFAULT_MAX
 
-    no_semantic = CanonicalEdition(
-        source_id=SourceId("ser"),
-        source_native_id="no-semantic",
-        title="SER bulletin",
-        published_at=NOW,
-        edition_at=None,
-    )
-    assert _build(no_semantic, 1200).duration_decisions[0].reason == (DURATION_EXCEEDS_DEFAULT_MAX)
+    no_semantic = _build(_episode(9, 1200, semantic_time=False))
+    assert no_semantic.desired.duration_decisions[0].reason == DURATION_EXCEEDS_DEFAULT_MAX
 
 
-def test_unknown_spotify_duration_fails_closed() -> None:
-    edition = _edition(9)
-    with pytest.raises(DesiredStateError, match="Spotify duration unavailable"):
-        _build(edition, None)
+def test_unknown_spotify_duration_is_excluded_and_counted() -> None:
+    built = _build(_episode(9, None))
+
+    assert built.desired.uris == ()
+    assert built.desired.duration_decisions == ()
+    assert built.duration_unavailable_count == 1
 
 
 def test_builtin_catalog_and_managed_compile_use_current_global_30_minute_default() -> None:
