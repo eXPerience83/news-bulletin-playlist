@@ -4,40 +4,51 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from news_bulletin_playlist.models import CanonicalEdition, SourceId
-from news_bulletin_playlist.persistence import LATEST_SCHEMA_VERSION, MatchStatus, SQLiteStore
+from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.persistence import LATEST_SCHEMA_VERSION, SQLiteStore
+from news_bulletin_playlist.spotify.first_models import SpotifyFirstEpisode, TimestampSource
+from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 
 NOW = datetime(2026, 9, 3, 9, 0, tzinfo=UTC)
+SHOW_ID = "A" * 22
+EPISODE_ID = "B" * 22
 
 
-def _edition() -> CanonicalEdition:
-    return CanonicalEdition(
+def _episode() -> SpotifyFirstEpisode:
+    return SpotifyFirstEpisode(
         source_id=SourceId("ser"),
-        source_native_id="duration-state",
+        spotify_show_id=SHOW_ID,
+        spotify_episode_id=EPISODE_ID,
+        spotify_episode_uri=f"spotify:episode:{EPISODE_ID}",
         title="Las noticias de la SER, 11:00 (03/09/2026)",
-        published_at=NOW,
         edition_at=NOW,
-        duration_seconds=300,
+        timestamp_source=TimestampSource.TITLE,
+        release_date_raw="2026-09-03",
+        release_date_precision="day",
+        duration_seconds=305,
+        first_seen_at=NOW,
+        last_seen_at=NOW,
     )
 
 
-def test_spotify_duration_round_trips_with_match_state(tmp_path: Path) -> None:
+def test_spotify_duration_round_trips_with_spotify_first_state(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.initialize()
-    edition = _edition()
-    store.upsert_editions((edition,), observed_at=NOW)
-    store.set_match_state(
-        edition.source_id,
-        edition.source_native_id,
-        status=MatchStatus.MATCHED,
-        spotify_episode_uri="spotify:episode:duration",
-        spotify_duration_seconds=305,
-        updated_at=NOW,
+    journal = SpotifyFirstJournal(store)
+    journal.initialize()
+    episode = _episode()
+
+    counts = journal.replace_source_episodes(
+        episode.source_id,
+        (episode,),
+        coverage_proven=True,
     )
 
-    state = store.get_match_state(edition.source_id, edition.source_native_id)
-    assert state is not None
-    assert state.spotify_duration_seconds == 305
+    assert counts.added == 1
+    persisted = journal.list_episodes(source_ids=(episode.source_id,))
+    assert len(persisted) == 1
+    assert persisted[0].spotify_episode_id == EPISODE_ID
+    assert persisted[0].duration_seconds == 305
 
 
 def test_schema_v2_database_migrates_duration_column_without_inventing_value(
