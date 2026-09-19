@@ -54,6 +54,19 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "duplicate_count",
         "desired_fingerprint",
         "desired_changed_since_previous_attempt",
+        "detector_changed_count",
+        "detector_failure_count",
+        "detector_outcome",
+        "detector_schema_version",
+        "detector_source_count",
+        "detector_unchanged_count",
+        "oembed_matches",
+        "public_release_date",
+        "spotify_episode_id",
+        "spotify_episode_title",
+        "spotify_oembed_title",
+        "spotify_previous_episode_id",
+        "spotify_previous_episode_title",
         "consecutive_failure_count",
         "first_failure_at",
         "last_failure_at",
@@ -193,6 +206,21 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "unavailable_media",
             "unknown_reconciliation_error",
             "verification_mismatch",
+        }
+    ),
+    "detector_outcome": frozenset(
+        {
+            "bootstrap",
+            "changed",
+            "configuration_failure",
+            "http_failure",
+            "oembed_failure",
+            "persistence_failure",
+            "recovered",
+            "response_failure",
+            "stale_ignored",
+            "transport_failure",
+            "unchanged",
         }
     ),
     "eligibility_reason": frozenset(
@@ -749,6 +777,21 @@ def _normalize_details(
             if key == "desired_fingerprint" and re.fullmatch(r"[0-9a-f]{64}", value):
                 normalized[key] = value
                 continue
+            if key in {"spotify_episode_id", "spotify_previous_episode_id"}:
+                if re.fullmatch(r"[A-Za-z0-9]{22}", value) is None:
+                    raise ValueError(f"diagnostic detail {key} contains an invalid Spotify id")
+                normalized[key] = value
+                continue
+            if key in {
+                "spotify_episode_title",
+                "spotify_previous_episode_title",
+                "spotify_oembed_title",
+            }:
+                normalized[key] = _normalize_bounded_text(value, key, max_length=1000)
+                continue
+            if key == "public_release_date":
+                normalized[key] = _normalize_bounded_text(value, key, max_length=128)
+                continue
             allowed_values = _ALLOWED_DETAIL_STRING_VALUES.get(key)
             if allowed_values is None or value not in allowed_values:
                 raise ValueError(f"diagnostic detail {key} contains an unsupported label")
@@ -756,6 +799,14 @@ def _normalize_details(
         else:
             raise ValueError(f"diagnostic detail {key} has unsupported value type")
     return normalized
+
+
+def _normalize_bounded_text(value: str, key: str, *, max_length: int) -> str:
+    if not value or len(value) > max_length:
+        raise ValueError(f"diagnostic detail {key} contains invalid text")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"diagnostic detail {key} contains control characters")
+    return value
 
 
 def _normalize_detail_timestamp(value: str) -> str:

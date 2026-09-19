@@ -18,6 +18,30 @@ A provider/source is independent from a playlist. A source can feed zero, one or
 
 The engine must not fetch or parse the same source independently for every playlist that uses it.
 
+## Spotify-first migration (2026-09)
+
+The current production engine still uses provider/RSS discovery plus Spotify matching while the
+replacement is validated in shadow. The target architecture is now Spotify-first:
+
+1. Poll the public Spotify show Embed without OAuth and extract only the bounded latest-episode
+   identity used as a change signal.
+2. If that episode ID is unchanged, do not create a Spotify Web API catalogue request.
+3. If it changed, read the official Spotify show catalogue for that source, ingest every relevant
+   episode in the retention window and persist Spotify episode IDs/URIs as canonical runtime
+   identities.
+4. Reuse persisted state for every unchanged source, expire episodes outside the playlist retention
+   window locally and compute the complete desired playlist.
+5. A normal source change must not trigger catalogue reads for every other source.
+6. Independent false-negative audits are inactivity-triggered rather than fixed-period while normal
+   detector changes continue.
+
+The public Embed/oEmbed surface is a **detector only**, never the episode catalogue. Raw Embed
+`ETag` and whole-document hashes are known to be volatile and are not change keys. The primary
+candidate is the latest public episode `entity.id`; oEmbed title is secondary corroboration.
+
+Until the Spotify-first shadow/cutover gates in #253/#254/#255 are complete, the legacy path remains
+authoritative and no shadow detector result may write or reorder a production playlist.
+
 ## Main domains
 
 ### Source / provider

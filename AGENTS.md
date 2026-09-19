@@ -70,10 +70,28 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 ## Architecture invariants
 
 - One engine can drive multiple playlists, countries and languages.
-- Fetch once -> normalize once -> store once -> distribute to many playlists.
-- RSS/provider data is the temporal authority; Spotify is the current destination, not the product domain.
+- The current authoritative production path remains the legacy RSS -> Spotify matching engine until
+  the Spotify-first shadow/cutover work is explicitly approved.
+- The target architecture is Spotify-first: an unauthenticated public Spotify show observation is
+  used only as a **change signal**; when that episode identity changes, the official Spotify Web API
+  catalogue is the episode-data authority for the refreshed source.
+- The public Embed/oEmbed surfaces are never the episode catalogue/content source. Do not scrape a
+  historical episode list from HTML; persist only the bounded latest-episode detector evidence
+  required to decide whether an official catalogue refresh is needed.
+- In the Spotify-first path, Spotify episode ID/URI is the canonical runtime episode identity. Do
+  not create a new RSS identity that then needs matching back to Spotify.
+- A normal detector change refreshes only the changed source catalogue. Reuse persisted state for
+  unchanged sources and apply playlist retention/ordering locally; do not fan out into all source
+  catalogues before an ordinary write.
+- Independent detector audits are inactivity-triggered, not fixed-period while normal transitions
+  are occurring. A detector or audit failure must preserve last-known-good state.
+- Deterministic stale/unavailable desired-item evidence may escalate to refreshing the other
+  catalogues for the affected playlist. Ambiguous mutating transport/5xx outcomes still require
+  existing readback/snapshot confirmation before retry; 429 still uses the global cooldown.
+- Title parsing remains preferred for exact editorial time. On failure, preserve bounded original
+  title evidence and explicit timestamp provenance; never invent minute precision.
 - Do not download or store audio.
-- Persisted `MATCHED` Spotify episode URIs must satisfy the shared episode-URI invariant before reuse.
+- Persisted Spotify episode URIs must satisfy the shared episode-URI invariant before reuse.
 - A failed source or destination must not unnecessarily block independent sources/playlists.
 
 ## Documentation and external contracts
