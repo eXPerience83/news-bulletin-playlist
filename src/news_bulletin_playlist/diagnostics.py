@@ -80,6 +80,13 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "duplicate_count",
         "desired_fingerprint",
         "desired_changed_since_previous_attempt",
+        "detector_changed",
+        "detector_false_negative",
+        "detector_ok",
+        "local_skip",
+        "refreshed",
+        "removed_count",
+        "stale_escalation",
         "detector_changed_count",
         "detector_failure_count",
         "detector_outcome",
@@ -238,7 +245,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "verification_mismatch",
         }
     ),
-    "refresh_reason": frozenset({"bootstrap", "change", "inactivity_audit"}),
+    "refresh_reason": frozenset({"bootstrap", "change", "inactivity_audit", "stale_escalation"}),
     "timestamp_source": frozenset({"title", "first_seen"}),
     "spotify_release_date_precision": frozenset({"day", "month", "year"}),
     "false_negative_reason": frozenset(
@@ -362,7 +369,9 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "unchanged",
         }
     ),
-    "write_outcome": frozenset({"not_attempted", "applied", "verified", "unknown", "skipped"}),
+    "write_outcome": frozenset(
+        {"not_attempted", "applied", "verified", "unknown", "skipped", "rejected"}
+    ),
     "provider": frozenset({"spotify"}),
     "service": frozenset({"spotify"}),
 }
