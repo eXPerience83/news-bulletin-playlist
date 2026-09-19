@@ -7,8 +7,6 @@ from typing import Any
 
 import pytest
 
-from news_bulletin_playlist.engine import EngineRunner
-from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.spotify.client import SpotifyApiError
 from news_bulletin_playlist.spotify_backoff import (
