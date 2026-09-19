@@ -93,6 +93,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "detector_changed_count",
         "detector_failure_count",
         "detector_outcome",
+        "detector_response_reason",
         "detector_schema_version",
         "detector_source_count",
         "detector_unchanged_count",
@@ -267,6 +268,22 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "stale_ignored",
             "transport_failure",
             "unchanged",
+        }
+    ),
+    "detector_response_reason": frozenset(
+        {
+            "response_too_large",
+            "embed_not_utf8",
+            "embed_html_parse",
+            "next_data_count",
+            "next_data_json",
+            "embed_shape",
+            "embed_entity_type",
+            "embed_field",
+            "embed_entity_validation",
+            "oembed_json",
+            "oembed_shape",
+            "oembed_title",
         }
     ),
     "eligibility_reason": frozenset(
