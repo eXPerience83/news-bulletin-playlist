@@ -355,7 +355,9 @@ def spotify_show_id(source: SourceDefinition) -> str:
     try:
         return _require_show_id(next(iter(show_ids)))
     except ValueError as exc:
-        raise PublicShowConfigurationError(f"source {source.id} has an invalid Spotify show id") from exc
+        raise PublicShowConfigurationError(
+            f"source {source.id} has an invalid Spotify show id"
+        ) from exc
 
 
 _TABLE_SQL = """
@@ -715,7 +717,9 @@ class PublicDetectorShadow:
                 self._emit_failure(source.id, "persistence_failure", observed_at=observed)
                 continue
 
-            candidate_changed = previous is None or previous.last_episode_id != observation.episode_id
+            candidate_changed = (
+                previous is None or previous.last_episode_id != observation.episode_id
+            )
             oembed_title: str | None = None
             if candidate_changed:
                 try:
