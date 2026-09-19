@@ -59,13 +59,9 @@ class SourceDefinition:
     parser_id: ParserId
     collection_filter_id: str | None = None
     editorial_scope: EditorialScope = EditorialScope.MIXED
-    endpoint_url: str | None = None
     external_references: tuple[ExternalReference, ...] = ()
-    spotify_release_delay_days: int = 0
 
     def __post_init__(self) -> None:
-        if self.spotify_release_delay_days < 0:
-            raise ValueError("spotify_release_delay_days must be non-negative")
         if self.collection_filter_id is not None and not self.collection_filter_id.strip():
             raise ValueError("collection_filter_id must not be blank")
 
