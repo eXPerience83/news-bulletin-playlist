@@ -162,6 +162,7 @@ def test_instrumented_runner_records_correlated_source_playlist_and_cycle_events
     }
     assert "provider-body-sentinel" not in output.getvalue()
 
+
 def test_degraded_playlist_verification_is_warning_without_raw_text(tmp_path: Path) -> None:
     diagnostics, store, output = _diagnostics(tmp_path)
     sentinel = "access-token-sentinel-never-persist"
