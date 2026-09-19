@@ -1,4 +1,5 @@
-"""Spotify-first domain models and time helpers for Phase C shadow mode."""
+"""Spotify-first domain models and time helpers for the authoritative runtime."""
+
 from __future__ import annotations
 
 import calendar
