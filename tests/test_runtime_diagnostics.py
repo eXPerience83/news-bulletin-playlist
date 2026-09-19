@@ -198,6 +198,9 @@ def test_degraded_playlist_verification_is_warning_without_raw_text(tmp_path: Pa
     assert playlist_event.details == {
         "applied_count": 82,
         "desired_count": 82,
+        "duration_unavailable_count": 0,
+        "local_skip": False,
+        "stale_escalation": False,
         "verification_outcome": "degraded",
         "write_decision": "applied",
     }
