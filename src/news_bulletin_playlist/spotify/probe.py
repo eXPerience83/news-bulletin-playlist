@@ -5,12 +5,12 @@ import sys
 from typing import Any
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.spotify.public_detector import spotify_show_id
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
     SpotifyClient,
     SpotifyTransportError,
 )
+from news_bulletin_playlist.spotify.public_detector import spotify_show_id
 
 _RNE_DUPLICATE_DATE = "2026-08-25"
 _RNE_DUPLICATE_TIME_TOKENS = ("18.00", "18:00")
