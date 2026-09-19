@@ -49,7 +49,7 @@ As of 2026-08-27, Spotify Development Mode is intended for learning, experimenta
 
 Spotify's Developer Policy permits certain limited commercial uses for qualifying non-streaming applications, but any future commercial use would require re-checking Spotify's then-current access mode, eligibility requirements and policies. Development Mode must not be used as the assumed foundation for building or scaling a business.
 
-See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for the current Spotify platform constraints and the authenticated probes still required.
+See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for historical Spotify platform research and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the current runtime contract.
 
 ## Initial providers
 
@@ -73,7 +73,7 @@ Source research and the admin UI classify each product on three independent axes
 | United Nations — ONU en minutos | `US · INT · es` | Concise | filtered global Spanish bulletin; spoken locale still unresolved |
 | N+ Univision 24-7 | `US · INT · es` | Concise | daily international/US Spanish newscast; spoken locale still unresolved |
 | DW — Actualidad en análisis | `DE · INT · es` | Mixed | international Spanish analysis with occasional >30-minute editions filtered by destination policy |
-| RFI — Journal Monde | `FR · INT · fr` | Concise selected product | dedicated parser admits only Journal Monde editions from the mixed provider feed |
+| RFI — Journal Monde | `FR · INT · fr` | Concise selected product | dedicated parser/filter admits only Journal Monde editions from the mixed Spotify product |
 | Deutschlandfunk — Die Nachrichten | `DE · MIX · de` | Concise | recurring short Germany/world bulletins |
 | RMF FM — Fakty | `PL · MIX · pl` | Mixed | recurring short Poland/world bulletins, with occasional longer editions |
 
