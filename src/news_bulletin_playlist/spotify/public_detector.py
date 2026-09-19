@@ -203,6 +203,7 @@ class PublicDetectorCycleSummary:
     changed_count: int
     unchanged_count: int
     failure_count: int
+    changed_source_ids: tuple[SourceId, ...] = ()
 
 
 class _NextDataParser(HTMLParser):
@@ -665,6 +666,7 @@ class PublicDetectorShadow:
         unchanged_count = 0
         failure_count = 0
         observed_count = 0
+        changed_source_ids: list[SourceId] = []
 
         for source in sources:
             if not source.enabled:
@@ -748,6 +750,7 @@ class PublicDetectorShadow:
             recovered_failures = 0 if previous is None else previous.consecutive_detector_failures
             if update.outcome in {PublicDetectorOutcome.BOOTSTRAP, PublicDetectorOutcome.CHANGED}:
                 changed_count += 1
+                changed_source_ids.append(source.id)
                 self._emit_change(update, observation, oembed_title=oembed_title)
             elif update.outcome is PublicDetectorOutcome.UNCHANGED:
                 unchanged_count += 1
@@ -795,6 +798,7 @@ class PublicDetectorShadow:
             changed_count=changed_count,
             unchanged_count=unchanged_count,
             failure_count=failure_count,
+            changed_source_ids=tuple(changed_source_ids),
         )
 
     def _record_failure(
