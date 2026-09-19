@@ -47,6 +47,7 @@ def _embed_html(
     title: str = "Bulletin 12:00",
     show_id: str = SHOW_ID,
     entity_type: str = "episode",
+    release_date: object = "2026-09-19T10:00:00Z",
 ) -> str:
     payload = {
         "props": {
@@ -59,7 +60,7 @@ def _embed_html(
                             "uri": f"spotify:episode:{episode_id}",
                             "name": title,
                             "title": title,
-                            "releaseDate": "2026-09-19T10:00:00Z",
+                            "releaseDate": release_date,
                             "duration": 180000,
                             "relatedEntityUri": f"spotify:show:{show_id}",
                         }
@@ -222,6 +223,21 @@ def test_parse_public_show_embed_rejects_invalid_contract(
         )
 
     assert exc_info.value.reason is reason
+
+
+@pytest.mark.parametrize("release_date", [{"isoString": "2026-09-19T10:00:00Z"}, "", 123])
+def test_parse_public_show_embed_tolerates_noncritical_release_date_drift(
+    release_date: object,
+) -> None:
+    observation = parse_public_show_embed(
+        _embed_html(release_date=release_date),
+        source_id=SourceId("source"),
+        spotify_show_id=SHOW_ID,
+        observed_at=NOW,
+    )
+
+    assert observation.episode_id == EPISODE_A
+    assert observation.release_date_raw is None
 
 
 def test_parse_public_show_embed_rejects_duplicate_next_data() -> None:
