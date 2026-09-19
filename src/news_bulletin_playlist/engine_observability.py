@@ -13,7 +13,12 @@ from news_bulletin_playlist.desired_state import (
     DurationEligibilityDecision,
 )
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
-from news_bulletin_playlist.engine import EngineCycleResult, EngineCycleRunner, SourceCycleOutcome
+from news_bulletin_playlist.engine import (
+    EngineCycleResult,
+    EngineCycleRunner,
+    PlaylistCycleOutcome,
+    SourceCycleOutcome,
+)
 from news_bulletin_playlist.reconciliation_diagnostics import (
     classify_reconciliation_failure,
     classify_reconciliation_warning,
@@ -189,7 +194,7 @@ class InstrumentedEngineCycleRunner:
 
     def _emit_playlist(
         self,
-        playlist,  # type: ignore[no-untyped-def]
+        playlist: PlaylistCycleOutcome,
         occurred_at: datetime,
         cycle_id: str,
     ) -> None:
@@ -407,13 +412,13 @@ class InstrumentedEngineCycleRunner:
                 cycle_id=cycle_id,
                 details={"total": snapshot.oauth_requests},
             )
-        for operation, count in snapshot.oauth:
+        for oauth_operation, count in snapshot.oauth:
             if count > 0:
                 self.diagnostics.emit(
                     occurred_at=occurred_at,
                     severity=DiagnosticSeverity.INFO,
                     component="spotify.requests",
-                    event_name=f"cycle_request_oauth_{operation.value}",
+                    event_name=f"cycle_request_oauth_{oauth_operation.value}",
                     cycle_id=cycle_id,
                     details={"total": count},
                 )
