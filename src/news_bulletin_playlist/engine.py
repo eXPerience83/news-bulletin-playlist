@@ -90,7 +90,7 @@ class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
         now: datetime | None = None,
     ) -> ProviderAuthorizationSession: ...
 
-    def planner_authorization_context(self) -> str | None: ...
+    def authorization_context(self) -> str | None: ...
 
 
 class SpotifyEngineClient(
@@ -973,7 +973,7 @@ class EngineRunner:
 
     def _authorization_context_matches(self, expected: str) -> bool:
         try:
-            current = self.raw_auth.planner_authorization_context()
+            current = self.raw_auth.authorization_context()
         except Exception:
             return False
         return isinstance(current, str) and current == expected
