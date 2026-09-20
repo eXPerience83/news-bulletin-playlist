@@ -13,6 +13,6 @@ class TitleParser(Protocol):
 
 
 class RecoveryTitleParser(TitleParser, Protocol):
-    """Title parser that exposes the exact/recovery decision used by runtime and watch."""
+    """Title parser that exposes the exact/recovery decision behind semantic parsing."""
 
     def parse_with_recovery(self, title: str) -> TitleParseAttempt: ...
