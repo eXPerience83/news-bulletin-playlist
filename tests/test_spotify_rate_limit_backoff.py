@@ -52,7 +52,7 @@ class _Auth:
         self.calls += 1
         return "access-token"
 
-    def planner_authorization_context(self) -> str:
+    def authorization_context(self) -> str:
         return "a" * 64
 
 
