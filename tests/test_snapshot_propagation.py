@@ -40,7 +40,12 @@ def _playlist() -> PlaylistDefinition:
     )
 
 
-def _desired(playlist: PlaylistDefinition, count: int = 75) -> DesiredPlaylistState:
+def _desired(
+    playlist: PlaylistDefinition,
+    count: int = 75,
+    *,
+    generated_at: datetime = NOW,
+) -> DesiredPlaylistState:
     items = tuple(
         DesiredPlaylistItem(
             source_id=SourceId("ser"),
@@ -52,7 +57,7 @@ def _desired(playlist: PlaylistDefinition, count: int = 75) -> DesiredPlaylistSt
     )
     return DesiredPlaylistState(
         playlist_id=playlist.id,
-        generated_at=NOW,
+        generated_at=generated_at,
         items=items,
     )
 
@@ -101,7 +106,19 @@ class _SnapshotPropagationSpotify:
         return {"snapshot_id": response}
 
 
-class _SnapshotContentRaceSpotify(_SnapshotPropagationSpotify):
+class _MissingBaselineSpotify(_SnapshotPropagationSpotify):
+    def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]:
+        if self.snapshot_calls == 0:
+            self.snapshot_calls += 1
+            raise SpotifyReconciliationError("baseline snapshot unavailable")
+        del playlist_id
+        index = min(self.snapshot_calls - 1, len(self.snapshot_responses) - 1)
+        response = self.snapshot_responses[index]
+        self.snapshot_calls += 1
+        return {"snapshot_id": response}
+
+
+class _PostReadbackRaceSpotify(_SnapshotPropagationSpotify):
     def playlist_items(
         self,
         playlist_id: str,
@@ -109,22 +126,10 @@ class _SnapshotContentRaceSpotify(_SnapshotPropagationSpotify):
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        if self.snapshot_calls == 1 and offset == 0 and self.writes:
+        response = super().playlist_items(playlist_id, limit=limit, offset=offset)
+        if self.writes == 1 and self.playlist_item_calls == 3 and offset == 50:
             self.state[0] = "spotify:episode:concurrent"
-        return super().playlist_items(playlist_id, limit=limit, offset=offset)
-
-
-class _LateSnapshotContentRaceSpotify(_SnapshotPropagationSpotify):
-    def playlist_items(
-        self,
-        playlist_id: str,
-        *,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        if self.snapshot_calls == 2 and offset == 0 and self.writes:
-            self.state[0] = "spotify:episode:late-concurrent"
-        return super().playlist_items(playlist_id, limit=limit, offset=offset)
+        return response
 
 
 def test_stable_stale_snapshot_becomes_durable_pending_without_second_recheck(
@@ -145,10 +150,10 @@ def test_stable_stale_snapshot_becomes_durable_pending_without_second_recheck(
         "Spotify verification degraded: snapshot propagation pending after exact readback"
     )
     assert client.writes == 1
-    # One prewrite page + two post-write pages for 75 items.  The former second
-    # exact readback (two more pages) and second snapshot request are deliberately absent.
+    # One prewrite page + two post-write pages for 75 items. Only the prewrite
+    # baseline snapshot is read; post-write snapshot confirmation is deferred.
     assert client.playlist_item_calls == 3
-    assert client.snapshot_calls == 2
+    assert client.snapshot_calls == 1
     assert store.get_playlist_attestation(playlist.id) is None
     pending = PendingSnapshotJournal(store).get(playlist.id)
     assert pending is not None
@@ -160,7 +165,7 @@ def test_stable_stale_snapshot_becomes_durable_pending_without_second_recheck(
     ("count", "expected_item_calls"),
     ((49, 2), (50, 3), (75, 3), (100, 4)),
 )
-def test_stale_snapshot_request_boundaries_omit_second_immediate_pass(
+def test_direct_pending_request_boundaries_omit_post_write_snapshot(
     tmp_path: Path,
     count: int,
     expected_item_calls: int,
@@ -177,7 +182,7 @@ def test_stale_snapshot_request_boundaries_omit_second_immediate_pass(
     assert result.remote_evidence_qualified is False
     assert client.writes == 1
     assert client.playlist_item_calls == expected_item_calls
-    assert client.snapshot_calls == 2
+    assert client.snapshot_calls == 1
     assert store.get_playlist_attestation(playlist.id) is None
     assert PendingSnapshotJournal(store).get(playlist.id) is not None
 
@@ -202,25 +207,26 @@ def test_pending_persistence_failure_after_exact_readback_fails_closed(
 
     assert client.writes == 1
     assert client.playlist_item_calls == 3
-    assert client.snapshot_calls == 2
+    assert client.snapshot_calls == 1
     assert store.get_playlist_attestation(playlist.id) is None
 
 
-def test_unexpected_advancing_snapshot_fails_closed(tmp_path: Path) -> None:
+def test_missing_baseline_unexpected_snapshot_fails_closed(tmp_path: Path) -> None:
     playlist = _playlist()
     desired = _desired(playlist)
     store = _store(tmp_path)
-    client = _SnapshotPropagationSpotify(["snapshot-a", "snapshot-b"])
+    client = _MissingBaselineSpotify(["snapshot-c", "snapshot-c"])
 
     with pytest.raises(SpotifyReconciliationError, match="known prewrite baseline"):
         reconcile_spotify_playlist(client, playlist, desired, store=store)
 
     assert client.writes == 1
+    assert client.snapshot_calls == 3
     assert store.get_playlist_attestation(playlist.id) is None
     assert PendingSnapshotJournal(store).get(playlist.id) is None
 
 
-def test_snapshot_that_is_immediately_visible_is_fully_verified_and_attested(
+def test_direct_pending_defers_even_when_write_snapshot_is_immediately_visible(
     tmp_path: Path,
 ) -> None:
     playlist = _playlist()
@@ -228,12 +234,47 @@ def test_snapshot_that_is_immediately_visible_is_fully_verified_and_attested(
     store = _store(tmp_path)
     client = _SnapshotPropagationSpotify(["snapshot-stale", "snapshot-write"])
 
+    first = reconcile_spotify_playlist(client, playlist, desired, store=store)
+
+    assert first.ok is True
+    assert first.wrote is True
+    assert first.degraded_verification is True
+    assert first.remote_evidence_qualified is False
+    assert client.snapshot_calls == 1
+    assert store.get_playlist_attestation(playlist.id) is None
+    assert PendingSnapshotJournal(store).get(playlist.id) is not None
+
+    second = reconcile_spotify_playlist(
+        client,
+        playlist,
+        _desired(playlist, generated_at=NOW + timedelta(minutes=10)),
+        store=store,
+    )
+
+    assert second.ok is True
+    assert second.wrote is False
+    assert second.remote_evidence_qualified is True
+    assert client.snapshot_calls == 2
+    assert client.playlist_item_calls == 3
+    attestation = store.get_playlist_attestation(playlist.id)
+    assert attestation is not None
+    assert attestation.snapshot_id == "snapshot-write"
+    assert PendingSnapshotJournal(store).get(playlist.id) is None
+
+
+def test_equal_prewrite_and_write_snapshot_keeps_immediate_strict_verification(
+    tmp_path: Path,
+) -> None:
+    playlist = _playlist()
+    desired = _desired(playlist)
+    store = _store(tmp_path)
+    client = _SnapshotPropagationSpotify(["snapshot-write", "snapshot-write"])
+
     result = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
     assert result.ok is True
     assert result.wrote is True
     assert result.degraded_verification is False
-    assert result.warning is None
     assert client.snapshot_calls == 2
     attestation = store.get_playlist_attestation(playlist.id)
     assert attestation is not None
@@ -241,13 +282,13 @@ def test_snapshot_that_is_immediately_visible_is_fully_verified_and_attested(
     assert PendingSnapshotJournal(store).get(playlist.id) is None
 
 
-def test_unexpected_snapshot_can_converge_to_write_snapshot_on_strict_recheck(
+def test_missing_baseline_unexpected_snapshot_can_converge_on_strict_recheck(
     tmp_path: Path,
 ) -> None:
     playlist = _playlist()
     desired = _desired(playlist)
     store = _store(tmp_path)
-    client = _SnapshotPropagationSpotify(["snapshot-a", "snapshot-c", "snapshot-write"])
+    client = _MissingBaselineSpotify(["snapshot-c", "snapshot-write"])
 
     result = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
@@ -255,36 +296,40 @@ def test_unexpected_snapshot_can_converge_to_write_snapshot_on_strict_recheck(
     assert result.wrote is True
     assert result.degraded_verification is False
     assert client.snapshot_calls == 3
-    # The C path intentionally retains the second full readback.
     assert client.playlist_item_calls == 5
     attestation = store.get_playlist_attestation(playlist.id)
     assert attestation is not None
     assert attestation.snapshot_id == "snapshot-write"
 
 
-def test_content_race_during_snapshot_recheck_still_fails_closed(tmp_path: Path) -> None:
-    playlist = _playlist()
-    desired = _desired(playlist)
-    store = _store(tmp_path)
-    client = _SnapshotContentRaceSpotify(["snapshot-stale", "snapshot-stale"])
-
-    with pytest.raises(SpotifyReconciliationError):
-        reconcile_spotify_playlist(client, playlist, desired, store=store)
-
-    assert client.writes == 1
-    assert store.get_playlist_attestation(playlist.id) is None
-
-
-def test_late_content_race_after_advancing_snapshot_still_fails_closed(
+def test_direct_pending_concurrent_divergence_is_repaired_next_cycle(
     tmp_path: Path,
 ) -> None:
     playlist = _playlist()
     desired = _desired(playlist)
     store = _store(tmp_path)
-    client = _LateSnapshotContentRaceSpotify(["snapshot-a", "snapshot-b"])
+    client = _PostReadbackRaceSpotify(["snapshot-a", "snapshot-c", "snapshot-c"])
 
-    with pytest.raises(SpotifyReconciliationError):
-        reconcile_spotify_playlist(client, playlist, desired, store=store)
+    first = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
-    assert client.writes == 1
+    assert first.ok is True and first.wrote is True and first.degraded_verification
     assert store.get_playlist_attestation(playlist.id) is None
+    assert PendingSnapshotJournal(store).get(playlist.id) is not None
+    assert client.state[0] == "spotify:episode:concurrent"
+    assert client.snapshot_calls == 1
+
+    second = reconcile_spotify_playlist(
+        client,
+        playlist,
+        _desired(playlist, generated_at=NOW + timedelta(minutes=10)),
+        store=store,
+    )
+
+    assert second.ok is True and second.wrote is True and second.degraded_verification
+    assert client.writes == 2
+    assert client.state == list(desired.uris)
+    assert store.get_playlist_attestation(playlist.id) is None
+    pending = PendingSnapshotJournal(store).get(playlist.id)
+    assert pending is not None
+    assert pending.baseline_snapshot_id == "snapshot-c"
+    assert pending.expected_snapshot_id == "snapshot-write"
