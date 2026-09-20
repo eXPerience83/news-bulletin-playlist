@@ -179,19 +179,20 @@ def test_persistent_primary_failure_waits_for_degraded_audit_deadline() -> None:
         public_detector=detector,
     )
 
-    assert runner._refresh_plan(  # noqa: SLF001
-        _summary(),
-        now=NOW + timedelta(minutes=20),
-    ) == ()
+    assert (
+        runner._refresh_plan(  # noqa: SLF001
+            _summary(),
+            now=NOW + timedelta(minutes=20),
+        )
+        == ()
+    )
     assert detector.audit_calls == []
 
     assert runner._refresh_plan(  # noqa: SLF001
         _summary(),
         now=NOW + timedelta(minutes=30),
     ) == ((SOURCE_ID, RefreshReason.INACTIVITY_AUDIT),)
-    assert detector.audit_calls == [
-        (SOURCE_ID, SHOW_ID, NOW + timedelta(minutes=30))
-    ]
+    assert detector.audit_calls == [(SOURCE_ID, SHOW_ID, NOW + timedelta(minutes=30))]
 
 
 def test_degraded_audit_is_fail_closed_when_attempt_cannot_be_persisted() -> None:
