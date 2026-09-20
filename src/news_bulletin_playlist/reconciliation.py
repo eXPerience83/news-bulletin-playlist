@@ -376,14 +376,13 @@ def _reconcile_playlist_items(
                 write_response,
                 context="Spotify playlist write response",
             )
-            direct_pending_eligible = (
+            if (
                 prewrite_snapshot is not None
                 and prewrite_snapshot != write_snapshot
                 and pending_journal is not None
                 and logical_playlist_id is not None
                 and attestation_updated_at is not None
-            )
-            if direct_pending_eligible:
+            ):
                 pending_confirmation_after_write = PendingSnapshotConfirmation(
                     playlist_id=logical_playlist_id,
                     destination_id=playlist_id,
