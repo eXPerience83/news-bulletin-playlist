@@ -23,7 +23,11 @@ from news_bulletin_playlist.reconciliation_diagnostics import (
     classify_reconciliation_failure,
     classify_reconciliation_warning,
 )
-from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics, cycle_id_for
+from news_bulletin_playlist.runtime_diagnostics import (
+    OperationalDiagnostics,
+    cycle_id_for,
+    diagnostic_cycle,
+)
 from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestMetrics,
     SpotifyRequestScopeSnapshot,
@@ -68,23 +72,24 @@ class InstrumentedEngineCycleRunner:
         )
 
         metrics = self.request_metrics
-        if metrics is None:
-            result = self._run_guarded(cycle_id)
-            request_snapshot = None
-        else:
-            with metrics.request_scope() as request_scope:
-                try:
-                    result = self.runner.run_cycle()
-                except Exception:  # noqa: BLE001 - scheduler isolation; never log exception text
-                    occurred_at = _as_utc(self.clock())
-                    self._emit_spotify_request_scope(
-                        request_scope.snapshot(),
-                        cycle_id=cycle_id,
-                        occurred_at=occurred_at,
-                    )
-                    self._emit_unexpected(cycle_id, occurred_at)
-                    raise
-                request_snapshot = request_scope.snapshot()
+        with diagnostic_cycle(cycle_id):
+            if metrics is None:
+                result = self._run_guarded(cycle_id)
+                request_snapshot = None
+            else:
+                with metrics.request_scope() as request_scope:
+                    try:
+                        result = self.runner.run_cycle()
+                    except Exception:  # noqa: BLE001 - scheduler isolation; never log exception text
+                        occurred_at = _as_utc(self.clock())
+                        self._emit_spotify_request_scope(
+                            request_scope.snapshot(),
+                            cycle_id=cycle_id,
+                            occurred_at=occurred_at,
+                        )
+                        self._emit_unexpected(cycle_id, occurred_at)
+                        raise
+                    request_snapshot = request_scope.snapshot()
 
         self._emit_result(result, cycle_id, request_snapshot=request_snapshot)
         return result
