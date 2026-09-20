@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.engine import EngineRunner
