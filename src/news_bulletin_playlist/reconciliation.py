@@ -191,15 +191,11 @@ def _reconcile_playlist_items(
         pending_confirmation = pending_journal.get(logical_playlist_id)
         if pending_confirmation is not None:
             if pending_confirmation.destination_id != playlist_id:
-                evidence.pending_snapshot_resolution = (
-                    PendingSnapshotResolution.INVALIDATED_CONTEXT
-                )
+                evidence.pending_snapshot_resolution = PendingSnapshotResolution.INVALIDATED_CONTEXT
                 pending_journal.clear(logical_playlist_id)
                 pending_confirmation = None
             elif pending_confirmation.desired_fingerprint != desired_fingerprint:
-                evidence.pending_snapshot_resolution = (
-                    PendingSnapshotResolution.SUPERSEDED_DESIRED
-                )
+                evidence.pending_snapshot_resolution = PendingSnapshotResolution.SUPERSEDED_DESIRED
                 pending_journal.clear(logical_playlist_id)
                 pending_confirmation = None
             elif attestation_updated_at >= pending_confirmation.expires_at:
