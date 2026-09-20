@@ -1,8 +1,8 @@
 # Managed playlist covers
 
 Managed playlists use curated cover assets shipped with the application image. Cover art is
-playlist metadata; it is intentionally independent from source collection, matching and bulletin
-reconciliation.
+playlist metadata; it is intentionally independent from source detection/catalogue refresh and
+bulletin reconciliation.
 
 ## Asset layout
 
