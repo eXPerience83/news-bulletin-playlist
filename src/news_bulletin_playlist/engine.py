@@ -1017,7 +1017,6 @@ class EngineRunner:
         fingerprint: str | None = None,
         now: datetime,
     ) -> PlaylistCycleOutcome:
-        desired_count = 0 if build is None else len(build.desired.items)
         self.store.record_playlist_state(
             playlist.id,
             started_at=now,
