@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -591,6 +592,45 @@ def test_spotify_show_id_requires_one_valid_show_reference() -> None:
 
     with pytest.raises(PublicShowConfigurationError, match="exactly one"):
         spotify_show_id(_source(show_ids=(SHOW_ID, "T" * 22)))
+
+
+def test_journal_additively_upgrades_existing_detector_table(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE spotify_public_detector_state (
+                source_id TEXT NOT NULL,
+                spotify_show_id TEXT NOT NULL,
+                last_episode_id TEXT,
+                last_episode_title TEXT,
+                last_public_release_date_raw TEXT,
+                last_public_observed_at TEXT,
+                last_detector_success_at TEXT,
+                last_change_at TEXT,
+                last_failure_at TEXT,
+                last_catalogue_refresh_at TEXT,
+                consecutive_detector_failures INTEGER NOT NULL DEFAULT 0,
+                detector_schema_version INTEGER NOT NULL,
+                last_oembed_title TEXT,
+                PRIMARY KEY (source_id, spotify_show_id)
+            )
+            """
+        )
+
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+
+    with sqlite3.connect(store.path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(spotify_public_detector_state)"
+            ).fetchall()
+        }
+
+    assert "last_public_release_date_shape" in columns
+    assert "last_degraded_audit_at" in columns
 
 
 def test_journal_detects_identity_changes_even_when_title_is_identical(tmp_path: Path) -> None:
