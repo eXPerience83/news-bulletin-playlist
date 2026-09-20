@@ -376,37 +376,36 @@ def _reconcile_playlist_items(
                 write_response,
                 context="Spotify playlist write response",
             )
-            current_snapshot = _read_current_snapshot(
-                client,
-                playlist_id,
-                phase="readback",
-            )
-            if current_snapshot != write_snapshot:
-                if prewrite_snapshot is not None and current_snapshot == prewrite_snapshot:
-                    if (
-                        pending_journal is None
-                        or logical_playlist_id is None
-                        or attestation_updated_at is None
-                    ):
-                        raise SpotifyReconciliationError(
-                            "Spotify playlist exact stale snapshot lacked durable pending storage"
-                        )
-                    pending_confirmation_after_write = PendingSnapshotConfirmation(
-                        playlist_id=logical_playlist_id,
-                        destination_id=playlist_id,
-                        baseline_snapshot_id=prewrite_snapshot,
-                        expected_snapshot_id=write_snapshot,
-                        desired_fingerprint=desired_fingerprint,
-                        created_at=attestation_updated_at,
-                        expires_at=attestation_updated_at + _PENDING_SNAPSHOT_TTL,
-                        readback_exact=True,
-                    )
-                    degraded_verification = True
-                    snapshot_warning = _SNAPSHOT_PROPAGATION_WARNING
-                    write_snapshot = None
-                else:
-                    # A third/unexpected snapshot still requires the stronger stability proof.
-                    # Only the known stale A -> B transition may defer confirmation immediately.
+            if (
+                prewrite_snapshot is not None
+                and prewrite_snapshot != write_snapshot
+                and pending_journal is not None
+                and logical_playlist_id is not None
+                and attestation_updated_at is not None
+            ):
+                pending_confirmation_after_write = PendingSnapshotConfirmation(
+                    playlist_id=logical_playlist_id,
+                    destination_id=playlist_id,
+                    baseline_snapshot_id=prewrite_snapshot,
+                    expected_snapshot_id=write_snapshot,
+                    desired_fingerprint=desired_fingerprint,
+                    created_at=attestation_updated_at,
+                    expires_at=attestation_updated_at + _PENDING_SNAPSHOT_TTL,
+                    readback_exact=True,
+                )
+                degraded_verification = True
+                snapshot_warning = _SNAPSHOT_PROPAGATION_WARNING
+                write_snapshot = None
+            else:
+                current_snapshot = _read_current_snapshot(
+                    client,
+                    playlist_id,
+                    phase="readback",
+                )
+                if current_snapshot != write_snapshot:
+                    # P3 handles every durable known A -> B exact transition before this point.
+                    # The remaining path has no usable transition baseline and therefore keeps
+                    # the stronger unexpected-snapshot stability proof.
                     stable_readback = _read_spotify_playlist(
                         client,
                         playlist_id,
@@ -427,8 +426,8 @@ def _reconcile_playlist_items(
                         pass
                     elif stable_snapshot == current_snapshot:
                         raise SpotifyReconciliationError(
-                            "Spotify playlist snapshot did not match the known prewrite baseline "
-                            "during exact readback verification"
+                            "Spotify playlist snapshot remained unexpected during exact "
+                            "readback verification"
                         )
                     else:
                         raise SpotifyReconciliationError(
