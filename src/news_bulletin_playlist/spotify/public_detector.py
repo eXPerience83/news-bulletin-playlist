@@ -1145,7 +1145,7 @@ class PublicDetector:
                 baseline = (
                     None
                     if previous is None
-                    else previous.last_oembed_title or previous.last_episode_title
+                    else previous.last_episode_title or previous.last_oembed_title
                 )
                 if baseline is None:
                     fallback_outcome = "title_baseline"
