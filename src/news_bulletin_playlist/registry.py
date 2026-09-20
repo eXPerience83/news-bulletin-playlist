@@ -43,13 +43,6 @@ def get_title_parser(parser_id: str) -> TitleParser:
         raise KeyError(f"unknown parser_id: {parser_id}") from exc
 
 
-def get_recovery_title_parser(parser_id: str) -> RecoveryTitleParser:
-    try:
-        return RECOVERY_TITLE_PARSERS[parser_id]
-    except KeyError as exc:
-        raise KeyError(f"parser_id does not support semantic title recovery: {parser_id}") from exc
-
-
 def has_collection_filter(filter_id: str) -> bool:
     return filter_id in COLLECTION_FILTERS
 

@@ -373,7 +373,7 @@ class SpotifyAuthService:
         if isinstance(self.transport, SpotifyAccountsClient):
             self.transport.metrics = metrics
 
-    def planner_authorization_context(self) -> str | None:
+    def authorization_context(self) -> str | None:
         """Return stable non-secret authorization provenance without contacting Spotify."""
         record = self.store.load()
         if record is None or record.status is not CredentialStatus.ACTIVE:

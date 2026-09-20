@@ -23,7 +23,7 @@ def load_effective_config(
     data_dir: Path,
     environ: Mapping[str, str],
 ) -> EngineConfig | None:
-    """Load one unambiguous effective configuration without changing the P1 engine model."""
+    """Load one unambiguous effective configuration for the current engine model."""
     raw_explicit = environ.get(CONFIG_PATH_ENV)
     explicit = raw_explicit.strip() if raw_explicit is not None and raw_explicit.strip() else None
     if explicit is not None:

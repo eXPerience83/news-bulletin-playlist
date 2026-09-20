@@ -90,7 +90,7 @@ class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
         now: datetime | None = None,
     ) -> ProviderAuthorizationSession: ...
 
-    def planner_authorization_context(self) -> str | None: ...
+    def authorization_context(self) -> str | None: ...
 
 
 class SpotifyEngineClient(
@@ -386,13 +386,11 @@ class EngineRunner:
                 now=started_at,
             )
             if destination_verification_kind is not None:
-                self.store.record_playlist_run(
+                self.store.record_playlist_state(
                     playlist.id,
                     started_at=started_at,
                     finished_at=started_at,
                     ok=True,
-                    desired_count=len(desired.items),
-                    applied_count=len(desired.items),
                 )
                 state = self.store.get_playlist_state(playlist.id)
                 playlist_outcomes.append(
@@ -803,13 +801,11 @@ class EngineRunner:
             self.first_journal.clear_destination_verification(playlist.id)
             self.first_journal.clear_degraded_destination_verification(playlist.id)
 
-        self.store.record_playlist_run(
+        self.store.record_playlist_state(
             playlist.id,
             started_at=now,
             finished_at=now,
             ok=result.ok,
-            desired_count=result.desired_count,
-            applied_count=0 if result.applied_count is None else result.applied_count,
             error=result.error or result.warning,
         )
         state = self.store.get_playlist_state(playlist.id)
@@ -977,7 +973,7 @@ class EngineRunner:
 
     def _authorization_context_matches(self, expected: str) -> bool:
         try:
-            current = self.raw_auth.planner_authorization_context()
+            current = self.raw_auth.authorization_context()
         except Exception:
             return False
         return isinstance(current, str) and current == expected
@@ -992,13 +988,11 @@ class EngineRunner:
         now: datetime,
     ) -> PlaylistCycleOutcome:
         self.first_journal.clear_destination_verification(playlist.id)
-        self.store.record_playlist_run(
+        self.store.record_playlist_state(
             playlist.id,
             started_at=now,
             finished_at=now,
             ok=False,
-            desired_count=len(build.desired.items),
-            applied_count=0,
             error=_safe_error(exc),
         )
         state = self.store.get_playlist_state(playlist.id)
@@ -1023,14 +1017,11 @@ class EngineRunner:
         fingerprint: str | None = None,
         now: datetime,
     ) -> PlaylistCycleOutcome:
-        desired_count = 0 if build is None else len(build.desired.items)
-        self.store.record_playlist_run(
+        self.store.record_playlist_state(
             playlist.id,
             started_at=now,
             finished_at=now,
             ok=False,
-            desired_count=desired_count,
-            applied_count=0,
             error=error,
         )
         state = self.store.get_playlist_state(playlist.id)

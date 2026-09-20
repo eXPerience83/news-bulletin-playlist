@@ -12,8 +12,8 @@ from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.spotify.first_models import (
     RefreshReason,
-    SourceShadowState,
     SpotifyFirstEpisode,
+    SpotifyFirstSourceState,
     TimestampSource,
     UpsertCounts,
     as_utc,
@@ -128,7 +128,7 @@ class SpotifyFirstJournal:
         with self._connection("initialize Spotify-first state") as connection:
             self._ensure_tables(connection)
 
-    def get_source_state(self, source_id: SourceId) -> SourceShadowState | None:
+    def get_source_state(self, source_id: SourceId) -> SpotifyFirstSourceState | None:
         with self._connection("read Spotify-first source state") as connection:
             self._ensure_tables(connection)
             row = connection.execute(
@@ -481,8 +481,8 @@ class SpotifyFirstJournal:
                 connection.close()
 
 
-def _source_state_from_row(row: sqlite3.Row) -> SourceShadowState:
-    return SourceShadowState(
+def _source_state_from_row(row: sqlite3.Row) -> SpotifyFirstSourceState:
+    return SpotifyFirstSourceState(
         source_id=SourceId(_row_text(row, "source_id")),
         spotify_show_id=_row_text(row, "spotify_show_id"),
         last_refresh_at=_parse_timestamp(_row_text(row, "last_refresh_at")),

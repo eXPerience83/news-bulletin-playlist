@@ -6,11 +6,11 @@ RELEASE_DATE_TITLE_PARSER_ID = "release_date_title"
 
 
 class ReleaseDateTitleParser:
-    """Marker parser for feeds matched by exact title plus Spotify release date.
+    """Parser marker for products without a trustworthy semantic title timestamp.
 
-    These feeds do not encode a trustworthy semantic edition timestamp in the title.
-    Collection therefore keeps ``edition_at`` unset and the Spotify matcher uses the
-    already-supported exact normalized title + release-date path.
+    The Spotify-first catalogue keeps ``edition_at`` unset for these titles. Episode identity
+    remains the Spotify episode ID/URI and ordering/retention use explicit release-date precision
+    plus local first-seen provenance rather than an RSS-to-Spotify match.
     """
 
     provider_id = RELEASE_DATE_TITLE_PARSER_ID
