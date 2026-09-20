@@ -74,7 +74,7 @@ change production behaviour.
 
 ## Current built-in runtime sources
 
-These are the sources exposed by the current multi-playlist dev candidate branch.
+These are the sources represented by the current built-in runtime catalog.
 
 | Source id | `ORIGIN · SCOPE · LANGUAGE` | Bulletin/provider | Duration profile | Role |
 | --- | --- | --- | --- | --- |
