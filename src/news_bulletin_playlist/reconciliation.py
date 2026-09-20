@@ -190,16 +190,26 @@ def _reconcile_playlist_items(
     ):
         pending_confirmation = pending_journal.get(logical_playlist_id)
         if pending_confirmation is not None:
-            if (
-                pending_confirmation.destination_id != playlist_id
-                or pending_confirmation.desired_fingerprint != desired_fingerprint
-                or attestation_updated_at >= pending_confirmation.expires_at
-            ):
+            if pending_confirmation.destination_id != playlist_id:
+                evidence.pending_snapshot_resolution = (
+                    PendingSnapshotResolution.INVALIDATED_CONTEXT
+                )
+                pending_journal.clear(logical_playlist_id)
+                pending_confirmation = None
+            elif pending_confirmation.desired_fingerprint != desired_fingerprint:
+                evidence.pending_snapshot_resolution = (
+                    PendingSnapshotResolution.SUPERSEDED_DESIRED
+                )
+                pending_journal.clear(logical_playlist_id)
+                pending_confirmation = None
+            elif attestation_updated_at >= pending_confirmation.expires_at:
+                evidence.pending_snapshot_resolution = PendingSnapshotResolution.EXPIRED
                 pending_journal.clear(logical_playlist_id)
                 pending_confirmation = None
             elif pending_confirmation.readback_exact:
                 pending_snapshot = _read_current_snapshot(client, playlist_id, phase="prewrite")
                 if pending_snapshot == pending_confirmation.expected_snapshot_id:
+                    evidence.pending_snapshot_resolution = PendingSnapshotResolution.CONFIRMED
                     store.set_playlist_attestation(
                         logical_playlist_id,
                         destination_id=playlist_id,
@@ -233,6 +243,7 @@ def _reconcile_playlist_items(
             allow_unavailable=True,
             phase="prewrite",
         )
+        _note_unavailable_media(evidence, current, UnavailableMediaPhase.PREWRITE)
 
         if (
             pending_confirmation is not None
@@ -241,6 +252,12 @@ def _reconcile_playlist_items(
             and logical_playlist_id is not None
             and attestation_updated_at is not None
         ):
+            if current.had_unavailable_item:
+                _note_unavailable_media(
+                    evidence,
+                    current,
+                    UnavailableMediaPhase.PENDING_CONFIRMATION,
+                )
             pending_result = _resolve_pending_confirmation(
                 client,
                 playlist_id,
@@ -253,6 +270,7 @@ def _reconcile_playlist_items(
                 journal=pending_journal,
                 pending=pending_confirmation,
                 current_snapshot=pending_snapshot,
+                evidence=evidence,
             )
             if pending_result is not None:
                 return pending_result
@@ -386,6 +404,7 @@ def _reconcile_playlist_items(
         allow_unavailable=allow_degraded_readback,
         phase="readback",
     )
+    _note_unavailable_media(evidence, readback, UnavailableMediaPhase.READBACK)
     if not _visible_positions_match(readback.slots, desired):
         raise SpotifyReconciliationError(
             "Spotify playlist readback did not match desired order/count/content "
@@ -411,6 +430,7 @@ def _reconcile_playlist_items(
                 and logical_playlist_id is not None
                 and attestation_updated_at is not None
             ):
+                evidence.pending_snapshot_created = PendingSnapshotCreation.EXACT
                 pending_confirmation_after_write = PendingSnapshotConfirmation(
                     playlist_id=logical_playlist_id,
                     destination_id=playlist_id,
@@ -501,6 +521,7 @@ def _reconcile_playlist_items(
     if current_snapshot != write_snapshot:
         if prewrite_snapshot is not None and current_snapshot == prewrite_snapshot:
             assert pending_journal is not None
+            evidence.pending_snapshot_created = PendingSnapshotCreation.PARTIAL
             pending_journal.set(
                 PendingSnapshotConfirmation(
                     playlist_id=logical_playlist_id,
@@ -536,6 +557,18 @@ def _reconcile_playlist_items(
         degraded_verification=True,
         warning=_degraded_warning(readback.unavailable_indices),
     )
+
+
+def _note_unavailable_media(
+    evidence: ReconciliationEvidence,
+    read: _SpotifyPlaylistRead,
+    phase: UnavailableMediaPhase,
+) -> None:
+    count = len(read.unavailable_indices)
+    if count <= 0:
+        return
+    evidence.unavailable_media_count = count
+    evidence.unavailable_media_phase = phase
 
 
 def _ambiguous_write_applied(
@@ -614,18 +647,25 @@ def _resolve_pending_confirmation(
     journal: PendingSnapshotJournal,
     pending: PendingSnapshotConfirmation,
     current_snapshot: str | None = None,
+    evidence: ReconciliationEvidence,
 ) -> _PlaylistItemsReconciliationResult | None:
-    if (
-        pending.destination_id != playlist_id
-        or pending.desired_fingerprint != desired_fingerprint
-        or now >= pending.expires_at
-    ):
+    if pending.destination_id != playlist_id:
+        evidence.pending_snapshot_resolution = PendingSnapshotResolution.INVALIDATED_CONTEXT
+        journal.clear(logical_playlist_id)
+        return None
+    if pending.desired_fingerprint != desired_fingerprint:
+        evidence.pending_snapshot_resolution = PendingSnapshotResolution.SUPERSEDED_DESIRED
+        journal.clear(logical_playlist_id)
+        return None
+    if now >= pending.expires_at:
+        evidence.pending_snapshot_resolution = PendingSnapshotResolution.EXPIRED
         journal.clear(logical_playlist_id)
         return None
 
     if not _visible_positions_match(current.slots, desired):
         # Visible content has genuinely diverged. The old transition no longer authorizes a
         # skip; clear it and let normal reconciliation repair the destination.
+        evidence.pending_snapshot_resolution = PendingSnapshotResolution.INVALIDATED_CONTEXT
         journal.clear(logical_playlist_id)
         return None
 
@@ -634,6 +674,7 @@ def _resolve_pending_confirmation(
     if current_snapshot is None:
         current_snapshot = _read_current_snapshot(client, playlist_id, phase="prewrite")
     if current_snapshot == pending.expected_snapshot_id:
+        evidence.pending_snapshot_resolution = PendingSnapshotResolution.CONFIRMED
         store.set_playlist_attestation(
             logical_playlist_id,
             destination_id=playlist_id,
@@ -651,6 +692,7 @@ def _resolve_pending_confirmation(
         return _PlaylistItemsReconciliationResult(wrote=False)
 
     if current_snapshot == pending.baseline_snapshot_id:
+        evidence.pending_snapshot_resolution = PendingSnapshotResolution.STILL_BASELINE
         warning = (
             _partial_snapshot_warning(current.unavailable_indices)
             if current.had_unavailable_item
@@ -661,6 +703,8 @@ def _resolve_pending_confirmation(
             degraded_verification=True,
             warning=warning,
         )
+
+    evidence.pending_snapshot_resolution = PendingSnapshotResolution.UNEXPECTED_SNAPSHOT
 
     # Playlist metadata, cover and privacy changes can advance Spotify's playlist-wide
     # snapshot id without changing any item.  Accept that third snapshot only when a second
@@ -779,6 +823,10 @@ def reconcile_spotify_playlist(
         verified_desired_uris=(
             current_desired.uris if evidence.remote_evidence_qualified else None
         ),
+        pending_snapshot_created=evidence.pending_snapshot_created,
+        pending_snapshot_resolution=evidence.pending_snapshot_resolution,
+        unavailable_media_count=evidence.unavailable_media_count,
+        unavailable_media_phase=evidence.unavailable_media_phase,
     )
 
 
