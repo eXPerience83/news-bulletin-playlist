@@ -207,7 +207,7 @@ SIGTERM/SIGINT asks the HTTP host and scheduler to stop. The scheduler does not 
 - do not add a Client Secret;
 - confirm the exact Spotify redirect URI matches the configured external origin.
 
-**Admin returns 403 before asking for credentials**
+**Optional hardened HTTPS mode returns 403 before asking for credentials**
 
 - confirm traffic really arrives through the configured immediate reverse proxy;
 - confirm its source address matches `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS`;
@@ -260,14 +260,12 @@ remains a **P0 diagnostic path only**, not normal production authorization.
 
 ## Runtime design
 
-`news-playlist serve` is the durable application host. It owns process lifecycle, storage validation, health, the read-only operational portal, the private OAuth administration surface and one sequential scheduler. The architecture remains:
-
-> **Fetch once -> normalize once -> store once -> distribute to many playlists.**
-
-The health endpoint performs a small real write, flush and `fsync` against `/data`, then removes the temporary probe file. This makes storage-full, quota and write failures observable without conflating ordinary upstream failures with container health.
+`news-playlist serve` is the durable application host. It owns process lifecycle, storage validation, health, the read-only operational portal, the private OAuth administration surface and one sequential scheduler.
 
 The current runtime data flow is:
 
 > **Detect public change -> refresh only due official Spotify catalogues -> persist episode state -> compute locally -> reconcile safely.**
+
+The health endpoint performs a small real write, flush and `fsync` against `/data`, then removes the temporary probe file. This makes storage-full, quota and write failures observable without conflating ordinary upstream failures with container health.
 
 Older RSS/canonical/matching descriptions in historical investigation documents are retained only for provenance and upgrade context.
