@@ -384,6 +384,25 @@ class InstrumentedEngineCycleRunner:
             cycle_id=cycle_id,
             details={"total": snapshot.total_requests},
         )
+        if snapshot.public_requests:
+            self.diagnostics.emit(
+                occurred_at=occurred_at,
+                severity=DiagnosticSeverity.INFO,
+                component="spotify.requests",
+                event_name="cycle_request_public_total",
+                cycle_id=cycle_id,
+                details={"total": snapshot.public_requests},
+            )
+        for public_operation, count in snapshot.public:
+            if count > 0:
+                self.diagnostics.emit(
+                    occurred_at=occurred_at,
+                    severity=DiagnosticSeverity.INFO,
+                    component="spotify.requests",
+                    event_name=f"cycle_request_public_{public_operation.value}",
+                    cycle_id=cycle_id,
+                    details={"total": count},
+                )
         if snapshot.web_api_requests:
             self.diagnostics.emit(
                 occurred_at=occurred_at,
@@ -393,13 +412,13 @@ class InstrumentedEngineCycleRunner:
                 cycle_id=cycle_id,
                 details={"total": snapshot.web_api_requests},
             )
-        for operation, count in snapshot.web_api:
+        for web_api_operation, count in snapshot.web_api:
             if count > 0:
                 self.diagnostics.emit(
                     occurred_at=occurred_at,
                     severity=DiagnosticSeverity.INFO,
                     component="spotify.requests",
-                    event_name=f"cycle_request_web_api_{operation.value}",
+                    event_name=f"cycle_request_web_api_{web_api_operation.value}",
                     cycle_id=cycle_id,
                     details={"total": count},
                 )

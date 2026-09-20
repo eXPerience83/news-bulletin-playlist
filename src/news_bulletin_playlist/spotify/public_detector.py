@@ -22,6 +22,11 @@ from news_bulletin_playlist.models import SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
+from news_bulletin_playlist.spotify_metrics import (
+    SpotifyPublicOperation,
+    SpotifyRequestMetrics,
+    SpotifyRequestOutcome,
+)
 
 _PUBLIC_SHOW_BASE = "https://open.spotify.com/show"
 _EMBED_SHOW_BASE = "https://open.spotify.com/embed/show"
@@ -269,8 +274,14 @@ class _NextDataParser(HTMLParser):
 class PublicShowClient:
     """Read the small public Spotify surfaces used only as change signals."""
 
-    def __init__(self, transport: PublicShowTransport | None = None) -> None:
+    def __init__(
+        self,
+        transport: PublicShowTransport | None = None,
+        *,
+        metrics: SpotifyRequestMetrics | None = None,
+    ) -> None:
         self.transport = transport or UrllibPublicShowTransport()
+        self.metrics = metrics
 
     def observe_episode(
         self,
@@ -280,47 +291,114 @@ class PublicShowClient:
         observed_at: datetime,
     ) -> PublicEpisodeObservation:
         show_id = _require_show_id(spotify_show_id)
-        response = self.transport.get(
-            f"{_EMBED_SHOW_BASE}/{show_id}",
-            accept="text/html,application/xhtml+xml",
-        )
+        operation = SpotifyPublicOperation.EMBED_SHOW
+        try:
+            response = self.transport.get(
+                f"{_EMBED_SHOW_BASE}/{show_id}",
+                accept="text/html,application/xhtml+xml",
+            )
+        except PublicShowHttpError as exc:
+            self._record(operation, SpotifyRequestOutcome.HTTP_ERROR, http_status=exc.status)
+            raise
+        except PublicShowTransportError:
+            self._record(operation, SpotifyRequestOutcome.TRANSPORT_ERROR)
+            raise
+        except PublicShowResponseError:
+            self._record(operation, SpotifyRequestOutcome.RESPONSE_ERROR)
+            raise
         try:
             html = response.body.decode("utf-8")
         except UnicodeDecodeError as exc:
+            self._record(
+                operation,
+                SpotifyRequestOutcome.RESPONSE_ERROR,
+                http_status=response.status,
+            )
             raise PublicShowResponseError(
                 "Spotify Embed response was not UTF-8",
                 reason=PublicShowResponseFailureReason.EMBED_NOT_UTF8,
             ) from exc
-        return parse_public_show_embed(
-            html,
-            source_id=source_id,
-            spotify_show_id=show_id,
-            observed_at=observed_at,
-        )
+        try:
+            observation = parse_public_show_embed(
+                html,
+                source_id=source_id,
+                spotify_show_id=show_id,
+                observed_at=observed_at,
+            )
+        except PublicShowResponseError:
+            self._record(
+                operation,
+                SpotifyRequestOutcome.RESPONSE_ERROR,
+                http_status=response.status,
+            )
+            raise
+        self._record(operation, SpotifyRequestOutcome.SUCCESS, http_status=response.status)
+        return observation
 
     def oembed_title(self, spotify_show_id: str) -> str:
         show_id = _require_show_id(spotify_show_id)
         show_url = f"{_PUBLIC_SHOW_BASE}/{show_id}"
         url = f"{_OEMBED_BASE}?{urllib.parse.urlencode({'url': show_url})}"
-        response = self.transport.get(url, accept="application/json")
+        operation = SpotifyPublicOperation.OEMBED
+        try:
+            response = self.transport.get(url, accept="application/json")
+        except PublicShowHttpError as exc:
+            self._record(operation, SpotifyRequestOutcome.HTTP_ERROR, http_status=exc.status)
+            raise
+        except PublicShowTransportError:
+            self._record(operation, SpotifyRequestOutcome.TRANSPORT_ERROR)
+            raise
+        except PublicShowResponseError:
+            self._record(operation, SpotifyRequestOutcome.RESPONSE_ERROR)
+            raise
         try:
             decoded = json.loads(response.body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self._record(
+                operation,
+                SpotifyRequestOutcome.RESPONSE_ERROR,
+                http_status=response.status,
+            )
             raise PublicShowResponseError(
                 "Spotify oEmbed response was not valid JSON",
                 reason=PublicShowResponseFailureReason.OEMBED_JSON,
             ) from exc
         if not isinstance(decoded, dict):
+            self._record(
+                operation,
+                SpotifyRequestOutcome.RESPONSE_ERROR,
+                http_status=response.status,
+            )
             raise PublicShowResponseError(
                 "Spotify oEmbed response was not an object",
                 reason=PublicShowResponseFailureReason.OEMBED_SHAPE,
             )
-        return _bounded_text(
-            decoded.get("title"),
-            "Spotify oEmbed title",
-            max_length=1000,
-            reason=PublicShowResponseFailureReason.OEMBED_TITLE,
-        )
+        try:
+            title = _bounded_text(
+                decoded.get("title"),
+                "Spotify oEmbed title",
+                max_length=1000,
+                reason=PublicShowResponseFailureReason.OEMBED_TITLE,
+            )
+        except PublicShowResponseError:
+            self._record(
+                operation,
+                SpotifyRequestOutcome.RESPONSE_ERROR,
+                http_status=response.status,
+            )
+            raise
+        self._record(operation, SpotifyRequestOutcome.SUCCESS, http_status=response.status)
+        return title
+
+    def _record(
+        self,
+        operation: SpotifyPublicOperation,
+        outcome: SpotifyRequestOutcome,
+        *,
+        http_status: int | None = None,
+    ) -> None:
+        if self.metrics is not None:
+            self.metrics.record_public(operation, outcome, http_status=http_status)
 
 
 def parse_public_show_embed(

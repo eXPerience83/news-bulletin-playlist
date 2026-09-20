@@ -20,6 +20,7 @@ from news_bulletin_playlist.spotify_backoff import (
 )
 from news_bulletin_playlist.spotify_metrics import (
     SpotifyOAuthOperation,
+    SpotifyPublicOperation,
     SpotifyQuotaReason,
     SpotifyRequestMetrics,
     SpotifyRequestOutcome,
@@ -39,6 +40,11 @@ def test_request_scope_counts_operations_nesting_and_429(tmp_path: Path) -> None
     metrics = _metrics(tmp_path)
 
     with metrics.request_scope() as outer:
+        metrics.record_public(
+            SpotifyPublicOperation.EMBED_SHOW,
+            SpotifyRequestOutcome.SUCCESS,
+            http_status=200,
+        )
         metrics.record_web_api(
             SpotifyWebApiOperation.SHOW_EPISODES,
             SpotifyRequestOutcome.SUCCESS,
@@ -57,9 +63,11 @@ def test_request_scope_counts_operations_nesting_and_429(tmp_path: Path) -> None
             )
         snapshot = outer.snapshot()
 
-    assert snapshot.total_requests == 3
+    assert snapshot.total_requests == 4
+    assert snapshot.public_requests == 1
     assert snapshot.web_api_requests == 2
     assert snapshot.oauth_requests == 1
+    assert snapshot.public_count(SpotifyPublicOperation.EMBED_SHOW) == 1
     assert snapshot.web_api_count(SpotifyWebApiOperation.SHOW_EPISODES) == 1
     assert snapshot.web_api_count(SpotifyWebApiOperation.PLAYLIST_SNAPSHOT) == 1
     assert snapshot.oauth_count(SpotifyOAuthOperation.TOKEN_REFRESH) == 1
@@ -142,6 +150,16 @@ class _Runner:
 
     def run_cycle(self) -> EngineCycleResult:
         if self.make_requests:
+            self.request_metrics.record_public(
+                SpotifyPublicOperation.EMBED_SHOW,
+                SpotifyRequestOutcome.SUCCESS,
+                http_status=200,
+            )
+            self.request_metrics.record_public(
+                SpotifyPublicOperation.OEMBED,
+                SpotifyRequestOutcome.SUCCESS,
+                http_status=200,
+            )
             self.request_metrics.record_web_api(
                 SpotifyWebApiOperation.SHOW_EPISODES,
                 SpotifyRequestOutcome.SUCCESS,
@@ -214,7 +232,10 @@ def test_instrumented_cycle_emits_exact_request_aggregates(tmp_path: Path) -> No
         if event.component == "spotify.requests"
     }
     assert request_events == {
-        "cycle_request_accounting": 6,
+        "cycle_request_accounting": 8,
+        "cycle_request_public_total": 2,
+        "cycle_request_public_embed_show": 1,
+        "cycle_request_public_oembed": 1,
         "cycle_request_web_api_total": 5,
         "cycle_request_web_api_show_episodes": 2,
         "cycle_request_web_api_playlist_items": 1,

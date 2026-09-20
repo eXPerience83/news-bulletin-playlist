@@ -38,6 +38,7 @@ from news_bulletin_playlist.spotify_backoff import (
 )
 from news_bulletin_playlist.spotify_metrics import (
     SpotifyOAuthOperation,
+    SpotifyPublicOperation,
     SpotifyQuotaReason,
     SpotifyRequestMetrics,
     SpotifyRequestOutcome,
@@ -96,6 +97,103 @@ def _metric(snapshot, *, operation: str, outcome: SpotifyRequestOutcome):  # typ
         for metric in snapshot.metrics
         if metric.operation == operation and metric.outcome is outcome
     )
+
+
+def test_schema_v7_metrics_upgrade_preserves_rows_and_marks_public_coverage_gap(
+    tmp_path: Path,
+) -> None:
+    observed = datetime.now(UTC).replace(microsecond=0)
+    bucket = observed.replace(second=0).isoformat(timespec="seconds")
+    path = tmp_path / "legacy-metrics.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+        INSERT INTO schema_migrations(version, applied_at)
+        VALUES (7, '2026-09-01T00:00:00+00:00');
+
+        CREATE TABLE spotify_request_metrics (
+            bucket_at TEXT NOT NULL,
+            surface TEXT NOT NULL CHECK (surface IN ('web_api', 'oauth')),
+            operation TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK (
+                outcome IN ('success', 'http_error', 'transport_error', 'response_error')
+            ),
+            http_status INTEGER NOT NULL DEFAULT -1,
+            quota_reason TEXT NOT NULL DEFAULT '',
+            request_count INTEGER NOT NULL CHECK (request_count > 0),
+            PRIMARY KEY (bucket_at, surface, operation, outcome, http_status, quota_reason)
+        );
+        CREATE INDEX spotify_request_metrics_bucket_idx
+        ON spotify_request_metrics (bucket_at DESC);
+        CREATE TABLE spotify_request_metrics_coverage (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            incomplete_at TEXT NOT NULL
+        );
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO spotify_request_metrics (
+            bucket_at, surface, operation, outcome, http_status, quota_reason, request_count
+        ) VALUES (?, 'web_api', 'show_episodes', 'success', -1, '', 3)
+        """,
+        (bucket,),
+    )
+    connection.commit()
+    connection.close()
+
+    metrics = SpotifyRequestMetrics(path, clock=lambda: observed)
+    metrics.initialize()
+    metrics.record_public(
+        SpotifyPublicOperation.EMBED_SHOW,
+        SpotifyRequestOutcome.SUCCESS,
+        http_status=200,
+        occurred_at=observed,
+    )
+
+    snapshot = metrics.last_24_hours(now=observed)
+    assert SQLiteStore(path).schema_version() == 8
+    assert snapshot.coverage_complete is False
+    assert snapshot.web_api_requests == 3
+    assert snapshot.public_requests == 1
+    assert (
+        _metric(
+            snapshot,
+            operation="embed_show",
+            outcome=SpotifyRequestOutcome.SUCCESS,
+        ).http_status
+        == 200
+    )
+
+
+def test_schema_v3_upgrade_marks_request_metrics_coverage_incomplete(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-pre-metrics.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+        INSERT INTO schema_migrations(version, applied_at)
+        VALUES
+            (1, '2026-08-01T00:00:00+00:00'),
+            (2, '2026-08-02T00:00:00+00:00'),
+            (3, '2026-08-03T00:00:00+00:00');
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    metrics = SpotifyRequestMetrics(path)
+    metrics.initialize()
+
+    snapshot = metrics.last_24_hours(now=datetime.now(UTC))
+    assert SQLiteStore(path).schema_version() == 8
+    assert snapshot.coverage_complete is False
+    assert snapshot.public_requests == 0
+    assert snapshot.web_api_requests == 0
+    assert snapshot.oauth_requests == 0
 
 
 def test_web_api_counts_only_real_http_attempts_and_keeps_operations_distinct(
@@ -409,6 +507,12 @@ def test_transport_error_is_counted_after_real_attempt(
 
 def test_metrics_survive_restart_prune_and_fail_soft(tmp_path: Path) -> None:
     metrics = _metrics(tmp_path)
+    metrics.record_public(
+        SpotifyPublicOperation.EMBED_SHOW,
+        SpotifyRequestOutcome.SUCCESS,
+        http_status=200,
+        occurred_at=NOW - timedelta(hours=2),
+    )
     metrics.record_web_api(
         SpotifyWebApiOperation.SHOW_EPISODES,
         SpotifyRequestOutcome.SUCCESS,
@@ -426,7 +530,9 @@ def test_metrics_survive_restart_prune_and_fail_soft(tmp_path: Path) -> None:
     )
     restarted = SpotifyRequestMetrics(metrics.path)
     snapshot = restarted.last_24_hours(now=NOW)
+    assert snapshot.public_requests == 1
     assert snapshot.web_api_requests == 1
+    assert snapshot.oauth_requests == 1
     assert snapshot.oauth_refreshes == 1
 
     broken = SpotifyRequestMetrics(tmp_path / "not-a-directory" / "state.sqlite3")
@@ -523,6 +629,17 @@ def test_runtime_managed_admin_client_records_real_web_api_attempt(
 
 def test_metrics_are_sanitized_in_diagnostics_page_and_every_zip_file(tmp_path: Path) -> None:
     metrics = _metrics(tmp_path)
+    metrics.record_public(
+        SpotifyPublicOperation.EMBED_SHOW,
+        SpotifyRequestOutcome.SUCCESS,
+        http_status=200,
+        occurred_at=NOW,
+    )
+    metrics.record_oauth(
+        SpotifyOAuthOperation.TOKEN_REFRESH,
+        SpotifyRequestOutcome.SUCCESS,
+        occurred_at=NOW,
+    )
     metrics.record_web_api(
         SpotifyWebApiOperation.REPLACE_PLAYLIST_ITEMS,
         SpotifyRequestOutcome.HTTP_ERROR,
@@ -544,15 +661,38 @@ def test_metrics_are_sanitized_in_diagnostics_page_and_every_zip_file(tmp_path: 
         spotify_metrics=snapshot,
     )
     assert TOKEN.encode() not in page and BODY_SENTINEL.encode() not in page
+    assert b"Public Spotify requests (no OAuth): 1" in page
+    assert b"Spotify Web API requests (authenticated): 1" in page
+    assert b"OAuth token requests: 1" in page
     with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
         for name in archive.namelist():
             contents = archive.read(name)
             assert TOKEN.encode() not in contents, name
             assert BODY_SENTINEL.encode() not in contents, name
         runtime = json.loads(archive.read("runtime.json"))
-    assert runtime["spotify_request_metrics_last_24_hours"]["web_api_requests"] == 1
-    assert runtime["spotify_request_metrics_last_24_hours"]["http_429s"] == 0
-    assert runtime["spotify_request_metrics_last_24_hours"]["breakdown"] == [
+    metric_document = runtime["spotify_request_metrics_last_24_hours"]
+    assert metric_document["public_requests"] == 1
+    assert metric_document["web_api_requests"] == 1
+    assert metric_document["oauth_requests"] == 1
+    assert metric_document["oauth_refreshes"] == 1
+    assert metric_document["http_429s"] == 0
+    assert metric_document["breakdown"] == [
+        {
+            "http_status": None,
+            "operation": "token_refresh",
+            "outcome": "success",
+            "quota_reason": None,
+            "request_count": 1,
+            "surface": "oauth",
+        },
+        {
+            "http_status": 200,
+            "operation": "embed_show",
+            "outcome": "success",
+            "quota_reason": None,
+            "request_count": 1,
+            "surface": "public",
+        },
         {
             "http_status": 502,
             "operation": "replace_playlist_items",
@@ -560,7 +700,7 @@ def test_metrics_are_sanitized_in_diagnostics_page_and_every_zip_file(tmp_path: 
             "quota_reason": None,
             "request_count": 1,
             "surface": "web_api",
-        }
+        },
     ]
 
 
@@ -643,13 +783,19 @@ def test_coverage_window_decision_survives_restart(
     metric_document = runtime["spotify_request_metrics_last_24_hours"]
     assert snapshot.coverage_complete is expected_complete
     if expected_complete:
+        assert metric_document["public_requests"] == 0
         assert metric_document["web_api_requests"] == 0
+        assert metric_document["oauth_requests"] == 0
         assert metric_document["recorded_counts"] is None
     else:
+        assert metric_document["public_requests"] is None
         assert metric_document["web_api_requests"] is None
+        assert metric_document["oauth_requests"] is None
         assert metric_document["recorded_counts"] == {
             "http_429s": 0,
             "oauth_refreshes": 0,
+            "oauth_requests": 0,
+            "public_requests": 0,
             "quota_exceeded": 0,
             "web_api_requests": 0,
         }
