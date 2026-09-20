@@ -150,6 +150,10 @@ class PlaylistCycleOutcome:
     local_skip: bool = False
     stale_escalation: bool = False
     write_outcome: str | None = None
+    pending_snapshot_created: str | None = None
+    pending_snapshot_resolution: str | None = None
+    unavailable_media_count: int = 0
+    unavailable_media_phase: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -744,6 +748,22 @@ class EngineRunner:
             stale_escalation=stale_escalation,
             error=result.error or result.warning,
             write_outcome=result.mutation_outcome.value,
+            pending_snapshot_created=(
+                None
+                if result.pending_snapshot_created is None
+                else result.pending_snapshot_created.value
+            ),
+            pending_snapshot_resolution=(
+                None
+                if result.pending_snapshot_resolution is None
+                else result.pending_snapshot_resolution.value
+            ),
+            unavailable_media_count=result.unavailable_media_count,
+            unavailable_media_phase=(
+                None
+                if result.unavailable_media_phase is None
+                else result.unavailable_media_phase.value
+            ),
         )
 
     def _stale_rejection_retry(
@@ -967,6 +987,10 @@ class EngineRunner:
         stale_escalation: bool = False,
         error: str | None = None,
         write_outcome: str | None = None,
+        pending_snapshot_created: str | None = None,
+        pending_snapshot_resolution: str | None = None,
+        unavailable_media_count: int = 0,
+        unavailable_media_phase: str | None = None,
     ) -> PlaylistCycleOutcome:
         uris = build.desired.uris
         encoded = json.dumps({"uris": list(uris)}, separators=(",", ":")).encode("utf-8")
@@ -990,6 +1014,10 @@ class EngineRunner:
             local_skip=local_skip,
             stale_escalation=stale_escalation,
             write_outcome=write_outcome,
+            pending_snapshot_created=pending_snapshot_created,
+            pending_snapshot_resolution=pending_snapshot_resolution,
+            unavailable_media_count=unavailable_media_count,
+            unavailable_media_phase=unavailable_media_phase,
         )
 
 

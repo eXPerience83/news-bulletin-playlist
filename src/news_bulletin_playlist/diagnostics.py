@@ -64,6 +64,8 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "http_status",
         "order_difference_count",
         "parser_fallback_count",
+        "pending_snapshot_created",
+        "pending_snapshot_resolution",
         "provider",
         "refresh_reason",
         "refresh_source_count",
@@ -189,6 +191,8 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "sample_count",
         "total",
         "unavailable_count",
+        "unavailable_media_count",
+        "unavailable_media_phase",
         "unresolved_relevant_count",
         "verification_outcome",
         "write_decision",
@@ -336,6 +340,18 @@ _ALLOWED_DETAIL_STRING_VALUES = {
         }
     ),
     "outcome": frozenset({"applied", "failed"}),
+    "pending_snapshot_created": frozenset({"exact", "partial"}),
+    "pending_snapshot_resolution": frozenset(
+        {
+            "confirmed",
+            "still_baseline",
+            "superseded_desired",
+            "expired",
+            "invalidated_context",
+            "unexpected_snapshot",
+        }
+    ),
+    "unavailable_media_phase": frozenset({"prewrite", "readback", "pending_confirmation"}),
     "phase": frozenset(
         {
             "authorization",

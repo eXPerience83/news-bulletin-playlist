@@ -19,7 +19,9 @@ from news_bulletin_playlist.models import (
 )
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.reconciliation import (
+    PendingSnapshotCreation,
     SpotifyReconciliationError,
+    UnavailableMediaPhase,
     reconcile_spotify_playlist,
 )
 from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
@@ -192,6 +194,9 @@ def test_exact_single_page_write_defers_snapshot_confirmation(tmp_path: Path) ->
     assert result.warning == (
         "Spotify verification degraded: snapshot propagation pending after exact readback"
     )
+    assert result.pending_snapshot_created is PendingSnapshotCreation.EXACT
+    assert result.unavailable_media_count == 0
+    assert result.unavailable_media_phase is None
     assert client.snapshot_reads == 1
     assert client.writes == [["spotify:episode:new"]]
     assert store.get_playlist_attestation(PLAYLIST_ID) is None
@@ -248,6 +253,8 @@ def test_write_with_unavailable_slot_is_attested_as_degraded_success(tmp_path: P
     assert result.degraded_verification is True
     assert result.warning is not None
     assert "[1]" in result.warning
+    assert result.unavailable_media_count == 1
+    assert result.unavailable_media_phase is UnavailableMediaPhase.READBACK
     assert client.snapshot_reads == 2
     attestation = store.get_playlist_attestation(PLAYLIST_ID)
     assert attestation is not None

@@ -19,6 +19,7 @@ from news_bulletin_playlist.models import (
 )
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
+    PendingSnapshotCreation,
     SpotifyReconciliationError,
     reconcile_spotify_playlist,
 )
@@ -149,6 +150,7 @@ def test_stable_stale_snapshot_becomes_durable_pending_without_second_recheck(
     assert result.warning == (
         "Spotify verification degraded: snapshot propagation pending after exact readback"
     )
+    assert result.pending_snapshot_created is PendingSnapshotCreation.EXACT
     assert client.writes == 1
     # One prewrite page + two post-write pages for 75 items. Only the prewrite
     # baseline snapshot is read; post-write snapshot confirmation is deferred.
