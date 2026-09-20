@@ -670,7 +670,6 @@ class EngineRunner:
             and exact.verified_at <= now
             and now - exact.verified_at < self.destination_audit
         ):
-            self.first_journal.clear_degraded_destination_verification(playlist.id)
             return _DESTINATION_VERIFICATION_EXACT
 
         degraded = self.first_journal.get_degraded_destination_verification(playlist.id)
@@ -816,6 +815,15 @@ class EngineRunner:
                 None
                 if result.unavailable_media_phase is None
                 else result.unavailable_media_phase.value
+            ),
+            destination_verification_kind=(
+                _DESTINATION_VERIFICATION_EXACT
+                if result.remote_evidence_qualified
+                else (
+                    _DESTINATION_VERIFICATION_DEGRADED
+                    if result.degraded_evidence_qualified
+                    else None
+                )
             ),
         )
 
