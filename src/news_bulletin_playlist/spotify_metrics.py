@@ -90,9 +90,7 @@ class SpotifyRequestMetricsSnapshot:
 
     @property
     def http_rate_limits(self) -> int:
-        return sum(
-            metric.request_count for metric in self.metrics if metric.http_status == 429
-        )
+        return sum(metric.request_count for metric in self.metrics if metric.http_status == 429)
 
     @property
     def quota_exceeded(self) -> int:
