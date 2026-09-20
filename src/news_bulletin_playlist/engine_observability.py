@@ -218,8 +218,13 @@ class InstrumentedEngineCycleRunner:
             "duplicate_count": playlist.duplicate_count,
             "desired_fingerprint": playlist.desired_fingerprint,
             "write_outcome": playlist.write_outcome,
+            "pending_snapshot_created": playlist.pending_snapshot_created,
+            "pending_snapshot_resolution": playlist.pending_snapshot_resolution,
+            "unavailable_media_phase": playlist.unavailable_media_phase,
         }
         details.update((key, value) for key, value in optional.items() if value is not None)
+        if playlist.unavailable_media_count > 0:
+            details["unavailable_media_count"] = playlist.unavailable_media_count
         if playlist.request_item_count is not None:
             details["provider"] = "spotify"
             details["service"] = "spotify"
