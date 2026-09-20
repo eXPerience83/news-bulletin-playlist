@@ -315,7 +315,7 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             )
             """,
         ),
-    ),,
+    ),
     (
         8,
         (
