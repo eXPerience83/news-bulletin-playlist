@@ -46,3 +46,19 @@ def test_released_legacy_run_tables_remain_present_but_inert(tmp_path: Path) -> 
     } <= tables
     assert playlist_run_count == 0
     assert source_run_count == 0
+
+    retired_planner_tables = {
+        "spotify_planner_catalogue_state",
+        "spotify_planner_destination_state",
+        "spotify_planner_unresolved_state",
+        "spotify_planner_match_inputs",
+        "spotify_planner_matched_recovery_state",
+        "spotify_planner_persistence_rejection_state",
+    }
+    assert tables.isdisjoint(retired_planner_tables)
+
+    with sqlite3.connect(store.path) as connection:
+        spotify_match_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(spotify_matches)").fetchall()
+        }
+    assert "spotify_duration_seconds" not in spotify_match_columns
