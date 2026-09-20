@@ -69,7 +69,7 @@ sources:
         resource_type: show
         external_id: 0vDgnorbpBr65YZzFVVouE
 
-  # Research-only example: no deterministic Spotify show/feed contract is configured.
+  # Research-only example: no deterministic Spotify show/catalogue contract is configured.
   - id: cope
     display_name: COPE
     countries: [ES]
