@@ -1,5 +1,16 @@
 # P1.5 desired-state and Spotify reconciliation
 
+> **Historical implementation document.** This describes the retired RSS/canonical-edition/matching
+> runtime completed under the original P1 roadmap. Since #260, current production is Spotify-first:
+> public Spotify state is a change signal, official `show_episodes` is catalogue authority, durable
+> Spotify episode state feeds local desired-state construction, and Spotify episode ID/URI is runtime
+> identity. Do not use the canonical/`MATCHED`/`PENDING` sections below as current operational
+> guidance. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the authoritative contract.
+>
+> The destination reconciliation safety principles documented here remain historical provenance for
+> the current readback/snapshot machinery, but current source inputs no longer come from RSS match
+> state.
+
 P1.5 turns durable canonical editions and Spotify match state into the exact ordered contents for each enabled Spotify playlist.
 
 ## Desired-state policy
