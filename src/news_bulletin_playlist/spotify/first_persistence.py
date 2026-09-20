@@ -66,6 +66,15 @@ CREATE TABLE IF NOT EXISTS spotify_first_destination_state (
 )
 """
 
+_DEGRADED_DESTINATION_TABLE = """
+CREATE TABLE IF NOT EXISTS spotify_first_destination_degraded_state (
+    playlist_id TEXT PRIMARY KEY,
+    destination_id TEXT NOT NULL,
+    desired_fingerprint TEXT NOT NULL,
+    verified_at TEXT NOT NULL
+)
+"""
+
 _EPISODE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_spotify_first_episode_source_seen
 ON spotify_first_episode_state (source_id, last_seen_at DESC)
@@ -365,6 +374,79 @@ class SpotifyFirstJournal:
                 (str(playlist_id),),
             )
 
+    def get_degraded_destination_verification(
+        self,
+        playlist_id: PlaylistId,
+    ) -> DestinationVerificationState | None:
+        with self._connection("read degraded Spotify-first destination verification") as connection:
+            self._ensure_tables(connection)
+            row = connection.execute(
+                """
+                SELECT playlist_id, destination_id, desired_fingerprint, verified_at
+                FROM spotify_first_destination_degraded_state
+                WHERE playlist_id = ?
+                """,
+                (str(playlist_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        return DestinationVerificationState(
+            playlist_id=PlaylistId(_row_text(row, "playlist_id")),
+            destination_id=_row_text(row, "destination_id"),
+            desired_fingerprint=_row_text(row, "desired_fingerprint"),
+            verified_at=_parse_timestamp(_row_text(row, "verified_at")),
+        )
+
+    def record_degraded_destination_verification(
+        self,
+        playlist_id: PlaylistId,
+        *,
+        destination_id: str,
+        desired_fingerprint: str,
+        verified_at: datetime,
+    ) -> None:
+        if not destination_id.strip():
+            raise ValueError("destination_id must not be blank")
+        if len(desired_fingerprint) != 64:
+            raise ValueError("desired fingerprint must be a SHA-256 hex digest")
+        try:
+            int(desired_fingerprint, 16)
+        except ValueError as exc:
+            raise ValueError("desired fingerprint must be a SHA-256 hex digest") from exc
+
+        with self._connection(
+            "persist degraded Spotify-first destination verification"
+        ) as connection:
+            self._ensure_tables(connection)
+            connection.execute(
+                """
+                INSERT INTO spotify_first_destination_degraded_state (
+                    playlist_id, destination_id, desired_fingerprint, verified_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(playlist_id) DO UPDATE SET
+                    destination_id = excluded.destination_id,
+                    desired_fingerprint = excluded.desired_fingerprint,
+                    verified_at = excluded.verified_at
+                WHERE excluded.verified_at >= spotify_first_destination_degraded_state.verified_at
+                """,
+                (
+                    str(playlist_id),
+                    destination_id.strip(),
+                    desired_fingerprint,
+                    _format_timestamp(verified_at),
+                ),
+            )
+
+    def clear_degraded_destination_verification(self, playlist_id: PlaylistId) -> None:
+        with self._connection(
+            "clear degraded Spotify-first destination verification"
+        ) as connection:
+            self._ensure_tables(connection)
+            connection.execute(
+                "DELETE FROM spotify_first_destination_degraded_state WHERE playlist_id = ?",
+                (str(playlist_id),),
+            )
+
     def prune(self, *, before: datetime) -> int:
         with self._connection("prune Spotify-first episode history") as connection:
             self._ensure_tables(connection)
@@ -379,6 +461,7 @@ class SpotifyFirstJournal:
         connection.execute(_EPISODE_TABLE)
         connection.execute(_SOURCE_TABLE)
         connection.execute(_DESTINATION_TABLE)
+        connection.execute(_DEGRADED_DESTINATION_TABLE)
         connection.execute(_EPISODE_INDEX)
 
     @contextmanager

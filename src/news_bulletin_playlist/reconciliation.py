@@ -119,6 +119,7 @@ class PlaylistReconciliationResult:
     warning: str | None = None
     mutation_outcome: MutationOutcome = MutationOutcome.NOT_ATTEMPTED
     remote_evidence_qualified: bool = False
+    degraded_evidence_qualified: bool = False
     verified_desired_uris: tuple[str, ...] | None = None
     pending_snapshot_created: PendingSnapshotCreation | None = None
     pending_snapshot_resolution: PendingSnapshotResolution | None = None
@@ -133,6 +134,7 @@ class _PlaylistItemsReconciliationResult:
     warning: str | None = None
     write_outcome: str = "verified"
     remote_evidence_qualified: bool = True
+    degraded_evidence_qualified: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,6 +313,7 @@ def _reconcile_playlist_items(
                         wrote=False,
                         degraded_verification=True,
                         warning=warning,
+                        degraded_evidence_qualified=True,
                     )
             else:
                 try:
@@ -552,6 +555,7 @@ def _reconcile_playlist_items(
         wrote=True,
         degraded_verification=True,
         warning=_degraded_warning(readback.unavailable_indices),
+        degraded_evidence_qualified=True,
     )
 
 
@@ -684,6 +688,7 @@ def _resolve_pending_confirmation(
                 wrote=False,
                 degraded_verification=True,
                 warning=_degraded_warning(current.unavailable_indices),
+                degraded_evidence_qualified=True,
             )
         return _PlaylistItemsReconciliationResult(wrote=False)
 
@@ -816,6 +821,7 @@ def reconcile_spotify_playlist(
         warning=reconciled.warning,
         mutation_outcome=evidence.mutation_outcome,
         remote_evidence_qualified=evidence.remote_evidence_qualified,
+        degraded_evidence_qualified=reconciled.degraded_evidence_qualified,
         verified_desired_uris=(
             current_desired.uris if evidence.remote_evidence_qualified else None
         ),

@@ -75,7 +75,11 @@ from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 DEFAULT_ENGINE_INTERVAL = timedelta(minutes=10)
 DEFAULT_SOURCE_INACTIVITY = timedelta(hours=24)
 DEFAULT_DESTINATION_AUDIT = timedelta(hours=6)
+DEFAULT_DEGRADED_DESTINATION_AUDIT = timedelta(minutes=30)
 SPOTIFY_FIRST_STATE_RETENTION = timedelta(days=30)
+
+_DESTINATION_VERIFICATION_EXACT = "exact"
+_DESTINATION_VERIFICATION_DEGRADED = "degraded"
 
 
 class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
@@ -154,6 +158,7 @@ class PlaylistCycleOutcome:
     pending_snapshot_resolution: str | None = None
     unavailable_media_count: int = 0
     unavailable_media_phase: str | None = None
+    destination_verification_kind: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,12 +237,17 @@ class EngineRunner:
         request_metrics: SpotifyRequestMetrics | None = None,
         source_inactivity: timedelta = DEFAULT_SOURCE_INACTIVITY,
         destination_audit: timedelta = DEFAULT_DESTINATION_AUDIT,
+        degraded_destination_audit: timedelta = DEFAULT_DEGRADED_DESTINATION_AUDIT,
         max_catalogue_pages: int = DEFAULT_MAX_PAGES,
     ) -> None:
         if source_inactivity <= timedelta(0):
             raise ValueError("source inactivity threshold must be positive")
         if destination_audit <= timedelta(0):
             raise ValueError("destination audit threshold must be positive")
+        if degraded_destination_audit <= timedelta(0):
+            raise ValueError("degraded destination audit threshold must be positive")
+        if degraded_destination_audit > destination_audit:
+            raise ValueError("degraded destination audit must not exceed exact destination audit")
         if max_catalogue_pages <= 0:
             raise ValueError("max catalogue pages must be positive")
 
@@ -251,6 +261,7 @@ class EngineRunner:
         self.playlist_mutation_guard = playlist_mutation_guard
         self.source_inactivity = source_inactivity
         self.destination_audit = destination_audit
+        self.degraded_destination_audit = degraded_destination_audit
         self.max_catalogue_pages = max_catalogue_pages
         self.rate_limit_journal = SpotifyRateLimitJournal(store)
         self.auth = SpotifyRateLimitGuardAuth(
@@ -364,11 +375,12 @@ class EngineRunner:
             desired = build.desired
             fingerprint = desired_fingerprint(desired.uris)
 
-            if self._can_skip_destination(
+            destination_verification_kind = self._destination_skip_evidence(
                 playlist,
                 fingerprint,
                 now=started_at,
-            ):
+            )
+            if destination_verification_kind is not None:
                 self.store.record_playlist_run(
                     playlist.id,
                     started_at=started_at,
@@ -389,6 +401,7 @@ class EngineRunner:
                         fingerprint=fingerprint,
                         local_skip=True,
                         write_outcome="skipped",
+                        destination_verification_kind=destination_verification_kind,
                     )
                 )
                 continue
@@ -638,23 +651,49 @@ class EngineRunner:
                 return False
         return True
 
-    def _can_skip_destination(
+    def _destination_skip_evidence(
         self,
         playlist: PlaylistDefinition,
         fingerprint: str,
         *,
         now: datetime,
-    ) -> bool:
+    ) -> str | None:
         if PendingSnapshotJournal(self.store).get(playlist.id) is not None:
-            return False
-        state = self.first_journal.get_destination_verification(playlist.id)
-        return bool(
-            state is not None
-            and state.destination_id == playlist.destination.external_id
-            and state.desired_fingerprint == fingerprint
-            and state.verified_at <= now
-            and now - state.verified_at < self.destination_audit
-        )
+            self.first_journal.clear_degraded_destination_verification(playlist.id)
+            return None
+
+        exact = self.first_journal.get_destination_verification(playlist.id)
+        if (
+            exact is not None
+            and exact.destination_id == playlist.destination.external_id
+            and exact.desired_fingerprint == fingerprint
+            and exact.verified_at <= now
+            and now - exact.verified_at < self.destination_audit
+        ):
+            return _DESTINATION_VERIFICATION_EXACT
+
+        degraded = self.first_journal.get_degraded_destination_verification(playlist.id)
+        if degraded is None:
+            return None
+        if (
+            degraded.destination_id != playlist.destination.external_id
+            or degraded.desired_fingerprint != fingerprint
+            or degraded.verified_at > now
+        ):
+            self.first_journal.clear_degraded_destination_verification(playlist.id)
+            return None
+        if now - degraded.verified_at >= self.degraded_destination_audit:
+            return None
+
+        attestation = self.store.get_playlist_attestation(playlist.id)
+        if (
+            attestation is None
+            or attestation.destination_id != playlist.destination.external_id
+            or attestation.desired_fingerprint != fingerprint
+        ):
+            self.first_journal.clear_degraded_destination_verification(playlist.id)
+            return None
+        return _DESTINATION_VERIFICATION_DEGRADED
 
     def _reconcile_playlist(
         self,
@@ -724,8 +763,21 @@ class EngineRunner:
                 desired_fingerprint=fingerprint,
                 verified_at=now,
             )
+            self.first_journal.clear_degraded_destination_verification(playlist.id)
+        elif (
+            result.degraded_evidence_qualified
+            and PendingSnapshotJournal(self.store).get(playlist.id) is None
+        ):
+            self.first_journal.clear_destination_verification(playlist.id)
+            self.first_journal.record_degraded_destination_verification(
+                playlist.id,
+                destination_id=playlist.destination.external_id,
+                desired_fingerprint=fingerprint,
+                verified_at=now,
+            )
         else:
             self.first_journal.clear_destination_verification(playlist.id)
+            self.first_journal.clear_degraded_destination_verification(playlist.id)
 
         self.store.record_playlist_run(
             playlist.id,
@@ -763,6 +815,15 @@ class EngineRunner:
                 None
                 if result.unavailable_media_phase is None
                 else result.unavailable_media_phase.value
+            ),
+            destination_verification_kind=(
+                _DESTINATION_VERIFICATION_EXACT
+                if result.remote_evidence_qualified
+                else (
+                    _DESTINATION_VERIFICATION_DEGRADED
+                    if result.degraded_evidence_qualified
+                    else None
+                )
             ),
         )
 
@@ -991,6 +1052,7 @@ class EngineRunner:
         pending_snapshot_resolution: str | None = None,
         unavailable_media_count: int = 0,
         unavailable_media_phase: str | None = None,
+        destination_verification_kind: str | None = None,
     ) -> PlaylistCycleOutcome:
         uris = build.desired.uris
         encoded = json.dumps({"uris": list(uris)}, separators=(",", ":")).encode("utf-8")
@@ -1018,6 +1080,7 @@ class EngineRunner:
             pending_snapshot_resolution=pending_snapshot_resolution,
             unavailable_media_count=unavailable_media_count,
             unavailable_media_phase=unavailable_media_phase,
+            destination_verification_kind=destination_verification_kind,
         )
 
 

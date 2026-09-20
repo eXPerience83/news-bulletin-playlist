@@ -265,6 +265,44 @@ def test_degraded_playlist_verification_is_warning_without_raw_text(tmp_path: Pa
     assert sentinel not in output.getvalue()
 
 
+def test_degraded_local_skip_is_explicit_without_warning_noise(tmp_path: Path) -> None:
+    diagnostics, store, _output = _diagnostics(tmp_path)
+    result = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=1),
+        ok=True,
+        sources=(),
+        playlists=(
+            PlaylistCycleOutcome(
+                playlist_id=PlaylistId("spain_spanish_news"),
+                ok=True,
+                desired_count=75,
+                applied_count=75,
+                wrote=False,
+                last_success_at=NOW,
+                local_skip=True,
+                write_outcome="skipped",
+                destination_verification_kind="degraded",
+            ),
+        ),
+    )
+    runner = InstrumentedEngineCycleRunner(
+        _Runner(result),
+        diagnostics,
+        clock=lambda: NOW,
+    )
+
+    assert runner.run_cycle() is result
+
+    playlist_event = next(
+        event for event in store.list_events(limit=10) if event.component == "playlist"
+    )
+    assert playlist_event.severity is DiagnosticSeverity.INFO
+    assert playlist_event.details["write_decision"] == "skipped"
+    assert playlist_event.details["destination_verification_kind"] == "degraded"
+    assert playlist_event.details["verification_outcome"] == "degraded"
+
+
 def test_unexpected_runner_exception_logs_only_safe_classification(tmp_path: Path) -> None:
     diagnostics, store, output = _diagnostics(tmp_path)
     runner = InstrumentedEngineCycleRunner(

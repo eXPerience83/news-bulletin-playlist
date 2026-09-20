@@ -223,6 +223,17 @@ Source catalogue replacement is conservative:
 Operational source/playlist run history, playlist attestations, pending snapshot confirmation,
 rate-limit cooldown and diagnostics continue to use the shared SQLite database.
 
+Destination skip authority has two deliberately separate levels:
+
+- exact verification uses the normal destination-audit lease (six hours by default);
+- a safely attested unavailable-media/opaque-slot result may use a shorter degraded lease
+  (30 minutes by default).
+
+The degraded lease never turns partial content into exact evidence. It is valid only for the same
+destination and desired fingerprint while the matching durable playlist attestation still exists
+and no pending snapshot transition is active. Expiry, desired/destination change or missing
+attestation forces conservative remote reconciliation again.
+
 ### Legacy database compatibility
 
 Released migrations created tables for canonical RSS editions, Spotify matching and the old planner.
