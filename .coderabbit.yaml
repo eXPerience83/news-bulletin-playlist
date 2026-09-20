@@ -106,12 +106,13 @@ reviews:
 
     - path: "src/news_bulletin_playlist/providers/**"
       instructions: |
-        Los parsers deben seguir siendo específicos por proveedor y tolerar solo
+        Los parsers deben seguir siendo específicos por producto y tolerar solo
         variantes observadas/documentadas; evita convertirlos en un regex genérico
-        global. Las fechas deben quedar timezone-aware. Conserva la identidad del
-        elemento fuente (GUID/ID) y no colapses publicaciones distintas solo porque
-        compartan título u hora. RSS/proveedor es la autoridad temporal; no se debe
-        descargar ni almacenar audio.
+        global. Las fechas deben quedar timezone-aware. En el runtime Spotify-first,
+        Spotify episode ID/URI es la identidad y el catálogo oficial del show es la
+        autoridad de episodios; título/edition_at son metadatos y nunca deben colapsar
+        episodios con IDs distintos. No reintroduzcas supuestos RSS/GUID ni descargues
+        o almacenes audio.
 
     - path: "src/news_bulletin_playlist/registry.py"
       instructions: |
@@ -158,8 +159,9 @@ reviews:
     - path: "docs/**"
       instructions: |
         Mantén coherencia con ARCHITECTURE.md: un único motor, múltiples playlists,
-        países e idiomas; fetch once -> normalize once -> store once -> distribute
-        to many playlists. Distingue hechos actuales de Spotify de decisiones de
+        países e idiomas; detector público como señal de cambio -> refresco selectivo
+        del catálogo oficial -> estado Spotify-first durable -> desired state local ->
+        reconciliación segura. Distingue hechos actuales de Spotify de decisiones de
         arquitectura y señala documentación obsoleta que pueda inducir una
         implementación incorrecta.
 

@@ -47,78 +47,6 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
         1,
         (
             """
-            CREATE TABLE canonical_editions (
-                source_id TEXT NOT NULL,
-                source_native_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                published_at TEXT NOT NULL,
-                edition_at TEXT,
-                duration_seconds INTEGER CHECK (
-                    duration_seconds IS NULL OR duration_seconds >= 0
-                ),
-                first_seen_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL,
-                PRIMARY KEY (source_id, source_native_id)
-            )
-            """,
-            """
-            CREATE INDEX canonical_editions_published_at_idx
-            ON canonical_editions (published_at)
-            """,
-            """
-            CREATE TABLE source_runs (
-                source_id TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                finished_at TEXT NOT NULL,
-                ok INTEGER NOT NULL CHECK (ok IN (0, 1)),
-                edition_count INTEGER NOT NULL CHECK (edition_count >= 0),
-                error TEXT,
-                PRIMARY KEY (source_id, started_at)
-            )
-            """,
-            """
-            CREATE INDEX source_runs_finished_at_idx
-            ON source_runs (finished_at)
-            """,
-            """
-            CREATE TABLE source_state (
-                source_id TEXT PRIMARY KEY,
-                last_attempt_at TEXT NOT NULL,
-                last_success_at TEXT,
-                last_error TEXT
-            )
-            """,
-            """
-            CREATE TABLE spotify_matches (
-                source_id TEXT NOT NULL,
-                source_native_id TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (status IN ('matched', 'pending', 'ambiguous')),
-                spotify_episode_uri TEXT,
-                diagnostics TEXT,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (source_id, source_native_id),
-                FOREIGN KEY (source_id, source_native_id)
-                    REFERENCES canonical_editions (source_id, source_native_id)
-                    ON DELETE CASCADE
-            )
-            """,
-            """
-            CREATE TABLE playlist_runs (
-                playlist_id TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                finished_at TEXT NOT NULL,
-                ok INTEGER NOT NULL CHECK (ok IN (0, 1)),
-                desired_count INTEGER NOT NULL CHECK (desired_count >= 0),
-                applied_count INTEGER NOT NULL CHECK (applied_count >= 0),
-                error TEXT,
-                PRIMARY KEY (playlist_id, started_at)
-            )
-            """,
-            """
-            CREATE INDEX playlist_runs_finished_at_idx
-            ON playlist_runs (finished_at)
-            """,
-            """
             CREATE TABLE playlist_state (
                 playlist_id TEXT PRIMARY KEY,
                 last_attempt_at TEXT NOT NULL,
@@ -139,16 +67,6 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
                 desired_fingerprint TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
-            """,
-        ),
-    ),
-    (
-        3,
-        (
-            """
-            ALTER TABLE spotify_matches
-            ADD COLUMN spotify_duration_seconds INTEGER
-                CHECK (spotify_duration_seconds IS NULL OR spotify_duration_seconds >= 0)
             """,
         ),
     ),
@@ -177,125 +95,6 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             CREATE TABLE spotify_request_metrics_coverage (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 incomplete_at TEXT NOT NULL
-            )
-            """,
-        ),
-    ),
-    (
-        5,
-        (
-            """
-            CREATE TABLE spotify_planner_catalogue_state (
-                context_key TEXT PRIMARY KEY,
-                contract_fingerprint TEXT NOT NULL,
-                last_verified_at TEXT,
-                next_audit_at TEXT,
-                CHECK (
-                    (last_verified_at IS NULL AND next_audit_at IS NULL)
-                    OR (last_verified_at IS NOT NULL AND next_audit_at IS NOT NULL)
-                )
-            )
-            """,
-            """
-            CREATE TABLE spotify_planner_destination_state (
-                playlist_id TEXT PRIMARY KEY,
-                destination_context_fingerprint TEXT NOT NULL,
-                config_fingerprint TEXT NOT NULL,
-                auth_context_fingerprint TEXT NOT NULL,
-                observed_desired_fingerprint TEXT NOT NULL,
-                confirmed_desired_fingerprint TEXT,
-                dirty INTEGER NOT NULL CHECK (dirty IN (0, 1)),
-                unknown INTEGER NOT NULL CHECK (unknown IN (0, 1)),
-                last_verified_at TEXT,
-                next_audit_at TEXT,
-                CHECK (
-                    (last_verified_at IS NULL AND next_audit_at IS NULL)
-                    OR (last_verified_at IS NOT NULL AND next_audit_at IS NOT NULL)
-                )
-            )
-            """,
-            """
-            CREATE TABLE spotify_planner_unresolved_state (
-                source_id TEXT NOT NULL,
-                source_native_id TEXT NOT NULL,
-                input_fingerprint TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (status IN ('pending', 'ambiguous')),
-                reason TEXT NOT NULL CHECK (
-                    reason IN ('no_viable_candidate', 'multiple_candidates')
-                ),
-                first_unresolved_at TEXT NOT NULL,
-                last_attempt_at TEXT NOT NULL,
-                next_retry_at TEXT NOT NULL,
-                PRIMARY KEY (source_id, source_native_id),
-                FOREIGN KEY (source_id, source_native_id)
-                    REFERENCES canonical_editions (source_id, source_native_id)
-                    ON DELETE CASCADE
-            )
-            """,
-            """
-            CREATE TABLE spotify_planner_match_inputs (
-                source_id TEXT NOT NULL,
-                source_native_id TEXT NOT NULL,
-                input_fingerprint TEXT NOT NULL,
-                observed_at TEXT NOT NULL,
-                PRIMARY KEY (source_id, source_native_id),
-                FOREIGN KEY (source_id, source_native_id)
-                    REFERENCES canonical_editions (source_id, source_native_id)
-                    ON DELETE CASCADE
-            )
-            """,
-            """
-            CREATE INDEX spotify_planner_unresolved_retry_idx
-            ON spotify_planner_unresolved_state (next_retry_at)
-            """,
-        ),
-    ),
-    (
-        6,
-        (
-            """
-            CREATE TABLE spotify_planner_matched_recovery_state (
-                source_id TEXT NOT NULL,
-                source_native_id TEXT NOT NULL,
-                input_fingerprint TEXT NOT NULL,
-                reason TEXT NOT NULL CHECK (reason = 'inconclusive_catalogue'),
-                first_attempt_at TEXT NOT NULL,
-                last_attempt_at TEXT NOT NULL,
-                next_retry_at TEXT NOT NULL,
-                PRIMARY KEY (source_id, source_native_id),
-                FOREIGN KEY (source_id, source_native_id)
-                    REFERENCES canonical_editions (source_id, source_native_id)
-                    ON DELETE CASCADE
-            )
-            """,
-            """
-            CREATE INDEX spotify_planner_matched_recovery_retry_idx
-            ON spotify_planner_matched_recovery_state (next_retry_at)
-            """,
-        ),
-    ),
-    (
-        7,
-        (
-            """
-            CREATE TABLE spotify_planner_persistence_rejection_state (
-                source_id TEXT NOT NULL,
-                source_native_id TEXT NOT NULL,
-                protected_status TEXT NOT NULL
-                    CHECK (protected_status IN ('matched', 'pending', 'ambiguous')),
-                protected_spotify_episode_uri TEXT,
-                protected_spotify_duration_seconds INTEGER
-                    CHECK (
-                        protected_spotify_duration_seconds IS NULL
-                        OR protected_spotify_duration_seconds >= 0
-                    ),
-                protected_match_updated_at TEXT NOT NULL,
-                first_rejected_at TEXT NOT NULL,
-                last_rejected_at TEXT NOT NULL,
-                PRIMARY KEY (source_id, source_native_id),
-                FOREIGN KEY (source_id, source_native_id)
-                    REFERENCES canonical_editions (source_id, source_native_id)
-                    ON DELETE CASCADE
             )
             """,
         ),
@@ -368,8 +167,6 @@ class SQLiteStore:
                     continue
                 for statement in statements:
                     connection.execute(statement)
-                if version == 7:
-                    self._seed_persistence_rejection_barriers(connection)
                 if version == 8 and 0 < current < 8:
                     self._mark_request_metrics_coverage_gap(
                         connection,
@@ -400,66 +197,6 @@ class SQLiteStore:
             WHERE excluded.incomplete_at > spotify_request_metrics_coverage.incomplete_at
             """,
             (_format_timestamp(observed_at),),
-        )
-
-    @staticmethod
-    def _seed_persistence_rejection_barriers(connection: sqlite3.Connection) -> None:
-        """Migrate only implicit barriers that can be reconstructed safely.
-
-        Some historical/synthetic databases contain only the tables needed by the migration
-        under test. Creating the v7 table remains valid there, but attempting a DML insert into
-        a child table whose canonical-edition parent is absent fails with foreign_keys enabled.
-        Treat those partial databases as having no reconstructable barrier rather than making
-        unrelated legacy upgrades fail.
-        """
-        required = {
-            "canonical_editions",
-            "spotify_matches",
-            "spotify_planner_matched_recovery_state",
-            "spotify_planner_unresolved_state",
-            "spotify_planner_persistence_rejection_state",
-        }
-        placeholders = ", ".join("?" for _ in required)
-        rows = connection.execute(
-            f"SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ({placeholders})",
-            tuple(sorted(required)),
-        ).fetchall()
-        if {str(row[0]) for row in rows} != required:
-            return
-
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO spotify_planner_persistence_rejection_state (
-                source_id, source_native_id, protected_status,
-                protected_spotify_episode_uri, protected_spotify_duration_seconds,
-                protected_match_updated_at, first_rejected_at, last_rejected_at
-            )
-            SELECT m.source_id, m.source_native_id, m.status, m.spotify_episode_uri,
-                   m.spotify_duration_seconds, m.updated_at,
-                   r.first_attempt_at, r.last_attempt_at
-            FROM spotify_matches AS m
-            JOIN spotify_planner_matched_recovery_state AS r
-              ON r.source_id = m.source_id
-             AND r.source_native_id = m.source_native_id
-            WHERE m.status = 'matched' AND m.updated_at > r.first_attempt_at
-            """
-        )
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO spotify_planner_persistence_rejection_state (
-                source_id, source_native_id, protected_status,
-                protected_spotify_episode_uri, protected_spotify_duration_seconds,
-                protected_match_updated_at, first_rejected_at, last_rejected_at
-            )
-            SELECT m.source_id, m.source_native_id, m.status, m.spotify_episode_uri,
-                   m.spotify_duration_seconds, m.updated_at,
-                   u.first_unresolved_at, u.last_attempt_at
-            FROM spotify_matches AS m
-            JOIN spotify_planner_unresolved_state AS u
-              ON u.source_id = m.source_id
-             AND u.source_native_id = m.source_native_id
-            WHERE m.status != 'matched' AND m.updated_at > u.last_attempt_at
-            """
         )
 
     def record_playlist_state(

@@ -10,7 +10,7 @@ from news_bulletin_playlist.persistence import SQLiteStore
 NOW = datetime(2026, 9, 20, 15, 0, tzinfo=UTC)
 
 
-def test_released_legacy_run_tables_remain_present_but_inert(tmp_path: Path) -> None:
+def test_fresh_database_does_not_replay_retired_legacy_schema(tmp_path: Path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.initialize()
 
@@ -34,15 +34,19 @@ def test_released_legacy_run_tables_remain_present_but_inert(tmp_path: Path) -> 
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        playlist_run_count = connection.execute("SELECT COUNT(*) FROM playlist_runs").fetchone()[0]
-        source_run_count = connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0]
 
-    assert {
+    assert "playlist_state" in tables
+    retired_tables = {
+        "canonical_editions",
         "source_runs",
         "source_state",
-        "playlist_runs",
-        "canonical_editions",
         "spotify_matches",
-    } <= tables
-    assert playlist_run_count == 0
-    assert source_run_count == 0
+        "playlist_runs",
+        "spotify_planner_catalogue_state",
+        "spotify_planner_destination_state",
+        "spotify_planner_unresolved_state",
+        "spotify_planner_match_inputs",
+        "spotify_planner_matched_recovery_state",
+        "spotify_planner_persistence_rejection_state",
+    }
+    assert tables.isdisjoint(retired_tables)

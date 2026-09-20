@@ -305,5 +305,6 @@ def test_diagnostics_initialize_is_idempotent(tmp_path: Path) -> None:
             ).fetchall()
         }
     assert "diagnostic_events" in tables
-    assert "source_runs" in tables
-    assert "playlist_runs" in tables
+    assert "playlist_state" in tables
+    assert "source_runs" not in tables
+    assert "playlist_runs" not in tables
