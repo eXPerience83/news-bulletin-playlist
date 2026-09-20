@@ -88,73 +88,74 @@ The runtime rejects values below 60 seconds so a configuration mistake cannot cr
 
 There is no cron job, one-container-per-playlist model or overlapping worker pool. A cycle must finish before the next begins. A successful Spotify authorization callback or managed configuration change wakes the scheduler so the engine can retry promptly rather than waiting for the full interval.
 
-Each cycle performs the architecture-defined sequence:
+Each cycle performs the Spotify-first sequence:
 
 1. load the validated effective configuration from managed state plus the built-in catalog, or from the deliberately selected legacy compatibility path;
 2. determine the union of sources required by enabled playlists;
-3. fetch each required source once;
-4. normalize and persist canonical editions;
-5. record source outcomes;
-6. reuse/persist deterministic Spotify episode matching;
-7. build each playlist from durable still-valid state;
-8. apply the common per-playlist episode-eligibility policy;
-9. reconcile destinations independently with exact readback verification;
-10. record playlist outcomes and prune operational history safely.
+3. observe each required source through the bounded public Spotify detector;
+4. decide which official Spotify show catalogues are due because of bootstrap, detector change, inactivity audit or deterministic stale-item escalation;
+5. refresh only those due catalogues and persist Spotify episode state;
+6. reuse durable local episode state for unchanged sources;
+7. build each playlist locally from retained Spotify episodes, title-derived semantic time where available, explicit release-date/first-seen provenance, duration policy and source filters;
+8. reconcile destinations independently, using qualified local verification evidence when safe and conservative remote readback/snapshot handling when required;
+9. record bounded source/playlist diagnostics plus public, Web API and OAuth request accounting;
+10. prune operational history safely.
 
-A failed RSS source does not become an empty successful source. Recent previously matched canonical editions remain eligible until their playlist retention boundary, so one transient feed outage does not wipe valid recent items. One Spotify destination failure also does not block another playlist.
+A detector or catalogue failure does not become an authoritative empty source. Still-valid persisted Spotify episodes remain eligible until their playlist retention boundary, so a transient public/API outage does not wipe recent content. One Spotify destination failure also does not block another playlist.
 
-## Production Spotify authorization
+## Current TrueNAS Spotify authorization
 
-Production Spotify authorization uses **Authorization Code + PKCE** and is opt-in. No Spotify Client Secret is required or supported by this application model.
+Spotify authorization uses **Authorization Code + PKCE** and is opt-in. No Spotify Client Secret is required or supported by this application model.
 
-The production admin flow requires an **HTTPS external origin terminated by a reverse proxy**. The Python backend intentionally remains HTTP; administrative routes are accepted only when the immediate socket peer is inside `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS` and that proxy supplies exactly `X-Forwarded-Proto: https`.
+The current production choice is the explicit **trusted-LAN administration mode** documented in [`LAN_ADMIN_AUTH.md`](LAN_ADMIN_AUTH.md). Hardened HTTPS/reverse-proxy administration remains implemented, but adopting it in production is a separate decision tracked by #145.
 
-### 1. Create the administration password file
-
-Store the administration password separately from the Custom App YAML. `/data/admin-password` is a suitable location. It must be a regular file owned/readable by the runtime user and must grant no group/other access; use mode `0600`. The password must contain at least 16 characters.
-
-Avoid commands that place the password itself in shell history.
-
-### 2. Add the non-secret runtime settings
+### 1. Configure trusted-LAN administration
 
 Add the following under `services.app` in your **local TrueNAS Custom App definition**, replacing example values:
 
 ```yaml
 environment:
+  NEWS_PLAYLIST_ADMIN_MODE: "lan"
+  NEWS_PLAYLIST_ADMIN_PASSWORD: "replace-with-a-strong-16-plus-character-password"
   SPOTIFY_CLIENT_ID: "your-spotify-client-id"
-  NEWS_PLAYLIST_EXTERNAL_URL: "https://news.example.com"
-  NEWS_PLAYLIST_ADMIN_PASSWORD_FILE: "/data/admin-password"
-  NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS: "10.0.0.2/32"
   NEWS_PLAYLIST_INTERVAL_SECONDS: "600"
 ```
 
-`NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS` is the source IP/CIDR of the **immediate reverse proxy as seen by the application**, not the browser subnet, LAN subnet or a broad Tailscale range. Multiple explicit entries may be comma-separated only when genuinely required.
+Alternatively, store the administration password in an owner-only `0600` file such as `/data/admin-password` and configure `NEWS_PLAYLIST_ADMIN_PASSWORD_FILE=/data/admin-password`. Configure only one password source.
 
-It is valid for the service to be configured but not yet connected: `/admin/` remains available for **Connect Spotify** and the engine remains **Not configured** until at least one managed playlist is activated. If a deliberately selected legacy engine configuration exists before authorization is available, scheduler attempts surface authorization-required failures rather than clearing a destination.
+In LAN mode:
 
-### 3. Configure the reverse proxy
+- do **not** configure `NEWS_PLAYLIST_EXTERNAL_URL`;
+- do **not** configure `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS`;
+- keep backend port `8788` reachable only from the trusted private LAN;
+- never forward it from the router or publish it through an untrusted tunnel/funnel.
 
-Terminate TLS at the reverse proxy and forward the external HTTPS origin to backend port `8788`. The proxy must **overwrite** `X-Forwarded-Proto` with `https`; do not append or preserve a client-supplied value.
+It is valid for the service to be configured but not yet connected: `/admin/` remains available for **Connect Spotify** and the engine remains **Not configured** until at least one managed playlist is activated.
 
-Keep backend port `8788` private. Production `/admin/*` requests that arrive directly or from an untrusted peer are rejected before any Basic-authentication challenge. `/` and `/healthz` remain read-only and do not use that admin transport gate.
+### 2. Register the LAN callback
 
-### 4. Register the exact Spotify callback
+Register exactly this redirect URI in the Spotify developer application:
 
-For:
+`http://127.0.0.1:8787/admin/spotify/callback`
 
-`NEWS_PLAYLIST_EXTERNAL_URL=https://news.example.com`
+Spotify redirects the browser to loopback after approval. Because the callback intentionally targets the browser machine rather than the NAS, a browser connection error is expected.
 
-register exactly:
+### 3. Connect Spotify from the Web UI
 
-`https://news.example.com/admin/spotify/callback`
+1. Open `http://<truenas-host>:8788/admin/` from the trusted LAN.
+2. Authenticate with username `admin` and the configured administration password.
+3. Choose **Connect Spotify** and open the generated Spotify authorization page.
+4. Approve access.
+5. After Spotify redirects to `127.0.0.1:8787`, copy the complete callback URL from the browser address bar.
+6. Paste it into the authenticated **Complete callback URL** form in the original administration tab.
 
-The external URL must be an HTTPS origin without path, query string or embedded credentials. HTTP is accepted only for an explicit loopback IP (`127.0.0.1` or `::1`) used by local/P0 diagnostics; private-LAN HTTP and `localhost` are intentionally rejected.
-
-### 5. Connect Spotify and activate playlists
-
-Open the HTTPS external origin, authenticate to `/admin/` with username `admin` and the configured administration password, then choose **Connect Spotify**. The application uses one-time CSRF, strong OAuth state and PKCE S256; Spotify returns directly to the server callback. Normal production operation requires no shell and no callback URL paste.
+The runtime validates the callback origin/path, OAuth state and PKCE verifier before exchanging the code. Callback URLs, authorization codes and PKCE verifiers are not persisted or logged.
 
 After Spotify reports connected, review **Noticias en Español** and any additional built-in templates you want to operate. Each activation creates a Spotify destination, persists its managed state and wakes the scheduler. There is no need to pre-create Spotify playlists or paste their IDs into YAML for the ordinary managed path.
+
+### Optional hardened HTTPS mode
+
+The HTTPS/reverse-proxy path using `NEWS_PLAYLIST_EXTERNAL_URL` plus narrow `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS` remains supported in code. It is not the current TrueNAS production choice. Evaluate and migrate to it separately under #145 rather than mixing that deployment change into engine/reconciliation validation.
 
 Only the long-lived refresh credential is persisted under `/data`, owner-only and atomically replaced. Access tokens remain memory-only. Scheduler token refresh and Web UI reconnect/callback operations are serialized against the same credential store so they cannot race.
 
@@ -170,10 +171,10 @@ The `/` page reports, without token material:
 - last cycle result, start and finish;
 - next scheduled run;
 - application version and safe short source-build revision;
-- source result, last success, fetched/matched count and current error summary;
+- source result, last success, persisted episode count, refresh/request evidence and current error summary;
 - playlist result, last success, desired/verified count, whether Spotify changed, and current error summary.
 
-Operational cycle status is in memory; authoritative source/playlist history, canonical data, match state, managed installation choices and Spotify refresh authorization remain under `/data` and survive container restart. After restart the scheduler immediately runs a new cycle when at least one playlist is enabled and reconstructs the current status from the durable engine state.
+Operational cycle status is in memory; authoritative Spotify-first source/destination state, retained episode metadata, managed installation choices, request metrics/diagnostics and Spotify refresh authorization remain under `/data` and survive container restart. Released legacy canonical/match tables may also remain physically present for upgrade/history compatibility but are not current runtime authority. After restart the scheduler immediately runs a new cycle when at least one playlist is enabled and reconstructs the current status from the durable engine state.
 
 ### Duration evidence
 
@@ -212,10 +213,10 @@ SIGTERM/SIGINT asks the HTTP host and scheduler to stop. The scheduler does not 
 - confirm its source address matches `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS`;
 - confirm the proxy overwrites `X-Forwarded-Proto` with exactly `https`.
 
-**A source fails but the playlist still contains recent items**
+**A source detector/catalogue refresh fails but the playlist still contains recent items**
 
-- this is expected carry-forward behavior; valid durable matches remain until the playlist retention boundary;
-- the source row on `/` shows the current collection error and previous success.
+- this is expected Spotify-first carry-forward behavior; still-valid persisted Spotify episodes remain eligible until the playlist retention boundary;
+- the source row and authenticated Diagnostics show the current detector/catalogue outcome and previous success.
 
 **One playlist fails while another succeeds**
 
@@ -264,3 +265,9 @@ remains a **P0 diagnostic path only**, not normal production authorization.
 > **Fetch once -> normalize once -> store once -> distribute to many playlists.**
 
 The health endpoint performs a small real write, flush and `fsync` against `/data`, then removes the temporary probe file. This makes storage-full, quota and write failures observable without conflating ordinary upstream failures with container health.
+
+The current runtime data flow is:
+
+> **Detect public change -> refresh only due official Spotify catalogues -> persist episode state -> compute locally -> reconcile safely.**
+
+Older RSS/canonical/matching descriptions in historical investigation documents are retained only for provenance and upgrade context.
