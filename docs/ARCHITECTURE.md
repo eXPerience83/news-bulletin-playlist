@@ -17,8 +17,11 @@ The current authority split is:
 - the existing reconciliation/readback machinery is the authority for determining whether a
   destination mutation safely applied.
 
-Released legacy SQLite tables are intentionally not dropped merely because the current runtime no
-longer reads them. They may remain inert so upgrades from released schemas stay boring and safe.
+Existing upgraded SQLite databases are not rewritten merely because the current runtime no longer
+reads retired RSS/matching/planner state. Those historical tables may therefore remain physically
+present and inert. Fresh databases, however, no longer replay retired planner-only schema generations
+that have no current runtime consumer; the later pre-1.0 persistence reset will establish the final
+public database baseline.
 
 Historical P0/P1 and shadow-planner documents describe earlier implementation stages. They are useful
 for provenance, but they are not the current runtime contract when they conflict with this document.
