@@ -865,8 +865,7 @@ class PublicDetectorJournal:
             )
         if "last_degraded_audit_at" not in columns:
             connection.execute(
-                "ALTER TABLE spotify_public_detector_state "
-                "ADD COLUMN last_degraded_audit_at TEXT"
+                "ALTER TABLE spotify_public_detector_state ADD COLUMN last_degraded_audit_at TEXT"
             )
 
     def _connection(self, operation: str) -> _ConnectionContext:
@@ -1004,12 +1003,9 @@ class PublicDetector:
 
             observed_count += 1
             recovered_failures = 0 if previous is None else previous.consecutive_detector_failures
-            if (
-                _release_date_shape_is_unsupported(observation.release_date_shape)
-                and (
-                    previous is None
-                    or previous.last_public_release_date_shape is not observation.release_date_shape
-                )
+            if _release_date_shape_is_unsupported(observation.release_date_shape) and (
+                previous is None
+                or previous.last_public_release_date_shape != observation.release_date_shape
             ):
                 self.diagnostics.emit(
                     occurred_at=observed,
