@@ -323,12 +323,8 @@ jobs:
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
               --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\") | .id"
           )"
-          if [[ -z "$artifact_id" ]]; then
-            echo "ERROR: transfer artifact not found: $ARTIFACT_NAME" >&2
-            exit 1
-          fi
-          if [[ "$artifact_id" == *\n'* ]]; then
-            echo "ERROR: multiple transfer artifacts matched: $ARTIFACT_NAME" >&2
+          if [[ ! "$artifact_id" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: expected exactly one transfer artifact named $ARTIFACT_NAME; got: $artifact_id" >&2
             exit 1
           fi
           gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
