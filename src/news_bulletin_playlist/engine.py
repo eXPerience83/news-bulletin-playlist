@@ -749,7 +749,9 @@ class EngineRunner:
             error=result.error or result.warning,
             write_outcome=result.mutation_outcome.value,
             pending_snapshot_created=(
-                None if result.pending_snapshot_created is None else result.pending_snapshot_created.value
+                None
+                if result.pending_snapshot_created is None
+                else result.pending_snapshot_created.value
             ),
             pending_snapshot_resolution=(
                 None
@@ -758,7 +760,9 @@ class EngineRunner:
             ),
             unavailable_media_count=result.unavailable_media_count,
             unavailable_media_phase=(
-                None if result.unavailable_media_phase is None else result.unavailable_media_phase.value
+                None
+                if result.unavailable_media_phase is None
+                else result.unavailable_media_phase.value
             ),
         )
 
