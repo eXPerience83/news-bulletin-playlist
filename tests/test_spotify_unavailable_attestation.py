@@ -206,6 +206,26 @@ def test_exact_single_page_write_defers_snapshot_confirmation(tmp_path: Path) ->
     assert pending.expected_snapshot_id == "snapshot-write-1"
 
 
+def test_partial_pending_does_not_qualify_degraded_lease(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    client = _AttestedSpotify(["spotify:episode:old"])
+    client.opaque_after_write = {0}
+    client.snapshot_responses = [
+        {"snapshot_id": "snapshot-initial"},
+        {"snapshot_id": "snapshot-initial"},
+    ]
+
+    result = _apply(store, client, "spotify:episode:new")
+
+    assert result.ok
+    assert result.wrote is True
+    assert result.degraded_verification is True
+    assert result.degraded_evidence_qualified is False
+    assert result.pending_snapshot_created is PendingSnapshotCreation.PARTIAL
+    assert PendingSnapshotJournal(store).get(PLAYLIST_ID) is not None
+    assert store.get_playlist_attestation(PLAYLIST_ID) is None
+
+
 def test_ambiguous_write_exact_readback_stays_verified_when_attestation_read_fails(
     tmp_path: Path,
 ) -> None:
@@ -251,6 +271,7 @@ def test_write_with_unavailable_slot_is_attested_as_degraded_success(tmp_path: P
     assert result.wrote is True
     assert result.applied_count == 2
     assert result.degraded_verification is True
+    assert result.degraded_evidence_qualified is True
     assert result.warning is not None
     assert "[1]" in result.warning
     assert result.unavailable_media_count == 1
@@ -276,6 +297,7 @@ def test_identical_next_cycle_with_same_snapshot_performs_zero_writes(tmp_path: 
     assert second.ok
     assert second.wrote is False
     assert second.degraded_verification is True
+    assert second.degraded_evidence_qualified is True
     assert client.writes == [list(uris)]
 
 
@@ -298,6 +320,7 @@ def test_restart_reuses_durable_attestation_without_rewriting(tmp_path: Path) ->
     assert result.ok
     assert result.wrote is False
     assert result.degraded_verification is True
+    assert result.degraded_evidence_qualified is True
     assert len(client.writes) == 1
 
 
