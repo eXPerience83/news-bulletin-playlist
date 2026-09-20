@@ -164,5 +164,6 @@ catalog. For each review:
 6. update this document and #53 with meaningful evidence/status changes;
 7. open focused implementation work only for sources actually selected for rollout.
 
-Provider-watch has a narrower role: it detects breakage in already-known implemented provider
-contracts. It does not discover new sources or promote research candidates.
+The former RSS/HTML provider-watch command has been retired with the pre-cutover provider runtime.
+Current implemented-source checks use deterministic parser/filter/catalogue tests plus Spotify-first
+production diagnostics. Research review still does not mutate production automatically.
