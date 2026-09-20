@@ -435,6 +435,39 @@ def test_public_http_failure_is_counted_with_bounded_status(tmp_path: Path) -> N
     assert metric.http_status == 503
 
 
+def test_public_response_validation_failure_is_counted_once(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    metrics = SpotifyRequestMetrics(store.path, clock=lambda: NOW)
+    metrics.initialize()
+    embed_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    client = PublicShowClient(
+        _StaticTransport(
+            {
+                embed_url: PublicHttpResponse(
+                    status=200,
+                    content_type="text/html",
+                    body=b"<html></html>",
+                )
+            }
+        ),
+        metrics=metrics,
+    )
+
+    with pytest.raises(PublicShowResponseError):
+        client.observe_episode(SourceId("source"), SHOW_ID, observed_at=NOW)
+
+    matching = [
+        metric
+        for metric in metrics.last_24_hours(now=NOW).metrics
+        if metric.surface == "public"
+        and metric.operation == SpotifyPublicOperation.EMBED_SHOW
+        and metric.outcome is SpotifyRequestOutcome.RESPONSE_ERROR
+    ]
+    assert len(matching) == 1
+    assert matching[0].request_count == 1
+    assert matching[0].http_status == 200
+
+
 def test_public_metric_persistence_failure_is_fail_soft(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
