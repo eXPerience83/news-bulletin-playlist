@@ -334,8 +334,8 @@ class SpotifyRateLimitGuardAuth:
                 raise SpotifyRateLimitBackoffActive(_active_message(state))
             return self.provider.get_access_token(now=now)
 
-    def planner_authorization_context(self) -> str | None:
-        reader = getattr(self.provider, "planner_authorization_context", None)
+    def authorization_context(self) -> str | None:
+        reader = getattr(self.provider, "authorization_context", None)
         value = reader() if callable(reader) else None
         return value if isinstance(value, str) and value else None
 
@@ -357,7 +357,7 @@ class SpotifyRateLimitGuardAuth:
             if callable(acquire):
                 return cast(ProviderAuthorizationSession, acquire(now=now))
             token = self.provider.get_access_token(now=now)
-            context_reader = getattr(self.provider, "planner_authorization_context", None)
+            context_reader = getattr(self.provider, "authorization_context", None)
             context = context_reader() if callable(context_reader) else None
             if not isinstance(context, str) or not context:
                 raise SpotifyAuthError("Spotify authorization context is unavailable")
