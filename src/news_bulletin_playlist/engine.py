@@ -74,6 +74,7 @@ from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
 DEFAULT_ENGINE_INTERVAL = timedelta(minutes=10)
 DEFAULT_SOURCE_INACTIVITY = timedelta(hours=24)
+DEFAULT_DEGRADED_SOURCE_AUDIT = timedelta(minutes=30)
 DEFAULT_DESTINATION_AUDIT = timedelta(hours=6)
 DEFAULT_DEGRADED_DESTINATION_AUDIT = timedelta(minutes=30)
 SPOTIFY_FIRST_STATE_RETENTION = timedelta(days=30)
@@ -236,12 +237,15 @@ class EngineRunner:
         playlist_mutation_guard: PlaylistMutationGuard | None = None,
         request_metrics: SpotifyRequestMetrics | None = None,
         source_inactivity: timedelta = DEFAULT_SOURCE_INACTIVITY,
+        degraded_source_audit: timedelta = DEFAULT_DEGRADED_SOURCE_AUDIT,
         destination_audit: timedelta = DEFAULT_DESTINATION_AUDIT,
         degraded_destination_audit: timedelta = DEFAULT_DEGRADED_DESTINATION_AUDIT,
         max_catalogue_pages: int = DEFAULT_MAX_PAGES,
     ) -> None:
         if source_inactivity <= timedelta(0):
             raise ValueError("source inactivity threshold must be positive")
+        if degraded_source_audit <= timedelta(0):
+            raise ValueError("degraded source audit threshold must be positive")
         if destination_audit <= timedelta(0):
             raise ValueError("destination audit threshold must be positive")
         if degraded_destination_audit <= timedelta(0):
@@ -260,6 +264,7 @@ class EngineRunner:
         self.clock = clock or _utc_now
         self.playlist_mutation_guard = playlist_mutation_guard
         self.source_inactivity = source_inactivity
+        self.degraded_source_audit = degraded_source_audit
         self.destination_audit = destination_audit
         self.degraded_destination_audit = degraded_destination_audit
         self.max_catalogue_pages = max_catalogue_pages
@@ -462,6 +467,7 @@ class EngineRunner:
         now: datetime,
     ) -> tuple[tuple[SourceId, RefreshReason], ...]:
         changed = set(detector.changed_source_ids)
+        degraded_changed = set(detector.degraded_change_source_ids)
         plan: list[tuple[SourceId, RefreshReason]] = []
         for source in _required_sources(self.config):
             local = self.first_journal.get_source_state(source.id)
@@ -472,12 +478,30 @@ class EngineRunner:
             if source.id in changed:
                 plan.append((source.id, RefreshReason.CHANGE))
                 continue
+            if source.id in degraded_changed:
+                plan.append((source.id, RefreshReason.CHANGE))
+                continue
             if (
                 public is not None
                 and public.last_change_at is not None
                 and public.last_change_at > local.last_refresh_at
             ):
                 plan.append((source.id, RefreshReason.CHANGE))
+                continue
+            if (
+                public is not None
+                and public.degraded_audit_due(
+                    now=now,
+                    interval=self.degraded_source_audit,
+                    fallback_anchor=local.last_refresh_at,
+                )
+                and self.public_detector.mark_degraded_audit_attempt(
+                    source.id,
+                    spotify_show_id(source),
+                    attempted_at=now,
+                )
+            ):
+                plan.append((source.id, RefreshReason.INACTIVITY_AUDIT))
                 continue
             due = (
                 public.audit_due(now=now, inactivity=self.source_inactivity)
