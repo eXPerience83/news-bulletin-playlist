@@ -84,6 +84,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "invalid_uri_count",
         "duplicate_count",
         "desired_fingerprint",
+        "destination_verification_kind",
         "desired_changed_since_previous_attempt",
         "detector_changed",
         "detector_false_negative",
@@ -259,6 +260,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
     "false_negative_reason": frozenset(
         {"api_semantic_newer", "api_release_day_newer", "detector_id_missing"}
     ),
+    "destination_verification_kind": frozenset({"exact", "degraded"}),
     "detector_outcome": frozenset(
         {
             "bootstrap",
