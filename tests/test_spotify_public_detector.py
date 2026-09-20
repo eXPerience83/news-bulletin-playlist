@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -26,6 +27,7 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorOutcome,
     PublicEpisodeObservation,
     PublicHttpResponse,
+    PublicReleaseDateShape,
     PublicShowClient,
     PublicShowConfigurationError,
     PublicShowHttpError,
@@ -241,6 +243,7 @@ def test_parse_public_show_embed_supports_release_date_iso_string_object() -> No
 
     assert observation.episode_id == EPISODE_A
     assert observation.release_date_raw == "2026-09-19T18:31:00Z"
+    assert observation.release_date_shape is PublicReleaseDateShape.OBJECT_ISO_STRING
 
 
 @pytest.mark.parametrize(
@@ -266,6 +269,11 @@ def test_parse_public_show_embed_tolerates_unsupported_release_date_metadata(
 
     assert observation.episode_id == EPISODE_A
     assert observation.release_date_raw is None
+    assert observation.release_date_shape in {
+        PublicReleaseDateShape.UNSUPPORTED_STRING,
+        PublicReleaseDateShape.UNSUPPORTED_OBJECT,
+        PublicReleaseDateShape.UNSUPPORTED_NUMBER,
+    }
 
 
 def test_parse_public_show_embed_rejects_duplicate_next_data() -> None:
@@ -494,6 +502,56 @@ def test_public_response_validation_failure_is_counted_once(tmp_path: Path) -> N
     assert matching[0].http_status == 200
 
 
+def test_response_failure_oembed_fallback_is_counted_at_public_transport_boundary(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    diagnostics, _ = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(
+        _observation(EPISODE_A, title="Bulletin 12:00"),
+        oembed_title="Bulletin 12:00",
+    )
+    metrics = SpotifyRequestMetrics(store.path, clock=lambda: NOW)
+    metrics.initialize()
+    embed_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    oembed_url = "https://open.spotify.com/oembed?url=" + (
+        "https%3A%2F%2Fopen.spotify.com%2Fshow%2F" + SHOW_ID
+    )
+    transport = _StaticTransport(
+        {
+            embed_url: PublicHttpResponse(
+                status=200,
+                content_type="text/html",
+                body=b"<html></html>",
+            ),
+            oembed_url: PublicHttpResponse(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"title": "Bulletin 13:00"}).encode(),
+            ),
+        }
+    )
+    detector = PublicDetector(
+        journal,
+        diagnostics,
+        client=PublicShowClient(transport, metrics=metrics),
+    )
+
+    with metrics.request_scope() as scope:
+        summary = detector.observe_sources(
+            (_source(),),
+            observed_at=NOW + timedelta(minutes=1),
+        )
+        snapshot = scope.snapshot()
+
+    assert summary.degraded_change_source_ids == (SourceId("source"),)
+    assert snapshot.public_requests == 2
+    assert snapshot.public_count(SpotifyPublicOperation.EMBED_SHOW) == 1
+    assert snapshot.public_count(SpotifyPublicOperation.OEMBED) == 1
+
+
 def test_public_metric_persistence_failure_is_fail_soft(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -534,6 +592,45 @@ def test_spotify_show_id_requires_one_valid_show_reference() -> None:
 
     with pytest.raises(PublicShowConfigurationError, match="exactly one"):
         spotify_show_id(_source(show_ids=(SHOW_ID, "T" * 22)))
+
+
+def test_journal_additively_upgrades_existing_detector_table(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE spotify_public_detector_state (
+                source_id TEXT NOT NULL,
+                spotify_show_id TEXT NOT NULL,
+                last_episode_id TEXT,
+                last_episode_title TEXT,
+                last_public_release_date_raw TEXT,
+                last_public_observed_at TEXT,
+                last_detector_success_at TEXT,
+                last_change_at TEXT,
+                last_failure_at TEXT,
+                last_catalogue_refresh_at TEXT,
+                consecutive_detector_failures INTEGER NOT NULL DEFAULT 0,
+                detector_schema_version INTEGER NOT NULL,
+                last_oembed_title TEXT,
+                PRIMARY KEY (source_id, spotify_show_id)
+            )
+            """
+        )
+
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+
+    with sqlite3.connect(store.path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(spotify_public_detector_state)"
+            ).fetchall()
+        }
+
+    assert "last_public_release_date_shape" in columns
+    assert "last_degraded_audit_at" in columns
 
 
 def test_journal_detects_identity_changes_even_when_title_is_identical(tmp_path: Path) -> None:
@@ -700,7 +797,8 @@ def test_public_detector_response_failure_emits_bounded_reason(tmp_path: Path) -
                 "Spotify Embed __NEXT_DATA__ shape changed",
                 reason=PublicShowResponseFailureReason.EMBED_SHAPE,
             )
-        ]
+        ],
+        oembed_titles=["Bulletin"],
     )
     detector = PublicDetector(journal, diagnostics, client=client)  # type: ignore[arg-type]
 
@@ -716,6 +814,232 @@ def test_public_detector_response_failure_emits_bounded_reason(tmp_path: Path) -
         "consecutive_failure_count": 1,
         "detector_outcome": "response_failure",
         "detector_response_reason": "embed_shape",
+        "detector_fallback_outcome": "title_unchanged",
+    }
+    assert client.oembed_calls == 1
+
+
+def test_response_failure_changed_oembed_title_triggers_only_degraded_change(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    diagnostics, diagnostic_store = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(
+        _observation(EPISODE_A, title="Bulletin 12:00"),
+        oembed_title="Bulletin 12:00",
+    )
+    client = _SequenceClient(
+        [
+            PublicShowResponseError(
+                "Spotify Embed __NEXT_DATA__ shape changed",
+                reason=PublicShowResponseFailureReason.EMBED_SHAPE,
+            )
+        ],
+        oembed_titles=["Bulletin 13:00"],
+    )
+    detector = PublicDetector(journal, diagnostics, client=client)  # type: ignore[arg-type]
+
+    summary = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+
+    assert summary.changed_count == 0
+    assert summary.failure_count == 1
+    assert summary.changed_source_ids == ()
+    assert summary.degraded_change_source_ids == (SourceId("source"),)
+    state = journal.get(SourceId("source"), SHOW_ID)
+    assert state is not None
+    assert state.last_episode_id == EPISODE_A
+    assert state.last_oembed_title == "Bulletin 13:00"
+    event = next(
+        event
+        for event in diagnostic_store.list_events(limit=10)
+        if event.event_name == "public_detector_failed"
+    )
+    assert event.details["detector_fallback_outcome"] == "title_changed"
+
+
+def test_repeated_degraded_title_change_triggers_only_once(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    diagnostics, _ = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(
+        _observation(EPISODE_A, title="Bulletin 12:00"),
+        oembed_title="Bulletin 12:00",
+    )
+    response_error = PublicShowResponseError(
+        "Spotify Embed __NEXT_DATA__ shape changed",
+        reason=PublicShowResponseFailureReason.EMBED_SHAPE,
+    )
+    client = _SequenceClient(
+        [response_error, response_error],
+        oembed_titles=["Bulletin 13:00", "Bulletin 13:00"],
+    )
+    detector = PublicDetector(journal, diagnostics, client=client)  # type: ignore[arg-type]
+
+    first = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+    second = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=2))
+
+    assert first.degraded_change_source_ids == (SourceId("source"),)
+    assert second.degraded_change_source_ids == ()
+    state = journal.get(SourceId("source"), SHOW_ID)
+    assert state is not None
+    assert state.last_episode_id == EPISODE_A
+    assert state.last_oembed_title == "Bulletin 13:00"
+    assert state.consecutive_detector_failures == 2
+
+
+def test_response_failure_same_oembed_title_is_inconclusive_not_unchanged(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    diagnostics, _ = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(_observation(EPISODE_A, title="Same title"), oembed_title="Same title")
+    client = _SequenceClient(
+        [
+            PublicShowResponseError(
+                "Spotify Embed __NEXT_DATA__ shape changed",
+                reason=PublicShowResponseFailureReason.EMBED_SHAPE,
+            )
+        ],
+        oembed_titles=["Same title"],
+    )
+    detector = PublicDetector(journal, diagnostics, client=client)  # type: ignore[arg-type]
+
+    summary = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+
+    assert summary.changed_count == 0
+    assert summary.unchanged_count == 0
+    assert summary.failure_count == 1
+    assert summary.degraded_change_source_ids == ()
+    state = journal.get(SourceId("source"), SHOW_ID)
+    assert state is not None
+    assert state.last_episode_id == EPISODE_A
+    assert state.consecutive_detector_failures == 1
+
+
+def test_http_failure_does_not_double_public_requests_with_oembed_fallback(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    diagnostics, _ = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(_observation(EPISODE_A))
+    client = _SequenceClient(
+        [PublicShowHttpError(504)],
+        oembed_titles=["must not be consumed"],
+    )
+    detector = PublicDetector(journal, diagnostics, client=client)  # type: ignore[arg-type]
+
+    summary = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+
+    assert summary.failure_count == 1
+    assert client.oembed_calls == 0
+
+
+def test_degraded_audit_cadence_is_persisted_and_primary_recovery_clears_it(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(_observation(EPISODE_A))
+    assert journal.mark_catalogue_refresh(
+        SourceId("source"),
+        SHOW_ID,
+        refreshed_at=NOW,
+    )
+    journal.record_failure(
+        SourceId("source"),
+        SHOW_ID,
+        failed_at=NOW + timedelta(minutes=10),
+    )
+
+    state = journal.get(SourceId("source"), SHOW_ID)
+    assert state is not None
+    assert not state.degraded_audit_due(
+        now=NOW + timedelta(minutes=29),
+        interval=timedelta(minutes=30),
+        fallback_anchor=NOW,
+    )
+    assert state.degraded_audit_due(
+        now=NOW + timedelta(minutes=30),
+        interval=timedelta(minutes=30),
+        fallback_anchor=NOW,
+    )
+    assert journal.mark_degraded_audit_attempt(
+        SourceId("source"),
+        SHOW_ID,
+        attempted_at=NOW + timedelta(minutes=30),
+    )
+
+    restarted = PublicDetectorJournal(store)
+    persisted = restarted.get(SourceId("source"), SHOW_ID)
+    assert persisted is not None
+    assert persisted.last_degraded_audit_at == NOW + timedelta(minutes=30)
+    assert not persisted.degraded_audit_due(
+        now=NOW + timedelta(minutes=59),
+        interval=timedelta(minutes=30),
+        fallback_anchor=NOW,
+    )
+    assert persisted.degraded_audit_due(
+        now=NOW + timedelta(minutes=60),
+        interval=timedelta(minutes=30),
+        fallback_anchor=NOW,
+    )
+
+    restarted.record_success(
+        _observation(
+            EPISODE_A,
+            observed_at=NOW + timedelta(minutes=61),
+        )
+    )
+    recovered = restarted.get(SourceId("source"), SHOW_ID)
+    assert recovered is not None
+    assert recovered.last_degraded_audit_at is None
+    assert recovered.consecutive_detector_failures == 0
+
+
+def test_unsupported_release_date_shape_emits_one_bounded_drift_event(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    diagnostics, diagnostic_store = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(_observation(EPISODE_A))
+    embed_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    transport = _StaticTransport(
+        {
+            embed_url: PublicHttpResponse(
+                status=200,
+                content_type="text/html",
+                body=_embed_html(release_date={"future": "shape"}).encode(),
+            )
+        }
+    )
+    detector = PublicDetector(
+        journal,
+        diagnostics,
+        client=PublicShowClient(transport),
+    )
+
+    detector.observe_sources((_source(),), observed_at=NOW)
+    detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+
+    drift = [
+        event
+        for event in diagnostic_store.list_events(limit=20)
+        if event.event_name == "public_detector_metadata_drift"
+    ]
+    assert len(drift) == 1
+    assert drift[0].details == {
+        "detector_outcome": "metadata_drift",
+        "public_release_date_shape": "unsupported_object",
     }
 
 

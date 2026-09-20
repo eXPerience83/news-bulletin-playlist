@@ -95,6 +95,8 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "stale_escalation",
         "detector_changed_count",
         "detector_failure_count",
+        "detector_degraded_change_count",
+        "detector_fallback_outcome",
         "detector_outcome",
         "detector_response_reason",
         "detector_schema_version",
@@ -102,6 +104,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "detector_unchanged_count",
         "oembed_matches",
         "public_release_date",
+        "public_release_date_shape",
         "spotify_episode_id",
         "spotify_episode_title",
         "spotify_oembed_title",
@@ -266,7 +269,9 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "bootstrap",
             "changed",
             "configuration_failure",
+            "degraded_audit",
             "http_failure",
+            "metadata_drift",
             "oembed_failure",
             "persistence_failure",
             "recovered",
@@ -274,6 +279,21 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "stale_ignored",
             "transport_failure",
             "unchanged",
+        }
+    ),
+    "detector_fallback_outcome": frozenset(
+        {"oembed_failed", "title_baseline", "title_changed", "title_unchanged"}
+    ),
+    "public_release_date_shape": frozenset(
+        {
+            "missing",
+            "string",
+            "object_iso_string",
+            "unsupported_string",
+            "unsupported_object",
+            "unsupported_array",
+            "unsupported_number",
+            "unsupported_boolean",
         }
     ),
     "detector_response_reason": frozenset(
