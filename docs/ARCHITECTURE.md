@@ -302,7 +302,7 @@ While the cooldown is active:
 - existing destination/local state is preserved;
 - no component starts its own bypass retry loop.
 
-Request accounting distinguishes transmitted Web API/OAuth work from locally suppressed work.
+Request accounting distinguishes unauthenticated public Embed/oEmbed requests, authenticated Spotify Web API requests and OAuth token requests from locally suppressed work.
 
 ## Failure isolation and fail-closed behavior
 
