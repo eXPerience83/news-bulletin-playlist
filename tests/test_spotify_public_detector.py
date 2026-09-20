@@ -21,9 +21,9 @@ from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.public_detector import (
     DETECTOR_SCHEMA_VERSION,
+    PublicDetector,
     PublicDetectorJournal,
     PublicDetectorOutcome,
-    PublicDetector,
     PublicEpisodeObservation,
     PublicHttpResponse,
     PublicShowClient,
@@ -719,7 +719,9 @@ def test_public_detector_response_failure_emits_bounded_reason(tmp_path: Path) -
     }
 
 
-def test_public_detector_failure_preserves_identity_and_emits_bounded_diagnostic(tmp_path: Path) -> None:
+def test_public_detector_failure_preserves_identity_and_emits_bounded_diagnostic(
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
     diagnostics, diagnostic_store = _diagnostics(store)
     journal = PublicDetectorJournal(store)
