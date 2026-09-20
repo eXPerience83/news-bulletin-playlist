@@ -1138,11 +1138,7 @@ class PublicDetector:
                     observed_at=observed_at,
                 )
             else:
-                baseline = (
-                    None
-                    if previous is None
-                    else previous.last_episode_title or previous.last_oembed_title
-                )
+                baseline = _degraded_title_baseline(previous)
                 if baseline is None:
                     fallback_outcome = "title_baseline"
                 elif oembed_title != baseline:
@@ -1240,6 +1236,14 @@ class PublicDetector:
             source_id=str(observation.source_id),
             details=details,
         )
+
+
+def _degraded_title_baseline(state: PublicDetectorState | None) -> str | None:
+    if state is None:
+        return None
+    if state.consecutive_detector_failures > 0 and state.last_oembed_title is not None:
+        return state.last_oembed_title
+    return state.last_episode_title or state.last_oembed_title
 
 
 def _release_date_shape_is_unsupported(shape: PublicReleaseDateShape) -> bool:
