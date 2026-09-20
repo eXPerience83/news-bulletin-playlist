@@ -859,6 +859,37 @@ def test_response_failure_changed_oembed_title_triggers_only_degraded_change(
     assert event.details["detector_fallback_outcome"] == "title_changed"
 
 
+def test_repeated_degraded_title_change_triggers_only_once(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    diagnostics, _ = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(
+        _observation(EPISODE_A, title="Bulletin 12:00"),
+        oembed_title="Bulletin 12:00",
+    )
+    response_error = PublicShowResponseError(
+        "Spotify Embed __NEXT_DATA__ shape changed",
+        reason=PublicShowResponseFailureReason.EMBED_SHAPE,
+    )
+    client = _SequenceClient(
+        [response_error, response_error],
+        oembed_titles=["Bulletin 13:00", "Bulletin 13:00"],
+    )
+    detector = PublicDetector(journal, diagnostics, client=client)  # type: ignore[arg-type]
+
+    first = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+    second = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=2))
+
+    assert first.degraded_change_source_ids == (SourceId("source"),)
+    assert second.degraded_change_source_ids == ()
+    state = journal.get(SourceId("source"), SHOW_ID)
+    assert state is not None
+    assert state.last_episode_id == EPISODE_A
+    assert state.last_oembed_title == "Bulletin 13:00"
+    assert state.consecutive_detector_failures == 2
+
+
 def test_response_failure_same_oembed_title_is_inconclusive_not_unchanged(
     tmp_path: Path,
 ) -> None:
