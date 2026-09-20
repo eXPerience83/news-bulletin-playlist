@@ -26,8 +26,8 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorJournal,
     PublicDetectorOutcome,
     PublicEpisodeObservation,
-    PublicReleaseDateShape,
     PublicHttpResponse,
+    PublicReleaseDateShape,
     PublicShowClient,
     PublicShowConfigurationError,
     PublicShowHttpError,
@@ -826,7 +826,10 @@ def test_response_failure_changed_oembed_title_triggers_only_degraded_change(
     diagnostics, diagnostic_store = _diagnostics(store)
     journal = PublicDetectorJournal(store)
     journal.initialize()
-    journal.record_success(_observation(EPISODE_A, title="Bulletin 12:00"), oembed_title="Bulletin 12:00")
+    journal.record_success(
+        _observation(EPISODE_A, title="Bulletin 12:00"),
+        oembed_title="Bulletin 12:00",
+    )
     client = _SequenceClient(
         [
             PublicShowResponseError(
