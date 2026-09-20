@@ -99,9 +99,11 @@ def _metric(snapshot, *, operation: str, outcome: SpotifyRequestOutcome):  # typ
     )
 
 
-def test_schema_v7_metrics_upgrade_preserves_rows_and_accepts_public_surface(
+def test_schema_v7_metrics_upgrade_preserves_rows_and_marks_public_coverage_gap(
     tmp_path: Path,
 ) -> None:
+    observed = datetime.now(UTC).replace(microsecond=0)
+    bucket = observed.replace(second=0).isoformat(timespec="seconds")
     path = tmp_path / "legacy-metrics.sqlite3"
     connection = sqlite3.connect(path)
     connection.executescript(
@@ -128,28 +130,31 @@ def test_schema_v7_metrics_upgrade_preserves_rows_and_accepts_public_surface(
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             incomplete_at TEXT NOT NULL
         );
+        """
+    )
+    connection.execute(
+        """
         INSERT INTO spotify_request_metrics (
             bucket_at, surface, operation, outcome, http_status, quota_reason, request_count
-        ) VALUES (
-            '2026-09-07T10:30:00+00:00', 'web_api', 'show_episodes',
-            'success', -1, '', 3
-        );
-        """
+        ) VALUES (?, 'web_api', 'show_episodes', 'success', -1, '', 3)
+        """,
+        (bucket,),
     )
     connection.commit()
     connection.close()
 
-    metrics = SpotifyRequestMetrics(path, clock=lambda: NOW)
+    metrics = SpotifyRequestMetrics(path, clock=lambda: observed)
     metrics.initialize()
     metrics.record_public(
         SpotifyPublicOperation.EMBED_SHOW,
         SpotifyRequestOutcome.SUCCESS,
         http_status=200,
-        occurred_at=NOW,
+        occurred_at=observed,
     )
 
-    snapshot = metrics.last_24_hours(now=NOW)
+    snapshot = metrics.last_24_hours(now=observed)
     assert SQLiteStore(path).schema_version() == 8
+    assert snapshot.coverage_complete is False
     assert snapshot.web_api_requests == 3
     assert snapshot.public_requests == 1
     assert (
