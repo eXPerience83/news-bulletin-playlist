@@ -12,7 +12,6 @@ on:
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/publish-edge-amd64.yml"
-      - ".github/workflows/container.yml"
   workflow_dispatch:
 
 permissions:
@@ -133,14 +132,14 @@ jobs:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: edge-image.tar.gz
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
   publish:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      actions: read
+      actions: write
       contents: read
       packages: write
 
@@ -274,3 +273,19 @@ jobs:
             echo "ERROR: immutable main SHA tag changed during edge promotion" >&2
             exit 1
           fi
+
+      - name: Delete transfer artifact after successful publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          artifact_id="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+              --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\") | .id"
+          )"
+          if [[ ! "$artifact_id" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: expected exactly one transfer artifact named $ARTIFACT_NAME; got: $artifact_id" >&2
+            exit 1
+          fi
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
