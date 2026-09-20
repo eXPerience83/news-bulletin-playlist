@@ -170,7 +170,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      actions: write
+      actions: read
       packages: write
       pull-requests: write
 
@@ -319,6 +319,14 @@ jobs:
           body="Published the reviewed AMD64 candidate after exact-head validation, live provider contract validation, hardened runtime smoke tests, artifact hash verification, and immediate pre-promotion PR revalidation passed.\n\n- Candidate: \`${CANDIDATE_REF}\`\n- Dev channel: \`${DEV_REF}\`\n- Immutable: \`${image}@${IMAGE_DIGEST}\`\n- Source revision: \`${SOURCE_REVISION}\`\n\nThe mutable \`dev\` channel may contain unmerged code. It is not \`edge\`, \`stable\`, or \`latest\`."
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$body"
 
+  cleanup:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+
+    steps:
       - name: Delete transfer artifact after successful publication
         env:
           GH_TOKEN: ${{ github.token }}
