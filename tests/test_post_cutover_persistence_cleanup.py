@@ -41,6 +41,12 @@ def test_released_legacy_run_tables_remain_present_but_inert(tmp_path: Path) -> 
             "SELECT COUNT(*) FROM source_runs"
         ).fetchone()[0]
 
-    assert {"source_runs", "source_state", "playlist_runs", "canonical_editions", "spotify_matches"} <= tables
+    assert {
+        "source_runs",
+        "source_state",
+        "playlist_runs",
+        "canonical_editions",
+        "spotify_matches",
+    } <= tables
     assert playlist_run_count == 0
     assert source_run_count == 0
