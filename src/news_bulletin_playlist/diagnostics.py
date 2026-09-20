@@ -351,9 +351,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "unexpected_snapshot",
         }
     ),
-    "unavailable_media_phase": frozenset(
-        {"prewrite", "readback", "pending_confirmation"}
-    ),
+    "unavailable_media_phase": frozenset({"prewrite", "readback", "pending_confirmation"}),
     "phase": frozenset(
         {
             "authorization",
