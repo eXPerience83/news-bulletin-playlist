@@ -48,9 +48,9 @@ Operational lines use UTC timestamps and stable fields, for example:
 2026-09-02T10:00:00Z level=INFO event=cycle_started component=engine cycle=cycle-...
 ```
 
-Significant runtime events include cycle start/completion/failure, source collection or matching
-failures, playlist reconciliation outcomes, explicit destination-preserved fail-safe decisions,
-and scheduler lifecycle events. Routine successful ten-minute cycles stay summary-oriented rather
+Significant runtime events include cycle start/completion/failure, public-detector or official
+catalogue failures, playlist reconciliation outcomes, explicit destination-preserved fail-safe
+decisions, and scheduler lifecycle events. Routine successful ten-minute cycles stay summary-oriented rather
 than emitting one line for every internal operation.
 
 Raw provider response bodies and arbitrary exception strings are not copied into this structured

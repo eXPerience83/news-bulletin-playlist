@@ -72,9 +72,9 @@ Before moving a source from research/candidate into the runtime catalog, verify 
 Promotion should be done by a focused implementation PR. Updating research notes alone must never
 change production behaviour.
 
-## Runtime sources through PR #137
+## Current built-in runtime sources
 
-These are the sources exposed by the current multi-playlist dev candidate branch.
+These are the sources represented by the current built-in runtime catalog.
 
 | Source id | `ORIGIN · SCOPE · LANGUAGE` | Bulletin/provider | Duration profile | Role |
 | --- | --- | --- | --- | --- |
@@ -111,11 +111,11 @@ The Phase-1 playlist templates are intentionally broader than the source labels:
 | `FR · REG · es-419` | RFI Español — Noticias de América | `candidate` | Americas-regional Spanish product; useful for a future Latin-American scope, not default `INT · ES`. |
 | `DE · NAT · de` | Tagesschau in 100 Sekunden | `candidate` | Multiple very short updates per day; verify feed identity and deterministic Spotify path. |
 | `FR · NAT · fr` | RTL — Le journal RTL | `candidate` | Hourly short bulletin; strong candidate for a future `FR · FR` product. |
-| `FR · NAT · fr` | Europe 1 — Le journal | `candidate` | Frequent feed containing both short and longer editions; measure representative profile. |
+| `FR · NAT · fr` | Europe 1 — Le journal | `candidate` | Frequent product containing both short and longer editions; verify a deterministic Spotify show/catalogue path and measure representative profile. |
 | `PL · NAT · pl` | TOK FM — Informacje | `candidate` | Frequent normal bulletin-length editions with anomalous long entries to characterise. |
 | `PL · NAT · pl` | Radio ZET — Wiadomości | `candidate` | Hourly national bulletin candidate. |
-| `IT · NAT/MIX · it` | Sky TG24 — news bulletin feed | `candidate` | Multiple short editions per day; deterministic feed/catalogue verification pending. |
-| `PT · NAT · pt` | Antena 1 — Noticiário | `candidate` | Many daily concise editions; verify identity and Spotify path. |
+| `IT · NAT/MIX · it` | Sky TG24 — news bulletin product | `candidate` | Multiple short editions per day; deterministic Spotify show/catalogue verification pending. |
+| `PT · NAT · pt` | Antena 1 — Noticiário | `candidate` | Many daily concise editions; verify deterministic Spotify show identity and catalogue behavior. |
 | `BE · NAT · nl` | VRT NWS update | `candidate` | Hourly explicitly short product; verify collection/catalogue contract. |
 | `CH · NAT/MIX · de` | SRF Nachrichten | `candidate` | Multiple short daily editions; verify deterministic destination path. |
 | `FI · NAT · fi` | Yle Uutiset / Radiouutiset | `candidate` | Short radio-news editions found; Spotify path still needs verification. |
@@ -126,7 +126,7 @@ The Phase-1 playlist templates are intentionally broader than the source labels:
 | `AT · NAT/MIX · de` | Ö1 — Nachrichten / Journale | `candidate` | Useful short editions appear to exist; verify target editions can be isolated deterministically. |
 | `IE · NAT · en` | RTÉ news bulletins | `research` | Search for a better short/frequent deterministic product than long-form programmes. |
 | `NL · NAT · nl` | NOS | `research` | Continue searching for a true short recurring bulletin rather than single-topic explainers. |
-| `RO · NAT · ro` | Radio România Actualități — Știri | `candidate` | Hourly schedule appears promising; verify feed and Spotify catalogue. |
+| `RO · NAT · ro` | Radio România Actualități — Știri | `candidate` | Hourly schedule appears promising; verify deterministic Spotify show identity and catalogue. |
 | `GB · INT · en` | BBC Global News Podcast | `rejected` | Strong world scope but predominantly long-form, so unsuitable for the default concise-news product. |
 
 `NAT/MIX` above means classification itself still needs verification; only built-in runtime sources get a
@@ -144,10 +144,10 @@ single authoritative scope value.
   480-second ceiling, one of the concrete reasons the current candidate uses 1800 seconds by default.
 - Onda Cero's official bulletin page is actively publishing hourly editions:
   <https://www.ondacero.es/podcast/programas/boletines/>.
-- ABC's active podcast has a stable Omny RSS path
-  (<https://omny.fm/shows/las-noticias-de-abc-1/playlists/podcast.rss>) and Spotify show
-  (<https://open.spotify.com/show/0cLJl7pvrr1bkUaKiVRggf>); PR #130 adds deterministic runtime
-  support using title + release-date matching inside that configured show.
+- ABC's active podcast has a stable Spotify show
+  (<https://open.spotify.com/show/0cLJl7pvrr1bkUaKiVRggf>). Historical Omny/RSS evidence remains
+  useful for provenance, but current runtime support reads the official Spotify catalogue directly
+  and uses the configured title parser only for optional semantic timestamp metadata.
 - COPE continues to expose frequent short bulletins, but remains blocked until a deterministic Spotify
   show identity is established rather than guessed through global search.
 
@@ -164,5 +164,6 @@ catalog. For each review:
 6. update this document and #53 with meaningful evidence/status changes;
 7. open focused implementation work only for sources actually selected for rollout.
 
-Provider-watch has a narrower role: it detects breakage in already-known implemented provider
-contracts. It does not discover new sources or promote research candidates.
+The former RSS/HTML provider-watch command has been retired with the pre-cutover provider runtime.
+Current implemented-source checks use deterministic parser/filter/catalogue tests plus Spotify-first
+production diagnostics. Research review still does not mutate production automatically.

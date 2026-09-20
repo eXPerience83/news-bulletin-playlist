@@ -1,8 +1,12 @@
 # Title-format recovery contract
 
-Title recovery exists to keep a bulletin source working through harmless upstream title-format drift
+Title recovery keeps semantic edition-time parsing resilient to harmless upstream title-format drift
 without broadening the identity of the configured news product. It is deterministic, local-only and
 fail-closed.
+
+The **current production runtime applies these parsers to episode titles returned by the official
+Spotify show catalogue**. Spotify episode ID/URI remains identity. A parser result supplies optional
+semantic `edition_at` metadata only; it never creates or changes episode identity.
 
 ## Parse stages
 
@@ -12,11 +16,11 @@ Every recovery-capable title parser uses the same ordered stages:
 2. **normalized** — retry the same strict parser after the reviewed generic syntax normalization;
 3. **provider_compat** — for providers with an explicit profile, canonicalize a reviewed family of
    layout variants and require the strict parser to validate the resulting candidate;
-4. **rejected** — no safe interpretation exists.
+4. **rejected** — no safe semantic interpretation exists.
 
-The reported mode is the stage that accepted the title. A `provider_compat` result may have passed
-through generic normalization before the provider profile. The original RSS title is always retained
-in `ParsedEdition` and `CanonicalEdition`; normalized/canonicalized strings are parse-only.
+The reported recovery mode is the stage that accepted the title. A `provider_compat` result may have
+passed through generic normalization before the provider profile. The original Spotify catalogue
+title remains stored as episode metadata; normalized/canonicalized strings are parse-only.
 
 ## Generic Unicode normalization
 
@@ -29,20 +33,20 @@ Generic recovery deliberately uses **NFC**, not NFKC. It may:
 
 It intentionally does **not** compatibility-fold full-width letters/digits, superscripts or other
 Unicode compatibility characters into product/date tokens. Provider date/time grammars also require
-ASCII digits (`0`-`9`) rather than Python's broader Unicode `\d` class. A visually similar product
-name or numeric token must not become valid merely because Unicode normalization or regex character
-classes can transform/accept it.
+ASCII digits (`0`-`9`) rather than Python's broader Unicode `\d` class. A visually similar
+product name or numeric token must not become valid merely because Unicode normalization or regex
+character classes can transform/accept it.
 
 Unreviewed compatibility characters stay fail-closed. For example, soft hyphen U+00AD, word joiner
 U+2060 and Unicode division/fraction slashes are not silently mapped into ordinary product/date
 syntax. They require separate provider evidence before becoming an allowed recovery family.
 
 Python's Unicode case-insensitive regex engine also treats a small set of non-ASCII letters as ASCII
-I/i/S/K equivalents (U+0130, U+0131, U+017F and U+212A). Recovery rejects those characters, including
-canonical decompositions that NFC would compose into one of them, before the historical strict regex
-runs. The guard is repeated after the complete reviewed normalization chain and the final candidate is
-NFC-composed again, so removing an allowed zero-width character cannot create a new confusable only
-after the first check.
+I/i/S/K equivalents (U+0130, U+0131, U+017F and U+212A). Recovery rejects those characters,
+including canonical decompositions that NFC would compose into one of them, before the historical
+strict regex runs. The guard is repeated after the complete reviewed normalization chain and the
+final candidate is NFC-composed again, so removing an allowed zero-width character cannot create a
+new confusable only after the first check.
 
 ## Provider compatibility profiles
 
@@ -64,8 +68,8 @@ Two-digit-year policy is intentionally provider-specific:
 
 These policies are covered explicitly rather than hidden behind one global pivot. RNE's historical
 compact time forms use HMM/HHMM semantics for every three- or four-digit token: the last two digits
-are always minutes. Leading zeros therefore do not change `0015` into `15:00`; it is
-equivalent to `00.15`.
+are always minutes. Leading zeros therefore do not change `0015` into `15:00`; it is equivalent
+to `00.15`.
 
 ## Bounded input
 
@@ -75,51 +79,45 @@ and known provider examples are short human-readable titles, while 1024 leaves a
 margin for harmless presentation changes. Boundary and oversized behavior are covered in CI, and all
 strict providers share the same pre-regex guard.
 
-## Runtime drift guard
+## Current Spotify-first runtime behavior
 
-Runtime mode counters use a single `parse_with_recovery()` attempt per unique eligible native
-identity. The denominator is the number of source-native items that actually reach title parsing,
-after required-field, collection-filter and publication-timestamp validation and after duplicate
-native identities are removed. The first occurrence of a native id that reaches this parsing boundary
-is authoritative for that collection cycle; later copies are counted as duplicates and cannot inflate
-attempted/rejected counts or change drift health. It is not the raw RSS item count.
+`fetch_source_catalogue()` reads episode metadata from official Spotify `show_episodes` pages. For
+each valid catalogue episode that passes any configured collection filter:
 
-The fail-closed material-drift guard currently applies only to the dedicated bulletin parsers
-`rne`, `ser` and `ondacero`:
+1. the provider title parser receives the Spotify episode `name`;
+2. a successful parse supplies semantic `edition_at` and records timestamp provenance as `title`;
+3. an unsuccessful parse **does not discard the Spotify episode** merely because the title format is
+   unknown;
+4. instead, `edition_at` remains absent, timestamp provenance becomes `first_seen`, and the
+   source's bounded `parser_fallback_count` is incremented;
+5. Spotify `release_date` plus its explicit precision remain stored so local retention/order logic
+   never invents minute precision from day/month/year-only provider metadata.
 
-- minimum parser sample: 3 titles;
-- healthy boundary: at least 50% accepted;
-- degradation: strictly below 50% accepted.
+This preserves the Spotify-first authority split: title parsing improves editorial ordering when it
+is trustworthy, while official Spotify episode identity and catalogue metadata remain authoritative
+for the episode itself.
 
-When that threshold is crossed after recovery, the fresh partial batch is discarded and the existing
-last-known-good engine behavior remains authoritative. Mixed-programme sources such as RFI are not
-subjected to this dedicated-feed threshold merely because non-target programmes are rejected.
+## Parser validation outside production
 
-## Provider watch
+The former RSS/HTML `provider_watch` module was retired with the old provider runtime and is not a
+supported current command. Historical documents may still describe it for provenance.
 
-Provider-watch evaluates the same recovery contract. Its title sample is capped at six and uses the
-same 50% acceptance boundary. Onda Cero's HTML fallback extracts complete semantic title units or
-bounded structural contexts, keeps nested formatting inside that unit, and passes the complete text
-through recovery. Nested inline/context fragments are not promoted independently when an enclosing
-context may add promo/special text. RSS title extraction likewise uses complete descendant text rather
-than only the first XML text node, keeping provider-watch aligned with runtime normalization.
-
-The fallback's lightweight Onda Cero prefilter uses the same safe syntax normalization so harmless
-Unicode whitespace does not prevent a valid complete title from reaching the parser. Provider-watch
-failure reports expose only bounded error classes/status codes; upstream exception strings, URLs and
-arbitrary provider payload text are not copied into incident reports.
+Current parser validation is deterministic in the parser/title-recovery test suite and through
+Spotify-first catalogue/source diagnostics. Do not restore a network provider watcher merely to
+preserve the old validation shape; any future live contract probe needs its own Spotify-first design
+and safety/request-budget review.
 
 ## Diagnostics and request budget
 
-Recovery and runtime drift detection add:
+Title parsing and recovery are local computation. They add:
 
-- **0 RSS requests**;
+- **0 public Spotify detector requests**;
 - **0 Spotify Web API requests**;
 - **0 OAuth requests**.
 
-Production diagnostics expose only bounded aggregate counts for exact, normalized,
-provider-compatible and rejected outcomes plus unresolved material drift. They do not add raw titles,
-native IDs, fingerprints, URLs or provider payloads.
+Production source diagnostics expose a bounded `parser_fallback_count` alongside catalogue/filter
+evidence. They do not add raw titles, episode IDs/URIs, URLs or provider payloads merely for parser
+debugging.
 
-This contract does not modify Spotify matching, #148 pre-write catalogue safety, retention,
-persistence barriers or Onda Cero duration disambiguation.
+This contract does not change detector identity, official catalogue authority, playlist retention,
+destination reconciliation/readback, pending-snapshot safety or the global Spotify 429 cooldown.

@@ -1,5 +1,12 @@
 # Spain / Latin America source separation and expansion
 
+> **Historical planning document.** This records the post-#130 expansion plan from the former
+> RSS/matching runtime. Its editorial market/locale discussion remains useful context, but its
+> technical intake checklist, provider-watch requirements and RSS-to-Spotify matching steps are
+> superseded by the Spotify-first promotion contract in [`SOURCE_CATALOG.md`](SOURCE_CATALOG.md)
+> and [`SOURCE_SELECTION.md`](SOURCE_SELECTION.md). Do not use those legacy technical steps for
+> current source implementation.
+
 This document stages the post-#130 source-catalog follow-up. It does **not** change runtime behavior by itself.
 
 PR #130 was squash-merged on 2026-09-05. This branch is based directly on the resulting `main` tree so the source-expansion work does not carry the PR's intermediate commit history.
