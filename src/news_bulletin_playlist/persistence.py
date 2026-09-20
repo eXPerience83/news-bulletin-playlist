@@ -462,25 +462,21 @@ class SQLiteStore:
             """
         )
 
-    def record_playlist_run(
+    def record_playlist_state(
         self,
         playlist_id: PlaylistId,
         *,
         started_at: datetime,
         finished_at: datetime,
         ok: bool,
-        desired_count: int,
-        applied_count: int,
         error: str | None = None,
     ) -> None:
-        """Upsert one playlist reconciliation outcome and latest state atomically."""
-        if desired_count < 0 or applied_count < 0:
-            raise ValueError("playlist counts must be non-negative")
-        started, finished = _run_timestamps(started_at, finished_at)
+        """Update only current playlist state; released run-history tables remain inert."""
+        _, finished = _run_timestamps(started_at, finished_at)
         success_at = finished if ok else None
         last_error = None if ok else error
 
-        with self._connection("record playlist run") as connection:
+        with self._connection("record playlist state") as connection:
             connection.execute(
                 """
                 INSERT INTO playlist_state (
