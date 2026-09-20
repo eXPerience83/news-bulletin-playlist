@@ -27,12 +27,9 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
     MutationOutcome,
-    PendingSnapshotCreation,
-    PendingSnapshotResolution,
     PlaylistReconciliationResult,
     SpotifyPlaylistClient,
     SpotifyReconciliationError,
-    UnavailableMediaPhase,
     reconcile_spotify_playlist,
 )
 from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
