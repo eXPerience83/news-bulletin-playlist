@@ -97,18 +97,15 @@ This preserves the Spotify-first authority split: title parsing improves editori
 is trustworthy, while official Spotify episode identity and catalogue metadata remain authoritative
 for the episode itself.
 
-## Provider-watch tooling
+## Parser validation outside production
 
-Provider-watch remains a supported **tooling/CI** path for checking known provider title contracts.
-It is not the production playlist ingestion path and it does not make RSS authoritative again.
+The former RSS/HTML `provider_watch` module was retired with the old provider runtime and is not a
+supported current command. Historical documents may still describe it for provenance.
 
-Where provider-watch uses provider RSS or HTML to obtain title samples, those requests exist only to
-detect parser/product drift before publication or during explicit investigation. The production
-engine still detects source changes from public Spotify state and refreshes due sources from the
-official Spotify Web API catalogue.
-
-Provider-watch failure reports expose only bounded error classes/status codes; upstream exception
-strings, URLs and arbitrary provider payload text are not copied into incident reports.
+Current parser validation is deterministic in the parser/title-recovery test suite and through
+Spotify-first catalogue/source diagnostics. Do not restore a network provider watcher merely to
+preserve the old validation shape; any future live contract probe needs its own Spotify-first design
+and safety/request-budget review.
 
 ## Diagnostics and request budget
 
