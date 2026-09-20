@@ -133,14 +133,14 @@ jobs:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: edge-image.tar.gz
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
   publish:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      actions: read
+      actions: write
       contents: read
       packages: write
 
@@ -274,3 +274,23 @@ jobs:
             echo "ERROR: immutable main SHA tag changed during edge promotion" >&2
             exit 1
           fi
+
+      - name: Delete transfer artifact after successful publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          artifact_id="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+              --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\") | .id"
+          )"
+          if [[ -z "$artifact_id" ]]; then
+            echo "ERROR: transfer artifact not found: $ARTIFACT_NAME" >&2
+            exit 1
+          fi
+          if [[ "$artifact_id" == *\n'* ]]; then
+            echo "ERROR: multiple transfer artifacts matched: $ARTIFACT_NAME" >&2
+            exit 1
+          fi
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
