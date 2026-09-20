@@ -55,7 +55,7 @@ from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorCycleSummary,
     PublicDetectorJournal,
-    PublicDetectorShadow,
+    PublicDetector,
     PublicDetectorState,
     spotify_show_id,
 )
@@ -218,7 +218,7 @@ class EngineRunner:
         config: EngineConfig,
         store: SQLiteStore,
         auth: SpotifyAuthProvider,
-        public_detector: PublicDetectorShadow,
+        public_detector: PublicDetector,
         detector_journal: PublicDetectorJournal,
         first_journal: SpotifyFirstJournal,
         *,
