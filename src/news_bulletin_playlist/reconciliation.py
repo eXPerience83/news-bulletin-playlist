@@ -411,7 +411,8 @@ def _reconcile_playlist_items(
                             or attestation_updated_at is None
                         ):
                             raise SpotifyReconciliationError(
-                                "Spotify playlist exact stale snapshot lacked durable pending storage"
+                                "Spotify playlist exact stale snapshot lacked durable "
+                                "pending storage"
                             )
                         pending_confirmation_after_write = PendingSnapshotConfirmation(
                             playlist_id=logical_playlist_id,
@@ -449,8 +450,8 @@ def _reconcile_playlist_items(
                             pass
                         elif stable_snapshot == current_snapshot:
                             raise SpotifyReconciliationError(
-                                "Spotify playlist snapshot did not match the known prewrite baseline "
-                                "during exact readback verification"
+                                "Spotify playlist snapshot did not match the known prewrite "
+                                "baseline during exact readback verification"
                             )
                         else:
                             raise SpotifyReconciliationError(
