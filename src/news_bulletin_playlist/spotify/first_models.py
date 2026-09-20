@@ -66,7 +66,7 @@ class SpotifyFirstEpisode:
 
 
 @dataclass(frozen=True, slots=True)
-class SourceShadowState:
+class SpotifyFirstSourceState:
     source_id: SourceId
     spotify_show_id: str
     last_refresh_at: datetime
