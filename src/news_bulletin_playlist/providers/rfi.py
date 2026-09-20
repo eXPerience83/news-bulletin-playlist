@@ -4,8 +4,8 @@ import re
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import ParsedEdition
+from news_bulletin_playlist.providers.base import RecoveringTitleParserBase
 from news_bulletin_playlist.providers.common import aware_datetime
-from news_bulletin_playlist.providers.title_recovery import TitleParseAttempt, parse_with_recovery
 
 UTC = ZoneInfo("UTC")
 
@@ -17,16 +17,10 @@ _PATTERN = re.compile(
 )
 
 
-class RfiJournalMondeParser:
+class RfiJournalMondeParser(RecoveringTitleParserBase):
     """Accept only RFI Journal Monde bulletin titles with an explicit GMT edition time."""
 
     provider_id = "rfi_journal_monde"
-
-    def parse(self, title: str) -> ParsedEdition | None:
-        return self.parse_with_recovery(title).parsed
-
-    def parse_with_recovery(self, title: str) -> TitleParseAttempt:
-        return parse_with_recovery(self.provider_id, title, self._parse_strict)
 
     def _parse_strict(self, title: str) -> ParsedEdition | None:
         match = _PATTERN.match(title.strip())
