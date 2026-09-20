@@ -12,7 +12,7 @@ from news_bulletin_playlist.models import PlaylistId, SourceId
 DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
 DEFAULT_RETENTION_DAYS = 30
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
 
 
 class PersistenceError(RuntimeError):
@@ -313,6 +313,43 @@ _MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
                     REFERENCES canonical_editions (source_id, source_native_id)
                     ON DELETE CASCADE
             )
+            """,
+        ),
+    ),,
+    (
+        8,
+        (
+            """
+            ALTER TABLE spotify_request_metrics
+            RENAME TO spotify_request_metrics_v7
+            """,
+            """
+            CREATE TABLE spotify_request_metrics (
+                bucket_at TEXT NOT NULL,
+                surface TEXT NOT NULL CHECK (surface IN ('public', 'web_api', 'oauth')),
+                operation TEXT NOT NULL,
+                outcome TEXT NOT NULL CHECK (
+                    outcome IN ('success', 'http_error', 'transport_error', 'response_error')
+                ),
+                http_status INTEGER NOT NULL DEFAULT -1,
+                quota_reason TEXT NOT NULL DEFAULT '',
+                request_count INTEGER NOT NULL CHECK (request_count > 0),
+                PRIMARY KEY (bucket_at, surface, operation, outcome, http_status, quota_reason)
+            )
+            """,
+            """
+            INSERT INTO spotify_request_metrics (
+                bucket_at, surface, operation, outcome, http_status, quota_reason, request_count
+            )
+            SELECT bucket_at, surface, operation, outcome, http_status, quota_reason, request_count
+            FROM spotify_request_metrics_v7
+            """,
+            """
+            DROP TABLE spotify_request_metrics_v7
+            """,
+            """
+            CREATE INDEX spotify_request_metrics_bucket_idx
+            ON spotify_request_metrics (bucket_at DESC)
             """,
         ),
     ),
