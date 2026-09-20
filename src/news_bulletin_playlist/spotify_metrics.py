@@ -171,6 +171,8 @@ class SpotifyRequestScope:
                     self._quota_exceeded += 1
             elif surface == "oauth":
                 self._oauth[SpotifyOAuthOperation(operation)] += 1
+                if http_status == 429:
+                    self._http_rate_limits += 1
             else:
                 raise ValueError("invalid Spotify request metric surface")
 
