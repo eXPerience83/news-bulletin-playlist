@@ -1,4 +1,4 @@
-"""Narrow, deterministic product filters applied before RSS normalization."""
+"""Narrow, deterministic product filters applied to official Spotify catalogue titles."""
 
 from __future__ import annotations
 
@@ -14,9 +14,10 @@ class CollectionFilter(Protocol):
 class UnNewsEsMinutesFilter:
     """Accept only dated ``La ONU en Minutos`` bulletin editions.
 
-    The United Nations Spanish audio RSS is a multi-product feed.  This filter
-    deliberately admits only its dated ONU-en-minutos product, leaving the
-    semantic edition time unset for the release-date/title matcher.
+    The United Nations Spanish Spotify show contains multiple audio products. This filter
+    deliberately admits only its dated ONU-en-minutos product. Semantic edition time remains
+    unset when the title parser cannot prove one; release-date/first-seen provenance then
+    supplies the bounded fallback metadata.
     """
 
     filter_id = "un_news_es_minutes"
