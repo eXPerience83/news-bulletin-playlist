@@ -31,6 +31,7 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicShowHttpError,
     PublicShowResponseError,
     PublicShowResponseFailureReason,
+    PublicShowTransportError,
     parse_public_show_embed,
     spotify_show_id,
 )
@@ -432,6 +433,32 @@ def test_public_http_failure_is_counted_with_bounded_status(tmp_path: Path) -> N
     )
     assert metric.request_count == 1
     assert metric.http_status == 503
+
+
+def test_public_transport_failure_is_counted_once(tmp_path: Path) -> None:
+    class _TransportFailure:
+        def get(self, url: str, *, accept: str) -> PublicHttpResponse:
+            del url, accept
+            raise PublicShowTransportError("offline")
+
+    store = _store(tmp_path)
+    metrics = SpotifyRequestMetrics(store.path, clock=lambda: NOW)
+    metrics.initialize()
+    client = PublicShowClient(_TransportFailure(), metrics=metrics)
+
+    with pytest.raises(PublicShowTransportError):
+        client.observe_episode(SourceId("source"), SHOW_ID, observed_at=NOW)
+
+    matching = [
+        metric
+        for metric in metrics.last_24_hours(now=NOW).metrics
+        if metric.surface == "public"
+        and metric.operation == SpotifyPublicOperation.EMBED_SHOW
+        and metric.outcome is SpotifyRequestOutcome.TRANSPORT_ERROR
+    ]
+    assert len(matching) == 1
+    assert matching[0].request_count == 1
+    assert matching[0].http_status is None
 
 
 def test_public_response_validation_failure_is_counted_once(tmp_path: Path) -> None:
