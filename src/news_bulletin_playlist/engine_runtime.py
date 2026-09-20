@@ -141,10 +141,10 @@ class _LockedAuthProvider:
         with self.synchronization.hold():
             return self.service.get_access_token(now=now)
 
-    def planner_authorization_context(self) -> str | None:
+    def authorization_context(self) -> str | None:
         """Read non-secret grant provenance under the production auth lock."""
         with self.synchronization.hold():
-            return self.service.planner_authorization_context()
+            return self.service.authorization_context()
 
     def acquire_provider_session(
         self, *, now: datetime | None = None
@@ -152,7 +152,7 @@ class _LockedAuthProvider:
         """Bind a token to its non-secret authorization generation under one auth lock."""
         with self.synchronization.hold():
             token = self.service.get_access_token(now=now)
-            context = self.service.planner_authorization_context()
+            context = self.service.authorization_context()
             if context is None:
                 raise SpotifyAuthError("Spotify authorization context is unavailable")
             return ProviderAuthorizationSession(token, context)
