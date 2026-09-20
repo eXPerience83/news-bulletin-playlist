@@ -18,7 +18,7 @@ from news_bulletin_playlist.models import (
     SourceId,
     SourceSelection,
 )
-from news_bulletin_playlist.spotify.first_models import RefreshReason, SourceShadowState
+from news_bulletin_playlist.spotify.first_models import RefreshReason, SpotifyFirstSourceState
 from news_bulletin_playlist.spotify.public_detector import (
     DETECTOR_SCHEMA_VERSION,
     PublicDetectorCycleSummary,
@@ -60,8 +60,8 @@ def _playlist() -> PlaylistDefinition:
     )
 
 
-def _local_state() -> SourceShadowState:
-    return SourceShadowState(
+def _local_state() -> SpotifyFirstSourceState:
+    return SpotifyFirstSourceState(
         source_id=SOURCE_ID,
         spotify_show_id=SHOW_ID,
         last_refresh_at=NOW,
@@ -96,7 +96,7 @@ def _public_state(*, failures: int) -> PublicDetectorState:
 
 
 class _FirstJournal:
-    def get_source_state(self, source_id: SourceId) -> SourceShadowState | None:
+    def get_source_state(self, source_id: SourceId) -> SpotifyFirstSourceState | None:
         assert source_id == SOURCE_ID
         return _local_state()
 
