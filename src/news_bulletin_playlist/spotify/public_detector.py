@@ -1,4 +1,4 @@
-"""Unauthenticated Spotify public-show change detection for shadow-mode evaluation."""
+"""Unauthenticated Spotify public-show change detection for the authoritative runtime."""
 
 from __future__ import annotations
 
@@ -782,8 +782,8 @@ class PublicDetectorJournal:
         return _ConnectionContext(connection, operation, str(self.path))
 
 
-class PublicDetectorShadow:
-    """Observe public Spotify state without changing authoritative engine behavior."""
+class PublicDetector:
+    """Observe public Spotify state as the authoritative Spotify-first change detector."""
 
     def __init__(
         self,
