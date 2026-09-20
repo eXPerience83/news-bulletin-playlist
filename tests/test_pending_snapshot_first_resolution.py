@@ -18,7 +18,10 @@ from news_bulletin_playlist.models import (
     SourceSelection,
 )
 from news_bulletin_playlist.persistence import SQLiteStore
-from news_bulletin_playlist.reconciliation import reconcile_spotify_playlist
+from news_bulletin_playlist.reconciliation import (
+    PendingSnapshotResolution,
+    reconcile_spotify_playlist,
+)
 from news_bulletin_playlist.snapshot_pending import (
     PendingSnapshotConfirmation,
     PendingSnapshotJournal,
@@ -128,6 +131,7 @@ def test_exact_pending_expected_snapshot_uses_one_snapshot_and_zero_item_reads(
     result = reconcile_spotify_playlist(client, _playlist(), desired, store=store)
 
     assert result.wrote is False and result.remote_evidence_qualified is True
+    assert result.pending_snapshot_resolution is PendingSnapshotResolution.CONFIRMED
     assert (client.snapshot_calls, client.item_calls, client.writes) == (1, 0, 0)
     assert PendingSnapshotJournal(store).get(PLAYLIST_ID) is None
     attestation = store.get_playlist_attestation(PLAYLIST_ID)
@@ -147,6 +151,7 @@ def test_exact_pending_baseline_snapshot_keeps_divergence_read(
 
     assert result.wrote is False and result.degraded_verification is True
     assert result.remote_evidence_qualified is False
+    assert result.pending_snapshot_resolution is PendingSnapshotResolution.STILL_BASELINE
     assert (client.snapshot_calls, client.item_calls, client.writes) == (1, 1, 0)
     assert PendingSnapshotJournal(store).get(PLAYLIST_ID) is not None
     assert store.get_playlist_attestation(PLAYLIST_ID) is None
@@ -163,6 +168,7 @@ def test_exact_pending_third_snapshot_keeps_two_content_observations(
     result = reconcile_spotify_playlist(client, _playlist(), desired, store=store)
 
     assert result.wrote is False and result.remote_evidence_qualified is True
+    assert result.pending_snapshot_resolution is PendingSnapshotResolution.UNEXPECTED_SNAPSHOT
     assert (client.snapshot_calls, client.item_calls, client.writes) == (2, 2, 0)
     attestation = store.get_playlist_attestation(PLAYLIST_ID)
     assert attestation is not None
