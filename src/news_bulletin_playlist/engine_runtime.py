@@ -78,6 +78,7 @@ from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorJournal,
     PublicDetectorShadow,
+    PublicShowClient,
 )
 from news_bulletin_playlist.spotify_backoff import (
     ProviderAuthorizationSession,
@@ -1053,6 +1054,7 @@ def serve(
         public_detector = PublicDetectorShadow(
             detector_journal,
             diagnostics,
+            client=PublicShowClient(metrics=request_metrics),
         )
         base_runner = ReloadingEngineCycleRunner(
             data_dir,
