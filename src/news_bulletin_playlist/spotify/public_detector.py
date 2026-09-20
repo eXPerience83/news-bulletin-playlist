@@ -244,6 +244,7 @@ class PublicDetectorState:
             for value in (
                 self.last_degraded_audit_at,
                 self.last_catalogue_refresh_at,
+                self.last_detector_success_at,
                 fallback_anchor,
             )
             if value is not None
@@ -1075,6 +1076,37 @@ class PublicDetector:
             changed_source_ids=tuple(changed_source_ids),
             degraded_change_source_ids=tuple(degraded_change_source_ids),
         )
+
+    def mark_degraded_audit_attempt(
+        self,
+        source_id: SourceId,
+        show_id: str,
+        *,
+        attempted_at: datetime,
+    ) -> bool:
+        try:
+            marked = self.journal.mark_degraded_audit_attempt(
+                source_id,
+                show_id,
+                attempted_at=attempted_at,
+            )
+        except PersistenceError:
+            self._emit_failure(
+                source_id,
+                "persistence_failure",
+                observed_at=attempted_at,
+            )
+            return False
+        if marked:
+            self.diagnostics.emit(
+                occurred_at=attempted_at,
+                severity=DiagnosticSeverity.INFO,
+                component="spotify.public_detector",
+                event_name="public_detector_degraded_audit_scheduled",
+                source_id=str(source_id),
+                details={"detector_outcome": "degraded_audit"},
+            )
+        return marked
 
     def _record_failure(
         self,
