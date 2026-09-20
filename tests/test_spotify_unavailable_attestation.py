@@ -22,6 +22,7 @@ from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
     reconcile_spotify_playlist,
 )
+from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
 NOW = datetime(2026, 9, 1, 20, 0, tzinfo=UTC)
@@ -178,7 +179,7 @@ def _apply(
     )
 
 
-def test_exact_readback_confirms_write_snapshot_for_single_page(tmp_path: Path) -> None:
+def test_exact_single_page_write_defers_snapshot_confirmation(tmp_path: Path) -> None:
     store = _store(tmp_path)
     client = _AttestedSpotify(["spotify:episode:old"])
 
@@ -186,13 +187,18 @@ def test_exact_readback_confirms_write_snapshot_for_single_page(tmp_path: Path) 
 
     assert result.ok
     assert result.wrote is True
-    assert result.degraded_verification is False
-    assert result.warning is None
-    assert client.snapshot_reads == 2
+    assert result.degraded_verification is True
+    assert result.remote_evidence_qualified is False
+    assert result.warning == (
+        "Spotify verification degraded: snapshot propagation pending after exact readback"
+    )
+    assert client.snapshot_reads == 1
     assert client.writes == [["spotify:episode:new"]]
-    attestation = store.get_playlist_attestation(PLAYLIST_ID)
-    assert attestation is not None
-    assert attestation.snapshot_id == "snapshot-write-1"
+    assert store.get_playlist_attestation(PLAYLIST_ID) is None
+    pending = PendingSnapshotJournal(store).get(PLAYLIST_ID)
+    assert pending is not None
+    assert pending.baseline_snapshot_id == "snapshot-initial"
+    assert pending.expected_snapshot_id == "snapshot-write-1"
 
 
 def test_ambiguous_write_exact_readback_stays_verified_when_attestation_read_fails(
