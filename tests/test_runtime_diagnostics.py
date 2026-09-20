@@ -230,6 +230,10 @@ def test_degraded_playlist_verification_is_warning_without_raw_text(tmp_path: Pa
                 wrote=True,
                 last_success_at=NOW,
                 error=f"snapshot propagation pending {sentinel}",
+                pending_snapshot_created="exact",
+                pending_snapshot_resolution="still_baseline",
+                unavailable_media_count=1,
+                unavailable_media_phase="pending_confirmation",
             ),
         ),
     )
@@ -250,7 +254,11 @@ def test_degraded_playlist_verification_is_warning_without_raw_text(tmp_path: Pa
         "desired_count": 82,
         "duration_unavailable_count": 0,
         "local_skip": False,
+        "pending_snapshot_created": "exact",
+        "pending_snapshot_resolution": "still_baseline",
         "stale_escalation": False,
+        "unavailable_media_count": 1,
+        "unavailable_media_phase": "pending_confirmation",
         "verification_outcome": "degraded",
         "write_decision": "applied",
     }
