@@ -76,8 +76,8 @@ from news_bulletin_playlist.spotify.client import (
 )
 from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import (
+    PublicDetector,
     PublicDetectorJournal,
-    PublicDetectorShadow,
     PublicShowClient,
 )
 from news_bulletin_playlist.spotify_backoff import (
@@ -340,7 +340,7 @@ class ReloadingEngineCycleRunner:
         environ: Mapping[str, str],
         store: SQLiteStore,
         auth: SpotifyAuthProvider,
-        public_detector: PublicDetectorShadow,
+        public_detector: PublicDetector,
         detector_journal: PublicDetectorJournal,
         first_journal: SpotifyFirstJournal,
         configuration_synchronization: ConfigurationSynchronization | None = None,
@@ -1051,7 +1051,7 @@ def serve(
         except PersistenceError as exc:
             raise RuntimeError("Spotify-first runtime state could not be initialized") from exc
 
-        public_detector = PublicDetectorShadow(
+        public_detector = PublicDetector(
             detector_journal,
             diagnostics,
             client=PublicShowClient(metrics=request_metrics),

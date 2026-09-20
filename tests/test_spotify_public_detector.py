@@ -21,9 +21,9 @@ from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.public_detector import (
     DETECTOR_SCHEMA_VERSION,
+    PublicDetector,
     PublicDetectorJournal,
     PublicDetectorOutcome,
-    PublicDetectorShadow,
     PublicEpisodeObservation,
     PublicHttpResponse,
     PublicShowClient,
@@ -350,7 +350,7 @@ def test_public_metrics_count_unchanged_embed_without_oembed(tmp_path: Path) -> 
             )
         }
     )
-    detector = PublicDetectorShadow(
+    detector = PublicDetector(
         journal,
         diagnostics,
         client=PublicShowClient(transport, metrics=metrics),
@@ -393,7 +393,7 @@ def test_public_metrics_count_embed_and_oembed_on_identity_change(tmp_path: Path
             ),
         }
     )
-    detector = PublicDetectorShadow(
+    detector = PublicDetector(
         journal,
         diagnostics,
         client=PublicShowClient(transport, metrics=metrics),
@@ -637,7 +637,7 @@ def test_inactivity_audit_uses_change_or_catalogue_refresh_not_unchanged_poll(
     )
 
 
-def test_shadow_logs_change_only_on_identity_transition_and_oembed_on_change(
+def test_public_detector_logs_change_only_on_identity_transition_and_oembed_on_change(
     tmp_path: Path,
 ) -> None:
     store = _store(tmp_path)
@@ -659,12 +659,12 @@ def test_shadow_logs_change_only_on_identity_transition_and_oembed_on_change(
         ],
         oembed_titles=["Bulletin", "Bulletin 13:00"],
     )
-    shadow = PublicDetectorShadow(journal, diagnostics, client=client)  # type: ignore[arg-type]
+    detector = PublicDetector(journal, diagnostics, client=client)  # type: ignore[arg-type]
     source = _source()
 
-    first = shadow.observe_sources((source,), observed_at=NOW)
-    second = shadow.observe_sources((source,), observed_at=NOW + timedelta(minutes=1))
-    third = shadow.observe_sources((source,), observed_at=NOW + timedelta(minutes=2))
+    first = detector.observe_sources((source,), observed_at=NOW)
+    second = detector.observe_sources((source,), observed_at=NOW + timedelta(minutes=1))
+    third = detector.observe_sources((source,), observed_at=NOW + timedelta(minutes=2))
 
     assert (first.changed_count, first.unchanged_count, first.failure_count) == (1, 0, 0)
     assert first.changed_source_ids == (SourceId("source"),)
@@ -688,7 +688,7 @@ def test_shadow_logs_change_only_on_identity_transition_and_oembed_on_change(
     assert latest.details["oembed_matches"] is True
 
 
-def test_shadow_response_failure_emits_bounded_reason(tmp_path: Path) -> None:
+def test_public_detector_response_failure_emits_bounded_reason(tmp_path: Path) -> None:
     store = _store(tmp_path)
     diagnostics, diagnostic_store = _diagnostics(store)
     journal = PublicDetectorJournal(store)
@@ -702,9 +702,9 @@ def test_shadow_response_failure_emits_bounded_reason(tmp_path: Path) -> None:
             )
         ]
     )
-    shadow = PublicDetectorShadow(journal, diagnostics, client=client)  # type: ignore[arg-type]
+    detector = PublicDetector(journal, diagnostics, client=client)  # type: ignore[arg-type]
 
-    summary = shadow.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+    summary = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
 
     assert summary.failure_count == 1
     event = next(
@@ -719,16 +719,18 @@ def test_shadow_response_failure_emits_bounded_reason(tmp_path: Path) -> None:
     }
 
 
-def test_shadow_failure_preserves_identity_and_emits_bounded_diagnostic(tmp_path: Path) -> None:
+def test_public_detector_failure_preserves_identity_and_emits_bounded_diagnostic(
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
     diagnostics, diagnostic_store = _diagnostics(store)
     journal = PublicDetectorJournal(store)
     journal.initialize()
     journal.record_success(_observation(EPISODE_A))
     client = _SequenceClient([PublicShowHttpError(503)])
-    shadow = PublicDetectorShadow(journal, diagnostics, client=client)  # type: ignore[arg-type]
+    detector = PublicDetector(journal, diagnostics, client=client)  # type: ignore[arg-type]
 
-    summary = shadow.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+    summary = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
 
     assert summary.failure_count == 1
     state = journal.get(SourceId("source"), SHOW_ID)
