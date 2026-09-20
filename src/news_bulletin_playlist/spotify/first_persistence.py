@@ -414,7 +414,9 @@ class SpotifyFirstJournal:
         except ValueError as exc:
             raise ValueError("desired fingerprint must be a SHA-256 hex digest") from exc
 
-        with self._connection("persist degraded Spotify-first destination verification") as connection:
+        with self._connection(
+            "persist degraded Spotify-first destination verification"
+        ) as connection:
             self._ensure_tables(connection)
             connection.execute(
                 """
@@ -436,7 +438,9 @@ class SpotifyFirstJournal:
             )
 
     def clear_degraded_destination_verification(self, playlist_id: PlaylistId) -> None:
-        with self._connection("clear degraded Spotify-first destination verification") as connection:
+        with self._connection(
+            "clear degraded Spotify-first destination verification"
+        ) as connection:
             self._ensure_tables(connection)
             connection.execute(
                 "DELETE FROM spotify_first_destination_degraded_state WHERE playlist_id = ?",
