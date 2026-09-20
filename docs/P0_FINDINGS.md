@@ -1,5 +1,12 @@
 # P0 source and Spotify probe findings
 
+> **Historical research snapshot.** This file records P0 evidence and design candidates from the
+> pre-Spotify-first architecture. Provider URLs and matching-policy sections below are retained for
+> provenance; they are not the current runtime contract. Since #260, runtime source authority is the
+> official Spotify show catalogue, Spotify episode ID/URI is identity, and there is no RSS-to-Spotify
+> matching lifecycle. See [`ARCHITECTURE.md`](ARCHITECTURE.md) and
+> [`SOURCE_CATALOG.md`](SOURCE_CATALOG.md) for current behavior/research status.
+
 Status: public-source research complete as of 2026-08-27. Authenticated Spotify API probing is still required for the remaining Spotify-side questions.
 
 ## Product invariants
@@ -87,7 +94,10 @@ The relevant API endpoints and scopes still need to be verified with the authent
 - Apple Podcasts, iVoox and COPE distribution are confirmed.
 - A current direct Spotify show/episode URL has not been verified publicly. Authenticated Spotify search is required before the provider can be enabled.
 
-## Matching policy candidate
+## Historical matching policy candidate
+
+The following was the pre-cutover candidate and is retained only to explain earlier P0 decisions. It
+is **not executed by the current runtime**.
 
 1. Parse each provider title into canonical `edition_at`.
 2. Use source `pubDate` as `published_at`.
