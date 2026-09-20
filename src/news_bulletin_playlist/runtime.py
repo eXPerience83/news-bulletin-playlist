@@ -1,4 +1,4 @@
-"""Minimal long-lived runtime host for container deployments."""
+"""Shared runtime HTTP/auth helpers and container healthcheck support."""
 
 from __future__ import annotations
 
@@ -10,19 +10,16 @@ import ipaddress
 import json
 import os
 import secrets
-import signal
 import stat
 import tempfile
-import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from types import FrameType
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.persistence import DEFAULT_DB_FILENAME, SQLiteStore
@@ -561,54 +558,6 @@ class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         """Suppress request logging, including OAuth callback query parameters."""
         return
-
-
-def serve(
-    *,
-    host: str = DEFAULT_HEALTH_HOST,
-    port: int = DEFAULT_HEALTH_PORT,
-    data_dir: Path = DEFAULT_DATA_DIR,
-    stop_event: threading.Event | None = None,
-) -> int:
-    """Run the durable container host until SIGTERM/SIGINT requests shutdown."""
-    database_path = initialize_runtime_storage(data_dir)
-    admin_security, spotify_auth = build_runtime_auth(data_dir)
-    HealthHandler.data_dir = data_dir
-    HealthHandler.admin_security = admin_security
-    HealthHandler.spotify_auth = spotify_auth
-    server = HTTPServer((host, port), HealthHandler)
-    server.timeout = 0.5
-    stopped = stop_event if stop_event is not None else threading.Event()
-
-    def request_stop(signum: int, frame: FrameType | None) -> None:
-        del signum, frame
-        stopped.set()
-
-    handlers_installed = (
-        stop_event is None and threading.current_thread() is threading.main_thread()
-    )
-    previous_sigterm = signal.getsignal(signal.SIGTERM)
-    previous_sigint = signal.getsignal(signal.SIGINT)
-    if handlers_installed:
-        signal.signal(signal.SIGTERM, request_stop)
-        signal.signal(signal.SIGINT, request_stop)
-
-    auth_status = "enabled" if spotify_auth is not None else "disabled"
-    print(
-        f"news-bulletin-playlist runtime ready; web=http://{host}:{server.server_port}/ "
-        f"health=http://127.0.0.1:{server.server_port}/healthz data={data_dir} "
-        f"db={database_path} spotify_auth={auth_status}",
-        flush=True,
-    )
-    try:
-        while not stopped.is_set():
-            server.handle_request()
-    finally:
-        server.server_close()
-        if handlers_installed:
-            signal.signal(signal.SIGTERM, previous_sigterm)
-            signal.signal(signal.SIGINT, previous_sigint)
-    return 0
 
 
 def healthcheck(*, url: str = DEFAULT_HEALTH_URL, timeout: float = 2.0) -> int:
