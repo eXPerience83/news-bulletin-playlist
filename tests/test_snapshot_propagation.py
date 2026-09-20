@@ -217,7 +217,7 @@ def test_missing_baseline_unexpected_snapshot_fails_closed(tmp_path: Path) -> No
     store = _store(tmp_path)
     client = _MissingBaselineSpotify(["snapshot-c", "snapshot-c"])
 
-    with pytest.raises(SpotifyReconciliationError, match="known prewrite baseline"):
+    with pytest.raises(SpotifyReconciliationError, match="remained unexpected"):
         reconcile_spotify_playlist(client, playlist, desired, store=store)
 
     assert client.writes == 1
