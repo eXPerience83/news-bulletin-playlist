@@ -34,12 +34,8 @@ def test_released_legacy_run_tables_remain_present_but_inert(tmp_path: Path) -> 
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        playlist_run_count = connection.execute(
-            "SELECT COUNT(*) FROM playlist_runs"
-        ).fetchone()[0]
-        source_run_count = connection.execute(
-            "SELECT COUNT(*) FROM source_runs"
-        ).fetchone()[0]
+        playlist_run_count = connection.execute("SELECT COUNT(*) FROM playlist_runs").fetchone()[0]
+        source_run_count = connection.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0]
 
     assert {
         "source_runs",
