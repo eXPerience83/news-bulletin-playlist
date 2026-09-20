@@ -331,7 +331,6 @@ def test_public_show_client_reads_embed_and_oembed_without_auth_headers() -> Non
     assert show_url in oembed_url.replace("%3A", ":").replace("%2F", "/")
 
 
-
 def test_public_metrics_count_unchanged_embed_without_oembed(tmp_path: Path) -> None:
     store = _store(tmp_path)
     diagnostics, _ = _diagnostics(store)
