@@ -1,4 +1,4 @@
-"""Spotify URI validation shared by catalog matching and playlist writes."""
+"""Spotify URI validation shared by catalogue ingestion and playlist writes."""
 
 from __future__ import annotations
 
