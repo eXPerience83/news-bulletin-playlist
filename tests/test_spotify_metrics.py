@@ -167,6 +167,35 @@ def test_schema_v7_metrics_upgrade_preserves_rows_and_marks_public_coverage_gap(
     )
 
 
+def test_schema_v3_upgrade_marks_request_metrics_coverage_incomplete(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-pre-metrics.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+        INSERT INTO schema_migrations(version, applied_at)
+        VALUES
+            (1, '2026-08-01T00:00:00+00:00'),
+            (2, '2026-08-02T00:00:00+00:00'),
+            (3, '2026-08-03T00:00:00+00:00');
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    metrics = SpotifyRequestMetrics(path)
+    metrics.initialize()
+
+    snapshot = metrics.last_24_hours(now=datetime.now(UTC))
+    assert SQLiteStore(path).schema_version() == 8
+    assert snapshot.coverage_complete is False
+    assert snapshot.public_requests == 0
+    assert snapshot.web_api_requests == 0
+    assert snapshot.oauth_requests == 0
+
+
 def test_web_api_counts_only_real_http_attempts_and_keeps_operations_distinct(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
