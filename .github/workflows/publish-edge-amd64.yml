@@ -12,7 +12,6 @@ on:
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/publish-edge-amd64.yml"
-      - ".github/workflows/container.yml"
   workflow_dispatch:
 
 permissions:
