@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 
 from news_bulletin_playlist.diagnostics import (
@@ -17,6 +19,7 @@ from news_bulletin_playlist.persistence import PersistenceError
 
 _LOGGER_NAME = "news_bulletin_playlist"
 _HANDLER_MARKER = "_news_bulletin_operational_handler"
+_CURRENT_CYCLE_ID: ContextVar[str | None] = ContextVar("diagnostic_cycle_id", default=None)
 
 
 def _utc_converter(timestamp: float | None) -> time.struct_time:
@@ -51,6 +54,16 @@ def cycle_id_for(value: datetime) -> str:
     return f"cycle-{observed.strftime('%Y%m%dT%H%M%S%fZ')}"
 
 
+@contextmanager
+def diagnostic_cycle(cycle_id: str) -> Iterator[None]:
+    """Correlate nested operational events with one engine cycle."""
+    token = _CURRENT_CYCLE_ID.set(cycle_id)
+    try:
+        yield
+    finally:
+        _CURRENT_CYCLE_ID.reset(token)
+
+
 class OperationalDiagnostics:
     """Emit one sanitized operational event to stdout and, when available, SQLite."""
 
@@ -82,6 +95,7 @@ class OperationalDiagnostics:
         propagating arbitrary exception text.
         """
         normalized_details = dict(details or {})
+        effective_cycle_id = cycle_id if cycle_id is not None else _CURRENT_CYCLE_ID.get()
         if self.store is not None:
             try:
                 self.store.record(
@@ -89,7 +103,7 @@ class OperationalDiagnostics:
                     severity=severity,
                     component=component,
                     event_name=event_name,
-                    cycle_id=cycle_id,
+                    cycle_id=effective_cycle_id,
                     source_id=source_id,
                     playlist_id=playlist_id,
                     details=normalized_details,
@@ -102,8 +116,8 @@ class OperationalDiagnostics:
             f"event={event_name}",
             f"component={component}",
         ]
-        if cycle_id is not None:
-            fields.append(f"cycle={cycle_id}")
+        if effective_cycle_id is not None:
+            fields.append(f"cycle={effective_cycle_id}")
         if source_id is not None:
             fields.append(f"source={source_id}")
         if playlist_id is not None:
