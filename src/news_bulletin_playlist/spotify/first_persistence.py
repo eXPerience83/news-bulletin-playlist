@@ -12,8 +12,8 @@ from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.spotify.first_models import (
     RefreshReason,
-    SpotifyFirstSourceState,
     SpotifyFirstEpisode,
+    SpotifyFirstSourceState,
     TimestampSource,
     UpsertCounts,
     as_utc,
