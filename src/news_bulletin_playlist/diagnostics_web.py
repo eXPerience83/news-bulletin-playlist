@@ -291,7 +291,9 @@ def _spotify_metrics_document(
     if snapshot is None:
         return None
     counts = {
+        "public_requests": snapshot.public_requests,
         "web_api_requests": snapshot.web_api_requests,
+        "oauth_requests": snapshot.oauth_requests,
         "oauth_refreshes": snapshot.oauth_refreshes,
         "http_429s": snapshot.http_rate_limits,
         "quota_exceeded": snapshot.quota_exceeded,
@@ -336,8 +338,11 @@ def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> 
         or '<tr><td colspan="6">No recorded Spotify HTTP attempts in this window.</td></tr>'
     )
     summary = (
-        f"Coverage: complete. Web API requests: {snapshot.web_api_requests}. "
-        f"OAuth refreshes: {snapshot.oauth_refreshes}. HTTP 429s: {snapshot.http_rate_limits}. "
+        "Coverage: complete. "
+        f"Public Spotify requests (no OAuth): {snapshot.public_requests}. "
+        f"Spotify Web API requests (authenticated): {snapshot.web_api_requests}. "
+        f"OAuth token requests: {snapshot.oauth_requests}. "
+        f"HTTP 429s: {snapshot.http_rate_limits}. "
         f"QUOTA_EXCEEDED: {snapshot.quota_exceeded}."
         if snapshot.coverage_complete
         else (
