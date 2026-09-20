@@ -905,6 +905,7 @@ class PublicDetector:
         failure_count = 0
         observed_count = 0
         changed_source_ids: list[SourceId] = []
+        degraded_change_source_ids: list[SourceId] = []
 
         for source in sources:
             if not source.enabled:
@@ -922,6 +923,12 @@ class PublicDetector:
 
             try:
                 previous = self.journal.get(source.id, show_id)
+            except PersistenceError:
+                failure_count += 1
+                self._emit_failure(source.id, "persistence_failure", observed_at=observed)
+                continue
+
+            try:
                 observation = self.client.observe_episode(
                     source.id,
                     show_id,
@@ -933,6 +940,7 @@ class PublicDetector:
                     source.id,
                     show_id,
                     observed,
+                    previous=previous,
                     outcome="http_failure",
                     http_status=exc.status,
                 )
@@ -943,22 +951,23 @@ class PublicDetector:
                     source.id,
                     show_id,
                     observed,
+                    previous=previous,
                     outcome="transport_failure",
                 )
                 continue
             except PublicShowResponseError as exc:
                 failure_count += 1
-                self._record_failure(
+                degraded_changed = self._record_failure(
                     source.id,
                     show_id,
                     observed,
+                    previous=previous,
                     outcome="response_failure",
                     response_reason=exc.reason,
+                    try_oembed_fallback=True,
                 )
-                continue
-            except PersistenceError:
-                failure_count += 1
-                self._emit_failure(source.id, "persistence_failure", observed_at=observed)
+                if degraded_changed:
+                    degraded_change_source_ids.append(source.id)
                 continue
 
             candidate_changed = (
@@ -994,6 +1003,24 @@ class PublicDetector:
 
             observed_count += 1
             recovered_failures = 0 if previous is None else previous.consecutive_detector_failures
+            if (
+                _release_date_shape_is_unsupported(observation.release_date_shape)
+                and (
+                    previous is None
+                    or previous.last_public_release_date_shape is not observation.release_date_shape
+                )
+            ):
+                self.diagnostics.emit(
+                    occurred_at=observed,
+                    severity=DiagnosticSeverity.WARNING,
+                    component="spotify.public_detector",
+                    event_name="public_detector_metadata_drift",
+                    source_id=str(source.id),
+                    details={
+                        "detector_outcome": "metadata_drift",
+                        "public_release_date_shape": observation.release_date_shape.value,
+                    },
+                )
             if update.outcome in {PublicDetectorOutcome.BOOTSTRAP, PublicDetectorOutcome.CHANGED}:
                 changed_count += 1
                 changed_source_ids.append(source.id)
@@ -1037,6 +1064,7 @@ class PublicDetector:
                 "detector_changed_count": changed_count,
                 "detector_unchanged_count": unchanged_count,
                 "detector_failure_count": failure_count,
+                "detector_degraded_change_count": len(degraded_change_source_ids),
             },
         )
         return PublicDetectorCycleSummary(
@@ -1045,6 +1073,7 @@ class PublicDetector:
             unchanged_count=unchanged_count,
             failure_count=failure_count,
             changed_source_ids=tuple(changed_source_ids),
+            degraded_change_source_ids=tuple(degraded_change_source_ids),
         )
 
     def _record_failure(
@@ -1053,19 +1082,57 @@ class PublicDetector:
         show_id: str,
         observed_at: datetime,
         *,
+        previous: PublicDetectorState | None,
         outcome: str,
         http_status: int | None = None,
         response_reason: PublicShowResponseFailureReason | None = None,
-    ) -> None:
+        try_oembed_fallback: bool = False,
+    ) -> bool:
+        oembed_title: str | None = None
+        fallback_outcome: str | None = None
+        degraded_changed = False
+        if try_oembed_fallback:
+            try:
+                oembed_title = self.client.oembed_title(show_id)
+            except PublicShowResponseError as exc:
+                fallback_outcome = "oembed_failed"
+                self._emit_failure(
+                    source_id,
+                    "oembed_failure",
+                    observed_at=observed_at,
+                    response_reason=exc.reason,
+                )
+            except PublicShowDetectorError:
+                fallback_outcome = "oembed_failed"
+                self._emit_failure(
+                    source_id,
+                    "oembed_failure",
+                    observed_at=observed_at,
+                )
+            else:
+                baseline = (
+                    None
+                    if previous is None
+                    else previous.last_oembed_title or previous.last_episode_title
+                )
+                if baseline is None:
+                    fallback_outcome = "title_baseline"
+                elif oembed_title != baseline:
+                    fallback_outcome = "title_changed"
+                    degraded_changed = True
+                else:
+                    fallback_outcome = "title_unchanged"
+
         try:
             state = self.journal.record_failure(
                 source_id,
                 show_id,
                 failed_at=observed_at,
+                oembed_title=oembed_title,
             )
         except PersistenceError:
             self._emit_failure(source_id, "persistence_failure", observed_at=observed_at)
-            return
+            return False
         details: dict[str, DiagnosticValue] = {
             "detector_outcome": outcome,
             "consecutive_failure_count": state.consecutive_detector_failures,
@@ -1074,6 +1141,8 @@ class PublicDetector:
             details["http_status"] = http_status
         if response_reason is not None:
             details["detector_response_reason"] = response_reason.value
+        if fallback_outcome is not None:
+            details["detector_fallback_outcome"] = fallback_outcome
         self.diagnostics.emit(
             occurred_at=observed_at,
             severity=DiagnosticSeverity.WARNING,
@@ -1082,6 +1151,7 @@ class PublicDetector:
             source_id=str(source_id),
             details=details,
         )
+        return degraded_changed
 
     def _emit_failure(
         self,
@@ -1129,6 +1199,7 @@ class PublicDetector:
             "spotify_oembed_title": oembed_title,
             "oembed_matches": oembed_matches,
             "public_release_date": observation.release_date_raw,
+            "public_release_date_shape": observation.release_date_shape.value,
             "detector_schema_version": observation.detector_schema_version,
         }
         self.diagnostics.emit(
@@ -1141,6 +1212,16 @@ class PublicDetector:
             source_id=str(observation.source_id),
             details=details,
         )
+
+
+def _release_date_shape_is_unsupported(shape: PublicReleaseDateShape) -> bool:
+    return shape in {
+        PublicReleaseDateShape.UNSUPPORTED_STRING,
+        PublicReleaseDateShape.UNSUPPORTED_OBJECT,
+        PublicReleaseDateShape.UNSUPPORTED_ARRAY,
+        PublicReleaseDateShape.UNSUPPORTED_NUMBER,
+        PublicReleaseDateShape.UNSUPPORTED_BOOLEAN,
+    }
 
 
 def _object_path(root: object, path: tuple[str, ...]) -> dict[str, object]:
