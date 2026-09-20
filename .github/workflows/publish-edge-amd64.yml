@@ -25,15 +25,12 @@ env:
   IMAGE_NAME: ghcr.io/experience83/news-bulletin-playlist
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
-    outputs:
-      artifact_name: ${{ steps.meta.outputs.artifact_name }}
-      archive_sha256: ${{ steps.archive.outputs.sha256 }}
-      source_sha: ${{ steps.meta.outputs.source_sha }}
+      packages: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -57,7 +54,18 @@ jobs:
             exit 1
           fi
           echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=edge-image-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a queued stale main revision before building
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          if [[ "$current_main" != "$SOURCE_SHA" ]]; then
+            echo "ERROR: refusing stale queued edge build; current main is $current_main, candidate is $SOURCE_SHA" >&2
+            exit 1
+          fi
 
       - name: Validate configuration
         run: |
@@ -114,60 +122,6 @@ jobs:
           docker stop news-bulletin-playlist-edge 2>/dev/null || true
           docker volume rm news-bulletin-edge-data 2>/dev/null || true
 
-      - name: Export exact edge image
-        id: archive
-        run: |
-          set -euo pipefail
-          docker save news-bulletin-playlist:edge-candidate | gzip -1 > edge-image.tar.gz
-          sha256="$(sha256sum edge-image.tar.gz | awk '{print $1}')"
-          if [[ ! "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "ERROR: invalid edge archive hash: $sha256" >&2
-            exit 1
-          fi
-          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
-
-      - name: Upload verified edge artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: ${{ steps.meta.outputs.artifact_name }}
-          path: edge-image.tar.gz
-          if-no-files-found: error
-          retention-days: 1
-
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      actions: write
-      contents: read
-      packages: write
-
-    steps:
-      - name: Download the verified edge artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
-        run: |
-          set -euo pipefail
-          gh run download "$GITHUB_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "$ARTIFACT_NAME" \
-            --dir edge
-
-      - name: Verify artifact hash and load image
-        env:
-          EXPECTED_SHA256: ${{ needs.build.outputs.archive_sha256 }}
-        run: |
-          set -euo pipefail
-          archive="edge/edge-image.tar.gz"
-          actual_sha256="$(sha256sum "$archive" | awk '{print $1}')"
-          if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
-            echo "ERROR: edge artifact changed after validation" >&2
-            exit 1
-          fi
-          gzip -dc "$archive" | docker load
-
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
@@ -180,7 +134,7 @@ jobs:
       - name: Require source revision to remain current main
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
         run: |
           set -euo pipefail
           current_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
@@ -192,7 +146,7 @@ jobs:
       - name: Publish or reuse immutable main SHA tag
         id: immutable
         env:
-          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
         run: |
           set -euo pipefail
           image="${IMAGE_NAME}"
@@ -236,7 +190,7 @@ jobs:
       - name: Revalidate main immediately before edge promotion
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
         run: |
           set -euo pipefail
           current_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
@@ -274,18 +228,3 @@ jobs:
             exit 1
           fi
 
-      - name: Delete transfer artifact after successful publication
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
-        run: |
-          set -euo pipefail
-          artifact_id="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-              --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\") | .id"
-          )"
-          if [[ ! "$artifact_id" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: expected exactly one transfer artifact named $ARTIFACT_NAME; got: $artifact_id" >&2
-            exit 1
-          fi
-          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
