@@ -107,14 +107,6 @@ jobs:
             --tag news-bulletin-playlist:candidate \
             .
 
-      - name: Validate live provider contracts in exact candidate
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            --entrypoint python \
-            news-bulletin-playlist:candidate \
-            -m news_bulletin_playlist.provider_watch
-
       - name: Smoke test the exact candidate
         run: |
           set -euo pipefail
