@@ -46,6 +46,31 @@ class _FailingRunner:
         raise RuntimeError("access-token-sentinel must never be logged")
 
 
+class _NestedDiagnosticRunner:
+    def __init__(
+        self,
+        diagnostics: OperationalDiagnostics,
+        result: EngineCycleResult,
+    ) -> None:
+        self.diagnostics = diagnostics
+        self.result = result
+
+    def run_cycle(self) -> EngineCycleResult:
+        self.diagnostics.emit(
+            occurred_at=NOW,
+            severity=DiagnosticSeverity.INFO,
+            component="spotify.public_detector",
+            event_name="public_detector_cycle_completed",
+            details={
+                "detector_source_count": 1,
+                "detector_changed_count": 0,
+                "detector_unchanged_count": 1,
+                "detector_failure_count": 0,
+            },
+        )
+        return self.result
+
+
 def _diagnostics(
     tmp_path: Path,
 ) -> tuple[OperationalDiagnostics, DiagnosticEventStore, io.StringIO]:
@@ -161,6 +186,31 @@ def test_instrumented_runner_records_correlated_source_playlist_and_cycle_events
         "write_decision": "preserved",
     }
     assert "provider-body-sentinel" not in output.getvalue()
+
+
+def test_nested_detector_event_inherits_engine_cycle_id(tmp_path: Path) -> None:
+    diagnostics, store, _output = _diagnostics(tmp_path)
+    result = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=1),
+        ok=True,
+        sources=(),
+        playlists=(),
+    )
+    runner = InstrumentedEngineCycleRunner(
+        _NestedDiagnosticRunner(diagnostics, result),
+        diagnostics,
+        clock=lambda: NOW,
+    )
+
+    assert runner.run_cycle() is result
+
+    detector = next(
+        event
+        for event in store.list_events(limit=10)
+        if event.event_name == "public_detector_cycle_completed"
+    )
+    assert detector.cycle_id == "cycle-20260902T100000000000Z"
 
 
 def test_degraded_playlist_verification_is_warning_without_raw_text(tmp_path: Path) -> None:
