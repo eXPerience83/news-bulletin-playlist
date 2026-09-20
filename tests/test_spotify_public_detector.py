@@ -17,7 +17,7 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
 )
-from news_bulletin_playlist.persistence import SQLiteStore
+from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.public_detector import (
     DETECTOR_SCHEMA_VERSION,
