@@ -226,10 +226,7 @@ class InstrumentedEngineCycleRunner:
         details.update((key, value) for key, value in optional.items() if value is not None)
         if playlist.unavailable_media_count > 0:
             details["unavailable_media_count"] = playlist.unavailable_media_count
-        if (
-            playlist.local_skip
-            and playlist.destination_verification_kind == "degraded"
-        ):
+        if playlist.local_skip and playlist.destination_verification_kind == "degraded":
             details["verification_outcome"] = "degraded"
         if playlist.request_item_count is not None:
             details["provider"] = "spotify"
