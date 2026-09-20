@@ -37,6 +37,11 @@ class SpotifyOAuthOperation(StrEnum):
     TOKEN_REFRESH = "token_refresh"
 
 
+class SpotifyPublicOperation(StrEnum):
+    EMBED_SHOW = "embed_show"
+    OEMBED = "oembed"
+
+
 class SpotifyRequestOutcome(StrEnum):
     SUCCESS = "success"
     HTTP_ERROR = "http_error"
@@ -64,8 +69,16 @@ class SpotifyRequestMetricsSnapshot:
     coverage_complete: bool
 
     @property
+    def public_requests(self) -> int:
+        return sum(metric.request_count for metric in self.metrics if metric.surface == "public")
+
+    @property
     def web_api_requests(self) -> int:
         return sum(metric.request_count for metric in self.metrics if metric.surface == "web_api")
+
+    @property
+    def oauth_requests(self) -> int:
+        return sum(metric.request_count for metric in self.metrics if metric.surface == "oauth")
 
     @property
     def oauth_refreshes(self) -> int:
@@ -78,9 +91,7 @@ class SpotifyRequestMetricsSnapshot:
     @property
     def http_rate_limits(self) -> int:
         return sum(
-            metric.request_count
-            for metric in self.metrics
-            if metric.surface == "web_api" and metric.http_status == 429
+            metric.request_count for metric in self.metrics if metric.http_status == 429
         )
 
     @property
@@ -96,10 +107,15 @@ class SpotifyRequestMetricsSnapshot:
 class SpotifyRequestScopeSnapshot:
     """Process-local request counts for one explicitly scoped unit of work."""
 
+    public: tuple[tuple[SpotifyPublicOperation, int], ...] = ()
     web_api: tuple[tuple[SpotifyWebApiOperation, int], ...] = ()
     oauth: tuple[tuple[SpotifyOAuthOperation, int], ...] = ()
     http_rate_limits: int = 0
     quota_exceeded: int = 0
+
+    @property
+    def public_requests(self) -> int:
+        return sum(count for _operation, count in self.public)
 
     @property
     def web_api_requests(self) -> int:
@@ -111,7 +127,10 @@ class SpotifyRequestScopeSnapshot:
 
     @property
     def total_requests(self) -> int:
-        return self.web_api_requests + self.oauth_requests
+        return self.public_requests + self.web_api_requests + self.oauth_requests
+
+    def public_count(self, operation: SpotifyPublicOperation) -> int:
+        return next((count for candidate, count in self.public if candidate is operation), 0)
 
     def web_api_count(self, operation: SpotifyWebApiOperation) -> int:
         return next((count for candidate, count in self.web_api if candidate is operation), 0)
@@ -124,6 +143,7 @@ class SpotifyRequestScope:
     """Mutable process-local accumulator exposed only through immutable snapshots."""
 
     def __init__(self) -> None:
+        self._public: Counter[SpotifyPublicOperation] = Counter()
         self._web_api: Counter[SpotifyWebApiOperation] = Counter()
         self._oauth: Counter[SpotifyOAuthOperation] = Counter()
         self._http_rate_limits = 0
@@ -139,7 +159,11 @@ class SpotifyRequestScope:
         quota_reason: SpotifyQuotaReason | None,
     ) -> None:
         with self._lock:
-            if surface == "web_api":
+            if surface == "public":
+                self._public[SpotifyPublicOperation(operation)] += 1
+                if http_status == 429:
+                    self._http_rate_limits += 1
+            elif surface == "web_api":
                 self._web_api[SpotifyWebApiOperation(operation)] += 1
                 if http_status == 429:
                     self._http_rate_limits += 1
@@ -153,6 +177,7 @@ class SpotifyRequestScope:
     def snapshot(self) -> SpotifyRequestScopeSnapshot:
         with self._lock:
             return SpotifyRequestScopeSnapshot(
+                public=tuple(sorted(self._public.items(), key=lambda item: item[0].value)),
                 web_api=tuple(sorted(self._web_api.items(), key=lambda item: item[0].value)),
                 oauth=tuple(sorted(self._oauth.items(), key=lambda item: item[0].value)),
                 http_rate_limits=self._http_rate_limits,
@@ -194,6 +219,23 @@ class SpotifyRequestMetrics:
             yield scope
         finally:
             self._active_scope.reset(token)
+
+    def record_public(
+        self,
+        operation: SpotifyPublicOperation,
+        outcome: SpotifyRequestOutcome,
+        *,
+        http_status: int | None = None,
+        occurred_at: datetime | None = None,
+    ) -> None:
+        self._record(
+            surface="public",
+            operation=operation.value,
+            outcome=outcome,
+            http_status=http_status,
+            quota_reason=None,
+            occurred_at=occurred_at,
+        )
 
     def record_web_api(
         self,
@@ -442,7 +484,9 @@ def _metric_from_row(row: sqlite3.Row) -> SpotifyRequestMetric:
     operation = row["operation"]
     if not isinstance(surface, str) or not isinstance(operation, str):
         raise ValueError("invalid Spotify request metric operation")
-    if surface == "web_api":
+    if surface == "public":
+        SpotifyPublicOperation(operation)
+    elif surface == "web_api":
         SpotifyWebApiOperation(operation)
     elif surface == "oauth":
         SpotifyOAuthOperation(operation)
