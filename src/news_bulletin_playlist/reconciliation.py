@@ -57,12 +57,36 @@ class MutationOutcome(StrEnum):
     VERIFIED = "verified"
 
 
+class PendingSnapshotCreation(StrEnum):
+    EXACT = "exact"
+    PARTIAL = "partial"
+
+
+class PendingSnapshotResolution(StrEnum):
+    CONFIRMED = "confirmed"
+    STILL_BASELINE = "still_baseline"
+    SUPERSEDED_DESIRED = "superseded_desired"
+    EXPIRED = "expired"
+    INVALIDATED_CONTEXT = "invalidated_context"
+    UNEXPECTED_SNAPSHOT = "unexpected_snapshot"
+
+
+class UnavailableMediaPhase(StrEnum):
+    PREWRITE = "prewrite"
+    READBACK = "readback"
+    PENDING_CONFIRMATION = "pending_confirmation"
+
+
 @dataclass(slots=True)
 class ReconciliationEvidence:
     """Observation only: survives exceptions without replacing their type or message."""
 
     mutation_outcome: MutationOutcome = MutationOutcome.NOT_ATTEMPTED
     remote_evidence_qualified: bool = False
+    pending_snapshot_created: PendingSnapshotCreation | None = None
+    pending_snapshot_resolution: PendingSnapshotResolution | None = None
+    unavailable_media_count: int = 0
+    unavailable_media_phase: UnavailableMediaPhase | None = None
 
 
 PlaylistMutationGuard = Callable[[], AbstractContextManager[None]]
@@ -96,6 +120,10 @@ class PlaylistReconciliationResult:
     mutation_outcome: MutationOutcome = MutationOutcome.NOT_ATTEMPTED
     remote_evidence_qualified: bool = False
     verified_desired_uris: tuple[str, ...] | None = None
+    pending_snapshot_created: PendingSnapshotCreation | None = None
+    pending_snapshot_resolution: PendingSnapshotResolution | None = None
+    unavailable_media_count: int = 0
+    unavailable_media_phase: UnavailableMediaPhase | None = None
 
 
 @dataclass(frozen=True, slots=True)
