@@ -1,30 +1,21 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
-from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.models import PlaylistId
 
 DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
-DEFAULT_RETENTION_DAYS = 30
 LATEST_SCHEMA_VERSION = 8
 
 
 class PersistenceError(RuntimeError):
     """Raised when durable state cannot be read or updated safely."""
-
-
-@dataclass(frozen=True, slots=True)
-class SourceState:
-    source_id: SourceId
-    last_attempt_at: datetime
-    last_success_at: datetime | None
-    last_error: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,13 +33,6 @@ class PlaylistAttestation:
     snapshot_id: str
     desired_fingerprint: str
     updated_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class RetentionResult:
-    source_runs_deleted: int
-    playlist_runs_deleted: int
-    canonical_editions_deleted: int = 0
 
 
 _MIGRATION_TABLE_SQL = """
@@ -478,87 +462,6 @@ class SQLiteStore:
             """
         )
 
-    def record_source_run(
-        self,
-        source_id: SourceId,
-        *,
-        started_at: datetime,
-        finished_at: datetime,
-        ok: bool,
-        edition_count: int,
-        error: str | None = None,
-    ) -> None:
-        """Upsert one source-run outcome and its last-known-good state atomically."""
-        if edition_count < 0:
-            raise ValueError("edition_count must be non-negative")
-        started, finished = _run_timestamps(started_at, finished_at)
-        success_at = finished if ok else None
-        last_error = None if ok else error
-
-        with self._connection("record source run") as connection:
-            connection.execute(
-                """
-                INSERT INTO source_runs (
-                    source_id, started_at, finished_at, ok, edition_count, error
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(source_id, started_at) DO UPDATE SET
-                    finished_at = excluded.finished_at,
-                    ok = excluded.ok,
-                    edition_count = excluded.edition_count,
-                    error = excluded.error
-                WHERE excluded.finished_at >= source_runs.finished_at
-                """,
-                (str(source_id), started, finished, int(ok), edition_count, last_error),
-            )
-            connection.execute(
-                """
-                INSERT INTO source_state (
-                    source_id, last_attempt_at, last_success_at, last_error
-                ) VALUES (?, ?, ?, ?)
-                ON CONFLICT(source_id) DO UPDATE SET
-                    last_attempt_at = MAX(
-                        source_state.last_attempt_at,
-                        excluded.last_attempt_at
-                    ),
-                    last_success_at = CASE
-                        WHEN source_state.last_success_at IS NULL
-                            THEN excluded.last_success_at
-                        WHEN excluded.last_success_at IS NULL
-                            THEN source_state.last_success_at
-                        ELSE MAX(
-                            source_state.last_success_at,
-                            excluded.last_success_at
-                        )
-                    END,
-                    last_error = CASE
-                        WHEN excluded.last_attempt_at >= source_state.last_attempt_at
-                            THEN excluded.last_error
-                        ELSE source_state.last_error
-                    END
-                """,
-                (str(source_id), finished, success_at, last_error),
-            )
-
-    def get_source_state(self, source_id: SourceId) -> SourceState | None:
-        """Load the latest source attempt and last-known-good timestamp."""
-        with self._connection("read source state") as connection:
-            row = connection.execute(
-                """
-                SELECT source_id, last_attempt_at, last_success_at, last_error
-                FROM source_state
-                WHERE source_id = ?
-                """,
-                (str(source_id),),
-            ).fetchone()
-        if row is None:
-            return None
-        return SourceState(
-            source_id=SourceId(_row_str(row, "source_id")),
-            last_attempt_at=_parse_timestamp(_row_str(row, "last_attempt_at")),
-            last_success_at=_parse_optional_timestamp(row["last_success_at"]),
-            last_error=_optional_str(row["last_error"]),
-        )
-
     def record_playlist_run(
         self,
         playlist_id: PlaylistId,
@@ -578,35 +481,6 @@ class SQLiteStore:
         last_error = None if ok else error
 
         with self._connection("record playlist run") as connection:
-            connection.execute(
-                """
-                INSERT INTO playlist_runs (
-                    playlist_id,
-                    started_at,
-                    finished_at,
-                    ok,
-                    desired_count,
-                    applied_count,
-                    error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(playlist_id, started_at) DO UPDATE SET
-                    finished_at = excluded.finished_at,
-                    ok = excluded.ok,
-                    desired_count = excluded.desired_count,
-                    applied_count = excluded.applied_count,
-                    error = excluded.error
-                WHERE excluded.finished_at >= playlist_runs.finished_at
-                """,
-                (
-                    str(playlist_id),
-                    started,
-                    finished,
-                    int(ok),
-                    desired_count,
-                    applied_count,
-                    last_error,
-                ),
-            )
             connection.execute(
                 """
                 INSERT INTO playlist_state (
@@ -727,67 +601,6 @@ class SQLiteStore:
             snapshot_id=_row_str(row, "snapshot_id"),
             desired_fingerprint=_row_str(row, "desired_fingerprint"),
             updated_at=_parse_timestamp(_row_str(row, "updated_at")),
-        )
-
-    def prune_operational_history(
-        self,
-        *,
-        now: datetime,
-        retention_days: int = DEFAULT_RETENTION_DAYS,
-        protected_identities: Iterable[tuple[SourceId, str]] | None = None,
-    ) -> RetentionResult:
-        """Prune old history and only delete canonical state proven safe to retire."""
-        if retention_days <= 0:
-            raise ValueError("retention_days must be positive")
-        cutoff = _format_timestamp(now - timedelta(days=retention_days))
-        protected = (
-            None
-            if protected_identities is None
-            else {(str(source_id), native_id) for source_id, native_id in protected_identities}
-        )
-
-        with self._connection("prune operational history") as connection:
-            source_cursor = connection.execute(
-                "DELETE FROM source_runs WHERE finished_at < ?",
-                (cutoff,),
-            )
-            playlist_cursor = connection.execute(
-                "DELETE FROM playlist_runs WHERE finished_at < ?",
-                (cutoff,),
-            )
-            canonical_deleted = 0
-            if protected is not None:
-                rows = connection.execute(
-                    """
-                    SELECT source_id, source_native_id
-                    FROM canonical_editions
-                    WHERE last_seen_at < ?
-                    """,
-                    (cutoff,),
-                ).fetchall()
-                stale = [
-                    (_row_str(row, "source_id"), _row_str(row, "source_native_id"))
-                    for row in rows
-                    if (
-                        _row_str(row, "source_id"),
-                        _row_str(row, "source_native_id"),
-                    )
-                    not in protected
-                ]
-                if stale:
-                    connection.executemany(
-                        """
-                        DELETE FROM canonical_editions
-                        WHERE source_id = ? AND source_native_id = ?
-                        """,
-                        stale,
-                    )
-                canonical_deleted = len(stale)
-
-        return RetentionResult(
-            source_runs_deleted=max(source_cursor.rowcount, 0),
-            playlist_runs_deleted=max(playlist_cursor.rowcount, 0),
-            canonical_editions_deleted=canonical_deleted,
         )
 
     def _schema_version(self, connection: sqlite3.Connection) -> int:
