@@ -44,7 +44,7 @@ from news_bulletin_playlist.spotify.auth import (
 from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorJournal,
-    PublicDetectorShadow,
+    PublicDetector,
 )
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
@@ -157,7 +157,7 @@ def _reloading_runner(tmp_path: Path, auth: _NeverAuth) -> ReloadingEngineCycleR
     detector_journal.initialize()
     first_journal = SpotifyFirstJournal(store)
     first_journal.initialize()
-    detector = PublicDetectorShadow(detector_journal, diagnostics)
+    detector = PublicDetector(detector_journal, diagnostics)
     return ReloadingEngineCycleRunner(
         tmp_path,
         {},
