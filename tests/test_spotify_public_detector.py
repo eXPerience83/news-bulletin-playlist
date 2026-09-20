@@ -501,6 +501,56 @@ def test_public_response_validation_failure_is_counted_once(tmp_path: Path) -> N
     assert matching[0].http_status == 200
 
 
+def test_response_failure_oembed_fallback_is_counted_at_public_transport_boundary(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    diagnostics, _ = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(
+        _observation(EPISODE_A, title="Bulletin 12:00"),
+        oembed_title="Bulletin 12:00",
+    )
+    metrics = SpotifyRequestMetrics(store.path, clock=lambda: NOW)
+    metrics.initialize()
+    embed_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    oembed_url = "https://open.spotify.com/oembed?url=" + (
+        "https%3A%2F%2Fopen.spotify.com%2Fshow%2F" + SHOW_ID
+    )
+    transport = _StaticTransport(
+        {
+            embed_url: PublicHttpResponse(
+                status=200,
+                content_type="text/html",
+                body=b"<html></html>",
+            ),
+            oembed_url: PublicHttpResponse(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"title": "Bulletin 13:00"}).encode(),
+            ),
+        }
+    )
+    detector = PublicDetector(
+        journal,
+        diagnostics,
+        client=PublicShowClient(transport, metrics=metrics),
+    )
+
+    with metrics.request_scope() as scope:
+        summary = detector.observe_sources(
+            (_source(),),
+            observed_at=NOW + timedelta(minutes=1),
+        )
+        snapshot = scope.snapshot()
+
+    assert summary.degraded_change_source_ids == (SourceId("source"),)
+    assert snapshot.public_requests == 2
+    assert snapshot.public_count(SpotifyPublicOperation.EMBED_SHOW) == 1
+    assert snapshot.public_count(SpotifyPublicOperation.OEMBED) == 1
+
+
 def test_public_metric_persistence_failure_is_fail_soft(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -887,6 +937,7 @@ def test_unsupported_release_date_shape_emits_one_bounded_drift_event(
     diagnostics, diagnostic_store = _diagnostics(store)
     journal = PublicDetectorJournal(store)
     journal.initialize()
+    journal.record_success(_observation(EPISODE_A))
     embed_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
     transport = _StaticTransport(
         {
