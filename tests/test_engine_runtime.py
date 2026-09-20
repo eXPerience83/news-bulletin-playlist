@@ -43,8 +43,8 @@ from news_bulletin_playlist.spotify.auth import (
 )
 from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import (
-    PublicDetectorJournal,
     PublicDetector,
+    PublicDetectorJournal,
 )
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
