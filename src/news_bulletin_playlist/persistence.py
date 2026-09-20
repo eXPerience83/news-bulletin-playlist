@@ -386,6 +386,11 @@ class SQLiteStore:
                     connection.execute(statement)
                 if version == 7:
                     self._seed_persistence_rejection_barriers(connection)
+                if version == 8 and 4 <= current < 8:
+                    self._mark_request_metrics_coverage_gap(
+                        connection,
+                        observed_at=datetime.now(UTC),
+                    )
                 connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (version, _format_timestamp(datetime.now(UTC))),
@@ -395,6 +400,23 @@ class SQLiteStore:
         """Return the latest applied migration version."""
         with self._connection("read schema version") as connection:
             return self._schema_version(connection)
+
+    @staticmethod
+    def _mark_request_metrics_coverage_gap(
+        connection: sqlite3.Connection,
+        *,
+        observed_at: datetime,
+    ) -> None:
+        """Mark pre-v8 request history incomplete because public attempts were not counted."""
+        connection.execute(
+            """
+            INSERT INTO spotify_request_metrics_coverage (singleton, incomplete_at)
+            VALUES (1, ?)
+            ON CONFLICT(singleton) DO UPDATE SET incomplete_at = excluded.incomplete_at
+            WHERE excluded.incomplete_at > spotify_request_metrics_coverage.incomplete_at
+            """,
+            (_format_timestamp(observed_at),),
+        )
 
     @staticmethod
     def _seed_persistence_rejection_barriers(connection: sqlite3.Connection) -> None:
