@@ -19,9 +19,9 @@ current work remains under **Unreleased** until a stable release is cut.
   - `INT · PL`.
 - Runtime source support for **ABC — Las Noticias de ABC**, **UN News Today**,
   **RFI — Journal Monde**, **Deutschlandfunk — Die Nachrichten** and **RMF FM — Fakty**.
-- Generic deterministic `release_date_title` matching strategy for feeds whose titles do not expose a
-  trustworthy semantic edition timestamp: the engine matches exact normalized title + compatible
-  Spotify release date inside the configured show identity.
+- Generic deterministic `release_date_title` parser strategy for Spotify catalogue products whose
+  titles do not expose a trustworthy semantic edition timestamp: `edition_at` remains unset and
+  ordering/retention use explicit Spotify release-date precision plus local first-seen provenance.
 - Source editorial-scope metadata and three-axis source classification:
   **`ORIGIN · SCOPE · LANGUAGE`**, separating provider country from actual news coverage and language.
 - Admin source labels/table now expose country, scope and language. For example, CNN 5 Cosas is
@@ -33,12 +33,12 @@ current work remains under **Unreleased** until a stable release is cut.
 - Source-selection documentation that rejects predominantly long-form products even when individual
   episodes fit below a playlist hard limit.
 - Runtime support for Reuters World News, ONU en minutos, N+ Univision 24-7 and DW Actualidad en
-  análisis. ONU's broad UN Spanish audio feed is filtered fail-closed to dated ONU-en-minutos
-  editions. CBC World Report remains verified research but is withheld from the runtime catalogue
-  because its official RSS did not meet the production provider-watch fetch contract.
-- Durable runtime-wide Spotify 429 backoff state with sanitized `Retry-After` diagnostics. The engine
-  keeps its ordinary RSS collection cadence while Spotify Web API activity is suppressed until the
-  persisted retry deadline expires, including across process/container restarts.
+  análisis. ONU's broad Spotify show catalogue is filtered fail-closed to dated ONU-en-minutos
+  editions. CBC World Report remains verified research but is withheld pending re-validation against
+  the current Spotify-first catalogue/parser/duration promotion contract.
+- Durable runtime-wide Spotify 429 backoff state with sanitized `Retry-After` diagnostics. Public
+  change detection and local computation may continue, while authenticated Spotify work is
+  suppressed until the persisted retry deadline expires, including across process/container restarts.
 
 ### Changed
 
