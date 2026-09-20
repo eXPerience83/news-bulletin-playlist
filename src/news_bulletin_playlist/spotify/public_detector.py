@@ -75,6 +75,19 @@ class PublicShowResponseFailureReason(StrEnum):
     OEMBED_TITLE = "oembed_title"
 
 
+class PublicReleaseDateShape(StrEnum):
+    """Bounded structural classification for optional public releaseDate metadata."""
+
+    MISSING = "missing"
+    STRING = "string"
+    OBJECT_ISO_STRING = "object_iso_string"
+    UNSUPPORTED_STRING = "unsupported_string"
+    UNSUPPORTED_OBJECT = "unsupported_object"
+    UNSUPPORTED_ARRAY = "unsupported_array"
+    UNSUPPORTED_NUMBER = "unsupported_number"
+    UNSUPPORTED_BOOLEAN = "unsupported_boolean"
+
+
 class PublicShowResponseError(PublicShowDetectorError):
     """Raised when the public Spotify response no longer satisfies the detector contract."""
 
@@ -151,6 +164,7 @@ class PublicEpisodeObservation:
     duration_ms: int | None
     related_entity_uri: str | None
     observed_at: datetime
+    release_date_shape: PublicReleaseDateShape = PublicReleaseDateShape.STRING
     detector_schema_version: int = DETECTOR_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -194,6 +208,8 @@ class PublicDetectorState:
     consecutive_detector_failures: int
     detector_schema_version: int
     last_oembed_title: str | None
+    last_public_release_date_shape: PublicReleaseDateShape | None
+    last_degraded_audit_at: datetime | None
 
     @property
     def inactivity_anchor(self) -> datetime | None:
@@ -211,6 +227,29 @@ class PublicDetectorState:
         if anchor is None:
             return False
         return _as_utc(now) >= anchor + inactivity
+
+    def degraded_audit_due(
+        self,
+        *,
+        now: datetime,
+        interval: timedelta,
+        fallback_anchor: datetime | None,
+    ) -> bool:
+        if interval <= timedelta(0):
+            raise ValueError("degraded detector audit threshold must be positive")
+        if self.consecutive_detector_failures <= 0:
+            return False
+        anchors = tuple(
+            value
+            for value in (
+                self.last_degraded_audit_at,
+                self.last_catalogue_refresh_at,
+                fallback_anchor,
+            )
+            if value is not None
+        )
+        anchor = max(anchors, default=None)
+        return anchor is None or _as_utc(now) >= anchor + interval
 
 
 class PublicDetectorOutcome(StrEnum):
@@ -238,6 +277,7 @@ class PublicDetectorCycleSummary:
     unchanged_count: int
     failure_count: int
     changed_source_ids: tuple[SourceId, ...] = ()
+    degraded_change_source_ids: tuple[SourceId, ...] = ()
 
 
 class _NextDataParser(HTMLParser):
@@ -452,7 +492,7 @@ def parse_public_show_embed(
     episode_uri = _optional_text(entity.get("uri"), "Spotify episode URI", max_length=128)
     name = _bounded_text(entity.get("name"), "Spotify episode name", max_length=1000)
     title = _bounded_text(entity.get("title"), "Spotify episode title", max_length=1000)
-    release_date = _optional_public_release_date(
+    release_date, release_date_shape = _optional_public_release_date(
         entity.get("releaseDate"),
         max_length=128,
     )
@@ -474,6 +514,7 @@ def parse_public_show_embed(
             duration_ms=duration,
             related_entity_uri=related_entity_uri,
             observed_at=observed_at,
+            release_date_shape=release_date_shape,
         )
     except ValueError as exc:
         raise PublicShowResponseError(
@@ -518,6 +559,8 @@ CREATE TABLE IF NOT EXISTS spotify_public_detector_state (
         CHECK (consecutive_detector_failures >= 0),
     detector_schema_version INTEGER NOT NULL,
     last_oembed_title TEXT,
+    last_public_release_date_shape TEXT,
+    last_degraded_audit_at TEXT,
     PRIMARY KEY (source_id, spotify_show_id)
 )
 """
@@ -568,7 +611,7 @@ class PublicDetectorJournal:
 
     def initialize(self) -> None:
         with self._connection("initialize Spotify public detector") as connection:
-            connection.execute(_TABLE_SQL)
+            self._ensure_table(connection)
 
     def get(self, source_id: SourceId, spotify_show_id: str) -> PublicDetectorState | None:
         show_id = _require_show_id(spotify_show_id)
@@ -630,8 +673,9 @@ class PublicDetectorJournal:
                     last_public_release_date_raw, last_public_observed_at,
                     last_detector_success_at, last_change_at, last_failure_at,
                     last_catalogue_refresh_at, consecutive_detector_failures,
-                    detector_schema_version, last_oembed_title
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    detector_schema_version, last_oembed_title,
+                    last_public_release_date_shape, last_degraded_audit_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL)
                 ON CONFLICT(source_id, spotify_show_id) DO UPDATE SET
                     last_episode_id = excluded.last_episode_id,
                     last_episode_title = excluded.last_episode_title,
@@ -643,7 +687,9 @@ class PublicDetectorJournal:
                     last_catalogue_refresh_at = excluded.last_catalogue_refresh_at,
                     consecutive_detector_failures = 0,
                     detector_schema_version = excluded.detector_schema_version,
-                    last_oembed_title = excluded.last_oembed_title
+                    last_oembed_title = excluded.last_oembed_title,
+                    last_public_release_date_shape = excluded.last_public_release_date_shape,
+                    last_degraded_audit_at = NULL
                 """,
                 (
                     str(observation.source_id),
@@ -658,6 +704,7 @@ class PublicDetectorJournal:
                     _optional_timestamp(last_catalogue_refresh_at),
                     observation.detector_schema_version,
                     stored_oembed_title,
+                    observation.release_date_shape.value,
                 ),
             )
             current_row = self._select(
@@ -676,6 +723,7 @@ class PublicDetectorJournal:
         spotify_show_id: str,
         *,
         failed_at: datetime,
+        oembed_title: str | None = None,
     ) -> PublicDetectorState:
         show_id = _require_show_id(spotify_show_id)
         failed = _as_utc(failed_at)
@@ -702,12 +750,17 @@ class PublicDetectorJournal:
                 """
                 INSERT INTO spotify_public_detector_state (
                     source_id, spotify_show_id, last_failure_at,
-                    consecutive_detector_failures, detector_schema_version
-                ) VALUES (?, ?, ?, ?, ?)
+                    consecutive_detector_failures, detector_schema_version,
+                    last_oembed_title
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id, spotify_show_id) DO UPDATE SET
                     last_failure_at = excluded.last_failure_at,
                     consecutive_detector_failures = excluded.consecutive_detector_failures,
-                    detector_schema_version = excluded.detector_schema_version
+                    detector_schema_version = excluded.detector_schema_version,
+                    last_oembed_title = COALESCE(
+                        excluded.last_oembed_title,
+                        spotify_public_detector_state.last_oembed_title
+                    )
                 """,
                 (
                     str(source_id),
@@ -715,12 +768,39 @@ class PublicDetectorJournal:
                     _timestamp(failed),
                     failures,
                     DETECTOR_SCHEMA_VERSION,
+                    oembed_title,
                 ),
             )
             current_row = self._select(connection, source_id, show_id)
             if current_row is None:
                 raise PersistenceError("Spotify public detector failure state was not persisted")
             return _state_from_row(current_row)
+
+    def mark_degraded_audit_attempt(
+        self,
+        source_id: SourceId,
+        spotify_show_id: str,
+        *,
+        attempted_at: datetime,
+    ) -> bool:
+        show_id = _require_show_id(spotify_show_id)
+        attempted = _timestamp(attempted_at)
+        with self._connection("persist degraded detector audit attempt") as connection:
+            self._ensure_table(connection)
+            cursor = connection.execute(
+                """
+                UPDATE spotify_public_detector_state
+                SET last_degraded_audit_at = ?
+                WHERE source_id = ? AND spotify_show_id = ?
+                  AND consecutive_detector_failures > 0
+                  AND (
+                      last_degraded_audit_at IS NULL
+                      OR last_degraded_audit_at < ?
+                  )
+                """,
+                (attempted, str(source_id), show_id, attempted),
+            )
+            return cursor.rowcount > 0
 
     def mark_catalogue_refresh(
         self,
@@ -759,7 +839,8 @@ class PublicDetectorJournal:
                    last_public_release_date_raw, last_public_observed_at,
                    last_detector_success_at, last_change_at, last_failure_at,
                    last_catalogue_refresh_at, consecutive_detector_failures,
-                   detector_schema_version, last_oembed_title
+                   detector_schema_version, last_oembed_title,
+                   last_public_release_date_shape, last_degraded_audit_at
             FROM spotify_public_detector_state
             WHERE source_id = ? AND spotify_show_id = ?
             """,
@@ -770,6 +851,22 @@ class PublicDetectorJournal:
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
         connection.execute(_TABLE_SQL)
+        columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(spotify_public_detector_state)"
+            ).fetchall()
+        }
+        if "last_public_release_date_shape" not in columns:
+            connection.execute(
+                "ALTER TABLE spotify_public_detector_state "
+                "ADD COLUMN last_public_release_date_shape TEXT"
+            )
+        if "last_degraded_audit_at" not in columns:
+            connection.execute(
+                "ALTER TABLE spotify_public_detector_state "
+                "ADD COLUMN last_degraded_audit_at TEXT"
+            )
 
     def _connection(self, operation: str) -> _ConnectionContext:
         try:
@@ -1086,24 +1183,47 @@ def _optional_text(value: object, label: str, *, max_length: int) -> str | None:
     return value
 
 
-def _optional_public_release_date(value: object, *, max_length: int) -> str | None:
-    """Normalize the supported public releaseDate shapes without making it identity-critical."""
+def _optional_public_release_date(
+    value: object,
+    *,
+    max_length: int,
+) -> tuple[str | None, PublicReleaseDateShape]:
+    """Normalize supported releaseDate shapes and classify optional metadata drift."""
     candidate: object
+    shape: PublicReleaseDateShape
     if value is None:
-        return None
+        return None, PublicReleaseDateShape.MISSING
     if isinstance(value, str):
         candidate = value
+        shape = PublicReleaseDateShape.STRING
     elif isinstance(value, dict) and set(value) == {"isoString"}:
         candidate = value.get("isoString")
+        shape = PublicReleaseDateShape.OBJECT_ISO_STRING
+    elif isinstance(value, dict):
+        return None, PublicReleaseDateShape.UNSUPPORTED_OBJECT
+    elif isinstance(value, list):
+        return None, PublicReleaseDateShape.UNSUPPORTED_ARRAY
+    elif isinstance(value, bool):
+        return None, PublicReleaseDateShape.UNSUPPORTED_BOOLEAN
+    elif isinstance(value, (int, float)):
+        return None, PublicReleaseDateShape.UNSUPPORTED_NUMBER
     else:
-        return None
+        return None, PublicReleaseDateShape.UNSUPPORTED_OBJECT
 
     if not isinstance(candidate, str):
-        return None
+        return None, (
+            PublicReleaseDateShape.UNSUPPORTED_OBJECT
+            if shape is PublicReleaseDateShape.OBJECT_ISO_STRING
+            else PublicReleaseDateShape.UNSUPPORTED_STRING
+        )
     stripped = candidate.strip()
     if not stripped or len(stripped) > max_length:
-        return None
-    return stripped
+        return None, (
+            PublicReleaseDateShape.UNSUPPORTED_OBJECT
+            if shape is PublicReleaseDateShape.OBJECT_ISO_STRING
+            else PublicReleaseDateShape.UNSUPPORTED_STRING
+        )
+    return stripped, shape
 
 
 def _optional_non_negative_int(value: object, label: str) -> int | None:
@@ -1168,6 +1288,10 @@ def _state_from_row(row: sqlite3.Row) -> PublicDetectorState:
         consecutive_detector_failures=failures,
         detector_schema_version=schema_version,
         last_oembed_title=_stored_optional_text(row["last_oembed_title"], "last_oembed_title"),
+        last_public_release_date_shape=_stored_optional_release_date_shape(
+            row["last_public_release_date_shape"]
+        ),
+        last_degraded_audit_at=_stored_optional_timestamp(row["last_degraded_audit_at"]),
     )
 
 
@@ -1181,6 +1305,18 @@ def _stored_optional_text(value: object, label: str) -> str | None:
     if value is None:
         return None
     return _stored_text(value, label)
+
+
+def _stored_optional_release_date_shape(value: object) -> PublicReleaseDateShape | None:
+    if value is None:
+        return None
+    raw = _stored_text(value, "last_public_release_date_shape")
+    try:
+        return PublicReleaseDateShape(raw)
+    except ValueError as exc:
+        raise PersistenceError(
+            "Spotify public detector stored an invalid releaseDate shape"
+        ) from exc
 
 
 def _stored_optional_timestamp(value: object) -> datetime | None:
