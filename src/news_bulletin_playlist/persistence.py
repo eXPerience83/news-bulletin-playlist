@@ -386,7 +386,7 @@ class SQLiteStore:
                     connection.execute(statement)
                 if version == 7:
                     self._seed_persistence_rejection_barriers(connection)
-                if version == 8 and 4 <= current < 8:
+                if version == 8 and 0 < current < 8:
                     self._mark_request_metrics_coverage_gap(
                         connection,
                         observed_at=datetime.now(UTC),
