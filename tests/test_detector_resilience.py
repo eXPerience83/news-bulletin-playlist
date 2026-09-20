@@ -208,6 +208,4 @@ def test_degraded_audit_is_fail_closed_when_attempt_cannot_be_persisted() -> Non
     )
 
     assert plan == ()
-    assert detector.audit_calls == [
-        (SOURCE_ID, SHOW_ID, NOW + timedelta(minutes=30))
-    ]
+    assert detector.audit_calls == [(SOURCE_ID, SHOW_ID, NOW + timedelta(minutes=30))]
