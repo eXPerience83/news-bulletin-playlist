@@ -34,6 +34,11 @@ from news_bulletin_playlist.spotify.public_detector import (
     parse_public_show_embed,
     spotify_show_id,
 )
+from news_bulletin_playlist.spotify_metrics import (
+    SpotifyPublicOperation,
+    SpotifyRequestMetrics,
+    SpotifyRequestOutcome,
+)
 
 NOW = datetime(2026, 9, 19, 10, 0, tzinfo=UTC)
 SHOW_ID = "S" * 22
@@ -324,6 +329,142 @@ def test_public_show_client_reads_embed_and_oembed_without_auth_headers() -> Non
         (oembed_url, "application/json"),
     ]
     assert show_url in oembed_url.replace("%3A", ":").replace("%2F", "/")
+
+
+
+def test_public_metrics_count_unchanged_embed_without_oembed(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    diagnostics, _ = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(_observation(EPISODE_A))
+    metrics = SpotifyRequestMetrics(store.path, clock=lambda: NOW)
+    metrics.initialize()
+    embed_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    transport = _StaticTransport(
+        {
+            embed_url: PublicHttpResponse(
+                status=200,
+                content_type="text/html",
+                body=_embed_html(EPISODE_A).encode(),
+            )
+        }
+    )
+    detector = PublicDetectorShadow(
+        journal,
+        diagnostics,
+        client=PublicShowClient(transport, metrics=metrics),
+    )
+
+    with metrics.request_scope() as scope:
+        summary = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+        snapshot = scope.snapshot()
+
+    assert (summary.changed_count, summary.unchanged_count, summary.failure_count) == (0, 1, 0)
+    assert snapshot.public_requests == 1
+    assert snapshot.public_count(SpotifyPublicOperation.EMBED_SHOW) == 1
+    assert snapshot.public_count(SpotifyPublicOperation.OEMBED) == 0
+    assert transport.calls == [(embed_url, "text/html,application/xhtml+xml")]
+
+
+def test_public_metrics_count_embed_and_oembed_on_identity_change(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    diagnostics, _ = _diagnostics(store)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(_observation(EPISODE_A))
+    metrics = SpotifyRequestMetrics(store.path, clock=lambda: NOW)
+    metrics.initialize()
+    embed_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    oembed_url = "https://open.spotify.com/oembed?url=" + (
+        "https%3A%2F%2Fopen.spotify.com%2Fshow%2F" + SHOW_ID
+    )
+    transport = _StaticTransport(
+        {
+            embed_url: PublicHttpResponse(
+                status=200,
+                content_type="text/html",
+                body=_embed_html(EPISODE_B, title="Bulletin 13:00").encode(),
+            ),
+            oembed_url: PublicHttpResponse(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"title": "Bulletin 13:00"}).encode(),
+            ),
+        }
+    )
+    detector = PublicDetectorShadow(
+        journal,
+        diagnostics,
+        client=PublicShowClient(transport, metrics=metrics),
+    )
+
+    with metrics.request_scope() as scope:
+        summary = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+        snapshot = scope.snapshot()
+
+    assert (summary.changed_count, summary.unchanged_count, summary.failure_count) == (1, 0, 0)
+    assert snapshot.public_requests == 2
+    assert snapshot.public_count(SpotifyPublicOperation.EMBED_SHOW) == 1
+    assert snapshot.public_count(SpotifyPublicOperation.OEMBED) == 1
+    assert len(transport.calls) == 2
+
+
+def test_public_http_failure_is_counted_with_bounded_status(tmp_path: Path) -> None:
+    class _HttpFailureTransport:
+        def get(self, url: str, *, accept: str) -> PublicHttpResponse:
+            del url, accept
+            raise PublicShowHttpError(503)
+
+    store = _store(tmp_path)
+    metrics = SpotifyRequestMetrics(store.path, clock=lambda: NOW)
+    metrics.initialize()
+    client = PublicShowClient(_HttpFailureTransport(), metrics=metrics)
+
+    with pytest.raises(PublicShowHttpError):
+        client.observe_episode(SourceId("source"), SHOW_ID, observed_at=NOW)
+
+    metric = next(
+        metric
+        for metric in metrics.last_24_hours(now=NOW).metrics
+        if metric.surface == "public"
+        and metric.operation == SpotifyPublicOperation.EMBED_SHOW
+        and metric.outcome is SpotifyRequestOutcome.HTTP_ERROR
+    )
+    assert metric.request_count == 1
+    assert metric.http_status == 503
+
+
+def test_public_metric_persistence_failure_is_fail_soft(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    metrics = SpotifyRequestMetrics(store.path, clock=lambda: NOW)
+    metrics.initialize()
+    embed_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    client = PublicShowClient(
+        _StaticTransport(
+            {
+                embed_url: PublicHttpResponse(
+                    status=200,
+                    content_type="text/html",
+                    body=_embed_html().encode(),
+                )
+            }
+        ),
+        metrics=metrics,
+    )
+
+    def unavailable(_operation: str) -> object:
+        raise PersistenceError("synthetic metrics persistence failure")
+
+    monkeypatch.setattr(metrics, "_connection", unavailable)
+
+    observation = client.observe_episode(SourceId("source"), SHOW_ID, observed_at=NOW)
+
+    assert observation.episode_id == EPISODE_A
+    assert metrics.last_24_hours(now=NOW).coverage_complete is False
 
 
 def test_spotify_show_id_requires_one_valid_show_reference() -> None:
