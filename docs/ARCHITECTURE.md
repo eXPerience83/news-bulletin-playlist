@@ -17,11 +17,11 @@ The current authority split is:
 - the existing reconciliation/readback machinery is the authority for determining whether a
   destination mutation safely applied.
 
-Existing upgraded SQLite databases are not rewritten merely because the current runtime no longer
-reads retired RSS/matching/planner state. Those historical tables may therefore remain physically
-present and inert. Fresh databases, however, no longer replay retired planner-only schema generations
-that have no current runtime consumer; the later pre-1.0 persistence reset will establish the final
-public database baseline.
+The pre-0.1 private-development SQLite history has been retired. The supported persistence
+baseline starts at database format 1 in `/data/news-bulletin-playlist-v1.sqlite3`. The former
+`/data/news-bulletin-playlist.sqlite3` is not migrated in place and may be retained temporarily as
+rollback evidence during the 0.1.0 cutover. From format 1 forward, database changes require explicit
+reviewed forward migrations rather than replaying the private v1-v8 development chain.
 
 Historical P0/P1 and shadow-planner documents describe earlier implementation stages. They are useful
 for provenance, but they are not the current runtime contract when they conflict with this document.
@@ -381,9 +381,6 @@ inline.
 
 Current diagnostics should expose enough source/playlist/request/refresh reason evidence to explain
 why a catalogue was or was not refreshed and why a destination was written, preserved or skipped.
-
-Legacy RSS/matching/planner diagnostic fields are retained only for already-persisted history from
-released versions.
 
 ## Editorial independence
 
