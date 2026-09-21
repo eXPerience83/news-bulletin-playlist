@@ -8,7 +8,10 @@ from enum import StrEnum
 from functools import partial
 from typing import Any, Protocol
 
-from news_bulletin_playlist.desired_state import DesiredPlaylistState, desired_fingerprint
+from news_bulletin_playlist.desired_state import (
+    DesiredPlaylistState,
+    desired_fingerprint as fingerprint_desired,
+)
 from news_bulletin_playlist.models import PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.snapshot_pending import (
@@ -178,7 +181,7 @@ def _reconcile_playlist_items(
     if store is not None and attestation_updated_at is None:
         raise ValueError("playlist attestation requires an update timestamp")
 
-    desired_fingerprint = desired_fingerprint(desired)
+    desired_fingerprint = fingerprint_desired(desired)
     pending_journal = PendingSnapshotJournal(store) if store is not None else None
     pending_confirmation: PendingSnapshotConfirmation | None = None
     pending_snapshot: str | None = None
