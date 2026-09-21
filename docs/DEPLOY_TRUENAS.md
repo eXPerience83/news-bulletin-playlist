@@ -285,4 +285,5 @@ The current runtime data flow is:
 
 The health endpoint performs a small real write, flush and `fsync` against `/data`, then removes the temporary probe file. This makes storage-full, quota and write failures observable without conflating ordinary upstream failures with container health.
 
-Older RSS/canonical/matching descriptions in historical investigation documents are retained only for provenance and upgrade context.
+Older RSS/canonical/matching descriptions in historical investigation documents are retained only
+for provenance. They are not current runtime, persistence or upgrade guidance.
