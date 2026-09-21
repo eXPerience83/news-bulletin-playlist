@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import io
 import json
 import logging
 import sqlite3
@@ -783,6 +786,80 @@ def test_public_detector_logs_change_only_on_identity_transition_and_oembed_on_c
     assert latest.details["spotify_episode_id"] == EPISODE_B
     assert latest.details["spotify_episode_title"] == "Bulletin 13:00"
     assert latest.details["oembed_matches"] is True
+
+
+def test_public_schema_failure_captures_first_exact_response_without_stdout_storm(
+    tmp_path: Path,
+) -> None:
+    raw_body = b"<html><body>simulated-schema-v2-without-next-data</body></html>"
+    store = _store(tmp_path)
+    diagnostic_store = DiagnosticEventStore(store.path)
+    diagnostic_store.initialize()
+    output = io.StringIO()
+    logger = logging.Logger("public-detector-capture-simulation")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(logging.StreamHandler(output))
+    diagnostics = OperationalDiagnostics(diagnostic_store, logger=logger)
+    journal = PublicDetectorJournal(store)
+    journal.initialize()
+    journal.record_success(
+        _observation(EPISODE_A, title="Same title"),
+        oembed_title="Same title",
+    )
+    embed_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    oembed_url = "https://open.spotify.com/oembed?url=" + (
+        "https%3A%2F%2Fopen.spotify.com%2Fshow%2F" + SHOW_ID
+    )
+    transport = _StaticTransport(
+        {
+            embed_url: PublicHttpResponse(
+                status=200,
+                content_type="text/html; charset=utf-8",
+                body=raw_body,
+            ),
+            oembed_url: PublicHttpResponse(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"title": "Same title"}).encode(),
+            ),
+        }
+    )
+    detector = PublicDetector(
+        journal,
+        diagnostics,
+        client=PublicShowClient(transport),
+    )
+
+    first = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=1))
+    second = detector.observe_sources((_source(),), observed_at=NOW + timedelta(minutes=11))
+
+    assert first.failure_count == 1
+    assert second.failure_count == 1
+    failures = [
+        event
+        for event in reversed(diagnostic_store.list_events(limit=20))
+        if event.event_name == "public_detector_failed"
+        and event.details.get("detector_outcome") == "response_failure"
+    ]
+    assert len(failures) == 2
+
+    first_failure, second_failure = failures
+    assert first_failure.details["detector_response_reason"] == "next_data_count"
+    assert first_failure.details["detector_fallback_outcome"] == "title_unchanged"
+    assert first_failure.details["public_response_capture"] is True
+    assert first_failure.details["public_response_surface"] == "embed"
+    assert first_failure.details["public_response_content_type"] == "text/html; charset=utf-8"
+    assert first_failure.details["public_response_size_bytes"] == len(raw_body)
+    assert first_failure.details["public_response_sha256"] == hashlib.sha256(raw_body).hexdigest()
+    assert first_failure.details["public_response_truncated"] is False
+    encoded = first_failure.details["public_response_body_b64"]
+    assert isinstance(encoded, str)
+    assert base64.b64decode(encoded, validate=True) == raw_body
+
+    assert "public_response_body_b64" not in second_failure.details
+    assert second_failure.details["consecutive_failure_count"] == 2
+    assert raw_body.decode() not in output.getvalue()
+    assert "public_response_body=<captured>" in output.getvalue()
 
 
 def test_public_detector_response_failure_emits_bounded_reason(tmp_path: Path) -> None:
