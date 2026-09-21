@@ -1321,7 +1321,11 @@ def _source_rows(cycle: EngineCycleResult | None) -> str:
     rows = []
     for source in cycle.sources:
         result = "Success" if source.ok else "Failed"
-        detector = "Healthy" if source.detector_ok else "Degraded"
+        detector = (
+            "Healthy"
+            if source.detector_ok
+            else '<a href="/admin/diagnostics">Degraded · inspect diagnostics</a>'
+        )
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(str(source.source_id))}</code></td>"
