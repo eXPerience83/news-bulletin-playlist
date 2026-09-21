@@ -5,7 +5,11 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
-No changes yet.
+### Changed
+
+- The current repository state is now **All rights reserved** rather than MIT-licensed. The
+  `LICENSE` file plus package/container MIT metadata were removed; this does not revoke rights
+  already granted for historical copies that were distributed under MIT.
 
 ## [0.1.0] - 2026-09-21
 
