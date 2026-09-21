@@ -98,7 +98,6 @@ _REQUIRED_BASELINE_TABLES = frozenset(
 )
 
 
-
 class SQLiteStore:
     """Small explicit SQLite store for durable multi-playlist operational state."""
 
