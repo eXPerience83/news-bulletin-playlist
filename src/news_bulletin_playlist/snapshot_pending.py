@@ -74,11 +74,9 @@ class _ConnectionContext:
         connection: sqlite3.Connection,
         *,
         operation: str,
-        path: str,
     ) -> None:
         self.connection = connection
         self.operation = operation
-        self.path = path
 
     def __enter__(self) -> sqlite3.Connection:
         return self.connection
@@ -207,7 +205,6 @@ class PendingSnapshotJournal:
         return _ConnectionContext(
             connection,
             operation=operation,
-            path=str(self.path),
         )
 
 

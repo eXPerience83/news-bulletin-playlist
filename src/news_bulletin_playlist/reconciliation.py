@@ -831,28 +831,6 @@ def reconcile_spotify_playlist(
     )
 
 
-def reconcile_spotify_destinations(
-    client: SpotifyPlaylistClient,
-    plans: Sequence[tuple[PlaylistDefinition, DesiredPlaylistState]],
-) -> tuple[PlaylistReconciliationResult, ...]:
-    """Reconcile destinations independently so one Spotify failure cannot block another."""
-    results: list[PlaylistReconciliationResult] = []
-    for playlist, desired in plans:
-        try:
-            result = reconcile_spotify_playlist(client, playlist, desired)
-        except (SpotifyApiError, SpotifyTransportError, SpotifyReconciliationError) as exc:
-            result = PlaylistReconciliationResult(
-                playlist_id=playlist.id,
-                ok=False,
-                desired_count=len(desired.items),
-                applied_count=None,
-                wrote=None,
-                error=str(exc),
-            )
-        results.append(result)
-    return tuple(results)
-
-
 def _read_spotify_playlist(
     client: SpotifyPlaylistClient,
     playlist_id: str,

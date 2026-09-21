@@ -20,7 +20,6 @@ from news_bulletin_playlist.models import (
 )
 from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
-    reconcile_spotify_destinations,
     reconcile_spotify_playlist,
 )
 from news_bulletin_playlist.spotify.client import SpotifyTransportError
@@ -489,27 +488,6 @@ def test_desired_state_over_100_is_rejected_before_writing() -> None:
 
     assert client.reads == []
     assert client.writes == []
-
-
-def test_one_destination_failure_does_not_block_another() -> None:
-    first = _playlist("first")
-    second = _playlist("second")
-    client = _FakeSpotify({"first": [], "second": ["spotify:episode:old"]})
-    client.fail_reads.add("first")
-
-    results = reconcile_spotify_destinations(
-        client,
-        (
-            (first, _desired(first, "spotify:episode:first")),
-            (second, _desired(second, "spotify:episode:second")),
-        ),
-    )
-
-    assert results[0].ok is False
-    assert results[0].wrote is None
-    assert results[1].ok is True
-    assert results[1].wrote is True
-    assert client.states["second"] == ["spotify:episode:second"]
 
 
 def test_mutation_guard_covers_replace_only_and_not_spotify_reads() -> None:
