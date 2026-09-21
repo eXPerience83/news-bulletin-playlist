@@ -74,7 +74,8 @@ def _failed_cycle() -> EngineCycleResult:
                 refreshed=False,
                 refresh_reason="change",
                 api_request_count=0,
-                last_success_at=None,
+                last_detector_success_at=NOW - timedelta(minutes=2),
+                last_catalogue_refresh_at=NOW - timedelta(hours=3),
                 detector_ok=False,
                 detector_changed=True,
                 error=f"provider failed with {SECRET}",
@@ -274,6 +275,12 @@ def test_diagnostic_bundle_never_copies_raw_cycle_errors() -> None:
         "severity": None,
         "source_id": None,
     }
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        status = json.loads(archive.read("status.json"))
+    source = status["last_cycle"]["sources"][0]
+    assert "last_success_at" not in source
+    assert source["last_detector_success_at"] == "2026-09-02T09:58:00Z"
+    assert source["last_catalogue_refresh_at"] == "2026-09-02T07:00:00Z"
 
 
 def test_diagnostic_export_truncation_uses_total_matching_count(tmp_path: Path) -> None:
