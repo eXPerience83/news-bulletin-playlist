@@ -97,22 +97,6 @@ _REQUIRED_BASELINE_TABLES = frozenset(
     }
 )
 
-_RETIRED_PRIVATE_TABLES = frozenset(
-    {
-        "canonical_editions",
-        "playlist_runs",
-        "schema_migrations",
-        "source_runs",
-        "source_state",
-        "spotify_matches",
-        "spotify_planner_catalogue_state",
-        "spotify_planner_destination_state",
-        "spotify_planner_match_inputs",
-        "spotify_planner_matched_recovery_state",
-        "spotify_planner_persistence_rejection_state",
-        "spotify_planner_unresolved_state",
-    }
-)
 
 
 class SQLiteStore:
@@ -139,13 +123,6 @@ class SQLiteStore:
                 raise PersistenceError(
                     "database predates the supported 0.1.0 clean format; "
                     "back up and replace the old SQLite database before starting this build"
-                )
-
-            retired = sorted(tables & _RETIRED_PRIVATE_TABLES)
-            if retired:
-                raise PersistenceError(
-                    "database mixes the clean format with retired private-development tables: "
-                    + ", ".join(retired)
                 )
 
             current = self._format_version(connection)
