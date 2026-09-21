@@ -54,27 +54,13 @@ Stopping management of a playlist does not delete its Spotify destination by def
 
 The source table and selectors distinguish **provider country**, **editorial scope** and **language**. Scope values are `LOC`, `REG`, `NAT`, `INT` and `MIX`. This prevents origin from being mistaken for coverage: for example, CNN 5 Cosas is `US · INT · es-ES`, so its US origin does not mean US-only news; it is the current default for `INT · ES`, not for the Spain-focused **Noticias en Español** template.
 
-## Legacy/manual YAML compatibility
+## Managed configuration only
 
-The original schema-v1 full-YAML loader remains available as an advanced/manual compatibility path. It is not the preferred first-run configuration for a managed installation.
+The runtime configuration is the built-in catalog plus versioned `/data/managed-state.json`.
+Playlist activation, metadata, source membership and duration policy are managed through `/admin/`; there is no longer a second full-YAML runtime configuration path.
 
-The default legacy path is:
-
-`/data/news-bulletin-playlist.yaml`
-
-A different legacy file can be selected explicitly with:
-
-```yaml
-environment:
-  NEWS_PLAYLIST_CONFIG: "/data/my-playlists.yaml"
-```
-
-When `NEWS_PLAYLIST_CONFIG` is explicitly set, that file must exist and validate or startup fails closed.
-
-Without an explicit override, the runtime uses `/data/managed-state.json` when managed state exists and only falls back to the default legacy YAML when no managed state exists. If **both** `/data/managed-state.json` and `/data/news-bulletin-playlist.yaml` are present, startup fails closed rather than guessing which configuration source should win. Remove the unintended one before restarting.
-
-[`config/news-bulletin-playlist.example.yaml`](../config/news-bulletin-playlist.example.yaml) is retained for this compatibility path. Legacy YAML destinations must contain real already-provisioned Spotify playlist IDs; never invent an ID or use a Spotify show ID as a writable playlist destination. If a legacy `duration_policy` omits `default_max_seconds`, it inherits the same current **1800-second** shared default as managed playlists; an explicit YAML value remains authoritative.
-
+The pre-1.0 settings `NEWS_PLAYLIST_CONFIG` and `/data/news-bulletin-playlist.yaml` are obsolete.
+A non-empty legacy environment value or any leftover default YAML path, including a broken symlink, causes startup to fail closed with an actionable message. Remove or relocate the obsolete setting or file after confirming the managed state is the intended installation configuration. The application never reads, rewrites or deletes the old YAML automatically.
 ### Scheduler
 
 One scheduler inside the existing process runs the complete engine cycle immediately after a playlist becomes active/startup configuration is available and then approximately every 10 minutes. The default is 600 seconds:
@@ -90,7 +76,7 @@ There is no cron job, one-container-per-playlist model or overlapping worker poo
 
 Each cycle performs the Spotify-first sequence:
 
-1. load the validated effective configuration from managed state plus the built-in catalog, or from the deliberately selected legacy compatibility path;
+1. load the validated effective configuration from managed state plus the built-in catalog;
 2. determine the union of sources required by enabled playlists;
 3. observe each required source through the bounded public Spotify detector;
 4. decide which official Spotify show catalogues are due because of bootstrap, detector change, inactivity audit or deterministic stale-item escalation;
@@ -190,16 +176,14 @@ SIGTERM/SIGINT asks the HTTP host and scheduler to stop. The scheduler does not 
 
 **Engine says Not configured**
 
-- on a normal managed installation, open `/admin/` and confirm at least one managed playlist is activated/enabled;
-- after activation, confirm `/data/managed-state.json` exists and remains writable by the runtime user;
-- if intentionally using the legacy compatibility path, confirm the selected YAML exists and validates;
-- do not leave both `/data/managed-state.json` and the default `/data/news-bulletin-playlist.yaml` in place.
+- open `/admin/` and confirm at least one managed playlist is activated/enabled;
+- after activation, confirm `/data/managed-state.json` exists and remains writable by the runtime user.
 
-**Startup reports ambiguous managed/legacy configuration**
+**Startup reports obsolete YAML configuration**
 
-- decide which path the installation should use;
-- for normal operation, retain `/data/managed-state.json` and remove/relocate the obsolete default legacy YAML;
-- for an intentional legacy deployment, remove managed state or explicitly select the intended legacy file with `NEWS_PLAYLIST_CONFIG`.
+- remove any non-empty `NEWS_PLAYLIST_CONFIG` setting;
+- remove or relocate `/data/news-bulletin-playlist.yaml` after confirming `/data/managed-state.json` is the intended configuration;
+- do not delete or rewrite `managed-state.json` as part of this cleanup.
 
 **Spotify says Not connected / Reauthorization required**
 
