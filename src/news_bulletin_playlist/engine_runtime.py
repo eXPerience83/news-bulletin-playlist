@@ -17,11 +17,7 @@ from types import FrameType
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
-from news_bulletin_playlist.effective_config import (
-    CONFIG_PATH_ENV,
-    DEFAULT_CONFIG_FILENAME,
-    load_effective_config,
-)
+from news_bulletin_playlist.effective_config import load_effective_config
 from news_bulletin_playlist.engine import (
     DEFAULT_ENGINE_INTERVAL,
     Clock,
@@ -1171,12 +1167,6 @@ def _build_managed_admin_service(
     rate_limit_journal: SpotifyRateLimitJournal | None = None,
 ) -> ManagedAdminService | None:
     if spotify_auth is None:
-        return None
-    explicit = environ.get(CONFIG_PATH_ENV)
-    if explicit is not None and explicit.strip():
-        return None
-    legacy_path = data_dir / DEFAULT_CONFIG_FILENAME
-    if legacy_path.is_symlink() or legacy_path.exists():
         return None
 
     def client_factory(access_token: str) -> PlaylistProvisioningClient:
