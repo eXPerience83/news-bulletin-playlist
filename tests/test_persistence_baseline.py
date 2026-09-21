@@ -18,7 +18,6 @@ from news_bulletin_playlist.spotify.public_detector import PublicDetectorJournal
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
-
 EXPECTED_CLEAN_TABLES = {
     "database_format",
     "diagnostic_events",
