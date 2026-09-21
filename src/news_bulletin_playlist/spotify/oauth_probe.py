@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import getpass
-import hashlib
 import hmac
 import json
 import os
@@ -19,7 +17,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, cast
 
-from news_bulletin_playlist.spotify.auth import SPOTIFY_CALLBACK_PATH
+from news_bulletin_playlist.spotify.auth import SPOTIFY_CALLBACK_PATH, create_code_challenge
 from news_bulletin_playlist.spotify.client import SpotifyClient
 from news_bulletin_playlist.spotify.probe import run_catalog_probe, run_write_probe
 
@@ -53,11 +51,6 @@ def scopes_for_mode(write: bool) -> tuple[str, ...]:
 
 def create_code_verifier() -> str:
     return secrets.token_urlsafe(64)
-
-
-def create_code_challenge(verifier: str) -> str:
-    digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
 def build_authorize_url(
