@@ -1,5 +1,11 @@
 # Post-#130 source expansion — public + authenticated technical intake
 
+> **Historical investigation snapshot.** The editorial/source observations may remain useful, but
+> the RSS-to-Spotify matcher/provider-watch implementation gates below belong to the retired
+> pre-Spotify-first runtime. Current source promotion uses the Spotify-first contracts in
+> [`../SOURCE_CATALOG.md`](../SOURCE_CATALOG.md) and
+> [`../SOURCE_SELECTION.md`](../SOURCE_SELECTION.md).
+
 Date: 2026-09-05
 
 This investigation records the first post-#130 source-expansion intake. Public web/feed discovery was followed by a bounded authenticated Spotify **GET-only** catalogue/matcher review. No playlist, metadata, cover, item or authorization state was mutated.

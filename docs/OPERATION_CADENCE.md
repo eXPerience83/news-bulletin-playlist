@@ -13,7 +13,7 @@ configured with `NEWS_PLAYLIST_INTERVAL_SECONDS`.
 
 Each cycle:
 
-1. loads the effective managed/manual configuration;
+1. loads the effective configuration compiled from the built-in catalog and managed installation state;
 2. observes the public detector state for required sources;
 3. decides which official Spotify catalogues, if any, are due;
 4. refreshes only those catalogues;

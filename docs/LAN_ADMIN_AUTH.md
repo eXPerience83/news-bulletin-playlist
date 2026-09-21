@@ -1,12 +1,15 @@
-# LAN development Spotify authorization
+# Trusted-LAN Spotify administration
 
-The production-grade HTTPS/reverse-proxy administration design remains available and is tracked for broader exposure in #40. For the current trusted TrueNAS development LAN, the runtime also supports an explicit LAN-only administration mode so first authorization can be completed entirely in the Web UI without a shell.
+The hardened HTTPS/reverse-proxy administration design remains available for deployments that need
+it. The current TrueNAS production choice is explicit trusted-LAN administration: the runtime keeps
+the backend private to the LAN and supports completing Spotify authorization entirely in the Web UI
+without a shell.
 
 ## Safety boundary
 
 LAN mode uses HTTP Basic authentication without TLS. Enable it only on a trusted private network. Do not forward port `8788` from the router, publish it through a tunnel/funnel, or expose it to an untrusted network.
 
-The simplest no-shell TrueNAS development setup adds these values to the local Custom App YAML:
+The current no-shell TrueNAS LAN setup adds these values to the local Custom App YAML:
 
 ```yaml
 environment:

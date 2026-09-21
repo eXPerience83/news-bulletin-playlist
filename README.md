@@ -151,7 +151,10 @@ Spotify playlist descriptions are plain text from the Web API contract. Managed 
 
 Copyright (c) 2026 eXPerience83. All rights reserved.
 
-The current codebase is not offered under an open-source license. No permission is granted to use, copy, modify, distribute, sublicense or otherwise exploit the source code unless separately authorized in writing by the copyright holder.
+The current codebase is not offered under an open-source license. No permission is granted to use,
+copy, modify, distribute, sublicense or otherwise exploit the current repository state unless
+separately authorized in writing by the copyright holder. This does not revoke rights already
+granted for historical copies that were distributed under the MIT License.
 
 ## Security
 
@@ -161,18 +164,42 @@ The current TrueNAS production choice is explicit trusted-LAN administration: se
 
 ## Roadmap
 
-The original RSS/matching implementation roadmap is recorded in the [P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13) for historical context. The current Spotify-first architecture supersedes that ingestion/matching path; issues #253-#258 record the detector, catalogue-ingestion, cutover and retirement work.
+Version **0.1.0** is the current persistence/runtime baseline. `1.0.0` remains a later product
+milestone for a sufficiently mature administration experience rather than a persistence-format
+milestone.
 
-1. **P0 — validated foundation** — provider contracts and watchdog, hardened container/TrueNAS runtime, plus Spotify catalogue/write probes.
-2. **P1 — production multi-playlist engine — complete**:
-   - [x] **P1.1 / #14** — source, canonical edition and playlist configuration/domain model; completed via #21.
-   - [x] **P1.2 / #15** — shared RSS collection and canonical normalization; completed via #22.
-   - [x] **P1.3 / #16** — SQLite persistence, migrations and 30-day operational retention; completed via #26.
-   - [x] **P1.4 / #17** — deterministic source-to-Spotify episode matching; completed via #27.
-   - [x] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation; completed via #29.
-   - [x] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI; completed via #30.
-   - [x] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime; completed via #31.
-3. **Managed catalog validation — current** — operate Spain-focused Spanish plus initial international ES/EN/FR/DE/PL playlists from the same TrueNAS instance, export sanitized diagnostics and adjust source/policy choices from real operation.
-4. **Expansion** — add more concise, deterministic sources and playlist definitions without duplicating the engine.
+### Current work
 
-Parallel/non-blocking product work such as the playlist cover-art system in #12 may land when its configuration hook is stable, but it must never block bulletin synchronization.
+1. **Managed catalog validation** — operate Spain-focused Spanish plus the initial international
+   playlists from the same TrueNAS instance, review sanitized diagnostics and refine source/policy
+   choices from real operation.
+2. **Administration maturity** — continue toward a UI that can manage playlists and supported
+   Spotify-first sources without restoring a second runtime configuration path.
+3. **Source/catalog expansion** — add more concise, deterministic sources and playlist definitions
+   without duplicating the engine.
+4. **Distribution readiness** — keep #297 non-blocking for private development while investigating a
+   clearly supported low/zero-quota Spotify change signal before reconsidering broad public
+   distribution.
+
+### Historical implementation milestones
+
+The original P0/P1 RSS/matching roadmap is retained only for provenance in the
+[P1 umbrella issue #13](https://github.com/eXPerience83/news-bulletin-playlist/issues/13).
+The current Spotify-first architecture supersedes that ingestion/matching path; issues #253-#258
+record the detector, catalogue-ingestion, cutover and retirement work.
+
+- **P0 — validated foundation** — provider contracts/watchdog, hardened container/TrueNAS runtime
+  and Spotify catalogue/write probes.
+- **P1 — completed historical implementation**:
+  - [x] **P1.1 / #14** — source, canonical edition and playlist configuration/domain model; completed via #21.
+  - [x] **P1.2 / #15** — shared RSS collection and canonical normalization; completed via #22.
+  - [x] **P1.3 / #16** — SQLite persistence, migrations and 30-day operational retention; completed via #26.
+  - [x] **P1.4 / #17** — deterministic source-to-Spotify episode matching; completed via #27.
+  - [x] **P1.5 / #18** — desired-state generation and multi-playlist Spotify reconciliation; completed via #29.
+  - [x] **P1.6 / #19** — production Spotify OAuth callback/token lifecycle through the private Web UI; completed via #30.
+  - [x] **P1.7 / #20** — integrated engine cycle, scheduler and operational status in the durable runtime; completed via #31.
+
+These historical bullets do **not** describe the current runtime data path or database schema.
+
+Parallel/non-blocking product work such as the playlist cover-art system in #12 may land when its
+configuration hook is stable, but it must never block bulletin synchronization.

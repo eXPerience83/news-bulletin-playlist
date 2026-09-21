@@ -235,8 +235,19 @@ For the controlled TrueNAS cutover:
 3. deploy the new image; it creates the v1 SQLite database automatically;
 4. expect the first cycle to rebuild detector/catalogue/destination evidence conservatively;
 5. verify existing Spotify destination IDs are reused and playlists converge without being recreated;
-6. keep the old SQLite file until the new baseline has been validated, then archive/remove it
+6. inspect the new database read-only and verify database format 1 contains only the expected
+   Spotify-first schema;
+7. allow subsequent cycles to confirm pending snapshots and demonstrate quiet-cycle reuse without
+   unnecessary catalogue reads;
+8. restart/redeploy once more after v1 state exists and verify the runtime reuses that state without
+   another bootstrap;
+9. keep the old SQLite file until the new baseline has been validated, then archive/remove it
    deliberately together with any old `-wal`/`-shm` companions.
+
+Do not treat container `healthy` as sufficient cutover evidence. The production validation for
+0.1.0 demonstrated the intended sequence: bootstrap into the clean v1 database, natural
+reconciliation/pending convergence, exact reuse of existing Spotify destination IDs, and then a
+real container replacement that reopened the same v1 state without refreshing every catalogue.
 
 The clean database intentionally starts without historical diagnostics/request metrics. Request
 metric coverage is marked incomplete at database creation and becomes complete naturally after the
@@ -274,4 +285,5 @@ The current runtime data flow is:
 
 The health endpoint performs a small real write, flush and `fsync` against `/data`, then removes the temporary probe file. This makes storage-full, quota and write failures observable without conflating ordinary upstream failures with container health.
 
-Older RSS/canonical/matching descriptions in historical investigation documents are retained only for provenance and upgrade context.
+Older RSS/canonical/matching descriptions in historical investigation documents are retained only
+for provenance. They are not current runtime, persistence or upgrade guidance.

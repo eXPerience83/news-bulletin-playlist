@@ -1,5 +1,10 @@
 # Onda Cero duplicate semantic edition investigation — 2026-09-15
 
+> **Historical pre-0.1 incident record.** The schema-v6 matcher/planner tables and
+> `MATCHED`/`AMBIGUOUS` lifecycle described below were retired before database format 1. They are
+> not present in the current SQLite baseline and are not executed by the Spotify-first runtime.
+> Keep this document only as engineering provenance.
+
 ## Trigger
 
 Production validation after #210 still showed `matching_reason_evidence_recovery_count=1` for Onda Cero with two `show_episodes` pages on roughly every scheduler cycle. The v6 matched-recovery backoff did not become durable.
