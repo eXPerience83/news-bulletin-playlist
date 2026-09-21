@@ -1017,7 +1017,6 @@ class PublicDetector:
                         "oembed_failure",
                         observed_at=observed,
                         response_reason=exc.reason,
-                        response_capture=exc.capture,
                     )
                 except PublicShowDetectorError:
                     self._emit_failure(
