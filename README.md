@@ -104,7 +104,7 @@ Production `/admin/` and the Spotify callback are intentionally fail-closed. Whe
 
 ## Development
 
-The project targets **Python 3.14**. PyYAML is the only runtime dependency; development checks use pytest, Ruff and mypy.
+The project targets **Python 3.14** and currently has no third-party runtime dependencies; development checks use pytest, Ruff and mypy.
 
 ```bash
 python3.14 -m venv .venv
@@ -132,7 +132,7 @@ Normal operation separates immutable application knowledge from installation-own
 
 The managed state is compiled with the built-in catalog into the same `EngineConfig` used by the production engine. Ordinary administration happens through `/admin/`: built-in source definitions can be assigned or unassigned from playlists but are not deleted from the catalog. A source selected by several active playlists is refreshed at most once when a detector change, inactivity audit or explicit stale-item escalation makes that catalogue due; unchanged source state is reused locally. Duration-only changes are local playlist policy and do not require a Spotify reconnect or metadata write.
 
-The schema-v1 full-YAML loader remains an **advanced/manual compatibility path**, not the default first-run workflow. [`config/news-bulletin-playlist.example.yaml`](config/news-bulletin-playlist.example.yaml) is retained for that path. An explicit `NEWS_PLAYLIST_CONFIG` selects a YAML configuration; otherwise the runtime prefers `/data/managed-state.json` when present and falls back to `/data/news-bulletin-playlist.yaml`. If managed state and that default YAML both exist, startup fails closed rather than guessing which configuration should win.
+The runtime now has one installation configuration model: the built-in catalog plus versioned `/data/managed-state.json`, administered through `/admin/`. The pre-1.0 full-YAML runtime path has been retired. To avoid silently starting a different configuration, a non-empty obsolete `NEWS_PLAYLIST_CONFIG` or a leftover `/data/news-bulletin-playlist.yaml` causes startup to fail with an actionable removal message; the obsolete file is never read, rewritten or deleted automatically.
 
 The current built-in runtime source IDs are `ser`, `rne`, `ondacero`, `abc`, `cnn`, `un_news_en`, `reuters_world`, `nplus_univision`, `dw_actualidad`, `un_news_es`, `rfi_fr`, `dlf_news` and `rmf_fakty`. Research candidates remain outside ordinary selectable production configuration until their Spotify show identity, catalogue behavior, parser/filter contract, editorial scope and typical episode duration have been checked.
 
