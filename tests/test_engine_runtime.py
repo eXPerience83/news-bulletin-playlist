@@ -36,7 +36,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     activate_template,
 )
-from news_bulletin_playlist.models import PlaylistId
+from news_bulletin_playlist.models import PlaylistId, SourceId
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.runtime import AdminSecurity
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
@@ -238,6 +238,7 @@ def test_unconfigured_runtime_stops_cleanly_when_requested(tmp_path: Path) -> No
     stop.set()
 
     assert serve(host="127.0.0.1", port=0, data_dir=tmp_path, stop_event=stop, environ={}) == 0
+
 
 def test_operational_status_page_reports_cycle_without_secret_material() -> None:
     status = OperationalStatus(configured=True)
