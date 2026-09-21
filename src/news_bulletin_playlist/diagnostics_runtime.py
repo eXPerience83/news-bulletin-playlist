@@ -372,7 +372,8 @@ def _safe_operational_status_page(
   <h2>Sources</h2>
   <table>
     <thead><tr>
-      <th>Source</th><th>Result</th><th>Last refresh</th><th>Spotify state</th>
+      <th>Source</th><th>Result</th><th>Detector success</th>
+      <th>Catalogue refresh</th><th>Spotify state</th>
     </tr></thead>
     <tbody>{source_rows}</tbody>
   </table>
@@ -391,7 +392,7 @@ def _safe_operational_status_page(
 
 def _safe_source_rows(cycle: EngineCycleResult | None) -> str:
     if cycle is None or not cycle.sources:
-        return '<tr><td colspan="4">No source cycle data yet.</td></tr>'
+        return '<tr><td colspan="5">No source cycle data yet.</td></tr>'
     rows = []
     for source in cycle.sources:
         result = "Success" if source.ok else "Failed — see admin diagnostics"
@@ -399,7 +400,8 @@ def _safe_source_rows(cycle: EngineCycleResult | None) -> str:
             "<tr>"
             f"<td><code>{html.escape(str(source.source_id))}</code></td>"
             f"<td>{result}</td>"
-            f"<td>{_format_optional_time(source.last_success_at)}</td>"
+            f"<td>{_format_optional_time(source.last_detector_success_at)}</td>"
+            f"<td>{_format_optional_time(source.last_catalogue_refresh_at)}</td>"
             f"<td>{source.episode_count} cached / {source.api_request_count} API requests</td>"
             "</tr>"
         )
