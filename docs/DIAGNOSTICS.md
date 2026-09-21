@@ -69,9 +69,14 @@ The row cap is intentionally much larger than the interactive page size so ordin
 event density can retain a meaningful multi-day/30-day window. Export metadata reports the current
 event count, oldest/newest retained timestamps and whether the row cap is active.
 
-The fields and textual values accepted by the durable event model are allow-listed. Diagnostic
-persistence is fail-soft: if the event store cannot be written, the playlist engine continues and
-emits only a fixed safe logging classification.
+The fields and textual values accepted by the durable event model are allow-listed. Explicit
+managed-playlist metadata synchronization records only a sanitized `metadata_outcome`:
+`applied_with_attribution` when Spotify accepted the rendered project footer, or
+`applied_without_attribution` when the exact HTTP 400 fallback succeeded with the base description.
+The rejected provider body and user description text are not copied into diagnostics.
+
+Diagnostic persistence is fail-soft: if the event store cannot be written, the playlist engine
+continues and emits only a fixed safe logging classification.
 
 ## Authenticated diagnostics UI
 
