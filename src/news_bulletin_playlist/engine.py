@@ -125,7 +125,8 @@ class SourceCycleOutcome:
     refreshed: bool
     refresh_reason: str | None
     api_request_count: int
-    last_success_at: datetime | None
+    last_detector_success_at: datetime | None
+    last_catalogue_refresh_at: datetime | None
     detector_ok: bool
     detector_changed: bool
     detector_false_negative: bool = False
@@ -562,7 +563,10 @@ class EngineRunner:
                 refreshed=True,
                 refresh_reason=reason.value,
                 api_request_count=snapshot.request_count,
-                last_success_at=now,
+                last_detector_success_at=(
+                    None if public is None else public.last_detector_success_at
+                ),
+                last_catalogue_refresh_at=now,
                 detector_ok=_detector_ok(public, now),
                 detector_changed=source.id in detector.changed_source_ids,
                 detector_false_negative=false_negative,
@@ -591,7 +595,10 @@ class EngineRunner:
                 refreshed=False,
                 refresh_reason=reason.value,
                 api_request_count=0,
-                last_success_at=None if state is None else state.last_refresh_at,
+                last_detector_success_at=(
+                    None if public is None else public.last_detector_success_at
+                ),
+                last_catalogue_refresh_at=None if state is None else state.last_refresh_at,
                 detector_ok=_detector_ok(public, now),
                 detector_changed=source.id in detector.changed_source_ids,
                 error=_safe_error(exc),
@@ -615,7 +622,8 @@ class EngineRunner:
             refreshed=False,
             refresh_reason=None,
             api_request_count=0,
-            last_success_at=None if state is None else state.last_refresh_at,
+            last_detector_success_at=(None if public is None else public.last_detector_success_at),
+            last_catalogue_refresh_at=None if state is None else state.last_refresh_at,
             detector_ok=_detector_ok(public, now),
             detector_changed=source_id in detector.changed_source_ids,
             error=None if state is not None else "Spotify-first source has no persisted catalogue",
@@ -644,7 +652,10 @@ class EngineRunner:
                 refreshed=False,
                 refresh_reason=reason.value,
                 api_request_count=0,
-                last_success_at=None if state is None else state.last_refresh_at,
+                last_detector_success_at=(
+                    None if public is None else public.last_detector_success_at
+                ),
+                last_catalogue_refresh_at=None if state is None else state.last_refresh_at,
                 detector_ok=_detector_ok(public, now),
                 detector_changed=source.id in detector.changed_source_ids,
                 error=_safe_error(exc),

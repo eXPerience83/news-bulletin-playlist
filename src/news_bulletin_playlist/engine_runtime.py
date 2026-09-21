@@ -1287,8 +1287,8 @@ def _operational_status_page(
   <h2>Sources</h2>
   <table>
     <thead><tr>
-      <th>Source</th><th>Result</th><th>Detector</th><th>Last success</th>
-      <th>Editions</th><th>Error</th>
+      <th>Source</th><th>Result</th><th>Detector</th><th>Detector success</th>
+      <th>Catalogue refresh</th><th>Editions</th><th>Error</th>
     </tr></thead>
     <tbody>{source_rows}</tbody>
   </table>
@@ -1314,7 +1314,7 @@ def _engine_label(snapshot: OperationalStatusSnapshot) -> str:
 
 def _source_rows(cycle: EngineCycleResult | None) -> str:
     if cycle is None or not cycle.sources:
-        return '<tr><td colspan="6">No source cycle data yet.</td></tr>'
+        return '<tr><td colspan="7">No source cycle data yet.</td></tr>'
     rows = []
     for source in cycle.sources:
         result = "Success" if source.ok else "Failed"
@@ -1328,7 +1328,8 @@ def _source_rows(cycle: EngineCycleResult | None) -> str:
             f"<td><code>{html.escape(str(source.source_id))}</code></td>"
             f"<td>{result}</td>"
             f"<td>{detector}</td>"
-            f"<td>{_format_optional_time(source.last_success_at)}</td>"
+            f"<td>{_format_optional_time(source.last_detector_success_at)}</td>"
+            f"<td>{_format_optional_time(source.last_catalogue_refresh_at)}</td>"
             f"<td>{source.episode_count} cached / {source.api_request_count} API requests</td>"
             f"<td>{_escape_optional(source.error)}</td>"
             "</tr>"

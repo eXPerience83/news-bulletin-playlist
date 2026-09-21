@@ -428,7 +428,12 @@ def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
                     "parser_fallback_count": source.parser_fallback_count,
                     "filter_rejected_count": source.filter_rejected_count,
                     "removed_count": source.removed_count,
-                    "last_success_at": _optional_timestamp(source.last_success_at),
+                    "last_detector_success_at": _optional_timestamp(
+                        source.last_detector_success_at
+                    ),
+                    "last_catalogue_refresh_at": _optional_timestamp(
+                        source.last_catalogue_refresh_at
+                    ),
                 }
                 for source in cycle.sources
             ],

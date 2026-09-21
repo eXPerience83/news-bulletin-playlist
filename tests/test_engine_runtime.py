@@ -255,7 +255,8 @@ def test_operational_status_page_reports_cycle_without_secret_material() -> None
                 refreshed=False,
                 refresh_reason="change",
                 api_request_count=0,
-                last_success_at=NOW - timedelta(minutes=10),
+                last_detector_success_at=NOW - timedelta(minutes=2),
+                last_catalogue_refresh_at=NOW - timedelta(minutes=10),
                 detector_ok=False,
                 detector_changed=True,
                 error="source unavailable",
@@ -285,6 +286,10 @@ def test_operational_status_page_reports_cycle_without_secret_material() -> None
     assert "2026-08-30T10:10:00Z" in body
     assert "source unavailable" in body
     assert "<th>Detector</th>" in body
+    assert "<th>Detector success</th>" in body
+    assert "<th>Catalogue refresh</th>" in body
+    assert "2026-08-30T09:58:00Z" in body
+    assert "2026-08-30T09:50:00Z" in body
     assert 'href="/admin/diagnostics">Degraded · inspect diagnostics</a>' in body
     assert "1 cached / 0 API requests" in body
     assert "1 desired / 1 verified" in body
