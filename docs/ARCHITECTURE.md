@@ -265,17 +265,20 @@ invalid, deterministic stale-item rejection can use the separate stale-escalatio
 the relevant official show catalogues, rebuild desired state from authoritative catalogue evidence
 and retry safely.
 
-### Legacy database compatibility
+### Pre-0.1 database boundary
 
-Released migrations created tables for canonical RSS editions, Spotify matching and the old planner.
+Database format 1 is a clean Spotify-first baseline. It deliberately does **not** contain the
+private-development RSS/canonical/matcher/planner tables, does not contain `schema_migrations` and
+does not replay the former v1-v8 migration chain.
 
-Those schema migrations remain so an existing database can upgrade without destructive surgery.
-Current runtime code does not use those rows to decide source refreshes, desired playlists or
-destination writes.
+The pre-0.1 database at `/data/news-bulletin-playlist.sqlite3` is a separate rollback artifact
+during the controlled cutover only. The 0.1.0 runtime reads and writes
+`/data/news-bulletin-playlist-v1.sqlite3` and never imports rows from the old file.
 
-Legacy diagnostic keys likewise remain allowlisted so already-persisted diagnostic history can be
-rendered/exported after upgrade. That compatibility surface must not be mistaken for an active
-legacy runtime path.
+Compatibility fields that existed only to render pre-Spotify-first diagnostic rows were retired
+with this baseline. From database format 1 forward, persistence compatibility is explicit: every
+format change requires a reviewed forward migration from a supported format rather than legacy
+schema replay.
 
 ## Desired playlist state
 
