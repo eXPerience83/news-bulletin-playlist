@@ -13,10 +13,10 @@ from news_bulletin_playlist.persistence import (
     SQLiteStore,
 )
 from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
-from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
-from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import PublicDetectorJournal
+from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
+from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
 
 EXPECTED_CLEAN_TABLES = {
