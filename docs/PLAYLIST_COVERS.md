@@ -42,18 +42,24 @@ state does not depend on Spotify metadata availability.
 
 ### Playlist description behavior
 
-The Spotify Web API receives only the editable, provider-agnostic base description. The application
-does not append the repository URL to that provider field.
+Managed state stores only the editable, provider-agnostic base description. On explicit Spotify
+metadata synchronization, the application first renders one bounded project-attribution line:
 
-This choice is based on live differential validation of the current Web API path: name-only updates,
-base-description updates and cover uploads succeeded, while otherwise equivalent descriptions that
-contained the external project URL returned HTTP 400. Spotify's published Change Playlist Details
-contract documents `description` as a string but does not document that observed URL-content
-restriction, so the project treats it as provider behavior rather than a portable API guarantee.
+`Proyecto / Project: https://github.com/eXPerience83/news-bulletin-playlist`
 
-Historical managed state that contains the old terminal `Proyecto: <repository URL>` footer is
-cleaned when it is next validated/edited. The project/repository link remains available in project
-documentation rather than being injected into Spotify metadata.
+Live differential validation found that the attributed description can return Spotify HTTP 400 even
+when name-only/base-description updates and cover uploads succeed. The runtime therefore retries
+**only that definitive HTTP 400 metadata validation failure** once with the base description. Auth,
+rate-limit, 5xx and transport failures remain visible and are not masked by the fallback.
+
+This provider-specific behavior is not documented by Spotify's public Change Playlist Details
+contract, so the project does not treat URL rejection as a portable API rule. The remaining
+observability gap—distinguishing an ordinary attributed success from a successful
+`applied_without_attribution` fallback—is tracked in #133.
+
+Historical managed state that already contains a terminal `Proyecto: <repository URL>` or
+`Proyecto / Project: <repository URL>` footer is stripped back to the base description when
+validated/edited so repeated synchronization cannot duplicate attribution.
 
 ## When covers are uploaded
 
