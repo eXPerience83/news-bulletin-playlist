@@ -410,6 +410,7 @@ unless explicitly updated to say otherwise:
 
 - `docs/P0_FINDINGS.md`;
 - `docs/P1_5_RECONCILIATION.md`;
+- `docs/SOURCE_EXPANSION_ES_LAT.md`;
 - `docs/architecture/spotify-shadow-planner.md`;
 - investigation notes under `docs/investigations/`.
 
