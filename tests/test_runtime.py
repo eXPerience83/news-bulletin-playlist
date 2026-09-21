@@ -18,7 +18,7 @@ import pytest
 import news_bulletin_playlist.runtime as runtime
 from news_bulletin_playlist.persistence import (
     DEFAULT_DB_FILENAME,
-    LATEST_SCHEMA_VERSION,
+    DATABASE_FORMAT_VERSION,
     SQLiteStore,
 )
 from news_bulletin_playlist.runtime import (
@@ -131,7 +131,7 @@ def test_ensure_data_dir_creates_and_verifies_writable_directory(tmp_path: Path)
     assert data_dir.is_dir()
 
 
-def test_initialize_runtime_storage_creates_migrated_database(tmp_path: Path) -> None:
+def test_initialize_runtime_storage_creates_clean_database(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
 
     database_path = runtime.initialize_runtime_storage(data_dir)
@@ -139,7 +139,7 @@ def test_initialize_runtime_storage_creates_migrated_database(tmp_path: Path) ->
 
     assert database_path == data_dir / DEFAULT_DB_FILENAME
     assert database_path.is_file()
-    assert SQLiteStore(database_path).schema_version() == LATEST_SCHEMA_VERSION
+    assert SQLiteStore(database_path).format_version() == DATABASE_FORMAT_VERSION
 
 
 def test_runtime_auth_is_disabled_by_default(tmp_path: Path) -> None:
