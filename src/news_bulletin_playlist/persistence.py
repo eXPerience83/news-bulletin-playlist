@@ -9,7 +9,7 @@ from pathlib import Path
 
 from news_bulletin_playlist.models import PlaylistId
 
-DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
+DEFAULT_DB_FILENAME = "news-bulletin-playlist-v1.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
 DATABASE_FORMAT_VERSION = 1
 
@@ -113,6 +113,7 @@ _RETIRED_PRIVATE_TABLES = frozenset(
         "spotify_planner_unresolved_state",
     }
 )
+
 
 class SQLiteStore:
     """Small explicit SQLite store for durable multi-playlist operational state."""
