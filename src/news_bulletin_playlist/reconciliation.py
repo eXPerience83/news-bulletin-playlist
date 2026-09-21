@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -10,7 +8,7 @@ from enum import StrEnum
 from functools import partial
 from typing import Any, Protocol
 
-from news_bulletin_playlist.desired_state import DesiredPlaylistState
+from news_bulletin_playlist.desired_state import DesiredPlaylistState, desired_fingerprint
 from news_bulletin_playlist.models import PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.snapshot_pending import (
@@ -180,7 +178,7 @@ def _reconcile_playlist_items(
     if store is not None and attestation_updated_at is None:
         raise ValueError("playlist attestation requires an update timestamp")
 
-    desired_fingerprint = _desired_fingerprint(desired)
+    desired_fingerprint = desired_fingerprint(desired)
     pending_journal = PendingSnapshotJournal(store) if store is not None else None
     pending_confirmation: PendingSnapshotConfirmation | None = None
     pending_snapshot: str | None = None
@@ -1104,15 +1102,6 @@ def _visible_positions_match(
     if len(slots) != len(desired):
         return False
     return all(slot is None or slot == desired[index] for index, slot in enumerate(slots))
-
-
-def _desired_fingerprint(desired: Sequence[str]) -> str:
-    encoded = json.dumps(
-        list(desired),
-        ensure_ascii=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _attested_prewrite_snapshot(
