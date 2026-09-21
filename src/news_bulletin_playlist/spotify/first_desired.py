@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from news_bulletin_playlist.desired_state import (
     DesiredPlaylistItem,
     DesiredPlaylistState,
-    desired_fingerprint,
+    desired_fingerprint as desired_fingerprint,
     duration_eligibility_decision,
 )
 from news_bulletin_playlist.models import PlaylistDefinition, SourceDefinition, SourceId
