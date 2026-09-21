@@ -60,11 +60,21 @@ Never log, commit, persist in diagnostics, or expose in user-visible errors:
 - authorization codes;
 - PKCE verifiers;
 - admin passwords or other credentials;
-- raw provider response bodies unless a temporary isolated investigation explicitly requires them.
+- raw authenticated provider/OAuth response bodies.
 
-When temporary raw provider instrumentation is needed for a LAB investigation, keep it outside committed/product diagnostics, sanitize the final report, and remove temporary dumps/debugging before finishing.
+One narrow production exception is allowed for #266-style public detector schema drift: the
+unauthenticated Spotify Embed/oEmbed response body may be retained, bounded by the detector response
+limit, on the first response-contract failure in a consecutive degraded streak. That capture must
+never include request headers/cookies or OAuth material, must not be printed to stdout or rendered
+inline in the normal diagnostics table, and may be exposed only through authenticated diagnostic
+evidence such as the ZIP export. Repeated failures must not create a capture storm.
 
-Diagnostics should prefer bounded, allowlisted metadata that is sufficient to reconstruct an incident without exposing raw URI lists or credentials.
+When temporary raw instrumentation outside that narrow exception is needed for a LAB investigation,
+keep it outside committed/product diagnostics, sanitize the final report, and remove temporary
+dumps/debugging before finishing.
+
+Diagnostics should otherwise prefer bounded, allowlisted metadata that is sufficient to reconstruct
+an incident without exposing raw URI lists or credentials.
 For bounded diagnostics exports, derive the exported rows and `truncated` from one SQLite read snapshot; do not combine separately committed list and count queries.
 
 ## Architecture invariants
