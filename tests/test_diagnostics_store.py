@@ -37,7 +37,7 @@ def test_diagnostics_survive_store_recreation_and_share_application_database(
     tmp_path: Path,
 ) -> None:
     operational, diagnostics = _stores(tmp_path)
-    assert operational.schema_version() >= 2
+    assert operational.format_version() == 1
 
     event_id = diagnostics.record(
         occurred_at=NOW,
