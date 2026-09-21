@@ -1290,7 +1290,8 @@ def _operational_status_page(
   <h2>Sources</h2>
   <table>
     <thead><tr>
-      <th>Source</th><th>Result</th><th>Detector</th><th>Last success</th><th>Editions</th><th>Error</th>
+      <th>Source</th><th>Result</th><th>Detector</th><th>Last success</th>
+      <th>Editions</th><th>Error</th>
     </tr></thead>
     <tbody>{source_rows}</tbody>
   </table>
