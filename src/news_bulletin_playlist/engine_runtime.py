@@ -1011,6 +1011,7 @@ def serve(
     if spotify_auth is not None:
         spotify_auth.set_request_metrics(request_metrics)
     rate_limit_journal = SpotifyRateLimitJournal(store)
+    config = _load_runtime_config(data_dir, env)
     managed_admin_service = _build_managed_admin_service(
         data_dir,
         spotify_auth=spotify_auth,
@@ -1018,8 +1019,9 @@ def serve(
         rate_limit_journal=rate_limit_journal,
     )
     if managed_admin_service is not None:
-        managed_admin_service.finalize_known_provisioning()
-    config = _load_runtime_config(data_dir, env)
+        finalized = managed_admin_service.finalize_known_provisioning()
+        if finalized is not None:
+            config = _load_runtime_config(data_dir, env)
     configured = config is not None
     if configured and spotify_auth is None:
         raise RuntimeError(
