@@ -2,7 +2,7 @@
 FROM python:3.14.7-slim-trixie@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2 AS builder
 
 WORKDIR /build
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml README.md ./
 COPY src ./src
 RUN python -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 
@@ -11,7 +11,6 @@ FROM python:3.14.7-slim-trixie@sha256:caaf356f40667c496d405780745b9ac25771c189a5
 ARG SOURCE_REVISION=dev
 
 LABEL org.opencontainers.image.source="https://github.com/eXPerience83/news-bulletin-playlist"
-LABEL org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
