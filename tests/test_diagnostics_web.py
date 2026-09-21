@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import threading
@@ -146,6 +147,59 @@ def test_diagnostics_page_contains_only_sanitized_event_fields() -> None:
     assert "/admin/diagnostics/export.zip?" in payload
     assert "limit=500" in payload
     assert SECRET not in payload
+
+
+def test_public_response_capture_is_hidden_inline_and_exported_as_exact_attachment() -> None:
+    raw_body = b"<html><body>simulated-public-schema-drift</body></html>"
+    event = DiagnosticEvent(
+        event_id=42,
+        occurred_at=NOW,
+        severity=DiagnosticSeverity.WARNING,
+        component="spotify.public_detector",
+        event_name="public_detector_failed",
+        cycle_id="cycle-public-schema-test",
+        source_id="ser",
+        playlist_id=None,
+        details={
+            "detector_outcome": "response_failure",
+            "detector_response_reason": "embed_shape",
+            "public_response_capture": True,
+            "public_response_surface": "embed",
+            "public_response_content_type": "text/html",
+            "public_response_size_bytes": len(raw_body),
+            "public_response_sha256": hashlib.sha256(raw_body).hexdigest(),
+            "public_response_truncated": False,
+            "public_response_body_b64": base64.b64encode(raw_body).decode("ascii"),
+        },
+    )
+
+    page = render_diagnostics_page(
+        events=(event,),
+        filters=DiagnosticFilters(hours=24, limit=200),
+    )
+    assert raw_body not in page
+    assert b"public_response_body=&lt;captured in ZIP&gt;" in page
+    assert b"detector_response_reason=embed_shape" in page
+
+    bundle = build_diagnostic_bundle(
+        events=(event,),
+        generated_at=NOW,
+        last_cycle=None,
+        retention_days=30,
+        max_events=10_000,
+    )
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        names = set(archive.namelist())
+        attachment = "public-responses/event-42-ser-embed.html"
+        assert attachment in names
+        assert archive.read(attachment) == raw_body
+        assert raw_body not in archive.read("diagnostics.jsonl")
+        assert raw_body not in archive.read("diagnostics.txt")
+        event_doc = json.loads(archive.read("diagnostics.jsonl").decode().strip())
+        manifest = json.loads(archive.read("manifest.json"))
+    assert "public_response_body_b64" not in event_doc["details"]
+    assert event_doc["details"]["public_response_attachment"] == attachment
+    assert attachment in manifest["files"]
 
 
 def test_diagnostics_page_renders_configured_timezone_with_dst() -> None:
