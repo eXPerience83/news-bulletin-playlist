@@ -85,6 +85,51 @@ def test_activation_snapshots_defaults_instead_of_copying_the_catalog() -> None:
     assert managed.max_duration_seconds == 1800
 
 
+def test_managed_state_rejects_duplicate_playlist_ids_before_write(tmp_path: Path) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = activate_template(template, "spotify-playlist-id")
+    store = ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME)
+
+    with pytest.raises(ManagedStateError, match="managed playlist ids must be unique"):
+        store.save(ManagedState(playlists=(managed, managed)))
+
+
+def test_managed_state_rejects_duplicate_enabled_destination_before_write(
+    tmp_path: Path,
+) -> None:
+    first_template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    second_template = BUILTIN_CATALOG.playlist("international_spanish_news")
+    first = activate_template(first_template, "shared-destination")
+    second = activate_template(second_template, "other-destination")
+    second = replace(second, destination=first.destination)
+    store = ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME)
+
+    with pytest.raises(ManagedStateError, match="duplicate enabled destination"):
+        store.save(ManagedState(playlists=(first, second)))
+
+
+def test_managed_state_rejects_enabled_playlist_without_sources_before_write(
+    tmp_path: Path,
+) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = replace(activate_template(template, "spotify-playlist-id"), source_ids=())
+    store = ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME)
+
+    with pytest.raises(ManagedStateError, match="must select a source"):
+        store.save(ManagedState(playlists=(managed,)))
+
+
+def test_managed_compile_rejects_unknown_source() -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = replace(
+        activate_template(template, "spotify-playlist-id"),
+        source_ids=(SourceId("missing"),),
+    )
+
+    with pytest.raises(ManagedStateError, match="references unknown source"):
+        compile_engine_config(BUILTIN_CATALOG, ManagedState(playlists=(managed,)))
+
+
 def test_managed_state_store_round_trip_is_owner_only(tmp_path: Path) -> None:
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
     state = ManagedState(playlists=(activate_template(template, "spotify-playlist-id"),))
