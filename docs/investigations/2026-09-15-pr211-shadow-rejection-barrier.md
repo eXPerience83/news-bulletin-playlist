@@ -1,5 +1,10 @@
 # PR #211 shared-catalogue rejection barrier follow-up — 2026-09-15
 
+> **Historical pre-0.1 incident record.** This analysis belongs to the retired
+> RSS/matcher/shadow-planner runtime. Its table names, retry states and persistence barrier are not
+> part of database format 1. The current Spotify-first safety contract is documented in
+> [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
+
 ## Adversarial finding
 
 A read-only adversarial review of head `f455635aba5be57c4669becf8632eb2d6d2c6b95` confirmed the earlier A1–A5 and direct B1/B2 regressions were fixed, then found a residual interaction between a durable persistence-rejection barrier and a later shared-catalogue shadow evaluation.
