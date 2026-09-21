@@ -1,5 +1,10 @@
 # Spotify live behavior investigation — 2026-09-05
 
+> **Historical investigation snapshot.** This records revision-specific LAB evidence gathered
+> before the Spotify-first cutover was complete. Preserve it as provider/reconciliation provenance,
+> not as the current runtime or persistence contract. See
+> [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for current behavior.
+
 ## Scope
 
 This record preserves sanitized evidence gathered by running the real `news-bulletin-playlist`
