@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS spotify_pending_snapshot_confirmations (
 )
 """
 
+
 @dataclass(frozen=True, slots=True)
 class PendingSnapshotConfirmation:
     playlist_id: PlaylistId
