@@ -9,9 +9,9 @@ from datetime import datetime, timedelta
 from news_bulletin_playlist.desired_state import (
     DesiredPlaylistItem,
     DesiredPlaylistState,
-    desired_fingerprint as desired_fingerprint,
     duration_eligibility_decision,
 )
+from news_bulletin_playlist.desired_state import desired_fingerprint as desired_fingerprint
 from news_bulletin_playlist.models import PlaylistDefinition, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
