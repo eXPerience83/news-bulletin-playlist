@@ -9,7 +9,7 @@ without a shell.
 
 LAN mode uses HTTP Basic authentication without TLS. Enable it only on a trusted private network. Do not forward port `8788` from the router, publish it through a tunnel/funnel, or expose it to an untrusted network.
 
-The simplest no-shell TrueNAS development setup adds these values to the local Custom App YAML:
+The current no-shell TrueNAS LAN setup adds these values to the local Custom App YAML:
 
 ```yaml
 environment:
