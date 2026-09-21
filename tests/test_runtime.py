@@ -17,8 +17,8 @@ import pytest
 
 import news_bulletin_playlist.runtime as runtime
 from news_bulletin_playlist.persistence import (
-    DEFAULT_DB_FILENAME,
     DATABASE_FORMAT_VERSION,
+    DEFAULT_DB_FILENAME,
     SQLiteStore,
 )
 from news_bulletin_playlist.runtime import (
