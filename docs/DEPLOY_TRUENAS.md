@@ -160,7 +160,7 @@ The `/` page reports, without token material:
 - source result, last success, persisted episode count, refresh/request evidence and current error summary;
 - playlist result, last success, desired/verified count, whether Spotify changed, and current error summary.
 
-Operational cycle status is in memory; authoritative Spotify-first source/destination state, retained episode metadata, managed installation choices, request metrics/diagnostics and Spotify refresh authorization remain under `/data` and survive container restart. Released legacy canonical/match tables may also remain physically present for upgrade/history compatibility but are not current runtime authority. After restart the scheduler immediately runs a new cycle when at least one playlist is enabled and reconstructs the current status from the durable engine state.
+Operational cycle status is in memory; authoritative Spotify-first source/destination state, retained episode metadata, managed installation choices, request metrics/diagnostics and Spotify refresh authorization remain under `/data` and survive container restart. Database format 1 contains only the supported Spotify-first schema; the separate pre-0.1 SQLite file may remain temporarily beside it solely as manual rollback evidence during the controlled cutover and is never read by the new runtime. After restart the scheduler immediately runs a new cycle when at least one playlist is enabled and reconstructs the current status from the durable engine state.
 
 ### Duration evidence
 

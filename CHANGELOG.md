@@ -1,9 +1,13 @@
 # Changelog
 
-All notable product and runtime changes are recorded here. The project is still pre-release, so the
-current work remains under **Unreleased** until a stable release is cut.
+All notable product and runtime changes are recorded here. The project remains pre-release; changes
+after the latest release stay under **Unreleased** until the next stable release is cut.
 
 ## [Unreleased]
+
+No changes yet.
+
+## [0.1.0] - 2026-09-21
 
 ### Added
 

@@ -5,6 +5,11 @@ with Spotify as the first destination.
 
 > Pre-release. The runtime is Spotify-first: public Spotify state is a change signal and the official Spotify Web API show catalogue is the episode authority. This project is not affiliated with or endorsed by Spotify or any news provider.
 
+Version **0.1.0** establishes the first supported persistence compatibility baseline: database
+format 1 in `/data/news-bulletin-playlist-v1.sqlite3`. The private-development database at
+`/data/news-bulletin-playlist.sqlite3` is not migrated into this baseline. From 0.1.0 forward,
+persistence changes require explicit reviewed forward migrations from database format 1.
+
 ## Goal
 
 Run **one engine that can maintain multiple news-bulletin playlists** from shared provider data.
