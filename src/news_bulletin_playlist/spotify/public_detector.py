@@ -1311,17 +1311,19 @@ def _with_capture_surface(
     surface: str,
 ) -> PublicShowResponseError:
     capture = exc.capture
-    if capture is None or capture.surface == surface:
-        return exc
     return PublicShowResponseError(
         str(exc),
         reason=exc.reason,
-        capture=PublicResponseCapture(
-            surface=surface,
-            status=capture.status,
-            content_type=capture.content_type,
-            body=capture.body,
-            truncated=capture.truncated,
+        capture=(
+            None
+            if capture is None
+            else PublicResponseCapture(
+                surface=surface,
+                status=capture.status,
+                content_type=capture.content_type,
+                body=capture.body,
+                truncated=capture.truncated,
+            )
         ),
     )
 
