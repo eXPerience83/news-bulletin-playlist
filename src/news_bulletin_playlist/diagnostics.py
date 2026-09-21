@@ -135,6 +135,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "legacy_fingerprint",
         "matched_count",
         "matching_evaluated_count",
+        "metadata_outcome",
         "missing_count",
         "matching_plan_conservative",
         "matching_reason_coalesced_unresolved_count",
@@ -370,6 +371,9 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "replace_items",
             "snapshot",
         }
+    ),
+    "metadata_outcome": frozenset(
+        {"applied_with_attribution", "applied_without_attribution"}
     ),
     "outcome": frozenset({"applied", "failed"}),
     "pending_snapshot_created": frozenset({"exact", "partial"}),
