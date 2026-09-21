@@ -302,7 +302,7 @@ def test_operational_status_page_reports_cycle_without_secret_material() -> None
     assert "2026-08-30T10:10:00Z" in body
     assert "source unavailable" in body
     assert "<th>Detector</th>" in body
-    assert "<td>Degraded</td>" in body
+    assert 'href="/admin/diagnostics">Degraded · inspect diagnostics</a>' in body
     assert "1 cached / 0 API requests" in body
     assert "1 desired / 1 verified" in body
     assert "unchanged" in body
