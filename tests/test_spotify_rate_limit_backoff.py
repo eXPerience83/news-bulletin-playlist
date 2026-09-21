@@ -172,16 +172,6 @@ def _config(
     return EngineConfig(schema_version=1, sources=sources, playlists=playlists)
 
 
-def _rss(source_id: str) -> bytes:
-    return (
-        "<rss><channel><item>"
-        f"<guid>{source_id}-1</guid>"
-        f"<title>Bulletin {source_id}</title>"
-        "<pubDate>Sat, 05 Sep 2026 09:30:00 +0000</pubDate>"
-        "</item></channel></rss>"
-    ).encode()
-
-
 def test_journal_honors_header_fallback_and_never_shortens_deadline(tmp_path: Path) -> None:
     journal = SpotifyRateLimitJournal(_store(tmp_path))
 
