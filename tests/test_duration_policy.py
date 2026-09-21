@@ -3,10 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, time
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.config import ConfigError, parse_config
 from news_bulletin_playlist.desired_state import (
     DURATION_EXCEEDS_DEFAULT_MAX,
     DURATION_EXCEEDS_EXCEPTION_MAX,
@@ -210,63 +207,3 @@ def test_builtin_catalog_and_managed_compile_use_current_global_30_minute_defaul
     compiled = compile_engine_config(BUILTIN_CATALOG, state)
     assert compiled.playlists[0].duration_policy.default_max_seconds == 1800
     assert compiled.playlists[0].duration_policy.exceptions == ()
-
-
-def _config_payload(exception_source: str = "ser", exception_max: int = 1800):
-    return {
-        "schema_version": 1,
-        "sources": [
-            {
-                "id": "ser",
-                "display_name": "SER",
-                "countries": ["ES"],
-                "languages": ["es"],
-                "timezone": "Europe/Madrid",
-                "enabled": True,
-                "parser_id": "ser",
-            }
-        ],
-        "playlists": [
-            {
-                "id": "test",
-                "display_name": "Test",
-                "description": "test",
-                "countries": ["ES"],
-                "languages": ["es"],
-                "enabled": True,
-                "source_selection": {"explicit": ["ser"]},
-                "destination": {"adapter_id": "spotify", "external_id": "dest"},
-                "duration_policy": {
-                    "default_max_seconds": 480,
-                    "exceptions": [
-                        {
-                            "id": "ser_morning_0800",
-                            "source_id": exception_source,
-                            "edition_local_time": "08:00",
-                            "max_seconds": exception_max,
-                        }
-                    ],
-                },
-            }
-        ],
-    }
-
-
-def test_yaml_duration_policy_without_explicit_ceiling_uses_shared_30_minute_default() -> None:
-    payload = _config_payload()
-    payload["playlists"][0]["duration_policy"] = {}
-
-    parsed = parse_config(payload)
-
-    assert parsed.playlists[0].duration_policy.default_max_seconds == 1800
-    assert parsed.playlists[0].duration_policy.exceptions == ()
-
-
-def test_yaml_duration_policy_validates_bounded_exception_and_known_source() -> None:
-    parsed = parse_config(_config_payload())
-    assert parsed.playlists[0].duration_policy.exceptions[0].edition_local_time == time(8, 0)
-
-    with pytest.raises(ConfigError, match="must exceed duration policy default"):
-        parse_config(_config_payload(exception_max=480))
-    with pytest.raises(ConfigError, match="unknown source"):
-        parse_config(_config_payload(exception_source="missing"))

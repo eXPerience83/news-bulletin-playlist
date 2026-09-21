@@ -84,11 +84,13 @@ Managed state stores installation choices such as:
 - explicit source membership;
 - per-playlist duration ceiling.
 
-The protected `/admin/` UI is the normal configuration path.
+The protected `/admin/` UI and versioned `/data/managed-state.json` are the supported installation
+configuration path.
 
-Schema-v1 YAML remains an advanced/manual compatibility path. It uses the same Spotify-first source
-model and does not require `endpoint_url`. If managed state and the default YAML both exist,
-startup fails closed rather than guessing which configuration is authoritative.
+The pre-1.0 schema-v1 full-YAML runtime path has been retired. A non-empty obsolete
+`NEWS_PLAYLIST_CONFIG` or any leftover `/data/news-bulletin-playlist.yaml` fails closed with an
+actionable message instead of being silently ignored. The runtime never reads, rewrites or deletes
+that obsolete YAML automatically.
 
 ## Source selection and catalogue promotion
 

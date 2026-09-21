@@ -17,7 +17,6 @@ from _http_handler import (
 )
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.effective_config import CONFIG_PATH_ENV
 from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
 from news_bulletin_playlist.engine_runtime import (
     ConfigurationSynchronization,
@@ -828,25 +827,14 @@ def test_lifecycle_reactivation_waits_for_draining_cycle_then_restarts() -> None
     assert controller.status.snapshot().configured is False
 
 
-def test_legacy_or_explicit_yaml_disables_managed_web_service(tmp_path: Path) -> None:
-    spotify_auth = object()
+def test_managed_web_service_requires_spotify_auth(tmp_path: Path) -> None:
+    assert _build_managed_admin_service(tmp_path, spotify_auth=None) is None
     assert (
-        _build_managed_admin_service(  # type: ignore[arg-type]
+        _build_managed_admin_service(
             tmp_path,
-            {CONFIG_PATH_ENV: "/data/manual.yaml"},
-            spotify_auth=spotify_auth,
+            spotify_auth=object(),  # type: ignore[arg-type]
         )
-        is None
-    )
-
-    (tmp_path / "news-bulletin-playlist.yaml").write_text("legacy")
-    assert (
-        _build_managed_admin_service(  # type: ignore[arg-type]
-            tmp_path,
-            {},
-            spotify_auth=spotify_auth,
-        )
-        is None
+        is not None
     )
 
 

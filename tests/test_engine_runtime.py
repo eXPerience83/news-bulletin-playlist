@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.engine import (
     EngineCycleResult,
@@ -20,7 +21,6 @@ from news_bulletin_playlist.engine import (
     SourceCycleOutcome,
 )
 from news_bulletin_playlist.engine_runtime import (
-    DEFAULT_CONFIG_FILENAME,
     AuthSynchronization,
     OperationalHealthHandler,
     ReloadingEngineCycleRunner,
@@ -29,6 +29,12 @@ from news_bulletin_playlist.engine_runtime import (
     _runtime_interval,
     _spotify_inactivity,
     serve,
+)
+from news_bulletin_playlist.managed_state import (
+    MANAGED_STATE_FILENAME,
+    ManagedState,
+    ManagedStateStore,
+    activate_template,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
 from news_bulletin_playlist.persistence import SQLiteStore
@@ -113,33 +119,12 @@ def _no_redirect_open(request: urllib.request.Request) -> urllib.error.HTTPError
     return raised.value
 
 
-def _valid_config() -> str:
-    return """schema_version: 1
-sources:
-  - id: ser
-    display_name: Cadena SER
-    countries: [ES]
-    languages: [es]
-    timezone: Europe/Madrid
-    enabled: true
-    parser_id: ser
-    external_references:
-      - system: spotify
-        resource_type: show
-        external_id: ser-show
-playlists:
-  - id: spanish
-    display_name: Spanish News
-    description: test
-    countries: [ES]
-    languages: [es]
-    enabled: true
-    source_selection:
-      explicit: [ser]
-    destination:
-      adapter_id: spotify
-      external_id: playlist-id
-"""
+def _write_managed_config(tmp_path: Path) -> Path:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    playlist = activate_template(template, "playlist-id")
+    path = tmp_path / MANAGED_STATE_FILENAME
+    ManagedStateStore(path).save(ManagedState(playlists=(playlist,)))
+    return path
 
 
 def _store(tmp_path: Path) -> SQLiteStore:
@@ -192,47 +177,45 @@ def test_spotify_inactivity_defaults_to_24_hours_and_is_configurable() -> None:
         _spotify_inactivity({"NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS": "daily"})
 
 
-def test_runtime_config_is_optional_until_production_file_exists(tmp_path: Path) -> None:
+def test_runtime_config_is_optional_until_managed_state_exists(tmp_path: Path) -> None:
     assert _load_runtime_config(tmp_path, {}) is None
     assert _load_runtime_config(tmp_path, {"NEWS_PLAYLIST_CONFIG": "  "}) is None
 
 
-def test_runtime_config_loads_default_data_file(tmp_path: Path) -> None:
-    config_path = tmp_path / DEFAULT_CONFIG_FILENAME
-    config_path.write_text(_valid_config(), encoding="utf-8")
+def test_runtime_config_loads_managed_state(tmp_path: Path) -> None:
+    _write_managed_config(tmp_path)
 
     config = _load_runtime_config(tmp_path, {})
 
     assert config is not None
-    assert [source.id for source in config.sources] == [SourceId("ser")]
-    assert [playlist.id for playlist in config.playlists] == [PlaylistId("spanish")]
+    assert [playlist.id for playlist in config.playlists] == [PlaylistId("spain_spanish_news")]
 
 
-def test_explicit_missing_runtime_config_fails_closed(tmp_path: Path) -> None:
-    missing = tmp_path / "missing.yaml"
-    with pytest.raises(RuntimeError, match="does not exist"):
-        _load_runtime_config(tmp_path, {"NEWS_PLAYLIST_CONFIG": str(missing)})
+def test_obsolete_explicit_runtime_config_fails_closed(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="NEWS_PLAYLIST_CONFIG is no longer supported"):
+        _load_runtime_config(
+            tmp_path,
+            {"NEWS_PLAYLIST_CONFIG": str(tmp_path / "missing.yaml")},
+        )
 
 
-def test_reloading_runner_revalidates_config_each_cycle(tmp_path: Path) -> None:
-    config_path = tmp_path / DEFAULT_CONFIG_FILENAME
-    config_path.write_text(_valid_config(), encoding="utf-8")
+def test_reloading_runner_revalidates_managed_config_each_cycle(tmp_path: Path) -> None:
+    config_path = _write_managed_config(tmp_path)
     assert _load_runtime_config(tmp_path, {}) is not None
 
     auth = _NeverAuth()
     runner = _reloading_runner(tmp_path, auth)
-    config_path.write_text("schema_version: 999\nsources: []\nplaylists: []\n", encoding="utf-8")
+    config_path.write_text('{"schema_version":999,"playlists":[]}', encoding="utf-8")
 
     result = runner.run_cycle()
 
     assert not result.ok
-    assert "invalid engine configuration" in (result.error or "")
+    assert "invalid managed configuration" in (result.error or "")
     assert auth.calls == 0
 
 
-def test_reloading_runner_fails_closed_if_config_disappears(tmp_path: Path) -> None:
-    config_path = tmp_path / DEFAULT_CONFIG_FILENAME
-    config_path.write_text(_valid_config(), encoding="utf-8")
+def test_reloading_runner_fails_closed_if_managed_config_disappears(tmp_path: Path) -> None:
+    config_path = _write_managed_config(tmp_path)
     auth = _NeverAuth()
     runner = _reloading_runner(tmp_path, auth)
     config_path.unlink()
@@ -245,7 +228,7 @@ def test_reloading_runner_fails_closed_if_config_disappears(tmp_path: Path) -> N
 
 
 def test_configured_engine_requires_production_spotify_auth(tmp_path: Path) -> None:
-    (tmp_path / DEFAULT_CONFIG_FILENAME).write_text(_valid_config(), encoding="utf-8")
+    _write_managed_config(tmp_path)
 
     with pytest.raises(RuntimeError, match="requires production Spotify"):
         serve(data_dir=tmp_path, stop_event=threading.Event(), environ={})

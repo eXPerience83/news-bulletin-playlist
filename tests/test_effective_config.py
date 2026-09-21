@@ -6,11 +6,7 @@ from pathlib import Path
 import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.effective_config import (
-    CONFIG_PATH_ENV,
-    DEFAULT_CONFIG_FILENAME,
-    load_effective_config,
-)
+from news_bulletin_playlist.effective_config import load_effective_config
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     ManagedState,
@@ -18,35 +14,6 @@ from news_bulletin_playlist.managed_state import (
     activate_template,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
-
-
-def _legacy_yaml(playlist_id: str = "legacy") -> str:
-    return f"""schema_version: 1
-sources:
-  - id: ser
-    display_name: Cadena SER
-    countries: [ES]
-    languages: [es]
-    timezone: Europe/Madrid
-    enabled: true
-    parser_id: ser
-    external_references:
-      - system: spotify
-        resource_type: show
-        external_id: ser-show
-playlists:
-  - id: {playlist_id}
-    display_name: Legacy News
-    description: test
-    countries: [ES]
-    languages: [es]
-    enabled: true
-    source_selection:
-      explicit: [ser]
-    destination:
-      adapter_id: spotify
-      external_id: legacy-destination
-"""
 
 
 def _managed_state(tmp_path: Path, *, enabled: bool = True) -> ManagedState:
@@ -61,9 +28,10 @@ def _managed_state(tmp_path: Path, *, enabled: bool = True) -> ManagedState:
 
 def test_missing_configuration_returns_none(tmp_path: Path) -> None:
     assert load_effective_config(tmp_path, {}) is None
+    assert load_effective_config(tmp_path, {"NEWS_PLAYLIST_CONFIG": "  "}) is None
 
 
-def test_managed_state_is_normal_configuration_source(tmp_path: Path) -> None:
+def test_managed_state_is_only_configuration_source(tmp_path: Path) -> None:
     _managed_state(tmp_path)
 
     config = load_effective_config(tmp_path, {})
@@ -96,37 +64,29 @@ def test_empty_or_all_paused_managed_state_has_no_active_engine(tmp_path: Path) 
     assert load_effective_config(tmp_path, {}) is None
 
 
-def test_default_legacy_yaml_remains_compatible_when_no_managed_state(tmp_path: Path) -> None:
-    (tmp_path / DEFAULT_CONFIG_FILENAME).write_text(_legacy_yaml(), encoding="utf-8")
-
-    config = load_effective_config(tmp_path, {})
-
-    assert config is not None
-    assert [playlist.id for playlist in config.playlists] == [PlaylistId("legacy")]
-
-
-def test_managed_and_default_legacy_sources_fail_closed_as_ambiguous(tmp_path: Path) -> None:
+def test_obsolete_explicit_yaml_setting_fails_with_migration_message(tmp_path: Path) -> None:
     _managed_state(tmp_path)
-    (tmp_path / DEFAULT_CONFIG_FILENAME).write_text(_legacy_yaml(), encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="both managed-state.json"):
+    with pytest.raises(RuntimeError, match="NEWS_PLAYLIST_CONFIG is no longer supported"):
+        load_effective_config(
+            tmp_path,
+            {"NEWS_PLAYLIST_CONFIG": str(tmp_path / "old-config.yaml")},
+        )
+
+
+def test_obsolete_default_yaml_file_fails_even_with_managed_state(tmp_path: Path) -> None:
+    _managed_state(tmp_path)
+    (tmp_path / "news-bulletin-playlist.yaml").write_text("obsolete", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="legacy /data/news-bulletin-playlist.yaml"):
         load_effective_config(tmp_path, {})
 
 
-def test_explicit_legacy_override_remains_authoritative(tmp_path: Path) -> None:
-    _managed_state(tmp_path)
-    explicit = tmp_path / "advanced.yaml"
-    explicit.write_text(_legacy_yaml("advanced"), encoding="utf-8")
+def test_broken_obsolete_yaml_symlink_also_fails_closed(tmp_path: Path) -> None:
+    (tmp_path / "news-bulletin-playlist.yaml").symlink_to(tmp_path / "missing.yaml")
 
-    config = load_effective_config(tmp_path, {CONFIG_PATH_ENV: str(explicit)})
-
-    assert config is not None
-    assert [playlist.id for playlist in config.playlists] == [PlaylistId("advanced")]
-
-
-def test_explicit_missing_legacy_override_fails_closed(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="does not exist"):
-        load_effective_config(tmp_path, {CONFIG_PATH_ENV: str(tmp_path / "missing.yaml")})
+    with pytest.raises(RuntimeError, match="legacy /data/news-bulletin-playlist.yaml"):
+        load_effective_config(tmp_path, {})
 
 
 def test_invalid_managed_state_fails_closed(tmp_path: Path) -> None:
