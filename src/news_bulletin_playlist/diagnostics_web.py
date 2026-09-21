@@ -1,7 +1,8 @@
-"""Authenticated diagnostic rendering and export helpers using sanitized models only."""
+"""Authenticated diagnostic rendering and export helpers with bounded public failure evidence."""
 
 from __future__ import annotations
 
+import base64
 import html
 import io
 import json
@@ -28,6 +29,7 @@ from news_bulletin_playlist.spotify_metrics import (
 MAX_DIAGNOSTIC_FILTER_HOURS = 30 * 24
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _ALLOWED_QUERY_KEYS = frozenset({"severity", "source", "playlist", "hours", "limit"})
+_PUBLIC_RESPONSE_BODY_KEY = "public_response_body_b64"
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,8 +154,10 @@ def render_diagnostics_page(
 </head>
 <body>
   <h1>Diagnostics</h1>
-  <p class="muted">Structured, sanitized operational events only. Raw SQLite, OAuth material,
-     provider response bodies and environment variables are never exposed here.</p>
+  <p class="muted">Structured operational events. Raw SQLite, OAuth material, authenticated
+     provider response bodies and environment variables are never exposed here. A bounded raw
+     response from an unauthenticated Spotify Embed/oEmbed schema failure may be retained only as
+     a separate file in the authenticated diagnostics ZIP.</p>
   <form method="get" action="/admin/diagnostics">
     <label>Severity
       <select name="severity">{_severity_options(severity_value)}</select>
@@ -208,6 +212,11 @@ def build_diagnostic_bundle(
 ) -> bytes:
     """Build an in-memory ZIP from sanitized models; never copy the SQLite file."""
     observed = _as_utc(generated_at)
+    attachments = tuple(
+        attachment
+        for event in events
+        if (attachment := _public_response_attachment(event)) is not None
+    )
     event_documents = [_event_document(event) for event in events]
     jsonl = "".join(
         json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
@@ -257,8 +266,17 @@ def build_diagnostic_bundle(
     manifest = {
         "format": "news-bulletin-playlist-diagnostics-v1",
         "generated_at": _timestamp(observed),
-        "files": ["diagnostics.jsonl", "diagnostics.txt", "status.json", "runtime.json"],
-        "privacy": "sanitized structured diagnostics; no raw database or credentials",
+        "files": [
+            "diagnostics.jsonl",
+            "diagnostics.txt",
+            "status.json",
+            "runtime.json",
+            *[name for name, _body in attachments],
+        ],
+        "privacy": (
+            "structured diagnostics plus bounded unauthenticated public Spotify "
+            "schema-failure response captures; no raw database or credentials"
+        ),
     }
 
     buffer = io.BytesIO()
@@ -267,11 +285,18 @@ def build_diagnostic_bundle(
         _writestr(archive, "diagnostics.txt", readable)
         _writestr(archive, "status.json", _json_text(_safe_status_document(last_cycle)))
         _writestr(archive, "runtime.json", _json_text(runtime))
+        for name, body in attachments:
+            _writebytes(archive, name, body)
         _writestr(archive, "manifest.json", _json_text(manifest))
     return buffer.getvalue()
 
 
 def _event_document(event: DiagnosticEvent) -> dict[str, object]:
+    details = dict(event.details)
+    details.pop(_PUBLIC_RESPONSE_BODY_KEY, None)
+    attachment = _public_response_attachment(event)
+    if attachment is not None:
+        details["public_response_attachment"] = attachment[0]
     return {
         "event_id": event.event_id,
         "occurred_at": _timestamp(event.occurred_at),
@@ -281,8 +306,31 @@ def _event_document(event: DiagnosticEvent) -> dict[str, object]:
         "cycle_id": event.cycle_id,
         "source_id": event.source_id,
         "playlist_id": event.playlist_id,
-        "details": event.details,
+        "details": details,
     }
+
+
+def _public_response_attachment(event: DiagnosticEvent) -> tuple[str, bytes] | None:
+    encoded = event.details.get(_PUBLIC_RESPONSE_BODY_KEY)
+    if not isinstance(encoded, str):
+        return None
+    body = base64.b64decode(encoded, validate=True)
+    surface_value = event.details.get("public_response_surface")
+    surface = surface_value if isinstance(surface_value, str) else "public"
+    content_type_value = event.details.get("public_response_content_type")
+    content_type = content_type_value if isinstance(content_type_value, str) else ""
+    extension = (
+        "html"
+        if "html" in content_type.casefold()
+        else "json"
+        if "json" in content_type.casefold()
+        else "bin"
+    )
+    source = event.source_id or "unknown"
+    return (
+        f"public-responses/event-{event.event_id}-{source}-{surface}.{extension}",
+        body,
+    )
 
 
 def _spotify_metrics_document(
@@ -400,10 +448,15 @@ def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
 
 
 def _event_row(event: DiagnosticEvent, *, display_timezone: tzinfo) -> str:
-    details = (
-        " ".join(f"{key}={_plain_value(value)}" for key, value in sorted(event.details.items()))
-        or "—"
-    )
+    visible_details = {
+        key: value for key, value in event.details.items() if key != _PUBLIC_RESPONSE_BODY_KEY
+    }
+    detail_parts = [
+        f"{key}={_plain_value(value)}" for key, value in sorted(visible_details.items())
+    ]
+    if _PUBLIC_RESPONSE_BODY_KEY in event.details:
+        detail_parts.append("public_response_body=<captured in ZIP>")
+    details = " ".join(detail_parts) or "—"
     occurred_at = html.escape(_display_timestamp(event.occurred_at, display_timezone))
     return (
         "<tr>"
@@ -506,10 +559,14 @@ def _json_text(value: object) -> str:
 
 
 def _writestr(archive: zipfile.ZipFile, name: str, content: str) -> None:
+    _writebytes(archive, name, content.encode("utf-8"))
+
+
+def _writebytes(archive: zipfile.ZipFile, name: str, content: bytes) -> None:
     info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
     info.compress_type = zipfile.ZIP_DEFLATED
     info.external_attr = 0o600 << 16
-    archive.writestr(info, content.encode("utf-8"))
+    archive.writestr(info, content)
 
 
 def _display_timestamp(value: datetime, display_timezone: tzinfo) -> str:

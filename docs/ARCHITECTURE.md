@@ -125,6 +125,19 @@ only the episode seen by the detector.
 Detector failures preserve last-known-good episode state and never authorize destructive playlist
 changes.
 
+If the primary Embed identity parser fails on an otherwise received public response, oEmbed is only
+a corroborating/degraded trigger: a changed title may trigger that source's official catalogue
+refresh, while an unchanged title remains inconclusive. Persistent degraded detector state is
+audited through the official catalogue on a slower 30-minute cadence rather than every ten-minute
+engine cycle. Successful Embed identity parsing immediately returns the source to normal detector
+authority.
+
+For rapid repair of future public schema drift, the first response-contract failure in one
+consecutive degraded streak may retain the exact unauthenticated Embed/oEmbed response bytes,
+bounded by the public detector's existing response-size limit. The raw body is forensic evidence,
+not runtime authority: it is never printed to stdout or rendered inline, and is available only in
+authenticated diagnostic export.
+
 ## Official Spotify catalogue refresh
 
 The official Spotify Web API show catalogue is the episode authority.
@@ -232,10 +245,23 @@ Destination skip authority has two deliberately separate levels:
 - a safely attested unavailable-media/opaque-slot result may use a shorter degraded lease
   (30 minutes by default).
 
-The degraded lease never turns partial content into exact evidence. It is valid only for the same
-destination and desired fingerprint while the matching durable playlist attestation still exists
-and no pending snapshot transition is active. Expiry, desired/destination change or missing
-attestation forces conservative remote reconciliation again.
+The degraded lease never turns partial content into exact evidence. An opaque destination slot
+means Spotify returned the playlist wrapper but no readable media object/URI for that position
+(`item: null` or legacy-equivalent `track: null`); it is not evidence that the episode was
+deleted.
+
+The lease is valid only for the same destination and exact desired fingerprint while the matching
+durable playlist attestation still exists and no pending snapshot transition is active. Therefore
+it does **not** freeze playlist updates for 30 minutes: any source update that changes the desired
+URI sequence invalidates the lease immediately and normal reconciliation runs in that same cycle.
+Expiry, desired/destination change, pending transition, missing attestation, visible URI/order/count
+divergence or incompatible snapshot evidence all force conservative remote reconciliation again.
+
+The runtime does not delete an opaque item merely because Spotify temporarily withheld its URI. If
+a later real desired-state change requires a write and a formerly retained URI has actually become
+invalid, deterministic stale-item rejection can use the separate stale-escalation path to refresh
+the relevant official show catalogues, rebuild desired state from authoritative catalogue evidence
+and retry safely.
 
 ### Legacy database compatibility
 
@@ -343,8 +369,13 @@ Never expose or persist:
 - authorization codes;
 - PKCE verifiers;
 - admin passwords;
-- raw provider response bodies containing unknown material;
+- raw authenticated Spotify Web API/OAuth response bodies;
 - unbounded URI/title collections.
+
+A narrow exception exists for unauthenticated public Embed/oEmbed schema failures: the first failure
+in a consecutive degraded streak may retain one bounded raw public response as authenticated ZIP
+forensic evidence. It must not include request headers/cookies and must not be printed/rendered
+inline.
 
 Current diagnostics should expose enough source/playlist/request/refresh reason evidence to explain
 why a catalogue was or was not refreshed and why a destination was written, preserved or skipped.

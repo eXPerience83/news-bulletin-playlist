@@ -53,8 +53,10 @@ catalogue failures, playlist reconciliation outcomes, explicit destination-prese
 decisions, and scheduler lifecycle events. Routine successful ten-minute cycles stay summary-oriented rather
 than emitting one line for every internal operation.
 
-Raw provider response bodies and arbitrary exception strings are not copied into this structured
-stream.
+Raw authenticated provider/OAuth response bodies and arbitrary exception strings are not copied
+into this structured stream. A #266 public-detector schema/response failure is a narrow exception:
+the first unauthenticated Embed/oEmbed failure in one consecutive degraded streak may retain the
+bounded response body as forensic evidence, but that body is never printed to stdout/stderr.
 
 ## Durable diagnostic history
 
@@ -90,9 +92,11 @@ The view is newest-first and supports bounded filters for:
 - recent window (1 hour, 6 hours, 24 hours, 7 days, 30 days, or all retained history);
 - result count, up to 500 events.
 
-The public `/` status page intentionally shows only success/failure classifications and counts. It
-does not render raw cycle/source/playlist error strings; detailed context belongs in the
-authenticated diagnostic surface.
+The public `/` status page intentionally stays bounded and never renders raw response bodies. For
+each source it does, however, distinguish the persisted catalogue result from the public detector
+health so a source can read **Success / Detector Degraded** while last-known-good catalogue state is
+being preserved. Detailed failure reason and capture metadata belong in the authenticated
+diagnostics surface.
 
 ## Export diagnostics
 
@@ -103,21 +107,31 @@ truncated, so a large window cannot silently look complete.
 
 The ZIP contains:
 
-- `diagnostics.jsonl` — machine-readable sanitized events;
+- `diagnostics.jsonl` — machine-readable bounded events;
 - `diagnostics.txt` — compact human-readable events;
 - `status.json` — current safe cycle/source/playlist summary without raw errors;
 - `runtime.json` — application version/build revision, effective retention/capacity metadata,
   export filters/truncation bounds and sanitized 24-hour Spotify request aggregates;
-- `manifest.json` — bundle format/privacy metadata.
+- `manifest.json` — bundle format/privacy metadata;
+- when #266 captures a public schema failure, one separate
+  `public-responses/event-<id>-<source>-<surface>.<ext>` file containing the exact response bytes
+  received by the unauthenticated detector, bounded by the existing 512 KiB response limit.
 
-It does not contain the raw SQLite database, environment variables, Docker logs, OAuth callback
-URLs, provider response bodies, unbounded episode-title/URI collections, or credential files.
+The raw public body is captured only on the first response-contract failure in one consecutive
+degraded streak for that source/surface. Repeated ten-minute failures do not duplicate the body.
+The normal event records only metadata such as surface, parser reason, content type, byte count,
+SHA-256 and truncation status, plus a marker that a ZIP attachment exists.
 
-Source/playlist events intentionally retain only bounded operational evidence such as detector
-outcomes, refresh reasons, catalogue/request counts, coverage flags, parser/filter counters,
-duration histograms, allow-listed reconciliation reasons and preservation decisions. Correlate
-these with `cycle_id`, `source_id` and `playlist_id`; do not add raw provider text merely to make
-an incident easier to inspect.
+The ZIP still does not contain the raw SQLite database, environment variables, Docker logs, OAuth
+callback URLs, authenticated Spotify Web API/OAuth response bodies, unbounded episode-title/URI
+collections, or credential files.
+
+Source/playlist events intentionally retain bounded operational evidence such as detector outcomes,
+refresh reasons, catalogue/request counts, coverage flags, parser/filter counters, duration
+histograms, allow-listed reconciliation reasons and preservation decisions. The only product
+diagnostic raw-body exception is the unauthenticated public Spotify response capture above, created
+specifically so an unexpected Embed/oEmbed schema change can be repaired from the incident ZIP
+without having to reproduce Spotify's transient response later.
 
 The diagnostic allowlist still recognizes fields emitted by released RSS/matching/planner versions
 so historical rows already stored in SQLite remain readable after upgrade. Those legacy keys are
@@ -136,5 +150,7 @@ logs, durable diagnostic events, public status, authenticated diagnostics, or ex
 - administration passwords/password-file contents;
 - complete sensitive callback URLs.
 
-If a new diagnostic field needs free-form provider text, do not add it directly. Add a fixed
-classification or a bounded allow-listed value instead.
+If a new diagnostic field needs free-form authenticated provider text, do not add it directly. Add
+a fixed classification or a bounded allow-listed value instead. Extending the public detector raw
+capture exception requires an explicit architecture/security review; it must never silently expand
+to authenticated Web API/OAuth traffic.
