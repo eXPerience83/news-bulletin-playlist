@@ -12,11 +12,9 @@ from typing import Any, Protocol, TypeVar, cast
 
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
-from news_bulletin_playlist.reconciliation import SpotifyPlaylistClient
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
-from news_bulletin_playlist.spotify.first_catalogue import SpotifyCatalogueClient
 
 DEFAULT_SPOTIFY_RATE_LIMIT_FALLBACK_SECONDS = 30 * 60
 SPOTIFY_RATE_LIMIT_ACTIVE_PREFIX = "Spotify rate-limit backoff active until "
@@ -48,10 +46,6 @@ WHERE excluded.retry_not_before > spotify_rate_limit_backoff.retry_not_before
 
 T = TypeVar("T")
 Clock = Callable[[], datetime]
-
-
-class SpotifyBackoffClient(SpotifyCatalogueClient, SpotifyPlaylistClient, Protocol):
-    """Combined Spotify catalogue/playlist surface guarded by runtime backoff."""
 
 
 class SpotifyBackoffAuthProvider(Protocol):
