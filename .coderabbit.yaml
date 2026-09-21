@@ -176,7 +176,8 @@ knowledge_base:
       - ".github/workflows/ci.yml"
       - "Dockerfile"
       - "docs/ARCHITECTURE.md"
-      - "docs/P0_FINDINGS.md"
+      - "docs/SOURCE_CATALOG.md"
+      - "docs/OPERATION_CADENCE.md"
       - "docs/SPOTIFY_PROBE.md"
   learnings:
     scope: "local"
