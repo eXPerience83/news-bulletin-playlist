@@ -142,6 +142,21 @@ def test_initialize_runtime_storage_creates_clean_database(tmp_path: Path) -> No
     assert SQLiteStore(database_path).format_version() == DATABASE_FORMAT_VERSION
 
 
+def test_clean_storage_cutover_leaves_pre_01_database_untouched(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    legacy_path = data_dir / "news-bulletin-playlist.sqlite3"
+    legacy_bytes = b"pre-0.1-private-database-sentinel"
+    legacy_path.write_bytes(legacy_bytes)
+
+    database_path = runtime.initialize_runtime_storage(data_dir)
+
+    assert database_path == data_dir / "news-bulletin-playlist-v1.sqlite3"
+    assert database_path.is_file()
+    assert legacy_path.read_bytes() == legacy_bytes
+    assert SQLiteStore(database_path).format_version() == DATABASE_FORMAT_VERSION
+
+
 def test_runtime_auth_is_disabled_by_default(tmp_path: Path) -> None:
     admin, spotify = build_runtime_auth(tmp_path, environ={})
     assert admin is None
