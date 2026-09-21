@@ -533,9 +533,7 @@ def test_unchanged_duration_diagnostics_are_not_repeated_but_new_identity_is_emi
     runner.run_cycle()
 
     policy_events = tuple(
-        event
-        for event in store.list_events(limit=30)
-        if event.component == "playlist.eligibility"
+        event for event in store.list_events(limit=30) if event.component == "playlist.eligibility"
     )
     assert [event.event_name for event in reversed(policy_events)] == [
         "duration_profile",
@@ -547,18 +545,14 @@ def test_unchanged_duration_diagnostics_are_not_repeated_but_new_identity_is_emi
         playlists=(
             replace(
                 playlist,
-                duration_decisions=(
-                    replace(decision, source_native_id="episode-b-private"),
-                ),
+                duration_decisions=(replace(decision, source_native_id="episode-b-private"),),
             ),
         ),
     )
     runner.run_cycle()
 
     policy_events = tuple(
-        event
-        for event in store.list_events(limit=30)
-        if event.component == "playlist.eligibility"
+        event for event in store.list_events(limit=30) if event.component == "playlist.eligibility"
     )
     assert [event.event_name for event in reversed(policy_events)] == [
         "duration_profile",
