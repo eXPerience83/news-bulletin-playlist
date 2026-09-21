@@ -42,11 +42,12 @@ current work remains under **Unreleased** until a stable release is cut.
 
 ### Changed
 
+- Runtime configuration is now exclusively the built-in catalog plus versioned
+  `/data/managed-state.json`; the pre-1.0 full-YAML runtime path and `NEWS_PLAYLIST_CONFIG`
+  selector have been retired with fail-closed detection of obsolete settings/files.
 - Current general/default episode ceiling increased from **8 minutes / 480 seconds** to
   **30 minutes / 1800 seconds**. It remains configurable per managed playlist. The long-term default
   will be selected from production duration evidence under #132.
-- The legacy schema-v1 YAML path now inherits the same shared 30-minute default when a duration-policy
-  object omits `default_max_seconds`; an explicit YAML value still overrides it.
 - `Noticias España` product naming becomes **Noticias en Español**, matching its existing cover and
   reflecting that the playlist combines Spain sources with selected genuinely global Spanish news.
 - `Noticias en Español` defaults to SER, RNE, Onda Cero and ABC.
