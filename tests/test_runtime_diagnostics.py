@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -492,3 +492,80 @@ def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: P
     assert "must-not-be-persisted" not in rendered
     assert "also-not-persisted" not in rendered
     assert "short-not-persisted" not in rendered
+
+
+def test_unchanged_duration_diagnostics_are_not_repeated_but_new_identity_is_emitted(
+    tmp_path: Path,
+) -> None:
+    diagnostics, store, output = _diagnostics(tmp_path)
+    decision = DurationEligibilityDecision(
+        source_id=SourceId("ser"),
+        source_native_id="episode-a-private",
+        duration_seconds=1201,
+        accepted=True,
+        reason=DURATION_WITHIN_DEFAULT_MAX,
+        max_seconds=1800,
+    )
+    playlist = PlaylistCycleOutcome(
+        playlist_id=PlaylistId("spain_spanish_news"),
+        ok=True,
+        desired_count=1,
+        applied_count=1,
+        wrote=False,
+        last_success_at=NOW,
+        duration_decisions=(decision,),
+    )
+    result = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=1),
+        ok=True,
+        sources=(),
+        playlists=(playlist,),
+    )
+    base_runner = _Runner(result)
+    runner = InstrumentedEngineCycleRunner(
+        base_runner,
+        diagnostics,
+        clock=lambda: NOW,
+    )
+
+    runner.run_cycle()
+    runner.run_cycle()
+
+    policy_events = tuple(
+        event
+        for event in store.list_events(limit=30)
+        if event.component == "playlist.eligibility"
+    )
+    assert [event.event_name for event in reversed(policy_events)] == [
+        "duration_profile",
+        "duration_long_episode_accepted",
+    ]
+
+    base_runner.result = replace(
+        result,
+        playlists=(
+            replace(
+                playlist,
+                duration_decisions=(
+                    replace(decision, source_native_id="episode-b-private"),
+                ),
+            ),
+        ),
+    )
+    runner.run_cycle()
+
+    policy_events = tuple(
+        event
+        for event in store.list_events(limit=30)
+        if event.component == "playlist.eligibility"
+    )
+    assert [event.event_name for event in reversed(policy_events)] == [
+        "duration_profile",
+        "duration_long_episode_accepted",
+        "duration_profile",
+        "duration_long_episode_accepted",
+    ]
+    rendered = output.getvalue()
+    assert "episode-a-private" not in rendered
+    assert "episode-b-private" not in rendered
