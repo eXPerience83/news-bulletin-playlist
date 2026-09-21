@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import sqlite3
@@ -100,6 +102,13 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "detector_outcome",
         "detector_response_reason",
         "detector_schema_version",
+        "public_response_capture",
+        "public_response_surface",
+        "public_response_content_type",
+        "public_response_size_bytes",
+        "public_response_sha256",
+        "public_response_truncated",
+        "public_response_body_b64",
         "detector_source_count",
         "detector_unchanged_count",
         "oembed_matches",
@@ -284,6 +293,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
     "detector_fallback_outcome": frozenset(
         {"oembed_failed", "title_baseline", "title_changed", "title_unchanged"}
     ),
+    "public_response_surface": frozenset({"embed", "oembed"}),
     "public_release_date_shape": frozenset(
         {
             "missing",
@@ -881,7 +891,24 @@ def _normalize_details(
                 "desired_fingerprint",
                 "legacy_fingerprint",
                 "shadow_fingerprint",
+                "public_response_sha256",
             } and re.fullmatch(r"[0-9a-f]{64}", value):
+                normalized[key] = value
+                continue
+            if key == "public_response_content_type":
+                normalized[key] = _normalize_bounded_text(value, key, max_length=256)
+                continue
+            if key == "public_response_body_b64":
+                if len(value) > 699_052:
+                    raise ValueError("diagnostic public response capture is too large")
+                try:
+                    decoded = base64.b64decode(value, validate=True)
+                except binascii.Error as exc:
+                    raise ValueError(
+                        "diagnostic public response capture is not valid base64"
+                    ) from exc
+                if len(decoded) > 512 * 1024:
+                    raise ValueError("diagnostic public response capture is too large")
                 normalized[key] = value
                 continue
             if key in {"spotify_episode_id", "spotify_previous_episode_id", "api_episode_id"}:
