@@ -35,6 +35,7 @@ from news_bulletin_playlist.spotify_metrics import (
 
 Clock = Callable[[], datetime]
 _LONG_DURATION_DIAGNOSTIC_SECONDS = 20 * 60
+type _DurationDecisionSignature = tuple[str, int, bool, str, int, str]
 
 
 class InstrumentedEngineCycleRunner:
@@ -59,6 +60,12 @@ class InstrumentedEngineCycleRunner:
             if isinstance(discovered, SpotifyRequestMetrics)
             else None
         )
+        self._duration_profile_signatures: dict[
+            tuple[str, str], tuple[_DurationDecisionSignature, ...]
+        ] = {}
+        self._noteworthy_duration_signatures: dict[
+            tuple[str, str], frozenset[_DurationDecisionSignature]
+        ] = {}
 
     def run_cycle(self) -> EngineCycleResult:
         observed_start = _as_utc(self.clock())
@@ -283,47 +290,56 @@ class InstrumentedEngineCycleRunner:
         cycle_id: str,
         occurred_at: datetime,
     ) -> None:
+        by_source: dict[str, list[DurationEligibilityDecision]] = {}
         for decision in decisions:
-            long_accept = (
-                decision.reason == DURATION_WITHIN_DEFAULT_MAX
-                and decision.accepted
-                and decision.duration_seconds >= _LONG_DURATION_DIAGNOSTIC_SECONDS
-            )
-            if (
-                decision.reason
-                not in {
-                    DURATION_EXCEPTION,
-                    DURATION_EXCEEDS_DEFAULT_MAX,
-                    DURATION_EXCEEDS_EXCEPTION_MAX,
-                }
-                and not long_accept
-            ):
-                continue
+            by_source.setdefault(str(decision.source_id), []).append(decision)
 
-            details: dict[str, str | int | bool | None] = {
-                "duration_seconds": decision.duration_seconds,
-                "eligibility_reason": decision.reason,
-                "max_seconds": decision.max_seconds,
+        current_keys: set[tuple[str, str]] = set()
+        for source_id, source_decisions in sorted(by_source.items()):
+            key = (playlist_id, source_id)
+            current_keys.add(key)
+            noteworthy = {
+                _duration_decision_signature(decision): decision
+                for decision in source_decisions
+                if _is_noteworthy_duration_decision(decision)
             }
-            if decision.exception_id is not None:
-                details["policy_exception"] = decision.exception_id
-            event_name = (
-                "duration_long_episode_accepted"
-                if long_accept
-                else "duration_exception_applied"
-                if decision.accepted
-                else "duration_episode_excluded"
-            )
-            self.diagnostics.emit(
-                occurred_at=occurred_at,
-                severity=DiagnosticSeverity.INFO,
-                component="playlist.eligibility",
-                event_name=event_name,
-                cycle_id=cycle_id,
-                source_id=str(decision.source_id),
-                playlist_id=playlist_id,
-                details=details,
-            )
+            previous = self._noteworthy_duration_signatures.get(key, frozenset())
+            for signature in sorted(set(noteworthy) - previous, key=repr):
+                decision = noteworthy[signature]
+                long_accept = (
+                    decision.reason == DURATION_WITHIN_DEFAULT_MAX
+                    and decision.accepted
+                    and decision.duration_seconds >= _LONG_DURATION_DIAGNOSTIC_SECONDS
+                )
+                details: dict[str, str | int | bool | None] = {
+                    "duration_seconds": decision.duration_seconds,
+                    "eligibility_reason": decision.reason,
+                    "max_seconds": decision.max_seconds,
+                }
+                if decision.exception_id is not None:
+                    details["policy_exception"] = decision.exception_id
+                event_name = (
+                    "duration_long_episode_accepted"
+                    if long_accept
+                    else "duration_exception_applied"
+                    if decision.accepted
+                    else "duration_episode_excluded"
+                )
+                self.diagnostics.emit(
+                    occurred_at=occurred_at,
+                    severity=DiagnosticSeverity.INFO,
+                    component="playlist.eligibility",
+                    event_name=event_name,
+                    cycle_id=cycle_id,
+                    source_id=source_id,
+                    playlist_id=playlist_id,
+                    details=details,
+                )
+            self._noteworthy_duration_signatures[key] = frozenset(noteworthy)
+
+        for key in tuple(self._noteworthy_duration_signatures):
+            if key[0] == playlist_id and key not in current_keys:
+                del self._noteworthy_duration_signatures[key]
 
     def _emit_duration_profiles(
         self,
@@ -337,7 +353,19 @@ class InstrumentedEngineCycleRunner:
         for decision in decisions:
             by_source.setdefault(str(decision.source_id), []).append(decision)
 
+        current_keys: set[tuple[str, str]] = set()
         for source_id, source_decisions in sorted(by_source.items()):
+            key = (playlist_id, source_id)
+            current_keys.add(key)
+            signature = tuple(
+                sorted(
+                    (_duration_decision_signature(decision) for decision in source_decisions),
+                    key=repr,
+                )
+            )
+            if self._duration_profile_signatures.get(key) == signature:
+                continue
+
             buckets = {
                 "lt_5m": 0,
                 "m5_lt8": 0,
@@ -381,6 +409,11 @@ class InstrumentedEngineCycleRunner:
                     **buckets,
                 },
             )
+            self._duration_profile_signatures[key] = signature
+
+        for key in tuple(self._duration_profile_signatures):
+            if key[0] == playlist_id and key not in current_keys:
+                del self._duration_profile_signatures[key]
 
     def _emit_spotify_request_scope(
         self,
@@ -472,6 +505,35 @@ class InstrumentedEngineCycleRunner:
                 cycle_id=cycle_id,
                 details={"total": snapshot.quota_exceeded},
             )
+
+
+def _duration_decision_signature(
+    decision: DurationEligibilityDecision,
+) -> _DurationDecisionSignature:
+    return (
+        decision.source_native_id,
+        decision.duration_seconds,
+        decision.accepted,
+        decision.reason,
+        decision.max_seconds,
+        decision.exception_id or "",
+    )
+
+
+def _is_noteworthy_duration_decision(decision: DurationEligibilityDecision) -> bool:
+    return bool(
+        decision.reason
+        in {
+            DURATION_EXCEPTION,
+            DURATION_EXCEEDS_DEFAULT_MAX,
+            DURATION_EXCEEDS_EXCEPTION_MAX,
+        }
+        or (
+            decision.reason == DURATION_WITHIN_DEFAULT_MAX
+            and decision.accepted
+            and decision.duration_seconds >= _LONG_DURATION_DIAGNOSTIC_SECONDS
+        )
+    )
 
 
 def _destination_was_preserved(error: str | None) -> bool:
