@@ -14,7 +14,7 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.14",
 ]
-dependencies = ["PyYAML>=6.0.3,<7"]
+dependencies = []
 
 [project.scripts]
 news-playlist = "news_bulletin_playlist.cli:main"
