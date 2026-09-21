@@ -5,11 +5,26 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
+No changes yet.
+
+## [0.1.1] - 2026-09-21
+
 ### Changed
 
 - The current repository state is now **All rights reserved** rather than MIT-licensed. The
   `LICENSE` file plus package/container MIT metadata were removed; this does not revoke rights
   already granted for historical copies that were distributed under MIT.
+- Source status and sanitized diagnostics now distinguish the latest successful public-detector
+  observation from the latest successful authoritative Spotify catalogue refresh, replacing the
+  ambiguous source-level `last_success_at` field without changing Spotify request cadence.
+- Current documentation was aligned with the 0.1.0/database-format-1 persistence baseline,
+  Spotify-first architecture boundaries, validated TrueNAS cutover behavior and current licensing.
+
+### Fixed
+
+- Unchanged duration profiles and noteworthy duration decisions are no longer emitted again on
+  every quiet scheduler cycle. Deduplication is in-memory only, keeps episode identity out of
+  persisted diagnostics, and still emits fresh evidence when the underlying episode decision changes.
 
 ## [0.1.0] - 2026-09-21
 
