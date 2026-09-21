@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -56,6 +58,16 @@ class DesiredPlaylistState:
     @property
     def uris(self) -> tuple[str, ...]:
         return tuple(item.spotify_episode_uri for item in self.items)
+
+
+def desired_fingerprint(uris: Sequence[str]) -> str:
+    """Return the canonical SHA-256 fingerprint for an ordered desired URI sequence."""
+    encoded = json.dumps(
+        list(uris),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def duration_eligibility_decision(
