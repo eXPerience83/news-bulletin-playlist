@@ -13,6 +13,7 @@ from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.engine_runtime import _load_bundled_cover
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminService,
+    SpotifyMetadataSyncOutcome,
     SpotifyPlaylistSyncError,
     render_spotify_description,
 )
@@ -272,7 +273,8 @@ def test_explicit_sync_reapplies_metadata_and_retries_cover(tmp_path: Path) -> N
         access_token="reauthorized-token",
     )
 
-    assert synced == managed
+    assert synced.playlist == managed
+    assert synced.metadata_outcome is SpotifyMetadataSyncOutcome.APPLIED_WITH_ATTRIBUTION
     assert client.update_calls == [
         (
             "destination",
@@ -294,9 +296,10 @@ def test_cover_failure_during_explicit_sync_reports_failure_after_metadata_sync(
     with pytest.raises(
         SpotifyPlaylistSyncError,
         match=r"metadata applied; cover failed \(HTTP 403\)",
-    ):
+    ) as raised:
         service.sync_spotify_metadata_and_cover(managed.id, access_token="token")
 
+    assert raised.value.metadata_outcome is SpotifyMetadataSyncOutcome.APPLIED_WITH_ATTRIBUTION
     assert len(client.update_calls) == 1
     assert client.cover_calls == [("destination", jpeg)]
 

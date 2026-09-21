@@ -53,9 +53,9 @@ when name-only/base-description updates and cover uploads succeed. The runtime t
 rate-limit, 5xx and transport failures remain visible and are not masked by the fallback.
 
 This provider-specific behavior is not documented by Spotify's public Change Playlist Details
-contract, so the project does not treat URL rejection as a portable API rule. The remaining
-observability gap—distinguishing an ordinary attributed success from a successful
-`applied_without_attribution` fallback—is tracked in #133.
+contract, so the project does not treat URL rejection as a portable API rule. Diagnostics record
+the sanitized metadata outcome explicitly as either `applied_with_attribution` or
+`applied_without_attribution`. No rejected description text or provider response body is retained.
 
 Historical managed state that already contains a terminal `Proyecto: <repository URL>` or
 `Proyecto / Project: <repository URL>` footer is stripped back to the base description when

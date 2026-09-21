@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from typing import Any, Protocol
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
@@ -91,6 +92,21 @@ class PlaylistProvisioningRecoveryRequired(ManagedAdminError):
         )
 
 
+class SpotifyMetadataSyncOutcome(StrEnum):
+    """Sanitized attribution result for explicit Spotify metadata synchronization."""
+
+    APPLIED_WITH_ATTRIBUTION = "applied_with_attribution"
+    APPLIED_WITHOUT_ATTRIBUTION = "applied_without_attribution"
+
+
+@dataclass(frozen=True, slots=True)
+class SpotifyPlaylistSyncResult:
+    """Successful explicit Spotify metadata/cover synchronization result."""
+
+    playlist: ManagedPlaylist
+    metadata_outcome: SpotifyMetadataSyncOutcome
+
+
 class SpotifyPlaylistSyncError(ManagedAdminError):
     """Report safe per-operation results from an explicit Spotify metadata/cover sync."""
 
@@ -99,9 +115,11 @@ class SpotifyPlaylistSyncError(ManagedAdminError):
         *,
         metadata_error: str | None,
         cover_error: str | None,
+        metadata_outcome: SpotifyMetadataSyncOutcome | None = None,
     ) -> None:
         self.metadata_error = metadata_error
         self.cover_error = cover_error
+        self.metadata_outcome = metadata_outcome
         metadata = "applied" if metadata_error is None else f"failed ({metadata_error})"
         cover = "applied" if cover_error is None else f"failed ({cover_error})"
         super().__init__(f"Spotify explicit sync result: metadata {metadata}; cover {cover}")
@@ -356,15 +374,16 @@ class ManagedAdminService:
         playlist_id: PlaylistId | str,
         *,
         access_token: str,
-    ) -> ManagedPlaylist:
+    ) -> SpotifyPlaylistSyncResult:
         state = self.store.load()
         current = self._managed(state, playlist_id)
         client = self.client_factory(access_token)
         metadata_error: str | None = None
         cover_error: str | None = None
+        metadata_outcome: SpotifyMetadataSyncOutcome | None = None
 
         try:
-            self._apply_metadata_with_attribution_fallback(client, current)
+            metadata_outcome = self._apply_metadata_with_attribution_fallback(client, current)
         except (SpotifyApiError, SpotifyTransportError) as exc:
             metadata_error = _safe_spotify_operation_error(exc)
 
@@ -383,8 +402,14 @@ class ManagedAdminService:
             raise SpotifyPlaylistSyncError(
                 metadata_error=metadata_error,
                 cover_error=cover_error,
+                metadata_outcome=metadata_outcome,
             )
-        return current
+        if metadata_outcome is None:
+            raise RuntimeError("metadata synchronization completed without an outcome")
+        return SpotifyPlaylistSyncResult(
+            playlist=current,
+            metadata_outcome=metadata_outcome,
+        )
 
     def set_enabled(self, playlist_id: PlaylistId | str, enabled: bool) -> ManagedPlaylist:
         state = self.store.load()
@@ -406,7 +431,7 @@ class ManagedAdminService:
         self,
         client: PlaylistProvisioningClient,
         playlist: ManagedPlaylist,
-    ) -> None:
+    ) -> SpotifyMetadataSyncOutcome:
         try:
             client.change_playlist_details(
                 playlist.destination.external_id,
@@ -423,6 +448,8 @@ class ManagedAdminService:
                 name=playlist.display_name,
                 description=_playlist_description(playlist.description),
             )
+            return SpotifyMetadataSyncOutcome.APPLIED_WITHOUT_ATTRIBUTION
+        return SpotifyMetadataSyncOutcome.APPLIED_WITH_ATTRIBUTION
 
     def _upload_cover_explicit(
         self,

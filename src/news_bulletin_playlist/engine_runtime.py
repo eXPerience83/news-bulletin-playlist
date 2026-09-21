@@ -40,6 +40,7 @@ from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
     ManagedAdminService,
     PlaylistProvisioningClient,
+    SpotifyMetadataSyncOutcome,
     SpotifyPlaylistSyncError,
 )
 from news_bulletin_playlist.managed_admin_web import (
@@ -727,11 +728,12 @@ class OperationalHealthHandler(LanAdminHandler):
                 # HTTPServer serves admin requests serially. Validate immutable managed state
                 # under the configuration lock, then keep Spotify I/O outside that lock so a
                 # slow metadata/cover request cannot delay an engine cycle.
-                self._sync_managed_playlist(service, form)
+                metadata_outcome = self._sync_managed_playlist(service, form)
                 self._emit_admin_spotify_sync_events(
                     playlist_id=playlist_id_for_event,
                     metadata_error=None,
                     cover_error=None,
+                    metadata_outcome=metadata_outcome,
                 )
             elif path in {"/admin/provisioning/adopt", "/admin/provisioning/clear"}:
                 with synchronization.hold():
@@ -800,6 +802,7 @@ class OperationalHealthHandler(LanAdminHandler):
                     playlist_id=playlist_id_for_event,
                     metadata_error=exc.metadata_error,
                     cover_error=exc.cover_error,
+                    metadata_outcome=exc.metadata_outcome,
                 )
             self._managed_error(HTTPStatus.BAD_GATEWAY, str(exc))
             return
@@ -896,14 +899,15 @@ class OperationalHealthHandler(LanAdminHandler):
         self,
         service: ManagedAdminService,
         form: Mapping[str, list[str]],
-    ) -> None:
+    ) -> SpotifyMetadataSyncOutcome:
         auth = self.managed_admin_auth
         if auth is None:
             raise ManagedAdminError("Spotify must be connected to apply metadata and cover")
-        service.sync_spotify_metadata_and_cover(
+        result = service.sync_spotify_metadata_and_cover(
             playlist_id_from_form(form),
             access_token=auth.get_access_token(),
         )
+        return result.metadata_outcome
 
     def _emit_admin_configuration_event(
         self,
@@ -931,6 +935,7 @@ class OperationalHealthHandler(LanAdminHandler):
         playlist_id: str,
         metadata_error: str | None,
         cover_error: str | None,
+        metadata_outcome: SpotifyMetadataSyncOutcome | None,
     ) -> None:
         diagnostics = self._admin_diagnostics()
         for operation, error in (
@@ -941,6 +946,8 @@ class OperationalHealthHandler(LanAdminHandler):
                 "operation": operation,
                 "outcome": "applied" if error is None else "failed",
             }
+            if operation == "playlist_metadata" and metadata_outcome is not None:
+                details["metadata_outcome"] = metadata_outcome.value
             if error is not None:
                 if error.startswith("HTTP ") and error[5:].isdigit():
                     details["failure_class"] = "api_error"

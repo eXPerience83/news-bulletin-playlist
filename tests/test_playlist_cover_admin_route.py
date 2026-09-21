@@ -38,6 +38,7 @@ class _SpotifyClient:
         self.cover_calls: list[tuple[str, bytes]] = []
         self.block_updates = False
         self.metadata_error: Exception | None = None
+        self.metadata_errors: list[Exception | None] = []
         self.cover_error: Exception | None = None
         self.update_started = threading.Event()
         self.update_release = threading.Event()
@@ -61,7 +62,11 @@ class _SpotifyClient:
             self.update_started.set()
             if not self.update_release.wait(timeout=5.0):
                 raise AssertionError("timed out waiting to release Spotify metadata update")
-        if self.metadata_error is not None:
+        if self.metadata_errors:
+            metadata_error = self.metadata_errors.pop(0)
+            if metadata_error is not None:
+                raise metadata_error
+        elif self.metadata_error is not None:
             raise self.metadata_error
         return {}
 
@@ -226,6 +231,72 @@ def test_explicit_admin_sync_uses_token_and_does_not_restart_scheduler(tmp_path:
     by_operation = {event.details["operation"]: event for event in admin_events}
     assert by_operation["playlist_metadata"].playlist_id == str(managed.id)
     assert by_operation["playlist_metadata"].details == {
+        "metadata_outcome": "applied_with_attribution",
+        "operation": "playlist_metadata",
+        "outcome": "applied",
+    }
+    assert by_operation["playlist_cover_upload"].details == {
+        "operation": "playlist_cover_upload",
+        "outcome": "applied",
+    }
+
+
+def test_explicit_admin_sync_reports_http_400_attribution_fallback(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    service, client, managed = _managed_service(tmp_path)
+    lifecycle = _Lifecycle()
+    provider = _Provider()
+    security = LanAdminSecurity(_PASSWORD)
+    client.metadata_errors = [
+        SpotifyApiError(400, "attribution-rejection-sentinel"),
+        None,
+    ]
+    handler = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=provider,
+        security=security,
+        path="/admin/playlists/sync",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(managed.id)],
+        },
+    )
+
+    handler.do_POST()
+
+    assert handler.response is not None
+    assert handler.response.status == HTTPStatus.SEE_OTHER
+    assert handler.response.extra_headers["Location"] == "/admin/?notice=spotify-sync-applied"
+    assert client.update_calls == [
+        (
+            "destination",
+            managed.display_name,
+            render_spotify_description(managed.description),
+        ),
+        (
+            "destination",
+            managed.display_name,
+            managed.description,
+        ),
+    ]
+    assert client.cover_calls == [("destination", b"\xff\xd8cover\xff\xd9")]
+    captured = capsys.readouterr()
+    assert "attribution-rejection-sentinel" not in captured.out
+    assert "attribution-rejection-sentinel" not in captured.err
+    diagnostic_output = handler.diagnostic_output.getvalue()
+    assert "metadata_outcome=applied_without_attribution" in diagnostic_output
+    assert "attribution-rejection-sentinel" not in diagnostic_output
+    assert handler.diagnostic_store is not None
+    events = handler.diagnostic_store.list_events(limit=10)
+    by_operation = {
+        event.details["operation"]: event for event in events if event.component == "admin"
+    }
+    assert by_operation["playlist_metadata"].details == {
+        "metadata_outcome": "applied_without_attribution",
         "operation": "playlist_metadata",
         "outcome": "applied",
     }
@@ -380,6 +451,7 @@ def test_explicit_admin_sync_reports_cover_network_failure_without_raw_error(
         event.details["operation"]: event for event in events if event.component == "admin"
     }
     assert by_operation["playlist_metadata"].details == {
+        "metadata_outcome": "applied_with_attribution",
         "operation": "playlist_metadata",
         "outcome": "applied",
     }

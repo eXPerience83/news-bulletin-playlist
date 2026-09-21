@@ -61,6 +61,9 @@ current work remains under **Unreleased** until a stable release is cut.
 
 ### Fixed
 
+- Explicit Spotify metadata synchronization now records whether the playlist description was applied
+  with the project attribution or through the existing exact-HTTP-400 fallback without attribution,
+  while keeping rejected provider text out of diagnostics.
 - Avoided the old 8-minute default silently dropping useful ordinary editions such as the observed
   **RNE 10:05 / 605-second** bulletin from production diagnostics on build `71788836ea1e`.
 - Spotify description attribution remains outside editable managed state, preventing duplicate project
