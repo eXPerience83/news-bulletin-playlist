@@ -885,21 +885,6 @@ class PublicDetectorJournal:
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
         connection.execute(_TABLE_SQL)
-        columns = {
-            str(row["name"])
-            for row in connection.execute(
-                "PRAGMA table_info(spotify_public_detector_state)"
-            ).fetchall()
-        }
-        if "last_public_release_date_shape" not in columns:
-            connection.execute(
-                "ALTER TABLE spotify_public_detector_state "
-                "ADD COLUMN last_public_release_date_shape TEXT"
-            )
-        if "last_degraded_audit_at" not in columns:
-            connection.execute(
-                "ALTER TABLE spotify_public_detector_state ADD COLUMN last_degraded_audit_at TEXT"
-            )
 
     def _connection(self, operation: str) -> _ConnectionContext:
         try:
