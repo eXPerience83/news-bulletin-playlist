@@ -123,7 +123,10 @@ class OperationalDiagnostics:
         if playlist_id is not None:
             fields.append(f"playlist={playlist_id}")
         for key in sorted(normalized_details):
-            fields.append(f"{key}={_render_value(normalized_details[key])}")
+            if key == "public_response_body_b64":
+                fields.append("public_response_body=<captured>")
+            else:
+                fields.append(f"{key}={_render_value(normalized_details[key])}")
 
         message = " ".join(fields)
         if severity is DiagnosticSeverity.ERROR:
