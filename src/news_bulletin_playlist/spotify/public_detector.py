@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 import sqlite3
@@ -88,6 +90,17 @@ class PublicReleaseDateShape(StrEnum):
     UNSUPPORTED_BOOLEAN = "unsupported_boolean"
 
 
+@dataclass(frozen=True, slots=True)
+class PublicResponseCapture:
+    """Bounded raw evidence from an unauthenticated Spotify public response."""
+
+    surface: str
+    status: int | None
+    content_type: str | None
+    body: bytes
+    truncated: bool = False
+
+
 class PublicShowResponseError(PublicShowDetectorError):
     """Raised when the public Spotify response no longer satisfies the detector contract."""
 
@@ -96,9 +109,11 @@ class PublicShowResponseError(PublicShowDetectorError):
         message: str,
         *,
         reason: PublicShowResponseFailureReason,
+        capture: PublicResponseCapture | None = None,
     ) -> None:
         super().__init__(message)
         self.reason = reason
+        self.capture = capture
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +163,13 @@ class UrllibPublicShowTransport:
             raise PublicShowResponseError(
                 "Spotify public show response exceeded the size limit",
                 reason=PublicShowResponseFailureReason.RESPONSE_TOO_LARGE,
+                capture=PublicResponseCapture(
+                    surface="public",
+                    status=status,
+                    content_type=content_type,
+                    body=body[: self.max_response_bytes],
+                    truncated=True,
+                ),
             )
         return PublicHttpResponse(status=status, content_type=content_type, body=body)
 
@@ -344,9 +366,9 @@ class PublicShowClient:
         except PublicShowTransportError:
             self._record(operation, SpotifyRequestOutcome.TRANSPORT_ERROR)
             raise
-        except PublicShowResponseError:
+        except PublicShowResponseError as exc:
             self._record(operation, SpotifyRequestOutcome.RESPONSE_ERROR)
-            raise
+            raise _with_capture_surface(exc, "embed") from exc
         try:
             html = response.body.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -358,6 +380,7 @@ class PublicShowClient:
             raise PublicShowResponseError(
                 "Spotify Embed response was not UTF-8",
                 reason=PublicShowResponseFailureReason.EMBED_NOT_UTF8,
+                capture=_response_capture(response, surface="embed"),
             ) from exc
         try:
             observation = parse_public_show_embed(
@@ -366,13 +389,17 @@ class PublicShowClient:
                 spotify_show_id=show_id,
                 observed_at=observed_at,
             )
-        except PublicShowResponseError:
+        except PublicShowResponseError as exc:
             self._record(
                 operation,
                 SpotifyRequestOutcome.RESPONSE_ERROR,
                 http_status=response.status,
             )
-            raise
+            raise PublicShowResponseError(
+                str(exc),
+                reason=exc.reason,
+                capture=_response_capture(response, surface="embed"),
+            ) from exc
         self._record(operation, SpotifyRequestOutcome.SUCCESS, http_status=response.status)
         return observation
 
@@ -389,9 +416,9 @@ class PublicShowClient:
         except PublicShowTransportError:
             self._record(operation, SpotifyRequestOutcome.TRANSPORT_ERROR)
             raise
-        except PublicShowResponseError:
+        except PublicShowResponseError as exc:
             self._record(operation, SpotifyRequestOutcome.RESPONSE_ERROR)
-            raise
+            raise _with_capture_surface(exc, "oembed") from exc
         try:
             decoded = json.loads(response.body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -403,6 +430,7 @@ class PublicShowClient:
             raise PublicShowResponseError(
                 "Spotify oEmbed response was not valid JSON",
                 reason=PublicShowResponseFailureReason.OEMBED_JSON,
+                capture=_response_capture(response, surface="oembed"),
             ) from exc
         if not isinstance(decoded, dict):
             self._record(
@@ -413,6 +441,7 @@ class PublicShowClient:
             raise PublicShowResponseError(
                 "Spotify oEmbed response was not an object",
                 reason=PublicShowResponseFailureReason.OEMBED_SHAPE,
+                capture=_response_capture(response, surface="oembed"),
             )
         try:
             title = _bounded_text(
@@ -421,13 +450,17 @@ class PublicShowClient:
                 max_length=1000,
                 reason=PublicShowResponseFailureReason.OEMBED_TITLE,
             )
-        except PublicShowResponseError:
+        except PublicShowResponseError as exc:
             self._record(
                 operation,
                 SpotifyRequestOutcome.RESPONSE_ERROR,
                 http_status=response.status,
             )
-            raise
+            raise PublicShowResponseError(
+                str(exc),
+                reason=exc.reason,
+                capture=_response_capture(response, surface="oembed"),
+            ) from exc
         self._record(operation, SpotifyRequestOutcome.SUCCESS, http_status=response.status)
         return title
 
@@ -964,6 +997,7 @@ class PublicDetector:
                     previous=previous,
                     outcome="response_failure",
                     response_reason=exc.reason,
+                    response_capture=exc.capture,
                     try_oembed_fallback=True,
                 )
                 if degraded_changed:
@@ -983,6 +1017,7 @@ class PublicDetector:
                         "oembed_failure",
                         observed_at=observed,
                         response_reason=exc.reason,
+                        response_capture=exc.capture,
                     )
                 except PublicShowDetectorError:
                     self._emit_failure(
@@ -1114,6 +1149,7 @@ class PublicDetector:
         outcome: str,
         http_status: int | None = None,
         response_reason: PublicShowResponseFailureReason | None = None,
+        response_capture: PublicResponseCapture | None = None,
         try_oembed_fallback: bool = False,
     ) -> bool:
         oembed_title: str | None = None
@@ -1129,6 +1165,11 @@ class PublicDetector:
                     "oembed_failure",
                     observed_at=observed_at,
                     response_reason=exc.reason,
+                    response_capture=(
+                        exc.capture
+                        if previous is None or previous.consecutive_detector_failures == 0
+                        else None
+                    ),
                 )
             except PublicShowDetectorError:
                 fallback_outcome = "oembed_failed"
@@ -1163,6 +1204,15 @@ class PublicDetector:
         }
         if http_status is not None:
             details["http_status"] = http_status
+        capture = (
+            response_capture
+            if previous is None or previous.consecutive_detector_failures == 0
+            else None
+        )
+        if capture is not None:
+            if http_status is None and capture.status is not None:
+                details["http_status"] = capture.status
+            details.update(_public_response_capture_details(capture))
         if response_reason is not None:
             details["detector_response_reason"] = response_reason.value
         if fallback_outcome is not None:
@@ -1184,8 +1234,13 @@ class PublicDetector:
         *,
         observed_at: datetime,
         response_reason: PublicShowResponseFailureReason | None = None,
+        response_capture: PublicResponseCapture | None = None,
     ) -> None:
         details: dict[str, DiagnosticValue] = {"detector_outcome": outcome}
+        if response_capture is not None:
+            if response_capture.status is not None:
+                details["http_status"] = response_capture.status
+            details.update(_public_response_capture_details(response_capture))
         if response_reason is not None:
             details["detector_response_reason"] = response_reason.value
         self.diagnostics.emit(
@@ -1236,6 +1291,56 @@ class PublicDetector:
             source_id=str(observation.source_id),
             details=details,
         )
+
+
+def _response_capture(
+    response: PublicHttpResponse,
+    *,
+    surface: str,
+) -> PublicResponseCapture:
+    return PublicResponseCapture(
+        surface=surface,
+        status=response.status,
+        content_type=response.content_type,
+        body=response.body,
+    )
+
+
+def _with_capture_surface(
+    exc: PublicShowResponseError,
+    surface: str,
+) -> PublicShowResponseError:
+    capture = exc.capture
+    if capture is None or capture.surface == surface:
+        return exc
+    return PublicShowResponseError(
+        str(exc),
+        reason=exc.reason,
+        capture=PublicResponseCapture(
+            surface=surface,
+            status=capture.status,
+            content_type=capture.content_type,
+            body=capture.body,
+            truncated=capture.truncated,
+        ),
+    )
+
+
+def _public_response_capture_details(
+    capture: PublicResponseCapture,
+) -> dict[str, DiagnosticValue]:
+    body = capture.body
+    details: dict[str, DiagnosticValue] = {
+        "public_response_capture": True,
+        "public_response_surface": capture.surface,
+        "public_response_size_bytes": len(body),
+        "public_response_sha256": hashlib.sha256(body).hexdigest(),
+        "public_response_truncated": capture.truncated,
+        "public_response_body_b64": base64.b64encode(body).decode("ascii"),
+    }
+    if capture.content_type:
+        details["public_response_content_type"] = capture.content_type
+    return details
 
 
 def _degraded_title_baseline(state: PublicDetectorState | None) -> str | None:
