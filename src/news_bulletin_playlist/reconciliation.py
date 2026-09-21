@@ -1125,9 +1125,9 @@ def _attested_prewrite_snapshot(
 ) -> str | None:
     """Return the settled attested baseline snapshot when it still matches remotely.
 
-    This is an optimization hint only. It never qualifies the new desired state, publishes
-    planner evidence or replaces post-write verification. Any missing, malformed, changed or
-    unavailable evidence falls back to the normal complete pre-write item read.
+    This is an optimization hint only. It never qualifies a new desired state or replaces
+    post-write verification. Any missing, malformed, changed or unavailable evidence falls back
+    to the normal complete pre-write item read.
     """
     try:
         attestation = store.get_playlist_attestation(logical_playlist_id)
