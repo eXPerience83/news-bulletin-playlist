@@ -1013,7 +1013,6 @@ def serve(
     rate_limit_journal = SpotifyRateLimitJournal(store)
     managed_admin_service = _build_managed_admin_service(
         data_dir,
-        env,
         spotify_auth=spotify_auth,
         request_metrics=request_metrics,
         rate_limit_journal=rate_limit_journal,
@@ -1160,7 +1159,6 @@ def serve(
 
 def _build_managed_admin_service(
     data_dir: Path,
-    environ: Mapping[str, str],
     *,
     spotify_auth: SpotifyAuthService | None,
     request_metrics: SpotifyRequestMetrics | None = None,
