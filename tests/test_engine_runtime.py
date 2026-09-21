@@ -126,6 +126,7 @@ def _write_managed_config(tmp_path: Path) -> Path:
     ManagedStateStore(path).save(ManagedState(playlists=(playlist,)))
     return path
 
+
 def _store(tmp_path: Path) -> SQLiteStore:
     store = SQLiteStore(tmp_path / "engine.sqlite3")
     store.initialize()
