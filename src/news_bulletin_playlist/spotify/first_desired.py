@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -13,6 +11,7 @@ from news_bulletin_playlist.desired_state import (
     DesiredPlaylistState,
     duration_eligibility_decision,
 )
+from news_bulletin_playlist.desired_state import desired_fingerprint as desired_fingerprint
 from news_bulletin_playlist.models import PlaylistDefinition, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
@@ -95,15 +94,6 @@ def build_spotify_first_desired_state(
         desired=desired,
         duration_unavailable_count=duration_unavailable,
     )
-
-
-def desired_fingerprint(uris: Sequence[str]) -> str:
-    encoded = json.dumps(
-        list(uris),
-        ensure_ascii=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _retained(
