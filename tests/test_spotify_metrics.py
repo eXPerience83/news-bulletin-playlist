@@ -605,7 +605,6 @@ def test_runtime_managed_admin_client_records_real_web_api_attempt(
     metrics = _metrics(tmp_path)
     service = _build_managed_admin_service(
         data_dir=tmp_path,
-        environ={},
         spotify_auth=object(),  # type: ignore[arg-type]
         request_metrics=metrics,
     )
