@@ -1,6 +1,6 @@
 # News Bulletin Playlist
 
-Open-source service for dynamic news bulletin playlists across countries and languages,
+Service for dynamic news bulletin playlists across countries and languages,
 with Spotify as the first destination.
 
 > Pre-release. The runtime is Spotify-first: public Spotify state is a change signal and the official Spotify Web API show catalogue is the episode authority. This project is not affiliated with or endorsed by Spotify or any news provider.
@@ -147,9 +147,11 @@ A cycle builds desired playlists from durable Spotify-first episode state. There
 
 Spotify playlist descriptions are plain text from the Web API contract. Managed descriptions stay attribution-free locally; when metadata is created or explicitly synchronized, the runtime appends one bounded project line containing `https://github.com/eXPerience83/news-bulletin-playlist`. Whether a Spotify client renders that URL as clickable is client behavior and is not assumed by the application.
 
-## License
+## Copyright
 
-Released under the [MIT License](LICENSE).
+Copyright (c) 2026 eXPerience83. All rights reserved.
+
+The current codebase is not offered under an open-source license. No permission is granted to use, copy, modify, distribute, sublicense or otherwise exploit the source code unless separately authorized in writing by the copyright holder.
 
 ## Security
 
