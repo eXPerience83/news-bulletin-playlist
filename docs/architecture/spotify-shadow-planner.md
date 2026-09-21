@@ -1,9 +1,9 @@
 # Spotify shadow planner
 
-> **Historical / superseded.** This document records the legacy RSS/matching planner design.
-> The authoritative runtime is now Spotify-first; see `docs/ARCHITECTURE.md`. Planner/matching
-> tables may remain in released SQLite schemas only for upgrade compatibility and do not
-> participate in current runtime decisions.
+> **Historical / superseded.** This document records the pre-0.1 RSS/matching planner design.
+> The authoritative runtime is now Spotify-first; see `docs/ARCHITECTURE.md`. The planner/matching
+> tables described below existed only in the private-development database and are not present in
+> database format 1. The 0.1.0 runtime does not read or migrate them.
 
 
 Issue #158 introduced the durable local planner and its bounded
