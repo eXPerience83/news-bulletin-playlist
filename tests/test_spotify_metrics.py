@@ -88,6 +88,10 @@ class _ExecuteFailureContext:
 def _metrics(tmp_path: Path) -> SpotifyRequestMetrics:
     metrics = SpotifyRequestMetrics(tmp_path / "state.sqlite3", clock=lambda: NOW)
     metrics.initialize()
+    # Most metrics tests exercise their own synthetic coverage gaps. Clear the format-1
+    # bootstrap gap so those tests start from a complete synthetic observation window.
+    with sqlite3.connect(metrics.path) as connection:
+        connection.execute("DELETE FROM spotify_request_metrics_coverage")
     return metrics
 
 
