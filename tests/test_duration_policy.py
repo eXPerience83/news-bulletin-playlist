@@ -207,5 +207,3 @@ def test_builtin_catalog_and_managed_compile_use_current_global_30_minute_defaul
     compiled = compile_engine_config(BUILTIN_CATALOG, state)
     assert compiled.playlists[0].duration_policy.default_max_seconds == 1800
     assert compiled.playlists[0].duration_policy.exceptions == ()
-
-
