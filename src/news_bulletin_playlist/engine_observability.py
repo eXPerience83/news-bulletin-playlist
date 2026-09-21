@@ -535,6 +535,7 @@ def _is_noteworthy_duration_decision(decision: DurationEligibilityDecision) -> b
         )
     )
 
+
 def _destination_was_preserved(error: str | None) -> bool:
     if error is None:
         return False
