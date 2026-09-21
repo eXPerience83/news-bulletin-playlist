@@ -153,7 +153,7 @@ def ensure_data_dir(data_dir: Path) -> None:
 
 
 def initialize_runtime_storage(data_dir: Path) -> Path:
-    """Verify `/data` and apply durable SQLite migrations before serving traffic."""
+    """Verify `/data` and initialize or validate the clean SQLite format before serving."""
     ensure_data_dir(data_dir)
     database_path = data_dir / DEFAULT_DB_FILENAME
     SQLiteStore(database_path).initialize()

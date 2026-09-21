@@ -104,8 +104,10 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - Do not download or store audio.
 - Persisted Spotify episode URIs must satisfy the shared episode-URI invariant before reuse.
 - A failed source or destination must not unnecessarily block independent sources/playlists.
-- Released legacy SQLite tables may remain inert for upgrade compatibility, but legacy rows must
-  never participate in current runtime decisions.
+- Database format 1 in `/data/news-bulletin-playlist-v1.sqlite3` is the supported Spotify-first
+  persistence baseline. Pre-0.1 private-development SQLite tables/migrations are not runtime
+  compatibility targets; future persistence changes must use explicit reviewed forward migrations
+  from format 1.
 
 ## Documentation and external contracts
 

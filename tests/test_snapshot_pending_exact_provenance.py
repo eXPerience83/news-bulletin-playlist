@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -43,55 +42,3 @@ def test_pending_round_trip_preserves_exact_readback_provenance(tmp_path: Path) 
 
     assert restored is not None
     assert restored.readback_exact is True
-
-
-def test_legacy_pending_row_migrates_fail_closed_to_non_exact(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    with sqlite3.connect(store.path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE spotify_pending_snapshot_confirmations (
-                playlist_id TEXT PRIMARY KEY,
-                destination_id TEXT NOT NULL,
-                baseline_snapshot_id TEXT NOT NULL,
-                expected_snapshot_id TEXT NOT NULL,
-                desired_fingerprint TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO spotify_pending_snapshot_confirmations (
-                playlist_id, destination_id, baseline_snapshot_id, expected_snapshot_id,
-                desired_fingerprint, created_at, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(PLAYLIST_ID),
-                "destination",
-                "snapshot-a",
-                "snapshot-b",
-                FINGERPRINT,
-                NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
-                (NOW + timedelta(hours=1))
-                .isoformat(timespec="microseconds")
-                .replace("+00:00", "Z"),
-            ),
-        )
-        connection.commit()
-
-    restored = PendingSnapshotJournal(SQLiteStore(store.path)).get(PLAYLIST_ID)
-
-    assert restored is not None
-    assert restored.readback_exact is False
-
-    with sqlite3.connect(store.path) as connection:
-        columns = {
-            row[1]
-            for row in connection.execute(
-                "PRAGMA table_info(spotify_pending_snapshot_confirmations)"
-            ).fetchall()
-        }
-    assert "readback_exact" in columns

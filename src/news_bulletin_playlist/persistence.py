@@ -9,9 +9,9 @@ from pathlib import Path
 
 from news_bulletin_playlist.models import PlaylistId
 
-DEFAULT_DB_FILENAME = "news-bulletin-playlist.sqlite3"
+DEFAULT_DB_FILENAME = "news-bulletin-playlist-v1.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
-LATEST_SCHEMA_VERSION = 8
+DATABASE_FORMAT_VERSION = 1
 
 
 class PersistenceError(RuntimeError):
@@ -35,107 +35,66 @@ class PlaylistAttestation:
     updated_at: datetime
 
 
-_MIGRATION_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version INTEGER PRIMARY KEY,
-    applied_at TEXT NOT NULL
+_FORMAT_TABLE_SQL = """
+CREATE TABLE database_format (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    format_version INTEGER NOT NULL CHECK (format_version > 0),
+    created_at TEXT NOT NULL
 )
 """
 
-_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
-    (
-        1,
-        (
-            """
-            CREATE TABLE playlist_state (
-                playlist_id TEXT PRIMARY KEY,
-                last_attempt_at TEXT NOT NULL,
-                last_success_at TEXT,
-                last_error TEXT
-            )
-            """,
+_BASELINE_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE playlist_state (
+        playlist_id TEXT PRIMARY KEY,
+        last_attempt_at TEXT NOT NULL,
+        last_success_at TEXT,
+        last_error TEXT
+    )
+    """,
+    """
+    CREATE TABLE spotify_playlist_attestations (
+        playlist_id TEXT PRIMARY KEY,
+        destination_id TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        desired_fingerprint TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE spotify_request_metrics (
+        bucket_at TEXT NOT NULL,
+        surface TEXT NOT NULL CHECK (surface IN ('public', 'web_api', 'oauth')),
+        operation TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK (
+            outcome IN ('success', 'http_error', 'transport_error', 'response_error')
         ),
-    ),
-    (
-        2,
-        (
-            """
-            CREATE TABLE spotify_playlist_attestations (
-                playlist_id TEXT PRIMARY KEY,
-                destination_id TEXT NOT NULL,
-                snapshot_id TEXT NOT NULL,
-                desired_fingerprint TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """,
-        ),
-    ),
-    (
-        4,
-        (
-            """
-            CREATE TABLE spotify_request_metrics (
-                bucket_at TEXT NOT NULL,
-                surface TEXT NOT NULL CHECK (surface IN ('web_api', 'oauth')),
-                operation TEXT NOT NULL,
-                outcome TEXT NOT NULL CHECK (
-                    outcome IN ('success', 'http_error', 'transport_error', 'response_error')
-                ),
-                http_status INTEGER NOT NULL DEFAULT -1,
-                quota_reason TEXT NOT NULL DEFAULT '',
-                request_count INTEGER NOT NULL CHECK (request_count > 0),
-                PRIMARY KEY (bucket_at, surface, operation, outcome, http_status, quota_reason)
-            )
-            """,
-            """
-            CREATE INDEX spotify_request_metrics_bucket_idx
-            ON spotify_request_metrics (bucket_at DESC)
-            """,
-            """
-            CREATE TABLE spotify_request_metrics_coverage (
-                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                incomplete_at TEXT NOT NULL
-            )
-            """,
-        ),
-    ),
-    (
-        8,
-        (
-            """
-            ALTER TABLE spotify_request_metrics
-            RENAME TO spotify_request_metrics_v7
-            """,
-            """
-            CREATE TABLE spotify_request_metrics (
-                bucket_at TEXT NOT NULL,
-                surface TEXT NOT NULL CHECK (surface IN ('public', 'web_api', 'oauth')),
-                operation TEXT NOT NULL,
-                outcome TEXT NOT NULL CHECK (
-                    outcome IN ('success', 'http_error', 'transport_error', 'response_error')
-                ),
-                http_status INTEGER NOT NULL DEFAULT -1,
-                quota_reason TEXT NOT NULL DEFAULT '',
-                request_count INTEGER NOT NULL CHECK (request_count > 0),
-                PRIMARY KEY (bucket_at, surface, operation, outcome, http_status, quota_reason)
-            )
-            """,
-            """
-            INSERT INTO spotify_request_metrics (
-                bucket_at, surface, operation, outcome, http_status, quota_reason, request_count
-            )
-            SELECT bucket_at, surface, operation, outcome, http_status, quota_reason, request_count
-            FROM spotify_request_metrics_v7
-            """,
-            """
-            DROP TABLE spotify_request_metrics_v7
-            """,
-            """
-            CREATE INDEX spotify_request_metrics_bucket_idx
-            ON spotify_request_metrics (bucket_at DESC)
-            """,
-        ),
-    ),
+        http_status INTEGER NOT NULL DEFAULT -1,
+        quota_reason TEXT NOT NULL DEFAULT '',
+        request_count INTEGER NOT NULL CHECK (request_count > 0),
+        PRIMARY KEY (bucket_at, surface, operation, outcome, http_status, quota_reason)
+    )
+    """,
+    """
+    CREATE INDEX spotify_request_metrics_bucket_idx
+    ON spotify_request_metrics (bucket_at DESC)
+    """,
+    """
+    CREATE TABLE spotify_request_metrics_coverage (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        incomplete_at TEXT NOT NULL
+    )
+    """,
+)
+
+_REQUIRED_BASELINE_TABLES = frozenset(
+    {
+        "database_format",
+        "playlist_state",
+        "spotify_playlist_attestations",
+        "spotify_request_metrics",
+        "spotify_request_metrics_coverage",
+    }
 )
 
 
@@ -146,7 +105,7 @@ class SQLiteStore:
         self.path = Path(path)
 
     def initialize(self) -> None:
-        """Create the database and apply pending migrations transactionally."""
+        """Create or validate the clean Spotify-first database format."""
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -154,49 +113,87 @@ class SQLiteStore:
 
         with self._connection("initialize database") as connection:
             connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute(_MIGRATION_TABLE_SQL)
-            current = self._schema_version(connection)
-            if current > LATEST_SCHEMA_VERSION:
+            tables = self._application_tables(connection)
+            if not tables:
+                self._create_baseline(connection, created_at=datetime.now(UTC))
+                return
+
+            if "database_format" not in tables:
                 raise PersistenceError(
-                    f"database schema {current} is newer than supported "
-                    f"version {LATEST_SCHEMA_VERSION}"
+                    "database predates the supported 0.1.0 clean format; "
+                    "back up and replace the old SQLite database before starting this build"
                 )
 
-            for version, statements in _MIGRATIONS:
-                if version <= current:
-                    continue
-                for statement in statements:
-                    connection.execute(statement)
-                if version == 8 and 0 < current < 8:
-                    self._mark_request_metrics_coverage_gap(
-                        connection,
-                        observed_at=datetime.now(UTC),
-                    )
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                    (version, _format_timestamp(datetime.now(UTC))),
+            current = self._format_version(connection)
+            if current > DATABASE_FORMAT_VERSION:
+                raise PersistenceError(
+                    f"database format {current} is newer than supported "
+                    f"version {DATABASE_FORMAT_VERSION}"
+                )
+            if current < DATABASE_FORMAT_VERSION:
+                raise PersistenceError(
+                    f"database format {current} requires a forward migration to "
+                    f"{DATABASE_FORMAT_VERSION}, but no migration is implemented"
                 )
 
-    def schema_version(self) -> int:
-        """Return the latest applied migration version."""
-        with self._connection("read schema version") as connection:
-            return self._schema_version(connection)
+            missing = sorted(_REQUIRED_BASELINE_TABLES - tables)
+            if missing:
+                raise PersistenceError(
+                    "database format is missing required tables: " + ", ".join(missing)
+                )
+
+    def format_version(self) -> int:
+        """Return the clean Spotify-first database format version."""
+        with self._connection("read database format") as connection:
+            return self._format_version(connection)
 
     @staticmethod
-    def _mark_request_metrics_coverage_gap(
+    def _application_tables(connection: sqlite3.Connection) -> frozenset[str]:
+        rows = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+            """
+        ).fetchall()
+        return frozenset(str(row["name"]) for row in rows)
+
+    @staticmethod
+    def _format_version(connection: sqlite3.Connection) -> int:
+        row = connection.execute(
+            "SELECT format_version FROM database_format WHERE singleton = 1"
+        ).fetchone()
+        if row is None:
+            raise PersistenceError("database format row is missing")
+        value = row["format_version"]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise PersistenceError("database format version is invalid")
+        return value
+
+    @staticmethod
+    def _create_baseline(
         connection: sqlite3.Connection,
         *,
-        observed_at: datetime,
+        created_at: datetime,
     ) -> None:
-        """Mark pre-v8 request history incomplete because public attempts were not counted."""
+        created = _format_timestamp(created_at)
+        connection.execute(_FORMAT_TABLE_SQL)
+        for statement in _BASELINE_STATEMENTS:
+            connection.execute(statement)
         connection.execute(
             """
-            INSERT INTO spotify_request_metrics_coverage (singleton, incomplete_at)
-            VALUES (1, ?)
-            ON CONFLICT(singleton) DO UPDATE SET incomplete_at = excluded.incomplete_at
-            WHERE excluded.incomplete_at > spotify_request_metrics_coverage.incomplete_at
+            INSERT INTO database_format(singleton, format_version, created_at)
+            VALUES (1, ?, ?)
             """,
-            (_format_timestamp(observed_at),),
+            (DATABASE_FORMAT_VERSION, created),
+        )
+        # A new/reset database has no request history for the preceding 24 hours.
+        connection.execute(
+            """
+            INSERT INTO spotify_request_metrics_coverage(singleton, incomplete_at)
+            VALUES (1, ?)
+            """,
+            (created,),
         )
 
     def record_playlist_state(
@@ -335,17 +332,6 @@ class SQLiteStore:
             desired_fingerprint=_row_str(row, "desired_fingerprint"),
             updated_at=_parse_timestamp(_row_str(row, "updated_at")),
         )
-
-    def _schema_version(self, connection: sqlite3.Connection) -> int:
-        row = connection.execute(
-            "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
-        ).fetchone()
-        if row is None:
-            return 0
-        value = row["version"]
-        if not isinstance(value, int):
-            raise PersistenceError("schema migration version is not an integer")
-        return value
 
     @contextmanager
     def _connection(self, operation: str) -> Iterator[sqlite3.Connection]:

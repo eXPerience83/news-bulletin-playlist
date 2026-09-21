@@ -37,7 +37,7 @@ def test_diagnostics_survive_store_recreation_and_share_application_database(
     tmp_path: Path,
 ) -> None:
     operational, diagnostics = _stores(tmp_path)
-    assert operational.schema_version() >= 2
+    assert operational.format_version() == 1
 
     event_id = diagnostics.record(
         occurred_at=NOW,
@@ -122,7 +122,7 @@ def test_diagnostic_row_cap_evicts_oldest_events_deterministically(tmp_path: Pat
             severity=DiagnosticSeverity.INFO,
             component="engine",
             event_name=f"cycle_{index}",
-            details={"edition_count": index},
+            details={"episode_count": index},
         )
 
     events = diagnostics.list_events(limit=10)
@@ -180,7 +180,7 @@ def test_diagnostic_filters_are_bounded_and_newest_first(tmp_path: Path) -> None
         component="source.collect",
         event_name="source_recovered",
         source_id="rne",
-        details={"edition_count": 5},
+        details={"episode_count": 5},
     )
 
     rne_events = diagnostics.list_events(source_id="rne", limit=10)

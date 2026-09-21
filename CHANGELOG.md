@@ -42,6 +42,10 @@ current work remains under **Unreleased** until a stable release is cut.
 
 ### Changed
 
+- Persistence now starts from a clean Spotify-first database format 1 in
+  `/data/news-bulletin-playlist-v1.sqlite3`; the private-development v1-v8 migration chain,
+  RSS/matcher/planner schema compatibility and legacy diagnostic-row allowlist have been retired.
+  The previous SQLite file is left untouched during the controlled 0.1.0 cutover for rollback.
 - Runtime configuration is now exclusively the built-in catalog plus versioned
   `/data/managed-state.json`; the pre-1.0 full-YAML runtime path and `NEWS_PLAYLIST_CONFIG`
   selector have been retired with fail-closed detection of obsolete settings/files.

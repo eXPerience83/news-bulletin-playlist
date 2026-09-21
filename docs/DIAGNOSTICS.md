@@ -138,9 +138,9 @@ diagnostic raw-body exception is the unauthenticated public Spotify response cap
 specifically so an unexpected Embed/oEmbed schema change can be repaired from the incident ZIP
 without having to reproduce Spotify's transient response later.
 
-The diagnostic allowlist still recognizes fields emitted by released RSS/matching/planner versions
-so historical rows already stored in SQLite remain readable after upgrade. Those legacy keys are
-compatibility-only and are not evidence that the old runtime path is still active.
+The 0.1.0 persistence baseline intentionally starts with a fresh diagnostic history. Compatibility
+fields that existed only to render pre-Spotify-first RSS/matcher/planner rows are no longer accepted
+by the durable diagnostic model.
 
 ## Secret-handling contract
 

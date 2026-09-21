@@ -220,6 +220,28 @@ GHCR also keeps candidate/revision tags and immutable image digests for audit an
 
 CI checks the deployment channel, package visibility, Compose rendering and the hardened health/web smoke test. The `/data` dataset is deliberately external to the container image, so updating or rolling back an image does not erase SQLite state, Spotify refresh authorization or managed configuration.
 
+## 0.1.0 persistence baseline cutover
+
+The clean Spotify-first persistence baseline uses
+`/data/news-bulletin-playlist-v1.sqlite3`. The pre-0.1 private-development database remains at
+`/data/news-bulletin-playlist.sqlite3` and is deliberately **not** migrated or modified by the new
+runtime.
+
+For the controlled TrueNAS cutover:
+
+1. keep a backup of the complete `/data` dataset;
+2. preserve `managed-state.json`, `spotify-auth.json`, admin credential files and
+   `managed-playlist-provisioning.json` if present;
+3. deploy the new image; it creates the v1 SQLite database automatically;
+4. expect the first cycle to rebuild detector/catalogue/destination evidence conservatively;
+5. verify existing Spotify destination IDs are reused and playlists converge without being recreated;
+6. keep the old SQLite file until the new baseline has been validated, then archive/remove it
+   deliberately together with any old `-wal`/`-shm` companions.
+
+The clean database intentionally starts without historical diagnostics/request metrics. Request
+metric coverage is marked incomplete at database creation and becomes complete naturally after the
+new runtime has accumulated a full 24-hour observation window.
+
 ## P0/manual OAuth probe
 
 The original P0/manual probe remains available as a diagnostic tool from the workload shell. The

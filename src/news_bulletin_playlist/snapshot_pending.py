@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS spotify_pending_snapshot_confirmations (
     readback_exact INTEGER NOT NULL DEFAULT 0 CHECK (readback_exact IN (0, 1))
 )
 """
-_READBACK_EXACT_COLUMN = "readback_exact"
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,18 +181,6 @@ class PendingSnapshotJournal:
     @staticmethod
     def _ensure_table(connection: sqlite3.Connection) -> None:
         connection.execute(_TABLE_SQL)
-        columns = {
-            str(row["name"])
-            for row in connection.execute(
-                "PRAGMA table_info(spotify_pending_snapshot_confirmations)"
-            ).fetchall()
-        }
-        if _READBACK_EXACT_COLUMN not in columns:
-            connection.execute(
-                "ALTER TABLE spotify_pending_snapshot_confirmations "
-                "ADD COLUMN readback_exact INTEGER NOT NULL DEFAULT 0 "
-                "CHECK (readback_exact IN (0, 1))"
-            )
 
     def _connection(self, operation: str) -> _ConnectionContext:
         try:
