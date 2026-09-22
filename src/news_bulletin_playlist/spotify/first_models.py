@@ -10,6 +10,7 @@ from enum import StrEnum
 from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
+
 _PRECISIONS = frozenset({"day", "month", "year"})
 
 
