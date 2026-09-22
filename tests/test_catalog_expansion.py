@@ -31,9 +31,10 @@ def test_builtin_catalog_exposes_phase_one_playlist_templates() -> None:
 
 
 def test_builtin_sources_expose_origin_scope_and_language() -> None:
-    ser = BUILTIN_CATALOG.source("ser")
-    cnn = BUILTIN_CATALOG.source("cnn")
-    dlf = BUILTIN_CATALOG.source("dlf_news")
+    sources = {str(source.id): source for source in BUILTIN_CATALOG.sources}
+    ser = sources["ser"]
+    cnn = sources["cnn"]
+    dlf = sources["dlf_news"]
 
     assert tuple(map(str, ser.countries)) == ("ES",)
     assert ser.editorial_scope is EditorialScope.NATIONAL
@@ -49,7 +50,8 @@ def test_builtin_sources_expose_origin_scope_and_language() -> None:
 
 
 def test_expanded_sources_have_deterministic_spotify_show_references() -> None:
-    source_ids = {str(source.id) for source in BUILTIN_CATALOG.sources}
+    sources = {str(source.id): source for source in BUILTIN_CATALOG.sources}
+    source_ids = set(sources)
     assert {
         "abc",
         "un_news_en",
@@ -75,7 +77,7 @@ def test_expanded_sources_have_deterministic_spotify_show_references() -> None:
         "dlf_news",
         "rmf_fakty",
     ):
-        source = BUILTIN_CATALOG.source(source_id)
+        source = sources[source_id]
         spotify_refs = tuple(
             ref
             for ref in source.external_references
@@ -85,6 +87,7 @@ def test_expanded_sources_have_deterministic_spotify_show_references() -> None:
 
 
 def test_wave_one_source_identity_and_unresolved_spanish_classification() -> None:
+    sources = {str(source.id): source for source in BUILTIN_CATALOG.sources}
     expected = {
         "reuters_world": ("GB", "INT", "en", "1alpjXkCUjn3Y9fR5xl8fZ"),
         "nplus_univision": ("US", "INT", "es", "7G8CEhjsTshZeGtPLcuW6T"),
@@ -92,11 +95,11 @@ def test_wave_one_source_identity_and_unresolved_spanish_classification() -> Non
         "un_news_es": ("US", "INT", "es", "77hGWK2o0NYsdS8WuXiLo6"),
     }
     for source_id, (country, scope, language, show_id) in expected.items():
-        source = BUILTIN_CATALOG.source(source_id)
+        source = sources[source_id]
         assert tuple(map(str, source.countries)) == (country,)
         assert source.editorial_scope.value == scope
         assert tuple(map(str, source.languages)) == (language,)
         assert source.parser_id == "release_date_title"
         assert any(reference.external_id == show_id for reference in source.external_references)
 
-    assert BUILTIN_CATALOG.source("un_news_es").collection_filter_id == "un_news_es_minutes"
+    assert sources["un_news_es"].collection_filter_id == "un_news_es_minutes"
