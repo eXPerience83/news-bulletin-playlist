@@ -53,8 +53,6 @@ jobs:
           fi
 
       - name: Verify required deployment channel is anonymously pullable
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           docker logout ghcr.io 2>/dev/null || true
@@ -62,14 +60,6 @@ jobs:
 
           if docker pull "$required"; then
             docker image rm "$required"
-            exit 0
-          fi
-
-          if [[ "$PR_NUMBER" == "87" ]]; then
-            echo "Bootstrap only for PR #87: edge-amd64 does not exist until this channel split reaches main." >&2
-            bootstrap="${IMAGE_NAME}:edge"
-            docker pull "$bootstrap"
-            docker image rm "$bootstrap"
             exit 0
           fi
 
