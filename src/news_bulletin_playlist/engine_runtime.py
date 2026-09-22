@@ -975,6 +975,7 @@ def serve(
     stop_event: threading.Event | None = None,
     environ: Mapping[str, str] | None = None,
     interval: timedelta | None = None,
+    handler_type: type[OperationalHealthHandler] = OperationalHealthHandler,
 ) -> int:
     """Run HTTP, OAuth and the production engine scheduler in one durable process."""
     env = os.environ if environ is None else environ
@@ -1076,19 +1077,19 @@ def serve(
     else:
         status = _MutableOperationalStatus(configured=configured)
 
-    OperationalHealthHandler.data_dir = data_dir
-    OperationalHealthHandler.admin_security = admin_security
-    OperationalHealthHandler.spotify_auth = spotify_auth
-    OperationalHealthHandler.operational_status = status
-    OperationalHealthHandler.engine_lifecycle = lifecycle
-    OperationalHealthHandler.auth_synchronization = auth_synchronization
-    OperationalHealthHandler.configuration_synchronization = configuration_synchronization
-    OperationalHealthHandler.managed_admin_service = managed_admin_service
-    OperationalHealthHandler.managed_admin_auth = managed_admin_auth
-    OperationalHealthHandler.diagnostic_store = diagnostic_store
-    OperationalHealthHandler.operational_diagnostics = diagnostics
-    OperationalHealthHandler.spotify_request_metrics = request_metrics
-    server = HTTPServer((host, port), OperationalHealthHandler)
+    handler_type.data_dir = data_dir
+    handler_type.admin_security = admin_security
+    handler_type.spotify_auth = spotify_auth
+    handler_type.operational_status = status
+    handler_type.engine_lifecycle = lifecycle
+    handler_type.auth_synchronization = auth_synchronization
+    handler_type.configuration_synchronization = configuration_synchronization
+    handler_type.managed_admin_service = managed_admin_service
+    handler_type.managed_admin_auth = managed_admin_auth
+    handler_type.diagnostic_store = diagnostic_store
+    handler_type.operational_diagnostics = diagnostics
+    handler_type.spotify_request_metrics = request_metrics
+    server = HTTPServer((host, port), handler_type)
     server.timeout = 0.5
     stopped = stop_event if stop_event is not None else threading.Event()
 
@@ -1129,13 +1130,13 @@ def serve(
         server.server_close()
         if lifecycle is not None:
             lifecycle.shutdown()
-        OperationalHealthHandler.engine_lifecycle = None
-        OperationalHealthHandler.auth_synchronization = None
-        OperationalHealthHandler.configuration_synchronization = None
-        OperationalHealthHandler.managed_admin_service = None
-        OperationalHealthHandler.managed_admin_auth = None
-        OperationalHealthHandler.diagnostic_store = None
-        OperationalHealthHandler.spotify_request_metrics = None
+        handler_type.engine_lifecycle = None
+        handler_type.auth_synchronization = None
+        handler_type.configuration_synchronization = None
+        handler_type.managed_admin_service = None
+        handler_type.managed_admin_auth = None
+        handler_type.diagnostic_store = None
+        handler_type.spotify_request_metrics = None
         if handlers_installed:
             signal.signal(signal.SIGTERM, previous_sigterm)
             signal.signal(signal.SIGINT, previous_sigint)
