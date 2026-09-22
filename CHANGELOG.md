@@ -7,6 +7,36 @@ after the latest release stay under **Unreleased** until the next stable release
 
 No changes yet.
 
+## [0.1.3] - 2026-09-22
+
+### Changed
+
+- Removed the unused reconciliation UTC helper and the obsolete standalone engine-scheduler fallback,
+  leaving the production lifecycle controller as the single scheduler owner.
+- Centralized operator-facing Spotify authorization labels and canonical raw 22-character base62 ID
+  validation while preserving the existing caller-specific error messages and keeping full Spotify
+  URI validation separate.
+- Centralized durable parent-directory `fsync` handling for managed state, provisioning state and
+  Spotify authorization persistence, preserving `O_DIRECTORY` where supported and each caller's
+  existing error translation.
+- Replaced diagnostics runtime's temporary mutation of
+  `engine_runtime.OperationalHealthHandler` with explicit handler injection. The base operational
+  handler remains the default internal fallback and its `/` renderer was retained after a separate
+  reachability review.
+
+### Compatibility / validation
+
+- Database format remains **1** and managed-state formats are unchanged; 0.1.3 requires no
+  persistence migration from 0.1.2.
+- The complete post-cleanup `main` range was re-audited after #343-#349 with no functional
+  regression found across scheduler lifecycle, OAuth/admin presentation, Spotify identifier
+  validation, durable-file synchronization or HTTP handler composition.
+- Every code-changing cleanup PR in the series passed both CI and Container validation on its final
+  head; the final runtime composition head passed Ruff, formatting, mypy and **742 tests** plus the
+  hardened container health/web/restart smoke test.
+- #349 was closed without code deletion after confirming the base operational status renderer is an
+  intentionally supported internal fallback rather than unreachable dead code.
+
 ## [0.1.2] - 2026-09-22
 
 ### Changed
