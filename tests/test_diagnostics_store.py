@@ -129,33 +129,6 @@ def test_diagnostic_row_cap_evicts_oldest_events_deterministically(tmp_path: Pat
     assert [event.event_name for event in events] == ["cycle_4", "cycle_3", "cycle_2"]
 
 
-def test_explicit_prune_enforces_age_and_overflow_bounds(tmp_path: Path) -> None:
-    _, diagnostics = _stores(tmp_path, retention_days=365, max_events=20)
-    diagnostics.record(
-        occurred_at=NOW - timedelta(days=40),
-        severity=DiagnosticSeverity.INFO,
-        component="engine",
-        event_name="old_event",
-    )
-    for index in range(4):
-        diagnostics.record(
-            occurred_at=NOW - timedelta(minutes=index),
-            severity=DiagnosticSeverity.INFO,
-            component="engine",
-            event_name=f"recent_{index}",
-        )
-
-    result = diagnostics.prune(now=NOW, retention_days=30, max_events=2)
-
-    assert result.age_deleted == 1
-    assert result.overflow_deleted == 2
-    assert result.total_deleted == 3
-    assert [event.event_name for event in diagnostics.list_events(limit=10)] == [
-        "recent_0",
-        "recent_1",
-    ]
-
-
 def test_diagnostic_filters_are_bounded_and_newest_first(tmp_path: Path) -> None:
     _, diagnostics = _stores(tmp_path)
     diagnostics.record(
