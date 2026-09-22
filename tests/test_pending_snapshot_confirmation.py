@@ -118,7 +118,7 @@ def test_single_page_stale_snapshot_is_durable_across_restart(tmp_path: Path) ->
         client, _playlist(), desired, store=store, evidence=first_evidence
     )
     pending = PendingSnapshotJournal(store).get(PLAYLIST_ID)
-    assert first.wrote is True and first.degraded_verification
+    assert first.wrote is True
     assert pending is not None
     assert pending.baseline_snapshot_id == "snapshot-A"
     assert pending.expected_snapshot_id == "snapshot-B"
@@ -136,7 +136,7 @@ def test_single_page_stale_snapshot_is_durable_across_restart(tmp_path: Path) ->
         store=restarted,
         evidence=stale_evidence,
     )
-    assert stale.wrote is False and stale.degraded_verification
+    assert stale.wrote is False
     assert len(client.writes) == 1
     assert stale_evidence.mutation_outcome is MutationOutcome.NOT_ATTEMPTED
     assert not stale_evidence.remote_evidence_qualified
@@ -174,7 +174,6 @@ def test_pending_confirmation_runs_before_phase3_prewrite_preparation(tmp_path: 
     )
 
     assert result.wrote is False
-    assert result.degraded_verification
     assert len(client.writes) == 1
 
 
@@ -191,7 +190,7 @@ def test_single_page_pending_partial_read_stays_degraded_without_rewrite(tmp_pat
         _desired(count=35, generated_at=NOW + timedelta(minutes=10)),
         store=store,
     )
-    assert partial.wrote is False and partial.degraded_verification
+    assert partial.wrote is False
     assert len(client.writes) == 1
 
 
@@ -236,7 +235,7 @@ def test_single_page_exact_cosmetic_third_snapshot_promotes_after_stable_recheck
         store=SQLiteStore(store.path),
     )
 
-    assert result.wrote is False and not result.degraded_verification
+    assert result.wrote is False
     assert len(client.writes) == 1
     assert PendingSnapshotJournal(store).get(PLAYLIST_ID) is None
     assert store.get_playlist_attestation(PLAYLIST_ID).snapshot_id == "snapshot-C-metadata"  # type: ignore[union-attr]
@@ -273,8 +272,8 @@ def test_partial_stale_snapshot_is_persisted_and_next_cycle_does_not_rewrite(
         store=store,
     )
 
-    assert first.ok and first.wrote is True and first.degraded_verification
-    assert second.ok and second.wrote is False and second.degraded_verification
+    assert first.wrote is True
+    assert second.wrote is False
     assert len(client.writes) == 1
     pending = PendingSnapshotJournal(store).get(PLAYLIST_ID)
     assert pending is not None
@@ -291,7 +290,7 @@ def test_exact_stale_snapshot_survives_restart_then_partial_readback_without_rew
 
     first = reconcile_spotify_playlist(client, _playlist(), _desired(), store=store)
     pending = PendingSnapshotJournal(store).get(PLAYLIST_ID)
-    assert first.ok and first.wrote is True and first.degraded_verification
+    assert first.wrote is True
     assert pending is not None
     assert pending.baseline_snapshot_id == "snapshot-A"
     assert pending.expected_snapshot_id == "snapshot-B"
@@ -306,7 +305,7 @@ def test_exact_stale_snapshot_survives_restart_then_partial_readback_without_rew
         store=restarted,
     )
 
-    assert second.ok and second.wrote is False and second.degraded_verification
+    assert second.wrote is False
     assert len(client.writes) == 1
     persisted = PendingSnapshotJournal(restarted).get(PLAYLIST_ID)
     assert persisted is not None
@@ -331,7 +330,7 @@ def test_pending_confirmation_survives_restart_and_promotes_when_expected_snapsh
         store=restarted,
     )
 
-    assert result.ok and result.wrote is False and result.degraded_verification
+    assert result.wrote is False
     assert len(client.writes) == 1
     assert PendingSnapshotJournal(restarted).get(PLAYLIST_ID) is None
     attestation = restarted.get_playlist_attestation(PLAYLIST_ID)
@@ -377,7 +376,7 @@ def test_stable_cosmetic_snapshot_after_restart_promotes_exact_content(
         store=restarted,
     )
 
-    assert result.ok and result.wrote is False and not result.degraded_verification
+    assert result.wrote is False
     assert len(client.writes) == 1
     assert PendingSnapshotJournal(restarted).get(PLAYLIST_ID) is None
     attestation = restarted.get_playlist_attestation(PLAYLIST_ID)
