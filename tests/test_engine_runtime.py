@@ -66,6 +66,14 @@ class _NeverAuth:
         raise AssertionError("authorization must not be reached for invalid configuration")
 
 
+class _WakeTrackingLifecycle:
+    def __init__(self) -> None:
+        self.wake_calls = 0
+
+    def wake(self) -> None:
+        self.wake_calls += 1
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self,
@@ -320,13 +328,14 @@ def test_operational_callback_and_status_never_expose_oauth_sentinels(
         OperationalHealthHandler.admin_security,
         OperationalHealthHandler.spotify_auth,
         OperationalHealthHandler.operational_status,
-        OperationalHealthHandler.engine_scheduler,
+        OperationalHealthHandler.engine_lifecycle,
     )
+    lifecycle = _WakeTrackingLifecycle()
     OperationalHealthHandler.data_dir = tmp_path
     OperationalHealthHandler.admin_security = AdminSecurity("long-enough-admin-password")
     OperationalHealthHandler.spotify_auth = service
     OperationalHealthHandler.operational_status = status
-    OperationalHealthHandler.engine_scheduler = None
+    OperationalHealthHandler.engine_lifecycle = lifecycle  # type: ignore[assignment]
     server = HTTPServer(("127.0.0.1", 0), OperationalHealthHandler)
     base_url = f"http://127.0.0.1:{server.server_port}"
 
@@ -364,6 +373,7 @@ def test_operational_callback_and_status_never_expose_oauth_sentinels(
             thread.join(timeout=2)
 
         assert len(transport.exchange_calls) == 1
+        assert lifecycle.wake_calls == 1
         verifier = transport.exchange_calls[0]["verifier"]
         captured = capsys.readouterr()
         surfaces = (
@@ -388,7 +398,7 @@ def test_operational_callback_and_status_never_expose_oauth_sentinels(
             OperationalHealthHandler.admin_security,
             OperationalHealthHandler.spotify_auth,
             OperationalHealthHandler.operational_status,
-            OperationalHealthHandler.engine_scheduler,
+            OperationalHealthHandler.engine_lifecycle,
         ) = previous
 
 

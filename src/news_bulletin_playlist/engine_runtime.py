@@ -503,7 +503,6 @@ class OperationalHealthHandler(LanAdminHandler):
         "form-action 'self'; frame-ancestors 'none'"
     )
     operational_status: OperationalStatus | None = None
-    engine_scheduler: EngineScheduler | None = None
     engine_lifecycle: EngineLifecycleController | None = None
     auth_synchronization: AuthSynchronization | None = None
     configuration_synchronization: ConfigurationSynchronization | None = None
@@ -550,9 +549,6 @@ class OperationalHealthHandler(LanAdminHandler):
             lifecycle = self.engine_lifecycle
             if lifecycle is not None:
                 lifecycle.wake()
-                self.__class__.engine_scheduler = lifecycle.scheduler
-            elif self.engine_scheduler is not None:
-                self.engine_scheduler.wake()
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         try:
@@ -591,9 +587,6 @@ class OperationalHealthHandler(LanAdminHandler):
                     lifecycle = self.engine_lifecycle
                     if lifecycle is not None:
                         lifecycle.wake()
-                        self.__class__.engine_scheduler = lifecycle.scheduler
-                    elif self.engine_scheduler is not None:
-                        self.engine_scheduler.wake()
             return
 
         super().do_GET()
@@ -752,7 +745,6 @@ class OperationalHealthHandler(LanAdminHandler):
                         next_state = "cleared"
                     configured = any(playlist.enabled for playlist in service.snapshot().managed)
                 lifecycle.reconcile(configured=configured)
-                self.__class__.engine_scheduler = lifecycle.scheduler
                 self._emit_admin_configuration_event(
                     event_name=event_name,
                     playlist_id=playlist_id_for_event,
@@ -777,7 +769,6 @@ class OperationalHealthHandler(LanAdminHandler):
                         next_state = "stopped"
                     configured = any(playlist.enabled for playlist in service.snapshot().managed)
                 lifecycle.reconcile(configured=configured)
-                self.__class__.engine_scheduler = lifecycle.scheduler
                 self._emit_admin_configuration_event(
                     event_name=event_name,
                     playlist_id=playlist_id_for_event,
@@ -1089,7 +1080,6 @@ def serve(
     OperationalHealthHandler.spotify_auth = spotify_auth
     OperationalHealthHandler.operational_status = status
     OperationalHealthHandler.engine_lifecycle = lifecycle
-    OperationalHealthHandler.engine_scheduler = None if lifecycle is None else lifecycle.scheduler
     OperationalHealthHandler.auth_synchronization = auth_synchronization
     OperationalHealthHandler.configuration_synchronization = configuration_synchronization
     OperationalHealthHandler.managed_admin_service = managed_admin_service
@@ -1138,7 +1128,6 @@ def serve(
         server.server_close()
         if lifecycle is not None:
             lifecycle.shutdown()
-        OperationalHealthHandler.engine_scheduler = None
         OperationalHealthHandler.engine_lifecycle = None
         OperationalHealthHandler.auth_synchronization = None
         OperationalHealthHandler.configuration_synchronization = None
