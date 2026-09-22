@@ -18,6 +18,7 @@ from news_bulletin_playlist.managed_provisioning import ProvisioningState
 from news_bulletin_playlist.managed_state import ManagedPlaylist
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 
 
 def render_managed_admin_page(
@@ -32,7 +33,7 @@ def render_managed_admin_page(
     error: str | None = None,
 ) -> bytes:
     spotify_connected = spotify_state is AuthorizationState.CONNECTED
-    spotify_label = _spotify_label(spotify_state)
+    spotify_label = authorization_state_label(spotify_state)
     warning = _lan_warning() if lan_mode else ""
     notice_html = _message("notice", notice)
     error_html = _message("error", error)
@@ -402,17 +403,6 @@ def _lan_warning() -> str:
         "Administration uses HTTP Basic authentication without TLS. Keep port 8788 only on a "
         "trusted private network and never expose it to the Internet.</div>"
     )
-
-
-def _spotify_label(state: AuthorizationState | None) -> str:
-    if state is None:
-        return "Not configured"
-    return {
-        AuthorizationState.DISCONNECTED: "Not connected",
-        AuthorizationState.CONNECTED: "Connected",
-        AuthorizationState.REAUTH_REQUIRED: "Reauthorization required",
-        AuthorizationState.ERROR: "Authorization state error",
-    }[state]
 
 
 def single_form_value(

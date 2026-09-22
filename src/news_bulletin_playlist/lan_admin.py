@@ -12,7 +12,6 @@ from pathlib import Path
 from news_bulletin_playlist.runtime import (
     AdminSecurity,
     HealthHandler,
-    _authorization_state_label,
     _load_admin_password,
     _optional_setting,
     build_runtime_auth,
@@ -23,6 +22,7 @@ from news_bulletin_playlist.spotify.auth import (
     SpotifyAuthService,
     SpotifyCredentialStore,
 )
+from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 
 LAN_ADMIN_MODE_ENV = "NEWS_PLAYLIST_ADMIN_MODE"
 LAN_ADMIN_MODE = "lan"
@@ -89,7 +89,7 @@ def build_engine_runtime_auth(
 
 
 def _lan_admin_page(*, spotify_state: AuthorizationState | None, csrf_token: str) -> bytes:
-    spotify = html.escape(_authorization_state_label(spotify_state))
+    spotify = html.escape(authorization_state_label(spotify_state))
     action = (
         "Reconnect Spotify" if spotify_state is AuthorizationState.CONNECTED else "Connect Spotify"
     )

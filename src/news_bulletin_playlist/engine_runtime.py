@@ -66,6 +66,7 @@ from news_bulletin_playlist.spotify.auth import (
     SpotifyAuthError,
     SpotifyAuthService,
 )
+from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
     SpotifyClient,
@@ -1264,7 +1265,7 @@ def _operational_status_page(
   <dl>
     <dt>Runtime</dt><dd>{runtime_label}</dd>
     <dt>Persistent storage</dt><dd>{storage_label}</dd>
-    <dt>Spotify authorization</dt><dd>{_spotify_label(spotify_state)}</dd>
+    <dt>Spotify authorization</dt><dd>{authorization_state_label(spotify_state)}</dd>
     <dt>Engine</dt><dd>{engine_label}</dd>
     <dt>Last cycle</dt><dd>{cycle_result}</dd>
     <dt>Cycle start</dt><dd>{cycle_started}</dd>
@@ -1345,17 +1346,6 @@ def _playlist_rows(cycle: EngineCycleResult | None) -> str:
             "</tr>"
         )
     return "".join(rows)
-
-
-def _spotify_label(state: AuthorizationState | None) -> str:
-    if state is None:
-        return "Not configured"
-    return {
-        AuthorizationState.DISCONNECTED: "Not connected",
-        AuthorizationState.CONNECTED: "Connected",
-        AuthorizationState.REAUTH_REQUIRED: "Reauthorization required",
-        AuthorizationState.ERROR: "Authorization state error",
-    }[state]
 
 
 def _format_optional_time(value: datetime | None) -> str:
