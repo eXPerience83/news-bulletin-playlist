@@ -205,7 +205,6 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
         )
 
     return EngineConfig(
-        schema_version=1,
         sources=catalog.sources,
         playlists=tuple(playlists),
     )
