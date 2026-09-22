@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from functools import partial
 from typing import Any, Protocol
@@ -1154,9 +1154,3 @@ def _partial_snapshot_warning(indices: Sequence[int]) -> str:
         f"{_PARTIAL_SNAPSHOT_PROPAGATION_WARNING}; unavailable media item(s) at "
         f"index/indices [{index_text}]"
     )
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("now must be timezone-aware")
-    return value.astimezone(UTC)
