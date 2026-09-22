@@ -35,6 +35,7 @@ from news_bulletin_playlist.spotify.auth import (
     SpotifyTokenError,
     build_redirect_uri,
 )
+from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 
 DEFAULT_DATA_DIR = Path("/data")
 DEFAULT_HEALTH_HOST = "127.0.0.1"
@@ -228,7 +229,7 @@ def _status_page(*, ready: bool, spotify_state: AuthorizationState | None) -> by
     status = "Ready" if ready else "Degraded"
     storage = "Writable" if ready else "Unavailable"
     version = html.escape(__version__)
-    spotify = _authorization_state_label(spotify_state)
+    spotify = authorization_state_label(spotify_state)
     document = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -264,7 +265,7 @@ def _admin_page(
     spotify_state: AuthorizationState | None,
     csrf_token: str,
 ) -> bytes:
-    spotify = html.escape(_authorization_state_label(spotify_state))
+    spotify = html.escape(authorization_state_label(spotify_state))
     action = (
         "Reconnect Spotify" if spotify_state is AuthorizationState.CONNECTED else "Connect Spotify"
     )
@@ -627,7 +628,7 @@ def _optional_setting(value: str | None, *, strip: bool = True) -> str | None:
     return candidate if candidate else None
 
 
-def _authorization_state_label(state: AuthorizationState | None) -> str:
+def authorization_state_label(state: AuthorizationState | None) -> str:
     if state is None:
         return "Not configured"
     return {
