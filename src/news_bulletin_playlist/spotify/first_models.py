@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import calendar
-import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
 
 from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
-
-_ID = re.compile(r"^[A-Za-z0-9]{22}$")
 _PRECISIONS = frozenset({"day", "month", "year"})
 
 
@@ -118,7 +116,7 @@ def episode_order_key(episode: SpotifyFirstEpisode) -> tuple[int, int, int, str,
 
 
 def spotify_id(value: str) -> str:
-    if _ID.fullmatch(value) is None:
+    if not is_spotify_id(value):
         raise ValueError("invalid Spotify id")
     return value
 
