@@ -739,14 +739,3 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("datetime must be timezone-aware")
     return value.astimezone(UTC)
-
-
-def fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    directory_fd = os.open(path, flags)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
