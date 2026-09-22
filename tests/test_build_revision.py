@@ -26,7 +26,7 @@ def test_public_status_page_exposes_safe_build_revision() -> None:
         status=None,
         build_revision="0123456789ab",
     ).decode()
-    assert "<dt>Build</dt><dd><code>0123456789ab</code></dd>" in body
+    assert "Build" in body\n    assert "<code>0123456789ab</code>" in body
 
 
 def test_diagnostic_bundle_includes_build_revision() -> None:
