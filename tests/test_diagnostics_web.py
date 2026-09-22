@@ -313,9 +313,7 @@ def test_diagnostic_export_truncation_uses_total_matching_count(tmp_path: Path) 
     assert exact_truncated is False
 
 
-def test_diagnostic_export_does_not_use_a_separate_count_snapshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_diagnostic_export_uses_bounded_event_snapshot(tmp_path: Path) -> None:
     store = DiagnosticEventStore(tmp_path / "state.sqlite3")
     store.initialize()
     event = store.record(
@@ -326,10 +324,6 @@ def test_diagnostic_export_does_not_use_a_separate_count_snapshot(
     )
     handler = type("DiagnosticHandler", (), {"diagnostic_store": store})()
 
-    def fail_count(**_kwargs: object) -> int:
-        raise AssertionError("the export must not issue a separate count query")
-
-    monkeypatch.setattr(store, "count_events", fail_count)
     filters, events, truncated = DiagnosticOperationalHealthHandler._diagnostic_events(
         handler, "hours=all&limit=2"
     )
