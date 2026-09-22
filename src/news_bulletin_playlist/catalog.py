@@ -93,12 +93,6 @@ class BuiltInCatalog:
             if template.retention_hours <= 0 or template.max_episodes <= 0:
                 raise ValueError(f"playlist template {template.id} has invalid retention policy")
 
-    def source(self, source_id: SourceId | str) -> SourceDefinition:
-        for source in self.sources:
-            if source.id == source_id:
-                return source
-        raise KeyError(f"unknown catalog source: {source_id}")
-
     def playlist(self, template_id: PlaylistId | str) -> PlaylistTemplate:
         for playlist in self.playlists:
             if playlist.id == template_id:
