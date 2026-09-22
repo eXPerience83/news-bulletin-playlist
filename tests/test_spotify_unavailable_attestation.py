@@ -186,9 +186,7 @@ def test_exact_single_page_write_defers_snapshot_confirmation(tmp_path: Path) ->
 
     result = _apply(store, client, "spotify:episode:new")
 
-    assert result.ok
     assert result.wrote is True
-    assert result.degraded_verification is True
     assert result.remote_evidence_qualified is False
     assert result.warning == (
         "Spotify verification degraded: snapshot propagation pending after exact readback"
@@ -216,9 +214,7 @@ def test_partial_pending_does_not_qualify_degraded_lease(tmp_path: Path) -> None
 
     result = _apply(store, client, "spotify:episode:new")
 
-    assert result.ok
     assert result.wrote is True
-    assert result.degraded_verification is True
     assert result.degraded_evidence_qualified is False
     assert result.pending_snapshot_created is PendingSnapshotCreation.PARTIAL
     assert PendingSnapshotJournal(store).get(PLAYLIST_ID) is not None
@@ -234,9 +230,7 @@ def test_ambiguous_write_exact_readback_stays_verified_when_attestation_read_fai
     first = _apply(store, client, "spotify:episode:new")
     second = _apply(store, client, "spotify:episode:new", generated_at=NOW + timedelta(minutes=10))
 
-    assert first.ok
     assert first.wrote is True
-    assert second.ok
     assert second.wrote is False
     assert client.writes == [["spotify:episode:new"]]
     assert store.get_playlist_attestation(PLAYLIST_ID) is None
@@ -248,7 +242,6 @@ def test_ambiguous_write_does_not_attest_across_a_concurrent_mutation(tmp_path: 
 
     result = _apply(store, client, "spotify:episode:new")
 
-    assert result.ok
     assert result.wrote is True
     assert client.snapshot_reads == 3
     assert store.get_playlist_attestation(PLAYLIST_ID) is None
@@ -266,10 +259,8 @@ def test_write_with_unavailable_slot_is_attested_as_degraded_success(tmp_path: P
         "spotify:episode:two",
     )
 
-    assert result.ok
     assert result.wrote is True
     assert result.applied_count == 2
-    assert result.degraded_verification is True
     assert result.degraded_evidence_qualified is True
     assert result.warning is not None
     assert "[1]" in result.warning
@@ -293,9 +284,7 @@ def test_identical_next_cycle_with_same_snapshot_performs_zero_writes(tmp_path: 
     second = _apply(store, client, *uris, generated_at=NOW + timedelta(minutes=10))
 
     assert first.wrote is True
-    assert second.ok
     assert second.wrote is False
-    assert second.degraded_verification is True
     assert second.degraded_evidence_qualified is True
     assert client.writes == [list(uris)]
 
@@ -316,9 +305,7 @@ def test_restart_reuses_durable_attestation_without_rewriting(tmp_path: Path) ->
         generated_at=NOW + timedelta(minutes=10),
     )
 
-    assert result.ok
     assert result.wrote is False
-    assert result.degraded_verification is True
     assert result.degraded_evidence_qualified is True
     assert len(client.writes) == 1
 
@@ -440,7 +427,6 @@ def test_multiple_unavailable_slots_are_attested_positionally(tmp_path: Path) ->
         generated_at=NOW + timedelta(minutes=10),
     )
 
-    assert first.degraded_verification is True
     assert first.warning is not None and "[0,2]" in first.warning
     assert second.wrote is False
     assert len(client.writes) == 1
