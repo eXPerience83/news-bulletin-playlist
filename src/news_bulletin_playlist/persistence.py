@@ -390,14 +390,6 @@ def _row_str(row: sqlite3.Row, column: str) -> str:
     return value
 
 
-def _optional_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise PersistenceError("stored optional integer value is invalid")
-    return value
-
-
 def _optional_str(value: object) -> str | None:
     if value is None:
         return None
