@@ -3,6 +3,12 @@ name: Publish stable AMD64
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact stable tag to publish or retry (vMAJOR.MINOR.PATCH)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -25,50 +31,58 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Validate exact stable release tag
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "ERROR: stable publication requires exact SemVer vMAJOR.MINOR.PATCH without leading zeroes; got $GITHUB_REF_NAME" >&2
+          if [[ ! "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "ERROR: stable publication requires exact SemVer vMAJOR.MINOR.PATCH without leading zeroes; got $VERSION" >&2
             exit 1
           fi
 
-      - name: Require tagged commit from main history
+      - name: Resolve publication metadata
+        id: meta
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          git fetch --force --tags origin
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+          source_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-parse "refs/tags/${VERSION}^{commit}")"
+          if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ || "$tag_sha" != "$source_sha" ]]; then
+            echo "ERROR: checked-out stable source does not match ${VERSION}" >&2
+            exit 1
+          fi
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Require tagged commit from main history
+        env:
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main; then
             echo "ERROR: stable tag commit must belong to main history" >&2
             exit 1
           fi
 
       - name: Require this to be the newest stable SemVer tag
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
           latest="$(
             git tag --list 'v*' --merged refs/remotes/origin/main |
               python3 -c 'import re,sys; pattern=re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"); items=[(tuple(int(part) for part in match.groups()), tag) for raw in sys.stdin if (tag:=raw.strip()) and (match:=pattern.fullmatch(tag))]; print(max(items)[1] if items else "")'
           )"
-          if [[ "$latest" != "$GITHUB_REF_NAME" ]]; then
-            echo "ERROR: refusing stable regression; newest stable tag on main is $latest, current tag is $GITHUB_REF_NAME" >&2
+          if [[ "$latest" != "$VERSION" ]]; then
+            echo "ERROR: refusing stable regression; newest stable tag on main is $latest, current tag is $VERSION" >&2
             exit 1
           fi
-
-      - name: Resolve publication metadata
-        id: meta
-        run: |
-          set -euo pipefail
-          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "ERROR: invalid stable source revision: $GITHUB_SHA" >&2
-            exit 1
-          fi
-          echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-          echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-
       - name: Validate configuration
         run: |
           set -euo pipefail
@@ -76,13 +90,16 @@ jobs:
           docker compose -f deploy/truenas.yaml config --quiet
 
       - name: Build exact stable candidate
+        env:
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
           docker build \
             --platform linux/amd64 \
-            --build-arg "SOURCE_REVISION=${GITHUB_SHA}" \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
+            --build-arg "SOURCE_REVISION=${SOURCE_SHA}" \
+            --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
             --tag news-bulletin-playlist:stable-candidate \
             .
 
