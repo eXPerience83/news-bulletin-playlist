@@ -437,8 +437,4 @@ code {
 def status_badge(label: str, *, tone: BadgeTone) -> str:
     """Render an escaped compact status badge."""
 
-    return (
-        f'<span class="badge badge-{tone}" role="status">'
-        f"{html.escape(label)}"
-        "</span>"
-    )
+    return f'<span class="badge badge-{tone}" role="status">{html.escape(label)}</span>'
