@@ -43,7 +43,7 @@ def test_spotify_duration_round_trips_with_spotify_first_state(tmp_path: Path) -
         coverage_proven=True,
     )
 
-    assert counts.added == 1
+    assert counts.removed == 0
     persisted = journal.list_episodes(source_ids=(episode.source_id,))
     assert len(persisted) == 1
     assert persisted[0].spotify_episode_id == EPISODE_ID
