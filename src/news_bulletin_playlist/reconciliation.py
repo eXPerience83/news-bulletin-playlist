@@ -1154,4 +1154,3 @@ def _partial_snapshot_warning(indices: Sequence[int]) -> str:
         f"{_PARTIAL_SNAPSHOT_PROPAGATION_WARNING}; unavailable media item(s) at "
         f"index/indices [{index_text}]"
     )
-
