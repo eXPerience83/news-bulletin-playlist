@@ -602,31 +602,6 @@ class DiagnosticEventStore:
             rows = connection.execute(query, values).fetchall()
         return tuple(_event_from_row(row) for row in rows[:limit]), len(rows) > limit
 
-    def count_events(
-        self,
-        *,
-        since: datetime | None = None,
-        severity: DiagnosticSeverity | None = None,
-        source_id: str | None = None,
-        playlist_id: str | None = None,
-    ) -> int:
-        """Count events matching the same sanitized filters used by list_events."""
-        clauses, values = _event_filter_query(
-            since=since,
-            severity=severity,
-            source_id=source_id,
-            playlist_id=playlist_id,
-        )
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        with self._connection("count diagnostic events") as connection:
-            row = connection.execute(
-                f"SELECT COUNT(*) AS event_count FROM diagnostic_events{where}", values
-            ).fetchone()
-        count = None if row is None else row["event_count"]
-        if not isinstance(count, int):
-            raise PersistenceError("count diagnostic events returned an invalid result")
-        return count
-
     def retention_status(self) -> DiagnosticRetentionStatus:
         """Describe effective stored coverage and whether the emergency row cap is saturated."""
         with self._connection("read diagnostic retention status") as connection:
