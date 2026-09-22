@@ -273,8 +273,6 @@ def serve(
     interval: timedelta | None = None,
 ) -> int:
     """Run the production engine using the diagnostics-aware HTTP handler."""
-    runtime_namespace = vars(engine_runtime)
-    original_handler = runtime_namespace["OperationalHealthHandler"]
     handler = DiagnosticOperationalHealthHandler
     previous_timezone = handler.diagnostic_timezone
     previous_timezone_label = handler.diagnostic_timezone_label
@@ -283,7 +281,6 @@ def serve(
     handler.diagnostic_timezone = display_timezone
     handler.diagnostic_timezone_label = timezone_label
     handler.build_revision = resolve_build_revision(environ)
-    runtime_namespace["OperationalHealthHandler"] = handler
     try:
         return engine_runtime.serve(
             host=host,
@@ -292,12 +289,12 @@ def serve(
             stop_event=stop_event,
             environ=environ,
             interval=interval,
+            handler_type=handler,
         )
     finally:
         handler.diagnostic_timezone = previous_timezone
         handler.diagnostic_timezone_label = previous_timezone_label
         handler.build_revision = previous_build_revision
-        runtime_namespace["OperationalHealthHandler"] = original_handler
 
 
 def _diagnostic_display_timezone(

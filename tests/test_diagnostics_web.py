@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from news_bulletin_playlist import diagnostics_runtime, engine_runtime
 from news_bulletin_playlist.diagnostics import (
     DiagnosticEvent,
     DiagnosticEventStore,
@@ -112,6 +113,42 @@ def _request(url: str, *, authenticated: bool = False) -> urllib.request.Request
     if authenticated:
         request.add_header("Authorization", _basic_auth())
     return request
+
+
+def test_diagnostics_serve_injects_handler_without_mutating_engine_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_handler = engine_runtime.OperationalHealthHandler
+    handler = DiagnosticOperationalHealthHandler
+    previous_timezone = handler.diagnostic_timezone
+    previous_timezone_label = handler.diagnostic_timezone_label
+    previous_build_revision = handler.build_revision
+    observed: dict[str, object] = {}
+
+    def fake_serve(**kwargs: object) -> int:
+        assert engine_runtime.OperationalHealthHandler is original_handler
+        observed.update(kwargs)
+        assert handler.diagnostic_timezone_label == "Europe/Madrid"
+        return 17
+
+    monkeypatch.setattr(engine_runtime, "serve", fake_serve)
+
+    assert (
+        diagnostics_runtime.serve(
+            host="127.0.0.1",
+            port=0,
+            data_dir=tmp_path,
+            stop_event=threading.Event(),
+            environ={"TZ": "Europe/Madrid"},
+        )
+        == 17
+    )
+    assert observed["handler_type"] is handler
+    assert engine_runtime.OperationalHealthHandler is original_handler
+    assert handler.diagnostic_timezone is previous_timezone
+    assert handler.diagnostic_timezone_label == previous_timezone_label
+    assert handler.build_revision == previous_build_revision
 
 
 def test_diagnostic_filters_are_bounded_and_single_valued() -> None:
