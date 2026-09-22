@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from news_bulletin_playlist import engine_runtime
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.engine import (
@@ -247,6 +248,52 @@ def test_unconfigured_runtime_stops_cleanly_when_requested(tmp_path: Path) -> No
     stop.set()
 
     assert serve(host="127.0.0.1", port=0, data_dir=tmp_path, stop_event=stop, environ={}) == 0
+
+
+def test_serve_uses_default_or_explicit_handler_without_global_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handlers: list[type[OperationalHealthHandler]] = []
+
+    class _Server:
+        timeout = 0.0
+
+        def __init__(
+            self,
+            address: tuple[str, int],
+            handler: type[OperationalHealthHandler],
+        ) -> None:
+            del address
+            handlers.append(handler)
+
+        def handle_request(self) -> None:
+            raise AssertionError("pre-set stop event must avoid request handling")
+
+        def server_close(self) -> None:
+            return None
+
+    class _InjectedHandler(OperationalHealthHandler):
+        pass
+
+    monkeypatch.setattr(engine_runtime, "HTTPServer", _Server)
+    stop = threading.Event()
+    stop.set()
+
+    assert serve(data_dir=tmp_path / "default", stop_event=stop, environ={}) == 0
+    assert engine_runtime.OperationalHealthHandler is OperationalHealthHandler
+    assert (
+        serve(
+            data_dir=tmp_path / "injected",
+            stop_event=stop,
+            environ={},
+            handler_type=_InjectedHandler,
+        )
+        == 0
+    )
+
+    assert handlers == [OperationalHealthHandler, _InjectedHandler]
+    assert engine_runtime.OperationalHealthHandler is OperationalHealthHandler
 
 
 def test_operational_status_page_reports_cycle_without_secret_material() -> None:
