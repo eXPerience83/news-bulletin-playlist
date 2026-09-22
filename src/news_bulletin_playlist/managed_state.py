@@ -450,11 +450,3 @@ def _duration_seconds(value: object, path: str) -> int:
         return validate_persisted_duration_seconds(value)
     except ValueError as exc:
         raise ManagedStateError(f"{path}: must be positive") from exc
-
-
-def fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
