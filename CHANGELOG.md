@@ -7,6 +7,36 @@ after the latest release stay under **Unreleased** until the next stable release
 
 No changes yet.
 
+## [0.1.2] - 2026-09-22
+
+### Changed
+
+- Completed the post-0.1.1 dead-code and unreachable-branch cleanup across persistence,
+  diagnostics, Spotify-first desired-state construction, rate-limit guarding, catalog helpers and
+  reconciliation results, removing unused compatibility surfaces without changing supported runtime
+  behavior.
+- Simplified Spotify-first catalogue replacement by removing the unused added/updated/unchanged
+  classification pass and its pre-read. Episode UPSERT semantics, durable first/last-seen provenance,
+  duplicate/source validation and deletion only with proven catalogue coverage remain unchanged.
+- Reduced diagnostic maintenance surface by removing unused explicit count/prune APIs and
+  never-emitted detail keys. Automatic age/capacity retention and the live sanitized diagnostic
+  contract remain in place.
+- Slimmed the outer playlist reconciliation result to evidence actually consumed by the engine while
+  preserving internal degraded-verification handling, exact/degraded destination evidence, pending
+  snapshot state, unavailable-media evidence and mutation outcomes.
+- Container CI no longer runs for docs-only changes or a nonexistent `LICENSE` path, and the obsolete
+  PR #87 edge bootstrap fallback was removed. The required `edge-amd64` deployment channel remains
+  fail-closed and anonymously pullable.
+
+### Compatibility / validation
+
+- Database format remains **1** and managed-state compatibility is unchanged; 0.1.2 requires no
+  persistence migration from 0.1.1.
+- Final `main` audit completed after the cleanup series with Ruff and mypy green and **735 tests
+  passed**.
+- The exact audited `main` revision was built and smoke-tested by the edge publication workflow
+  before promotion to `edge` / `edge-amd64`.
+
 ## [0.1.1] - 2026-09-21
 
 ### Changed
