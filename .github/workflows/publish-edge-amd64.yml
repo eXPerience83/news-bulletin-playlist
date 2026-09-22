@@ -7,7 +7,6 @@ on:
       - "Dockerfile"
       - ".dockerignore"
       - "README.md"
-      - "LICENSE"
       - "assets/**"
       - "src/**"
       - "pyproject.toml"
