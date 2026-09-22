@@ -50,7 +50,6 @@ def _desired(*, generated_at: datetime = NOW, count: int = 51) -> DesiredPlaylis
         DesiredPlaylistItem(
             source_id=SourceId("rne"),
             source_native_id=f"rne-{index}",
-            published_at=generated_at - timedelta(seconds=index),
             spotify_episode_uri=f"spotify:episode:{index:03d}",
         )
         for index in range(count)

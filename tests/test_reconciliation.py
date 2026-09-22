@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -45,7 +45,6 @@ def _desired(playlist: PlaylistDefinition, *uris: str) -> DesiredPlaylistState:
         DesiredPlaylistItem(
             source_id=SourceId("ser"),
             source_native_id=str(index),
-            published_at=NOW - timedelta(minutes=index),
             spotify_episode_uri=uri,
         )
         for index, uri in enumerate(uris)

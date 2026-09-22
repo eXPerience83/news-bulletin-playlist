@@ -28,7 +28,6 @@ class DesiredStateError(RuntimeError):
 class DesiredPlaylistItem:
     source_id: SourceId
     source_native_id: str
-    published_at: datetime
     spotify_episode_uri: str
     edition_at: datetime | None = None
 

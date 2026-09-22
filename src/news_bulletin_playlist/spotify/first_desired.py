@@ -59,7 +59,6 @@ def build_spotify_first_desired_state(
         item = DesiredPlaylistItem(
             source_id=episode.source_id,
             source_native_id=episode.spotify_episode_id,
-            published_at=episode.first_seen_at,
             spotify_episode_uri=episode.spotify_episode_uri,
             edition_at=episode.edition_at,
         )

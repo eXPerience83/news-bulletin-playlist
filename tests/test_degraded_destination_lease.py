@@ -102,7 +102,6 @@ def _build() -> SpotifyFirstDesiredBuild:
             DesiredPlaylistItem(
                 source_id=SourceId("rne"),
                 source_native_id="episode-1",
-                published_at=NOW,
                 spotify_episode_uri="spotify:episode:1234567890123456789012",
             ),
         ),
