@@ -36,6 +36,7 @@ from news_bulletin_playlist.runtime import (
     _data_dir_ready,
 )
 from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestMetrics,
     SpotifyRequestMetricsSnapshot,
@@ -334,7 +335,7 @@ def _safe_operational_status_page(
     next_run = "—" if snapshot.next_run_at is None else _format_time(snapshot.next_run_at)
     source_rows = _safe_source_rows(cycle)
     playlist_rows = _safe_playlist_rows(cycle)
-    spotify_label = _spotify_label(spotify_state)
+    spotify_label = authorization_state_label(spotify_state)
 
     document = f"""<!doctype html>
 <html lang="en">
@@ -428,7 +429,7 @@ def _safe_playlist_rows(cycle: EngineCycleResult | None) -> str:
     return "".join(rows)
 
 
-def _spotify_label(state: AuthorizationState | None) -> str:
+def authorization_state_label(state: AuthorizationState | None) -> str:
     if state is None:
         return "Not configured"
     return {
