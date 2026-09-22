@@ -101,6 +101,11 @@ class _ForbiddenProfileClient(_Client):
         raise SpotifyApiError(403, "forbidden")
 
 
+class _UnexpectedVerificationClient(_Client):
+    def current_user(self) -> dict[str, Any]:
+        raise AssertionError("invalid playlist id must be rejected before Spotify verification")
+
+
 def _service(
     tmp_path: Path,
     client: _Client,
@@ -329,6 +334,17 @@ def test_stale_known_journal_after_state_save_self_heals_without_create(tmp_path
     assert recovered is not None and recovered.destination.external_id == "created"
     assert journal.load() is None
     assert len(client.create_calls) == 1
+
+
+def test_adoption_rejects_non_ascii_base62_id_before_spotify_verification(tmp_path: Path) -> None:
+    journal = ProvisioningJournal(tmp_path / "provisioning.json")
+    journal.save(_request_intent())
+    service = _service(tmp_path, _UnexpectedVerificationClient(), journal=journal)
+
+    with pytest.raises(ManagedAdminError, match="22-character base62"):
+        service.adopt_uncertain_provisioning("é" * 22, access_token="token")
+
+    assert journal.load().state is ProvisioningState.REQUEST_STARTED  # type: ignore[union-attr]
 
 
 def test_adoption_requires_existing_playlist_owned_by_authorized_user(tmp_path: Path) -> None:
