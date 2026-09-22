@@ -41,7 +41,7 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestMetrics,
     SpotifyRequestMetricsSnapshot,
 )
-from news_bulletin_playlist.web_ui import BadgeTone, WEB_UI_STYLES, status_badge
+from news_bulletin_playlist.web_ui import WEB_UI_STYLES, BadgeTone, status_badge
 
 
 class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler):
