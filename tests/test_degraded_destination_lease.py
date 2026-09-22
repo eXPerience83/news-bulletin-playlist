@@ -192,7 +192,6 @@ def test_pending_transition_invalidates_degraded_destination_lease(tmp_path: Pat
     _persist_degraded_evidence(store, journal)
     PendingSnapshotJournal(store).set(
         PendingSnapshotConfirmation(
-            playlist_id=PLAYLIST_ID,
             destination_id=DESTINATION_ID,
             baseline_snapshot_id="snapshot-A",
             expected_snapshot_id="snapshot-B",
@@ -260,12 +259,8 @@ def test_qualified_degraded_reconciliation_renews_only_degraded_lease(
         engine_module,
         "reconcile_spotify_playlist",
         lambda *args, **kwargs: PlaylistReconciliationResult(
-            playlist_id=PLAYLIST_ID,
-            ok=True,
-            desired_count=1,
             applied_count=1,
             wrote=False,
-            degraded_verification=True,
             warning="Spotify playlist contains unavailable media at indices [0]",
             degraded_evidence_qualified=True,
         ),
@@ -306,9 +301,6 @@ def test_exact_reconciliation_clears_degraded_lease(
         engine_module,
         "reconcile_spotify_playlist",
         lambda *args, **kwargs: PlaylistReconciliationResult(
-            playlist_id=PLAYLIST_ID,
-            ok=True,
-            desired_count=1,
             applied_count=1,
             wrote=False,
             remote_evidence_qualified=True,
