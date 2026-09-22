@@ -628,17 +628,6 @@ def _optional_setting(value: str | None, *, strip: bool = True) -> str | None:
     return candidate if candidate else None
 
 
-def authorization_state_label(state: AuthorizationState | None) -> str:
-    if state is None:
-        return "Not configured"
-    return {
-        AuthorizationState.DISCONNECTED: "Not connected",
-        AuthorizationState.CONNECTED: "Connected",
-        AuthorizationState.REAUTH_REQUIRED: "Reauthorization required",
-        AuthorizationState.ERROR: "Authorization state error",
-    }[state]
-
-
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("datetime must be timezone-aware")
