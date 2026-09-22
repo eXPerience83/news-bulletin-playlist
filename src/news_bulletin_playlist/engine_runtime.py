@@ -1348,17 +1348,6 @@ def _playlist_rows(cycle: EngineCycleResult | None) -> str:
     return "".join(rows)
 
 
-def authorization_state_label(state: AuthorizationState | None) -> str:
-    if state is None:
-        return "Not configured"
-    return {
-        AuthorizationState.DISCONNECTED: "Not connected",
-        AuthorizationState.CONNECTED: "Connected",
-        AuthorizationState.REAUTH_REQUIRED: "Reauthorization required",
-        AuthorizationState.ERROR: "Authorization state error",
-    }[state]
-
-
 def _format_optional_time(value: datetime | None) -> str:
     return "—" if value is None else _format_time(value)
 
