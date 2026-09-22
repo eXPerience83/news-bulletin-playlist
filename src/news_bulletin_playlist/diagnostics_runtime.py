@@ -41,7 +41,7 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestMetrics,
     SpotifyRequestMetricsSnapshot,
 )
-from news_bulletin_playlist.web_ui import WEB_UI_STYLES, status_badge
+from news_bulletin_playlist.web_ui import BadgeTone, WEB_UI_STYLES, status_badge
 
 
 class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler):
@@ -324,24 +324,26 @@ def _safe_operational_status_page(
     runtime_label = "Ready" if ready else "Degraded"
     storage_label = "Writable" if ready else "Unavailable"
     engine_label = "Not configured"
-    engine_tone = "muted"
+    engine_tone: BadgeTone = "muted"
     if snapshot.configured:
         engine_label = "Cycle running" if snapshot.running else "Scheduled"
         engine_tone = "accent" if snapshot.running else "success"
 
     cycle = snapshot.last_cycle
     cycle_result = "Not run yet" if cycle is None else ("Success" if cycle.ok else "Failed")
-    cycle_tone = "muted" if cycle is None else ("success" if cycle.ok else "danger")
+    cycle_tone: BadgeTone = "muted" if cycle is None else ("success" if cycle.ok else "danger")
     cycle_started = "—" if cycle is None else _format_time(cycle.started_at)
     cycle_finished = "—" if cycle is None else _format_time(cycle.finished_at)
     next_run = "—" if snapshot.next_run_at is None else _format_time(snapshot.next_run_at)
     source_rows = _safe_source_rows(cycle)
     playlist_rows = _safe_playlist_rows(cycle)
     spotify_label = authorization_state_label(spotify_state)
-    spotify_tone = "success" if spotify_state is AuthorizationState.CONNECTED else "muted"
-    runtime_tone = "success" if ready else "danger"
+    spotify_tone: BadgeTone = (
+        "success" if spotify_state is AuthorizationState.CONNECTED else "muted"
+    )
+    runtime_tone: BadgeTone = "success" if ready else "danger"
     overall_label = "Operational"
-    overall_tone = "success"
+    overall_tone: BadgeTone = "success"
     if not ready:
         overall_label = "Runtime degraded"
         overall_tone = "danger"
@@ -511,7 +513,9 @@ def _safe_playlist_rows(cycle: EngineCycleResult | None) -> str:
         )
         applied = "unverified" if playlist.applied_count is None else str(playlist.applied_count)
         write = "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
-        write_tone = "muted" if playlist.wrote is None else ("accent" if playlist.wrote else "success")
+        write_tone: BadgeTone = (
+            "muted" if playlist.wrote is None else ("accent" if playlist.wrote else "success")
+        )
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(str(playlist.playlist_id))}</code></td>"
