@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import cast
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.file_durability import fsync_directory
 from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
 from news_bulletin_playlist.models import (
     AdapterId,
@@ -103,7 +104,7 @@ class ManagedStateStore:
                 os.fsync(stream.fileno())
             os.replace(temp_path, self.path)
             os.chmod(self.path, 0o600)
-            _fsync_directory(parent)
+            fsync_directory(parent)
         finally:
             with suppress(FileNotFoundError):
                 temp_path.unlink()
@@ -449,11 +450,3 @@ def _duration_seconds(value: object, path: str) -> int:
         return validate_persisted_duration_seconds(value)
     except ValueError as exc:
         raise ManagedStateError(f"{path}: must be positive") from exc
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from news_bulletin_playlist.file_durability import fsync_directory
 from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
 from news_bulletin_playlist.models import PlaylistId, SourceId
 
@@ -122,7 +123,7 @@ class ProvisioningJournal:
                 os.fsync(stream.fileno())
             os.replace(temporary, self.path)
             os.chmod(self.path, 0o600)
-            _fsync_directory(parent)
+            fsync_directory(parent)
         except OSError as exc:
             raise ProvisioningJournalError("provisioning journal could not be saved") from exc
         finally:
@@ -139,7 +140,7 @@ class ProvisioningJournal:
         except OSError as exc:
             raise ProvisioningJournalError("provisioning journal could not be cleared") from exc
         try:
-            _fsync_directory(self.path.parent)
+            fsync_directory(self.path.parent)
         except OSError as exc:
             raise ProvisioningJournalError(
                 "provisioning journal deletion could not be synchronized"
@@ -206,11 +207,3 @@ def _positive_integer(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError
     return value
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)

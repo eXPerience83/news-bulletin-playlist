@@ -19,6 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from news_bulletin_playlist.file_durability import fsync_directory
 from news_bulletin_playlist.spotify_metrics import (
     SpotifyOAuthOperation,
     SpotifyRequestMetrics,
@@ -284,7 +285,7 @@ class SpotifyCredentialStore:
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
             os.chmod(self.path, 0o600)
-            _fsync_directory(self.path.parent)
+            fsync_directory(self.path.parent)
         except OSError as exc:
             raise SpotifyCredentialStoreError(
                 "Spotify authorization state could not be saved"
@@ -306,7 +307,7 @@ class SpotifyCredentialStore:
                 "Spotify authorization state could not be discarded"
             ) from exc
         try:
-            _fsync_directory(self.path.parent)
+            fsync_directory(self.path.parent)
         except OSError as exc:
             raise SpotifyCredentialStoreError(
                 "Spotify authorization state deletion could not be synchronized"
@@ -738,14 +739,3 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("datetime must be timezone-aware")
     return value.astimezone(UTC)
-
-
-def _fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    directory_fd = os.open(path, flags)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
