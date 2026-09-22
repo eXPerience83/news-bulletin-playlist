@@ -50,7 +50,6 @@ def _desired(*uris: str, generated_at: datetime = NOW) -> DesiredPlaylistState:
         DesiredPlaylistItem(
             source_id=SourceId("rne"),
             source_native_id=f"rne-{index}",
-            published_at=generated_at - timedelta(minutes=index),
             spotify_episode_uri=uri,
         )
         for index, uri in enumerate(uris)
