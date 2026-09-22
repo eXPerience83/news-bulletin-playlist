@@ -192,6 +192,7 @@ def test_pending_transition_invalidates_degraded_destination_lease(tmp_path: Pat
     _persist_degraded_evidence(store, journal)
     PendingSnapshotJournal(store).set(
         PendingSnapshotConfirmation(
+            playlist_id=PLAYLIST_ID,
             destination_id=DESTINATION_ID,
             baseline_snapshot_id="snapshot-A",
             expected_snapshot_id="snapshot-B",
