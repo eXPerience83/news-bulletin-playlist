@@ -134,7 +134,6 @@ def _runner(
 ) -> EngineRunner:
     runner = object.__new__(EngineRunner)
     runner.config = EngineConfig(
-        schema_version=1,
         sources=(_source(),),
         playlists=(_playlist(),),
     )

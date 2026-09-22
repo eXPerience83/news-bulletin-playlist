@@ -169,7 +169,7 @@ def _config(
     sources: tuple[SourceDefinition, ...],
     playlists: tuple[PlaylistDefinition, ...],
 ) -> EngineConfig:
-    return EngineConfig(schema_version=1, sources=sources, playlists=playlists)
+    return EngineConfig(sources=sources, playlists=playlists)
 
 
 def test_journal_honors_header_fallback_and_never_shortens_deadline(tmp_path: Path) -> None:

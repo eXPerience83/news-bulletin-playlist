@@ -131,7 +131,6 @@ class PlaylistDefinition:
 
 @dataclass(frozen=True, slots=True)
 class EngineConfig:
-    schema_version: int
     sources: tuple[SourceDefinition, ...]
     playlists: tuple[PlaylistDefinition, ...]
 
