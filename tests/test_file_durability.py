@@ -43,10 +43,15 @@ def test_fsync_directory_closes_descriptor_and_preserves_oserror(
 ) -> None:
     closed: list[int] = []
 
-    monkeypatch.setattr(file_durability.os, "open", lambda path, flags: 43)
+    def fake_open(path: Path, flags: int) -> int:
+        del path, flags
+        return 43
 
     def fail_fsync(descriptor: int) -> None:
+        del descriptor
         raise OSError("simulated directory fsync failure")
+
+    monkeypatch.setattr(file_durability.os, "open", fake_open)
 
     monkeypatch.setattr(file_durability.os, "fsync", fail_fsync)
     monkeypatch.setattr(file_durability.os, "close", closed.append)
