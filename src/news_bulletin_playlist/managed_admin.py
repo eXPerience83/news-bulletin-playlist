@@ -34,6 +34,7 @@ from news_bulletin_playlist.spotify.client import (
     SpotifyClient,
     SpotifyTransportError,
 )
+from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitSuppressed
 
 MAX_PLAYLIST_NAME_LENGTH = 100
@@ -616,7 +617,7 @@ def _spotify_playlist_id(response: object) -> str:
 
 def _spotify_playlist_id_text(value: str) -> str:
     candidate = value.strip()
-    if len(candidate) != 22 or not candidate.isalnum():
+    if not is_spotify_id(candidate):
         raise ManagedAdminError("Spotify playlist id must be a 22-character base62 id")
     return candidate
 

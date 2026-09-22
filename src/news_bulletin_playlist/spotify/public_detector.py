@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import re
 import sqlite3
 import urllib.error
 import urllib.parse
@@ -23,6 +22,7 @@ from news_bulletin_playlist.diagnostics import DiagnosticSeverity, DiagnosticVal
 from news_bulletin_playlist.models import SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
+from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 from news_bulletin_playlist.spotify_metrics import (
     SpotifyPublicOperation,
@@ -36,8 +36,6 @@ _OEMBED_BASE = "https://open.spotify.com/oembed"
 _MAX_RESPONSE_BYTES = 512 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 DETECTOR_SCHEMA_VERSION = 1
-_SHOW_ID_RE = re.compile(r"^[A-Za-z0-9]{22}$")
-_EPISODE_ID_RE = re.compile(r"^[A-Za-z0-9]{22}$")
 
 
 class PublicShowDetectorError(RuntimeError):
@@ -1438,13 +1436,13 @@ def _optional_non_negative_int(value: object, label: str) -> int | None:
 
 
 def _require_show_id(value: str) -> str:
-    if not _SHOW_ID_RE.fullmatch(value):
+    if not is_spotify_id(value):
         raise ValueError("Spotify show id must be a 22-character base62 identifier")
     return value
 
 
 def _require_episode_id(value: str) -> str:
-    if not _EPISODE_ID_RE.fullmatch(value):
+    if not is_spotify_id(value):
         raise ValueError("Spotify episode id must be a 22-character base62 identifier")
     return value
 

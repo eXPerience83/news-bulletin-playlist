@@ -13,6 +13,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from news_bulletin_playlist.persistence import DEFAULT_DB_PATH, PersistenceError
+from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 DEFAULT_DIAGNOSTIC_RETENTION_DAYS = 30
 DEFAULT_DIAGNOSTIC_MAX_EVENTS = 100_000
@@ -711,7 +712,7 @@ def _normalize_details(
                 normalized[key] = value
                 continue
             if key in {"spotify_episode_id", "spotify_previous_episode_id"}:
-                if re.fullmatch(r"[A-Za-z0-9]{22}", value) is None:
+                if not is_spotify_id(value):
                     raise ValueError(f"diagnostic detail {key} contains an invalid Spotify id")
                 normalized[key] = value
                 continue
