@@ -81,9 +81,6 @@ class SpotifyFirstSourceState:
 
 @dataclass(frozen=True, slots=True)
 class UpsertCounts:
-    added: int
-    updated: int
-    unchanged: int
     removed: int = 0
 
 

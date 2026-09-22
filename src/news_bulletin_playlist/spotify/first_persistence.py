@@ -193,33 +193,10 @@ class SpotifyFirstJournal:
         if len({episode.spotify_episode_id for episode in values}) != len(values):
             raise ValueError("Spotify-first replacement contains duplicate episode ids")
 
-        added = 0
-        updated = 0
-        unchanged = 0
         removed = 0
         with self._connection("replace Spotify-first source catalogue") as connection:
             self._ensure_tables(connection)
-            rows = connection.execute(
-                """
-                SELECT source_id, spotify_show_id, spotify_episode_id,
-                       spotify_episode_uri, title, edition_at, timestamp_source,
-                       release_date_raw, release_date_precision, duration_seconds,
-                       first_seen_at, last_seen_at
-                FROM spotify_first_episode_state
-                WHERE source_id = ?
-                """,
-                (str(source_id),),
-            ).fetchall()
-            existing = {_row_text(row, "spotify_episode_id"): row for row in rows}
-
             for episode in values:
-                current = existing.get(episode.spotify_episode_id)
-                if current is None:
-                    added += 1
-                elif _same_episode_metadata(current, episode):
-                    unchanged += 1
-                else:
-                    updated += 1
                 connection.execute(_UPSERT_EPISODE, _episode_values(episode))
 
             if coverage_proven:
@@ -241,12 +218,7 @@ class SpotifyFirstJournal:
                     )
                 removed = max(cursor.rowcount, 0)
 
-        return UpsertCounts(
-            added=added,
-            updated=updated,
-            unchanged=unchanged,
-            removed=removed,
-        )
+        return UpsertCounts(removed=removed)
 
     def record_refresh(
         self,
@@ -493,28 +465,6 @@ def _source_state_from_row(row: sqlite3.Row) -> SpotifyFirstSourceState:
         catalogue_complete=bool(_row_int(row, "catalogue_complete")),
         coverage_proven=bool(_row_int(row, "coverage_proven")),
         coverage_cutoff_at=_parse_timestamp(_row_text(row, "coverage_cutoff_at")),
-    )
-
-
-def _same_episode_metadata(row: sqlite3.Row, episode: SpotifyFirstEpisode) -> bool:
-    return (
-        _row_text(row, "spotify_show_id"),
-        _row_text(row, "spotify_episode_uri"),
-        _row_text(row, "title"),
-        _optional_text(row["edition_at"]),
-        _row_text(row, "timestamp_source"),
-        _row_text(row, "release_date_raw"),
-        _row_text(row, "release_date_precision"),
-        _optional_int(row["duration_seconds"]),
-    ) == (
-        episode.spotify_show_id,
-        episode.spotify_episode_uri,
-        episode.title,
-        None if episode.edition_at is None else _format_timestamp(episode.edition_at),
-        episode.timestamp_source.value,
-        episode.release_date_raw,
-        episode.release_date_precision,
-        episode.duration_seconds,
     )
 
 
