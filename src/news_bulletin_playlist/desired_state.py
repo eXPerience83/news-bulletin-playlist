@@ -32,10 +32,6 @@ class DesiredPlaylistItem:
     spotify_episode_uri: str
     edition_at: datetime | None = None
 
-    @property
-    def identity(self) -> tuple[SourceId, str]:
-        return (self.source_id, self.source_native_id)
-
 
 @dataclass(frozen=True, slots=True)
 class DurationEligibilityDecision:
