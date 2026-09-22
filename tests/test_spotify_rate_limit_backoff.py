@@ -343,7 +343,6 @@ def test_optional_snapshot_429_cannot_reach_live_replace(tmp_path: Path) -> None
             DesiredPlaylistItem(
                 source_id=SourceId("one"),
                 source_native_id="one-1",
-                published_at=NOW,
                 spotify_episode_uri="spotify:episode:one",
             ),
         ),
