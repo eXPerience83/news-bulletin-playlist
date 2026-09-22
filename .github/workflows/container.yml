@@ -7,7 +7,6 @@ on:
       - ".dockerignore"
       - "compose.yaml"
       - "deploy/**"
-      - "docs/**"
       - "README.md"
       - "assets/**"
       - "src/**"
