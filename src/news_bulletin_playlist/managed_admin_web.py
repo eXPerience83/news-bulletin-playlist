@@ -405,17 +405,6 @@ def _lan_warning() -> str:
     )
 
 
-def authorization_state_label(state: AuthorizationState | None) -> str:
-    if state is None:
-        return "Not configured"
-    return {
-        AuthorizationState.DISCONNECTED: "Not connected",
-        AuthorizationState.CONNECTED: "Connected",
-        AuthorizationState.REAUTH_REQUIRED: "Reauthorization required",
-        AuthorizationState.ERROR: "Authorization state error",
-    }[state]
-
-
 def single_form_value(
     form: Mapping[str, list[str]],
     name: str,
