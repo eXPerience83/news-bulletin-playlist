@@ -356,16 +356,6 @@ class DiagnosticEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class DiagnosticRetentionResult:
-    age_deleted: int
-    overflow_deleted: int
-
-    @property
-    def total_deleted(self) -> int:
-        return self.age_deleted + self.overflow_deleted
-
-
-@dataclass(frozen=True, slots=True)
 class DiagnosticRetentionStatus:
     event_count: int
     oldest_occurred_at: datetime | None
@@ -625,33 +615,6 @@ class DiagnosticEventStore:
             oldest_occurred_at=oldest,
             newest_occurred_at=newest,
             capacity_limit_reached=event_count >= self.max_events,
-        )
-
-    def prune(
-        self,
-        *,
-        now: datetime,
-        retention_days: int | None = None,
-        max_events: int | None = None,
-    ) -> DiagnosticRetentionResult:
-        """Apply explicit time and row bounds, returning deterministic deletion counts."""
-        days = self.retention_days if retention_days is None else retention_days
-        maximum = self.max_events if max_events is None else max_events
-        if days <= 0:
-            raise ValueError("diagnostic retention_days must be positive")
-        if maximum <= 0:
-            raise ValueError("diagnostic max_events must be positive")
-        cutoff = _format_timestamp(now - timedelta(days=days))
-        with self._connection("prune diagnostic events") as connection:
-            age_cursor = connection.execute(
-                "DELETE FROM diagnostic_events WHERE occurred_at < ?",
-                (cutoff,),
-            )
-            age_deleted = max(age_cursor.rowcount, 0)
-            overflow_deleted = self._delete_overflow(connection, maximum)
-        return DiagnosticRetentionResult(
-            age_deleted=age_deleted,
-            overflow_deleted=overflow_deleted,
         )
 
     @staticmethod
