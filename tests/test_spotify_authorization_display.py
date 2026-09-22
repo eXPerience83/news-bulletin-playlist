@@ -3,7 +3,6 @@ from __future__ import annotations
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 
-
 _CASES: tuple[tuple[AuthorizationState | None, str], ...] = (
     (None, "Not configured"),
     (AuthorizationState.DISCONNECTED, "Not connected"),
