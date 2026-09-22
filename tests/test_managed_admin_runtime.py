@@ -115,7 +115,6 @@ class _FakeLifecycle:
     def __init__(self) -> None:
         self.reconcile_calls: list[bool] = []
         self.wake_calls = 0
-        self.scheduler = None
         self.status = OperationalStatus(configured=False)
 
     def reconcile(self, *, configured: bool) -> None:
@@ -145,7 +144,6 @@ class _HandlerHarness(HandlerCaptureMixin, OperationalHealthHandler):
         self.admin_security = security or LanAdminSecurity(_PASSWORD)
         self.spotify_auth = _SpotifyState(spotify_state)  # type: ignore[assignment]
         self.operational_status = lifecycle.status
-        self.engine_scheduler = None
         self.engine_lifecycle = lifecycle  # type: ignore[assignment]
         self.auth_synchronization = None
         self.configuration_synchronization = ConfigurationSynchronization()
