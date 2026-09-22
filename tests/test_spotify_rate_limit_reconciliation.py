@@ -108,7 +108,6 @@ def _desired() -> DesiredPlaylistState:
             DesiredPlaylistItem(
                 source_id=SourceId("one"),
                 source_native_id="native-one",
-                published_at=NOW,
                 spotify_episode_uri=URI,
             ),
         ),
