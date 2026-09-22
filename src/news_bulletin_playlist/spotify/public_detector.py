@@ -288,10 +288,6 @@ class PublicDetectorUpdate:
     previous: PublicDetectorState | None
     current: PublicDetectorState
 
-    @property
-    def changed(self) -> bool:
-        return self.outcome in {PublicDetectorOutcome.BOOTSTRAP, PublicDetectorOutcome.CHANGED}
-
 
 @dataclass(frozen=True, slots=True)
 class PublicDetectorCycleSummary:
