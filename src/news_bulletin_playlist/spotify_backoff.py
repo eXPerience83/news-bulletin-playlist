@@ -469,25 +469,6 @@ class SpotifyRateLimitGuardClient:
                 raise
 
 
-def is_spotify_rate_limit_suppressed(error: BaseException) -> bool:
-    """Return whether a bounded exception chain contains local rate-limit suppression."""
-    current: BaseException | None = error
-    seen: set[int] = set()
-    for _ in range(16):
-        if current is None or id(current) in seen:
-            return False
-        if isinstance(current, SpotifyRateLimitSuppressed):
-            return True
-        seen.add(id(current))
-        if current.__cause__ is not None:
-            current = current.__cause__
-        elif current.__suppress_context__:
-            current = None
-        else:
-            current = current.__context__
-    return False
-
-
 def _emit_backoff(
     diagnostics: OperationalDiagnostics | None,
     state: SpotifyRateLimitState,
