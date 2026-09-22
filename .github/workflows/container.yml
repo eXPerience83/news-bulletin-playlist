@@ -9,7 +9,6 @@ on:
       - "deploy/**"
       - "docs/**"
       - "README.md"
-      - "LICENSE"
       - "assets/**"
       - "src/**"
       - "pyproject.toml"
