@@ -526,9 +526,7 @@ def test_mutation_guard_covers_replace_only_and_not_spotify_reads() -> None:
         mutation_guard=mutation_guard,
     )
 
-    assert result.ok
     assert result.wrote is True
-    assert result.verified_desired_uris == ("spotify:episode:new",)
     assert guard_depth == 0
     assert client.writes == [("playlist", ["spotify:episode:new"])]
 
@@ -548,8 +546,6 @@ def test_prewrite_rebuild_reenters_and_can_eliminate_write() -> None:
     )
 
     assert not result.wrote
-    assert result.desired_count == 0
-    assert result.verified_desired_uris == ()
     assert preparations == [original.uris]
     assert client.writes == []
     assert len(client.reads) == 2

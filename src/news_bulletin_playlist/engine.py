@@ -816,20 +816,20 @@ class EngineRunner:
             playlist.id,
             started_at=now,
             finished_at=now,
-            ok=result.ok,
-            error=result.error or result.warning,
+            ok=True,
+            error=result.warning,
         )
         state = self.store.get_playlist_state(playlist.id)
         return self._playlist_outcome(
             playlist,
             build,
-            ok=result.ok,
+            ok=True,
             applied_count=result.applied_count,
             wrote=result.wrote,
             last_success_at=None if state is None else state.last_success_at,
             fingerprint=fingerprint,
             stale_escalation=stale_escalation,
-            error=result.error or result.warning,
+            error=result.warning,
             write_outcome=result.mutation_outcome.value,
             pending_snapshot_created=(
                 None

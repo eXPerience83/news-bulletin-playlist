@@ -108,18 +108,12 @@ def _desired_preparation_key(
 
 @dataclass(frozen=True, slots=True)
 class PlaylistReconciliationResult:
-    playlist_id: PlaylistId
-    ok: bool
-    desired_count: int
     applied_count: int | None
     wrote: bool | None
-    error: str | None = None
-    degraded_verification: bool = False
     warning: str | None = None
     mutation_outcome: MutationOutcome = MutationOutcome.NOT_ATTEMPTED
     remote_evidence_qualified: bool = False
     degraded_evidence_qualified: bool = False
-    verified_desired_uris: tuple[str, ...] | None = None
     pending_snapshot_created: PendingSnapshotCreation | None = None
     pending_snapshot_resolution: PendingSnapshotResolution | None = None
     unavailable_media_count: int = 0
@@ -811,19 +805,12 @@ def reconcile_spotify_playlist(
     if reconciled.wrote:
         evidence.mutation_outcome = MutationOutcome.VERIFIED
     return PlaylistReconciliationResult(
-        playlist_id=playlist.id,
-        ok=True,
-        desired_count=len(current_desired.items),
         applied_count=len(current_desired.items),
         wrote=reconciled.wrote,
-        degraded_verification=reconciled.degraded_verification,
         warning=reconciled.warning,
         mutation_outcome=evidence.mutation_outcome,
         remote_evidence_qualified=evidence.remote_evidence_qualified,
         degraded_evidence_qualified=reconciled.degraded_evidence_qualified,
-        verified_desired_uris=(
-            current_desired.uris if evidence.remote_evidence_qualified else None
-        ),
         pending_snapshot_created=evidence.pending_snapshot_created,
         pending_snapshot_resolution=evidence.pending_snapshot_resolution,
         unavailable_media_count=evidence.unavailable_media_count,

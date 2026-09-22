@@ -148,7 +148,7 @@ def test_exact_pending_baseline_snapshot_keeps_divergence_read(
 
     result = reconcile_spotify_playlist(client, _playlist(), desired, store=store)
 
-    assert result.wrote is False and result.degraded_verification is True
+    assert result.wrote is False
     assert result.remote_evidence_qualified is False
     assert result.pending_snapshot_resolution is PendingSnapshotResolution.STILL_BASELINE
     assert (client.snapshot_calls, client.item_calls, client.writes) == (1, 1, 0)

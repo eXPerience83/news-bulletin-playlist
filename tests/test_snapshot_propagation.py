@@ -142,9 +142,7 @@ def test_stable_stale_snapshot_becomes_durable_pending_without_second_recheck(
 
     result = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
-    assert result.ok is True
     assert result.wrote is True
-    assert result.degraded_verification is True
     assert result.remote_evidence_qualified is False
     assert result.warning == (
         "Spotify verification degraded: snapshot propagation pending after exact readback"
@@ -179,7 +177,6 @@ def test_direct_pending_request_boundaries_omit_post_write_snapshot(
     result = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
     assert result.wrote is True
-    assert result.degraded_verification is True
     assert result.remote_evidence_qualified is False
     assert client.writes == 1
     assert client.playlist_item_calls == expected_item_calls
@@ -237,9 +234,7 @@ def test_direct_pending_defers_even_when_write_snapshot_is_immediately_visible(
 
     first = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
-    assert first.ok is True
     assert first.wrote is True
-    assert first.degraded_verification is True
     assert first.remote_evidence_qualified is False
     assert client.snapshot_calls == 1
     assert store.get_playlist_attestation(playlist.id) is None
@@ -252,7 +247,6 @@ def test_direct_pending_defers_even_when_write_snapshot_is_immediately_visible(
         store=store,
     )
 
-    assert second.ok is True
     assert second.wrote is False
     assert second.remote_evidence_qualified is True
     assert client.snapshot_calls == 2
@@ -273,9 +267,7 @@ def test_equal_prewrite_and_write_snapshot_keeps_immediate_strict_verification(
 
     result = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
-    assert result.ok is True
     assert result.wrote is True
-    assert result.degraded_verification is False
     assert client.snapshot_calls == 2
     attestation = store.get_playlist_attestation(playlist.id)
     assert attestation is not None
@@ -293,9 +285,7 @@ def test_missing_baseline_unexpected_snapshot_can_converge_on_strict_recheck(
 
     result = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
-    assert result.ok is True
     assert result.wrote is True
-    assert result.degraded_verification is False
     assert client.snapshot_calls == 3
     assert client.playlist_item_calls == 5
     attestation = store.get_playlist_attestation(playlist.id)
@@ -313,7 +303,7 @@ def test_direct_pending_concurrent_divergence_is_repaired_next_cycle(
 
     first = reconcile_spotify_playlist(client, playlist, desired, store=store)
 
-    assert first.ok is True and first.wrote is True and first.degraded_verification
+    assert first.wrote is True
     assert store.get_playlist_attestation(playlist.id) is None
     assert PendingSnapshotJournal(store).get(playlist.id) is not None
     assert client.state[0] == "spotify:episode:concurrent"
@@ -326,7 +316,7 @@ def test_direct_pending_concurrent_divergence_is_repaired_next_cycle(
         store=store,
     )
 
-    assert second.ok is True and second.wrote is True and second.degraded_verification
+    assert second.wrote is True
     assert client.writes == 2
     assert client.state == list(desired.uris)
     assert store.get_playlist_attestation(playlist.id) is None
