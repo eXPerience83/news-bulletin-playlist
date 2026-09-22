@@ -87,6 +87,27 @@ The three mutable stable aliases are promoted together from one exact digest and
 
 Until the first stable release under this contract is published, do not treat any historical `latest` tag as a supported stable channel.
 
+## Stable release operator checklist
+
+Preparing a version in `pyproject.toml`, package `__version__` and `CHANGELOG.md` does **not**
+publish a stable image by itself. A stable release is completed only when the exact SemVer Git tag
+is created and the stable publication workflow succeeds.
+
+For each stable release:
+
+1. merge the release-preparation PR into `main`;
+2. verify `main` contains the intended version and changelog entry;
+3. create the exact Git tag `vMAJOR.MINOR.PATCH` on that release-preparation commit;
+4. verify **Publish stable AMD64** succeeds for that exact tag;
+5. verify GHCR exposes the immutable `:vMAJOR.MINOR.PATCH` image and that `:stable`,
+   `:stable-amd64` and `:latest` resolve to the same release digest;
+6. optionally create a GitHub Release for human-readable release notes. Creating the GitHub Release
+   itself is informational and does not trigger the container build; the Git tag is the release
+   trigger under the current workflow.
+
+Do not consider a version stable merely because its version metadata was merged. If step 3 is
+forgotten, the version exists in source history but no named stable GHCR release is published.
+
 ## Rollback
 
 Mutable channels are convenient deployment pointers, not exact evidence. For deterministic rollback use one of the immutable references recorded by publication:
