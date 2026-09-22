@@ -104,7 +104,6 @@ class _SpotifyState:
 class _Lifecycle:
     def __init__(self) -> None:
         self.status = OperationalStatus(configured=True)
-        self.scheduler = None
         self.reconcile_calls: list[bool] = []
 
     def reconcile(self, *, configured: bool) -> None:
@@ -130,7 +129,6 @@ class _Handler(HandlerCaptureMixin, OperationalHealthHandler):
         self.admin_security = security
         self.spotify_auth = _SpotifyState()  # type: ignore[assignment]
         self.operational_status = lifecycle.status
-        self.engine_scheduler = None
         self.engine_lifecycle = lifecycle  # type: ignore[assignment]
         self.auth_synchronization = None
         self.configuration_synchronization = ConfigurationSynchronization()
