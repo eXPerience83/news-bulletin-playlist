@@ -41,6 +41,7 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestMetrics,
     SpotifyRequestMetricsSnapshot,
 )
+from news_bulletin_playlist.web_ui import WEB_UI_STYLES, BadgeTone, status_badge
 
 
 class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler):
@@ -323,65 +324,155 @@ def _safe_operational_status_page(
     runtime_label = "Ready" if ready else "Degraded"
     storage_label = "Writable" if ready else "Unavailable"
     engine_label = "Not configured"
+    engine_tone: BadgeTone = "muted"
     if snapshot.configured:
         engine_label = "Cycle running" if snapshot.running else "Scheduled"
+        engine_tone = "accent" if snapshot.running else "success"
+
     cycle = snapshot.last_cycle
     cycle_result = "Not run yet" if cycle is None else ("Success" if cycle.ok else "Failed")
+    cycle_tone: BadgeTone = "muted" if cycle is None else ("success" if cycle.ok else "danger")
     cycle_started = "—" if cycle is None else _format_time(cycle.started_at)
     cycle_finished = "—" if cycle is None else _format_time(cycle.finished_at)
     next_run = "—" if snapshot.next_run_at is None else _format_time(snapshot.next_run_at)
     source_rows = _safe_source_rows(cycle)
     playlist_rows = _safe_playlist_rows(cycle)
     spotify_label = authorization_state_label(spotify_state)
+    spotify_tone: BadgeTone = (
+        "success" if spotify_state is AuthorizationState.CONNECTED else "muted"
+    )
+    runtime_tone: BadgeTone = "success" if ready else "danger"
+    overall_label = "Operational"
+    overall_tone: BadgeTone = "success"
+    if not ready:
+        overall_label = "Runtime degraded"
+        overall_tone = "danger"
+    elif cycle is not None and not cycle.ok:
+        overall_label = "Cycle needs attention"
+        overall_tone = "warning"
+    elif snapshot.running:
+        overall_label = "Cycle running"
+        overall_tone = "accent"
 
     document = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
   <title>News Bulletin Playlists</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; max-width: 72rem; margin: 3rem auto;
-           padding: 0 1.25rem; line-height: 1.5; }}
-    dl {{ display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1rem; }}
-    dt {{ font-weight: 700; }}
-    table {{ width: 100%; border-collapse: collapse; margin: 1rem 0 2rem; }}
-    th, td {{ text-align: left; vertical-align: top; padding: .45rem .55rem;
-              border-bottom: 1px solid #ddd; }}
-    code {{ font-family: ui-monospace, monospace; }}
-  </style>
+  <style>{WEB_UI_STYLES}</style>
 </head>
 <body>
-  <h1>News Bulletin Playlists</h1>
-  <p>This page is read-only. Detailed failure context is available only from the
-     authenticated administration diagnostics.</p>
-  <dl>
-    <dt>Runtime</dt><dd>{runtime_label}</dd>
-    <dt>Persistent storage</dt><dd>{storage_label}</dd>
-    <dt>Spotify authorization</dt><dd>{spotify_label}</dd>
-    <dt>Engine</dt><dd>{engine_label}</dd>
-    <dt>Last cycle</dt><dd>{cycle_result}</dd>
-    <dt>Cycle start</dt><dd>{cycle_started}</dd>
-    <dt>Cycle end</dt><dd>{cycle_finished}</dd>
-    <dt>Next run</dt><dd>{next_run}</dd>
-    <dt>Version</dt><dd><code>{html.escape(__version__)}</code></dd>
-    <dt>Build</dt><dd><code>{html.escape(build_revision)}</code></dd>
-  </dl>
-  <h2>Sources</h2>
-  <table>
-    <thead><tr>
-      <th>Source</th><th>Result</th><th>Detector success</th>
-      <th>Catalogue refresh</th><th>Spotify state</th>
-    </tr></thead>
-    <tbody>{source_rows}</tbody>
-  </table>
-  <h2>Playlists</h2>
-  <table>
-    <thead><tr>
-      <th>Playlist</th><th>Result</th><th>Last success</th><th>Items</th><th>Write</th>
-    </tr></thead>
-    <tbody>{playlist_rows}</tbody>
-  </table>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="News Bulletin Playlists status">
+        <span class="brand-mark" aria-hidden="true">NB</span>
+        <span>News Bulletin Playlists</span>
+      </a>
+      {status_badge(overall_label, tone=overall_tone)}
+    </header>
+
+    <main id="main-content">
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Live operational status</p>
+          <h1 id="page-title">Your news playlists, always current.</h1>
+          <p class="hero-copy">
+            A read-only view of the engine, Spotify connection, sources and published playlists.
+            Detailed failure context stays inside authenticated administration.
+          </p>
+        </div>
+        <div class="hero-actions">
+          <a class="button button-primary" href="/admin/">Administration</a>
+          <span class="section-note">Configuration and diagnostics are protected.</span>
+        </div>
+      </section>
+
+      <section aria-label="Runtime summary">
+        <div class="summary-grid">
+          <article class="card summary-card">
+            <p class="card-label">Runtime</p>
+            <p class="card-value">{status_badge(runtime_label, tone=runtime_tone)}</p>
+            <p class="card-meta">Persistent storage: {html.escape(storage_label)}</p>
+          </article>
+          <article class="card summary-card">
+            <p class="card-label">Spotify</p>
+            <p class="card-value">{status_badge(spotify_label, tone=spotify_tone)}</p>
+            <p class="card-meta">Authorization state</p>
+          </article>
+          <article class="card summary-card">
+            <p class="card-label">Engine</p>
+            <p class="card-value">{status_badge(engine_label, tone=engine_tone)}</p>
+            <p class="card-meta">Next run: {next_run}</p>
+          </article>
+          <article class="card summary-card">
+            <p class="card-label">Last cycle</p>
+            <p class="card-value">{status_badge(cycle_result, tone=cycle_tone)}</p>
+            <p class="card-meta">Started {cycle_started} · ended {cycle_finished}</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="sources-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Collection</p>
+            <h2 id="sources-heading">Sources</h2>
+          </div>
+          <p class="section-note">Public-safe source health and catalogue freshness.</p>
+        </div>
+        <div class="card table-card">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Source</th>
+                  <th scope="col">Result</th>
+                  <th scope="col">Detector success</th>
+                  <th scope="col">Catalogue refresh</th>
+                  <th scope="col">Spotify state</th>
+                </tr>
+              </thead>
+              <tbody>{source_rows}</tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="playlists-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Publishing</p>
+            <h2 id="playlists-heading">Playlists</h2>
+          </div>
+          <p class="section-note">Desired, verified and write state from the latest cycle.</p>
+        </div>
+        <div class="card table-card">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Playlist</th>
+                  <th scope="col">Result</th>
+                  <th scope="col">Last success</th>
+                  <th scope="col">Items</th>
+                  <th scope="col">Write</th>
+                </tr>
+              </thead>
+              <tbody>{playlist_rows}</tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>Read-only status · sensitive diagnostics are not exposed here.</p>
+      <p>Version <code>{html.escape(__version__)}</code> · Build
+        <code>{html.escape(build_revision)}</code></p>
+    </footer>
+  </div>
 </body>
 </html>
 """
@@ -393,7 +484,11 @@ def _safe_source_rows(cycle: EngineCycleResult | None) -> str:
         return '<tr><td colspan="5">No source cycle data yet.</td></tr>'
     rows = []
     for source in cycle.sources:
-        result = "Success" if source.ok else "Failed — see admin diagnostics"
+        result = (
+            status_badge("Success", tone="success")
+            if source.ok
+            else status_badge("Failed — see admin diagnostics", tone="danger")
+        )
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(str(source.source_id))}</code></td>"
@@ -411,16 +506,23 @@ def _safe_playlist_rows(cycle: EngineCycleResult | None) -> str:
         return '<tr><td colspan="5">No playlist cycle data yet.</td></tr>'
     rows = []
     for playlist in cycle.playlists:
-        result = "Success" if playlist.ok else "Failed — see admin diagnostics"
+        result = (
+            status_badge("Success", tone="success")
+            if playlist.ok
+            else status_badge("Failed — see admin diagnostics", tone="danger")
+        )
         applied = "unverified" if playlist.applied_count is None else str(playlist.applied_count)
         write = "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
+        write_tone: BadgeTone = (
+            "muted" if playlist.wrote is None else ("accent" if playlist.wrote else "success")
+        )
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(str(playlist.playlist_id))}</code></td>"
             f"<td>{result}</td>"
             f"<td>{_format_optional_time(playlist.last_success_at)}</td>"
             f"<td>{playlist.desired_count} desired / {applied} verified</td>"
-            f"<td>{write}</td>"
+            f"<td>{status_badge(write, tone=write_tone)}</td>"
             "</tr>"
         )
     return "".join(rows)
