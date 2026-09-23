@@ -39,8 +39,8 @@ def render_sources_page(
     </div>
     <p class="section-note">{len(catalog.sources)} built-in sources</p>
   </div>
-  <p class="muted">Country/origin, editorial scope and language are separate so a foreign
-     provider can still be useful to a global playlist.</p>
+  <p class="muted">Provider origin, editorial scope and language are separate; an institutional
+     origin need not be a country.</p>
   {_sources_table(snapshot, catalog, last_cycle)}
 </section>
 """,
@@ -75,7 +75,7 @@ def _sources_table(
         rows.append(
             "<tr>"
             f"<td>{html.escape(source.display_name)}</td>"
-            f"<td>{html.escape(', '.join(str(value) for value in source.countries))}</td>"
+            f"<td>{html.escape(str(source.origin))}</td>"
             f"<td><code>{html.escape(source.editorial_scope.value)}</code></td>"
             f"<td>{html.escape(', '.join(str(value) for value in source.languages))}</td>"
             f"<td>{_source_health_badge(source_outcomes.get(source.id))}</td>"

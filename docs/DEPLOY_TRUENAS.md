@@ -52,7 +52,7 @@ Stopping management of a playlist does not delete its Spotify destination by def
 
 ### Source labels in admin
 
-The source table and selectors distinguish **provider country**, **editorial scope** and **language**. Scope values are `LOC`, `REG`, `NAT`, `INT` and `MIX`. This prevents origin from being mistaken for coverage: for example, CNN 5 Cosas is `US · INT · es-ES`, so its US origin does not mean US-only news; it is the current default for `INT · ES`, not for the Spain-focused **Noticias en Español** template.
+The source table and selectors distinguish **provider origin** (country or institution), **editorial scope** and **language**. Scope values are `LOC`, `REG`, `NAT`, `INT` and `MIX`. United Nations sources display `UN`, not a headquarters country. Origin does not imply coverage: CNN 5 Cosas is `US · INT · es-ES`, so its US origin does not mean US-only news; it is the current default for `INT · ES`, not for the Spain-focused **Noticias en Español** template.
 
 ## Managed configuration only
 

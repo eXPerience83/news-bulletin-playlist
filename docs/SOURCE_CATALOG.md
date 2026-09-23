@@ -13,8 +13,9 @@ supports. An entry in this document does **not** become selectable or runnable m
 listed here.
 
 Source classification uses the three-axis `ORIGIN · SCOPE · LANGUAGE` contract defined in
-[`SOURCE_SELECTION.md`](SOURCE_SELECTION.md). Provider country, editorial coverage and language are
-independent. For example, CNN 5 Cosas is `US · INT · es-ES`: its US origin does not make it a US-local
+[`SOURCE_SELECTION.md`](SOURCE_SELECTION.md). Provider origin, editorial coverage and language are
+independent. Origin may be a country or an institution such as `UN`; no country is invented for an
+institution. For example, CNN 5 Cosas is `US · INT · es-ES`: its US origin does not make it a US-local
 source, and its confirmed Spain-Spanish locale does not make it a Spain-national source.
 
 ## Boundaries
@@ -83,9 +84,9 @@ These are the sources represented by the current built-in runtime catalog.
 | `ondacero` | `ES · NAT · es-ES` | Onda Cero — Las noticias en Onda Cero | Concise | recurring Spain radio bulletins |
 | `abc` | `ES · NAT · es-ES` | ABC — Las Noticias de ABC | Concise | daily Spain/general news summary |
 | `cnn` | `US · INT · es-ES` | CNN — 5 Cosas | Concise | global/international Spain-Spanish briefing; default for `INT · ES`, not the Spain-national product |
-| `un_news_en` | `US · INT · en` | United Nations — UN News Today | Concise | daily global English bulletin, preferred over long-form BBC Global News Podcast |
+| `un_news_en` | `UN · INT · en` | United Nations — UN News Today | Concise | daily global English bulletin, preferred over long-form BBC Global News Podcast |
 | `reuters_world` | `GB · INT · en` | Reuters — World News | Concise | daily ~10-minute global briefing; `INT · EN` default alongside UN News Today |
-| `un_news_es` | `US · INT · es` | United Nations — ONU en minutos | Concise | broad UN Spanish audio feed is explicitly filtered to dated ONU-en-minutos editions; spoken locale unresolved |
+| `un_news_es` | `UN · INT · es` | United Nations — ONU en minutos | Concise | broad UN Spanish audio feed is explicitly filtered to dated ONU-en-minutos editions; spoken locale unresolved |
 | `nplus_univision` | `US · INT · es` | N+ Univision 24-7 | Concise | international/US Spanish daily newscast; spoken locale unresolved |
 | `dw_actualidad` | `DE · INT · es` | DW — Actualidad en análisis | Mixed | normally under 30 minutes, with occasional longer episodes excluded by destination duration policy; spoken locale unresolved |
 | `rfi_fr` | `FR · INT · fr` | RFI — Journal Monde | Mixed | world-news journals, ordinarily around bulletin length with occasional longer tranches |

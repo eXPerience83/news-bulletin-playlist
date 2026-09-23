@@ -23,6 +23,7 @@ from news_bulletin_playlist.models import (
     PlaylistId,
     SourceDefinition,
     SourceId,
+    SourceOrigin,
     SourceSelection,
 )
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
@@ -141,6 +142,7 @@ def _source(source_id: str) -> SourceDefinition:
         id=SourceId(source_id),
         display_name=source_id,
         countries=(CountryCode("ES"),),
+        origin=SourceOrigin.country(CountryCode("ES")),
         languages=(LanguageTag("es-ES"),),
         timezone=ZoneInfo("UTC"),
         enabled=True,

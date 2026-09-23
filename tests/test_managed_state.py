@@ -15,6 +15,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     activate_template,
     compile_engine_config,
+    serialize_managed_state,
 )
 from news_bulletin_playlist.models import (
     AdapterId,
@@ -83,6 +84,17 @@ def test_activation_snapshots_defaults_instead_of_copying_the_catalog() -> None:
     assert managed.cover_id == template.cover_id
     assert managed.destination == DestinationReference(AdapterId("spotify"), "spotify-playlist-id")
     assert managed.max_duration_seconds == 1800
+
+
+def test_source_origin_does_not_change_managed_state_schema_or_payload() -> None:
+    template = BUILTIN_CATALOG.playlist("international_english_news")
+    managed = activate_template(template, "spotify-playlist-id")
+    payload = serialize_managed_state(ManagedState(playlists=(managed,)))
+
+    assert payload["schema_version"] == 2
+    assert payload["playlists"][0]["source_ids"] == ["un_news_en", "reuters_world"]
+    assert "origin" not in json.dumps(payload)
+    assert "countries" not in json.dumps(payload)
 
 
 def test_managed_state_rejects_duplicate_playlist_ids_before_write(tmp_path: Path) -> None:

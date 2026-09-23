@@ -16,6 +16,7 @@ from news_bulletin_playlist.models import (
     PlaylistId,
     SourceDefinition,
     SourceId,
+    SourceOrigin,
     SourceSelection,
 )
 from news_bulletin_playlist.spotify.first_models import RefreshReason, SpotifyFirstSourceState
@@ -36,6 +37,7 @@ def _source() -> SourceDefinition:
         id=SOURCE_ID,
         display_name="Source",
         countries=(CountryCode("ES"),),
+        origin=SourceOrigin.country(CountryCode("ES")),
         languages=(LanguageTag("es"),),
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,

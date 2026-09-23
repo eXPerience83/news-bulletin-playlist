@@ -19,6 +19,7 @@ from news_bulletin_playlist.models import (
     ParserId,
     SourceDefinition,
     SourceId,
+    SourceOrigin,
 )
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
@@ -112,6 +113,7 @@ def _source(*, show_ids: tuple[str, ...] = (SHOW_ID,)) -> SourceDefinition:
         id=SourceId("source"),
         display_name="Source",
         countries=(CountryCode("ES"),),
+        origin=SourceOrigin.country(CountryCode("ES")),
         languages=(LanguageTag("es"),),
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,

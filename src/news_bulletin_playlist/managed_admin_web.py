@@ -387,9 +387,8 @@ def _provisioning_recovery(
 
 
 def _source_label(source: SourceDefinition) -> str:
-    origin = ",".join(str(value) for value in source.countries)
     language = ",".join(str(value) for value in source.languages)
-    return f"{source.display_name} ({origin} · {source.editorial_scope.value} · {language})"
+    return f"{source.display_name} ({source.origin} · {source.editorial_scope.value} · {language})"
 
 
 def _cover_image(cover_id: str, label: str) -> str:
