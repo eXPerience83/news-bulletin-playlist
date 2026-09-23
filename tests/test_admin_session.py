@@ -181,7 +181,7 @@ def test_login_page_and_generic_invalid_credentials_do_not_echo_secrets() -> Non
 def test_successful_login_prevents_fixation_and_session_is_shared_across_admin_routes() -> None:
     security = LanAdminSecurity(_PASSWORD)
     manager = admin_session_manager_for(security)
-    attacker_session = manager.create_session(now=_NOW)
+    attacker_session = manager.create_session()
     attacker_cookie = _cookie_for(attacker_session)
 
     login = _Handler(
@@ -210,9 +210,10 @@ def test_successful_login_prevents_fixation_and_session_is_shared_across_admin_r
 def test_logout_requires_csrf_invalidates_session_and_expires_cookie() -> None:
     security = LanAdminSecurity(_PASSWORD)
     manager = admin_session_manager_for(security)
-    session_id = manager.create_session(now=_NOW)
+    observed_at = datetime.now(UTC)
+    session_id = manager.create_session(now=observed_at)
     cookie = _cookie_for(session_id)
-    csrf_token = manager.issue_csrf_token(session_id, now=_NOW)
+    csrf_token = manager.issue_csrf_token(session_id, now=observed_at)
 
     logout = _Handler(
         security=security,
