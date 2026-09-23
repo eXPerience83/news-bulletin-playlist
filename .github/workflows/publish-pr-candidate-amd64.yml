@@ -19,6 +19,7 @@ jobs:
       github.event.comment.user.login == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    cache-mode: write-only
     permissions:
       contents: read
       pull-requests: read
@@ -173,6 +174,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    cache-mode: read
     permissions:
       actions: read
       packages: write
@@ -325,6 +327,7 @@ jobs:
     needs: [build, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    cache-mode: none
     permissions:
       actions: write
 
