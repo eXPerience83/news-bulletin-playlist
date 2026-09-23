@@ -32,7 +32,7 @@ class HandlerCaptureMixin:
     def _reply(
         self,
         status: HTTPStatus,
-        payload: bytes
+        payload: bytes,
         *,
         content_type: str = "text/html; charset=utf-8",
         extra_headers: dict[str, str] | None = None,
@@ -67,11 +67,7 @@ def initialize_handler_capture(
         assert security.is_authorized(basic_header(password))
         manager = admin_session_manager_for(security)
         session_id = getattr(security, "_test_admin_session_id", None)
-        cookie_header = (
-            None
-            if session_id is None
-            else f"{ADMIN_SESSION_COOKIE}={session_id}"
-        )
+        cookie_header = None if session_id is None else f"{ADMIN_SESSION_COOKIE}={session_id}"
         if manager.resolve_session(cookie_header) is None:
             session_id = manager.create_session()
             setattr(security, "_test_admin_session_id", session_id)
