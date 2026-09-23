@@ -101,8 +101,8 @@ def build_engine_runtime_auth(
     return security, spotify_auth
 
 
-class _SessionBoundSecurity:
-    """Expose the existing CSRF API while binding tokens to one authenticated session."""
+class _SessionBoundSecurity(AdminSecurity):
+    """Adapt one AdminSecurity instance to session-scoped request security."""
 
     def __init__(
         self,
@@ -111,9 +111,21 @@ class _SessionBoundSecurity:
         manager: AdminSessionManager,
         session_id: str,
     ) -> None:
+        # This adapter intentionally does not duplicate the password verifier held by AdminSecurity.
+        # Every base security operation delegates to the already configured security object.
         self._security = security
         self._manager = manager
         self._session_id = session_id
+
+    def is_secure_transport(
+        self,
+        client_ip: str,
+        forwarded_proto_values: Sequence[str] | None,
+    ) -> bool:
+        return self._security.is_secure_transport(client_ip, forwarded_proto_values)
+
+    def is_authorized(self, header: str | None) -> bool:
+        return self._security.is_authorized(header)
 
     def issue_csrf_token(self, *, now: datetime | None = None) -> str:
         token = self._manager.issue_csrf_token(self._session_id, now=now)
