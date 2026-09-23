@@ -61,6 +61,7 @@ def initialize_handler_capture(
     handler.path = path
     handler.client_address = (client_ip, 12345)
     handler.headers = HTTPMessage()
+    handler._form = {} if form is None else {key: list(values) for key, values in form.items()}
     if password is not None:
         security = handler.admin_security
         assert security is not None
@@ -72,7 +73,13 @@ def initialize_handler_capture(
             session_id = manager.create_session()
             security._test_admin_session_id = session_id
         handler.headers["Cookie"] = f"{ADMIN_SESSION_COOKIE}={session_id}"
-    handler._form = {} if form is None else form
+
+        # Older unit fixtures create a CSRF token directly on AdminSecurity before constructing
+        # the handler. Translate only a still-valid legacy fixture token into the equivalent
+        # session-scoped token so production code has one CSRF acceptance path.
+        csrf_values = handler._form.get("csrf_token", [])
+        if len(csrf_values) == 1 and security.consume_csrf_token(csrf_values[0]):
+            handler._form["csrf_token"] = [manager.issue_csrf_token(session_id)]
     handler.response = None
 
 
