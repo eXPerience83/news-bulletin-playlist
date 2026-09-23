@@ -284,7 +284,9 @@ def _managed_card(
   <form method="post" action="/admin/playlists/stop">
     {_hidden_input("csrf_token", csrf_token)}
     {_hidden_input("playlist_id", str(playlist.id))}
-    <button class="button button-danger" type="submit">Stop managing (keep Spotify playlist)</button>
+    <button class="button button-danger" type="submit">
+      Stop managing (keep Spotify playlist)
+    </button>
   </form>
 </article>
 """
