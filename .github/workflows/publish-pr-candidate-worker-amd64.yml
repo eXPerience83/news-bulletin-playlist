@@ -289,11 +289,14 @@ jobs:
           image="ghcr.io/${namespace}/news-bulletin-playlist"
           candidate_tag="candidate-pr-${PR_NUMBER}-${SHORT_SHA}"
           candidate_ref="${image}:${candidate_tag}"
+          expected_version="candidate-pr-${PR_NUMBER}"
           local_id="$(docker image inspect news-bulletin-playlist:candidate --format '{{.Id}}')"
+          existing=false
 
           inspect_error="$(mktemp)"
           trap 'rm -f "$inspect_error"' EXIT
           if digest="$(docker buildx imagetools inspect "$candidate_ref" --format '{{json .Manifest.Digest}}' 2>"$inspect_error" | tr -d '"')"; then
+            existing=true
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "ERROR: existing candidate tag returned invalid digest: $digest" >&2
               exit 1
@@ -315,10 +318,20 @@ jobs:
 
           resolved_ref="${image}@${digest}"
           docker pull "$resolved_ref"
-          resolved_id="$(docker image inspect "$resolved_ref" --format '{{.Id}}')"
-          if [[ "$resolved_id" != "$local_id" ]]; then
-            echo "ERROR: immutable candidate digest does not match the tested image" >&2
+          resolved_revision="$(docker image inspect "$resolved_ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          resolved_version="$(docker image inspect "$resolved_ref" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          if [[ "$resolved_revision" != "$HEAD_SHA" || "$resolved_version" != "$expected_version" ]]; then
+            echo "ERROR: immutable candidate tag provenance does not match the authorized PR/SHA" >&2
+            echo "revision=$resolved_revision version=$resolved_version" >&2
             exit 1
+          fi
+
+          if [[ "$existing" == false ]]; then
+            resolved_id="$(docker image inspect "$resolved_ref" --format '{{.Id}}')"
+            if [[ "$resolved_id" != "$local_id" ]]; then
+              echo "ERROR: newly published candidate digest does not match the tested image" >&2
+              exit 1
+            fi
           fi
 
           echo "candidate_ref=$candidate_ref" >> "$GITHUB_OUTPUT"
