@@ -367,10 +367,8 @@ def _spotify_metrics_document(
 
 
 def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> str:
-    heading = (
-        '<h2 id="spotify-request-metrics-heading">'
-        "Spotify request metrics (last 24 hours)</h2>"
-    )
+    heading_id = "spotify-request-metrics-heading"
+    heading = f'<h2 id="{heading_id}">Spotify request metrics (last 24 hours)</h2>'
     if snapshot is None:
         return heading + '<p class="muted">Spotify request metrics are unavailable.</p>'
 
