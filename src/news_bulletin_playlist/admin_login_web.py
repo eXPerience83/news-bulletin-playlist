@@ -118,7 +118,8 @@ def render_admin_login_page(*, invalid_credentials: bool, lan_mode: bool) -> byt
       <section class="card login-card" aria-labelledby="login-title">
         <p class="eyebrow">Administration</p>
         <h1 id="login-title">Sign in</h1>
-        <p class="hero-copy">Use the administration credentials configured for this installation.</p>
+        <p class="hero-copy">Use the administration credentials configured for this
+           installation.</p>
         {warning}
         {error}
         <form method="post" action="/admin/login">
