@@ -26,7 +26,7 @@ jobs:
       pr_number: ${{ steps.pr.outputs.pr_number }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
       short_sha: ${{ steps.pr.outputs.short_sha }}
-      artifact_name: ${{ steps.pr.outputs.artifact_name }}
+      cache_key: ${{ steps.pr.outputs.cache_key }}
       archive_sha256: ${{ steps.archive.outputs.sha256 }}
 
     steps:
@@ -72,11 +72,11 @@ jobs:
           fi
 
           short_sha="${head_sha:0:12}"
-          artifact_name="candidate-image-pr-${PR_NUMBER}-${short_sha}"
+          cache_key="candidate-image-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}-pr-${PR_NUMBER}-${head_sha}"
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "cache_key=$cache_key" >> "$GITHUB_OUTPUT"
 
       - name: Checkout the exact pull-request head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -157,13 +157,11 @@ jobs:
           fi
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
 
-      - name: Upload verified candidate artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - name: Save verified candidate transfer cache
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          name: ${{ steps.pr.outputs.artifact_name }}
           path: candidate-image.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+          key: ${{ steps.pr.outputs.cache_key }}
 
   publish:
     needs: build
@@ -175,26 +173,22 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Download the verified candidate artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
-        run: |
-          set -euo pipefail
-          gh run download "$GITHUB_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "$ARTIFACT_NAME" \
-            --dir candidate
+      - name: Restore exact verified candidate transfer cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: candidate-image.tar.gz
+          key: ${{ needs.build.outputs.cache_key }}
+          fail-on-cache-miss: true
 
-      - name: Verify artifact hash and load image
+      - name: Verify transfer cache hash and load image
         env:
           EXPECTED_SHA256: ${{ needs.build.outputs.archive_sha256 }}
         run: |
           set -euo pipefail
-          archive="candidate/candidate-image.tar.gz"
+          archive="candidate-image.tar.gz"
           actual_sha256="$(sha256sum "$archive" | awk '{print $1}')"
           if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
-            echo "ERROR: candidate artifact changed after validation" >&2
+            echo "ERROR: candidate transfer cache changed after validation" >&2
             exit 1
           fi
           gzip -dc "$archive" | docker load
@@ -316,7 +310,7 @@ jobs:
         run: |
           set -euo pipefail
           image="${CANDIDATE_REF%:*}"
-          body="Published the reviewed AMD64 candidate after exact-head validation, configuration/build validation, hardened runtime smoke tests, artifact hash verification, and immediate pre-promotion PR revalidation passed.\n\n- Candidate: \`${CANDIDATE_REF}\`\n- Dev channel: \`${DEV_REF}\`\n- Immutable: \`${image}@${IMAGE_DIGEST}\`\n- Source revision: \`${SOURCE_REVISION}\`\n\nThe mutable \`dev\` channel may contain unmerged code. It is not \`edge\`, \`stable\`, or \`latest\`."
+          body="Published the reviewed AMD64 candidate after exact-head validation, configuration/build validation, hardened runtime smoke tests, transfer-cache hash verification, and immediate pre-promotion PR revalidation passed.\n\n- Candidate: \`${CANDIDATE_REF}\`\n- Dev channel: \`${DEV_REF}\`\n- Immutable: \`${image}@${IMAGE_DIGEST}\`\n- Source revision: \`${SOURCE_REVISION}\`\n\nThe mutable \`dev\` channel may contain unmerged code. It is not \`edge\`, \`stable\`, or \`latest\`."
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$body"
 
   cleanup:
@@ -327,18 +321,18 @@ jobs:
       actions: write
 
     steps:
-      - name: Delete transfer artifact after successful publication
+      - name: Delete transfer cache after successful publication
         env:
           GH_TOKEN: ${{ github.token }}
-          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+          CACHE_KEY: ${{ needs.build.outputs.cache_key }}
         run: |
           set -euo pipefail
-          artifact_id="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-              --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\") | .id"
+          response="$(
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/actions/caches?key=${CACHE_KEY}&ref=refs/heads/main"
           )"
-          if [[ ! "$artifact_id" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: expected exactly one transfer artifact named $ARTIFACT_NAME; got: $artifact_id" >&2
+          deleted_count="$(jq -r '.total_count // 0' <<<"$response")"
+          if [[ "$deleted_count" != "1" ]]; then
+            echo "ERROR: expected exactly one transfer cache for $CACHE_KEY; deleted: $deleted_count" >&2
             exit 1
           fi
-          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
