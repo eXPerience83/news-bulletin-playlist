@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -21,6 +22,7 @@ from news_bulletin_playlist.admin_session import (
     session_cookie_header,
 )
 from news_bulletin_playlist.lan_admin import LanAdminHandler, LanAdminSecurity
+from news_bulletin_playlist.runtime import AdminSecurity
 
 _PASSWORD = "long-enough-admin-password"
 _SECRET = "credential-sentinel-never-render"
@@ -31,14 +33,15 @@ class _Handler(HandlerCaptureMixin, LanAdminHandler):
     def __init__(
         self,
         *,
-        security: LanAdminSecurity,
+        security: AdminSecurity,
         path: str,
         form: dict[str, list[str]] | None = None,
         cookie: str | None = None,
+        client_ip: str = "127.0.0.1",
     ) -> None:
         self.admin_security = security
         self.spotify_auth = None
-        initialize_handler_capture(self, path=path, form=form, password=None)
+        initialize_handler_capture(self, path=path, form=form, password=None, client_ip=client_ip)
         if cookie is not None:
             self.headers["Cookie"] = cookie
 
@@ -110,6 +113,18 @@ def test_csrf_is_scoped_to_one_session_and_one_use() -> None:
     assert not manager.consume_csrf_token(second, first_token, now=_NOW)
     assert manager.consume_csrf_token(first, first_token, now=_NOW)
     assert not manager.consume_csrf_token(first, first_token, now=_NOW)
+
+
+def test_failed_login_tracking_is_bounded_and_discards_inactive_clients() -> None:
+    manager = AdminSessionManager()
+
+    for _ in range(100):
+        delay = manager.invalid_login_delay("client-a", now=_NOW)
+    assert delay == 0.5
+    assert manager._login_failures["client-a"] == (_NOW, 7)
+
+    assert manager.invalid_login_delay("client-b", now=_NOW + timedelta(minutes=2)) == 0
+    assert "client-a" not in manager._login_failures
 
 
 def test_session_cookie_attributes_follow_transport() -> None:
@@ -205,6 +220,88 @@ def test_successful_login_prevents_fixation_and_session_is_shared_across_admin_r
         handler = _SharedRouteHandler(security=security, path=path, cookie=cookie)
         handler.do_GET()
         assert captured_response(handler).status == HTTPStatus.OK
+
+
+def test_lan_login_sets_http_session_cookie_attributes() -> None:
+    login = _Handler(
+        security=LanAdminSecurity(_PASSWORD),
+        path="/admin/login",
+        form={"username": ["admin"], "password": [_PASSWORD]},
+    )
+
+    login.do_POST()
+    response = captured_response(login)
+
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/"
+    cookie = response.extra_headers["Set-Cookie"]
+    assert _session_id_from_set_cookie(cookie)
+    assert "HttpOnly" in cookie
+    assert "SameSite=Lax" in cookie
+    assert "Path=/admin" in cookie
+    assert "Max-Age=" in cookie
+    assert "Secure" not in cookie
+
+
+def test_trusted_https_proxy_login_sets_secure_session_cookie() -> None:
+    proxy_ip = "192.0.2.10"
+    security = AdminSecurity(
+        _PASSWORD,
+        trusted_proxy_networks=(ipaddress.ip_network("192.0.2.0/24"),),
+        allow_direct_loopback=False,
+    )
+    login = _Handler(
+        security=security,
+        path="/admin/login",
+        form={"username": ["admin"], "password": [_PASSWORD]},
+        client_ip=proxy_ip,
+    )
+    login.headers["X-Forwarded-Proto"] = "https"
+
+    login.do_POST()
+    response = captured_response(login)
+
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/"
+    cookie = response.extra_headers["Set-Cookie"]
+    assert _session_id_from_set_cookie(cookie)
+    assert "HttpOnly" in cookie
+    assert "SameSite=Lax" in cookie
+    assert "Path=/admin" in cookie
+    assert "Max-Age=" in cookie
+    assert "Secure" in cookie
+
+    untrusted = _Handler(
+        security=security,
+        path="/admin/login",
+        form={"username": ["admin"], "password": [_PASSWORD]},
+        client_ip="192.0.3.10",
+    )
+    untrusted.headers["X-Forwarded-Proto"] = "https"
+    untrusted.do_POST()
+    rejected = captured_response(untrusted)
+    assert rejected.status == HTTPStatus.FORBIDDEN
+    assert "Set-Cookie" not in rejected.extra_headers
+
+
+def test_legacy_csrf_token_cannot_authorize_session_logout() -> None:
+    security = LanAdminSecurity(_PASSWORD)
+    manager = admin_session_manager_for(security)
+    session_id = manager.create_session()
+    legacy_token = security.issue_csrf_token()
+    logout = _Handler(
+        security=security,
+        path="/admin/logout",
+        form={"csrf_token": [legacy_token]},
+        cookie=_cookie_for(session_id),
+    )
+
+    logout.do_POST()
+    response = captured_response(logout)
+
+    assert response.status == HTTPStatus.FORBIDDEN
+    assert manager.resolve_session(_cookie_for(session_id)) == session_id
+    assert "Set-Cookie" not in response.extra_headers
 
 
 def test_logout_requires_csrf_invalidates_session_and_expires_cookie() -> None:

@@ -105,7 +105,7 @@ The base container remains healthy with no active managed playlist and reports t
 
 For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and contains no Spotify credentials.
 
-Production `/admin/` and the Spotify callback are intentionally fail-closed. When an external HTTPS origin is configured, administration is accepted only from the explicitly configured immediate reverse-proxy IP/CIDR and only when that proxy asserts `X-Forwarded-Proto: https`. Direct HTTP access to the backend never reaches the Basic-authentication challenge in that mode. Loopback HTTP remains available only for local/P0 development.
+Production `/admin/` and the Spotify callback are intentionally fail-closed. When an external HTTPS origin is configured, administration is accepted only from the explicitly configured immediate reverse-proxy IP/CIDR and only when that proxy asserts `X-Forwarded-Proto: https`. Direct HTTP access to the backend cannot reach the first-party `/admin/login` form in that mode. Successful login creates a server-side session with a session cookie. Loopback HTTP remains available only for local/P0 development.
 
 ## Development
 
@@ -160,7 +160,7 @@ granted for historical copies that were distributed under the MIT License.
 
 Do not commit Spotify client secrets, refresh tokens, `.env` files, administration passwords or the runtime database. Production Spotify authorization uses Authorization Code + PKCE and does not require a Spotify Client Secret. The durable refresh credential is stored owner-only under `/data`; access tokens remain memory-only.
 
-The current TrueNAS production choice is explicit trusted-LAN administration: set `NEWS_PLAYLIST_ADMIN_MODE=lan`, keep backend port `8788` private to the trusted LAN, and do not configure `NEWS_PLAYLIST_EXTERNAL_URL` or `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS`. LAN mode uses HTTP Basic authentication without TLS, so it must never be forwarded from the router, exposed through a public tunnel/funnel, or used on an untrusted network. The hardened HTTPS/reverse-proxy mode remains implemented but is a separate deployment option tracked by #145 rather than the current default. Runtime OAuth operations and scheduler token refreshes are serialized so reconnect/refresh cannot race against the same credential store.
+The current TrueNAS production choice is explicit trusted-LAN administration: set `NEWS_PLAYLIST_ADMIN_MODE=lan`, keep backend port `8788` private to the trusted LAN, and do not configure `NEWS_PLAYLIST_EXTERNAL_URL` or `NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS`. Operators sign in at `/admin/login`; the server then authenticates requests using a server-side session and session cookie. In LAN mode, credentials and session traffic travel over HTTP without TLS, so port `8788` must stay exclusively on a trusted private network. Never forward it from the router, expose it through a public tunnel/funnel, or use it on an untrusted network. The hardened HTTPS/reverse-proxy mode remains implemented as another supported deployment option tracked by #145. Runtime OAuth operations and scheduler token refreshes are serialized so reconnect/refresh cannot race against the same credential store.
 
 ## Roadmap
 

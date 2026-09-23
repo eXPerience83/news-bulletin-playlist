@@ -40,7 +40,7 @@ class AdminSessionManager:
 
     def __init__(self) -> None:
         self._sessions: dict[str, _AdminSession] = {}
-        self._login_failures: dict[str, list[datetime]] = {}
+        self._login_failures: dict[str, tuple[datetime, int]] = {}
         self._lock = RLock()
 
     def create_session(self, *, now: datetime | None = None) -> str:
@@ -135,14 +135,15 @@ class AdminSessionManager:
         observed_at = _as_utc(now or datetime.now(UTC))
         cutoff = observed_at - _LOGIN_FAILURE_WINDOW
         with self._lock:
-            failures = [
-                failure_at
-                for failure_at in self._login_failures.get(client_id, [])
-                if failure_at >= cutoff
-            ]
-            failures.append(observed_at)
-            self._login_failures[client_id] = failures
-            penalty_steps = max(0, len(failures) - 2)
+            self._login_failures = {
+                identity: (last_failure, count)
+                for identity, (last_failure, count) in self._login_failures.items()
+                if last_failure >= cutoff
+            }
+            _last_failure, previous_count = self._login_failures.get(client_id, (observed_at, 0))
+            count = min(previous_count + 1, 7)
+            self._login_failures[client_id] = (observed_at, count)
+            penalty_steps = max(0, count - 2)
             return min(
                 penalty_steps * _LOGIN_FAILURE_DELAY_STEP_SECONDS,
                 _LOGIN_FAILURE_DELAY_MAX_SECONDS,

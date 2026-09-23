@@ -7,7 +7,7 @@ without a shell.
 
 ## Safety boundary
 
-LAN mode uses HTTP Basic authentication without TLS. Enable it only on a trusted private network. Do not forward port `8788` from the router, publish it through a tunnel/funnel, or expose it to an untrusted network.
+In LAN mode, operators sign in at `/admin/login`; the server authenticates subsequent requests using a server-side session and session cookie. Credentials and session traffic travel over HTTP without TLS. Keep port `8788` exclusively on a trusted private network. Do not forward it from the router, publish it through a tunnel/funnel, or expose it to an untrusted network. Hardened HTTPS behind a trusted reverse proxy remains the other supported mode.
 
 The current no-shell TrueNAS LAN setup adds these values to the local Custom App YAML:
 

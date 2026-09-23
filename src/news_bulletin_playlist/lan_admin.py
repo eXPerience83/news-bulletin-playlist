@@ -133,11 +133,7 @@ class _SessionBoundSecurity(AdminSecurity):
         return token
 
     def consume_csrf_token(self, token: str, *, now: datetime | None = None) -> bool:
-        if self._manager.consume_csrf_token(self._session_id, token, now=now):
-            return True
-        # Compatibility for low-level unit harnesses that issue a token directly on AdminSecurity.
-        # No production page exposes that legacy token once session authentication is active.
-        return self._security.consume_csrf_token(token, now=now)
+        return self._manager.consume_csrf_token(self._session_id, token, now=now)
 
     def invalidate_session(self) -> None:
         self._manager.invalidate_session(self._session_id)
