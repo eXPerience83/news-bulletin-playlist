@@ -43,7 +43,6 @@ _EXTERNAL_URL_ENV = "NEWS_PLAYLIST_EXTERNAL_URL"
 _TRUSTED_PROXY_CIDRS_ENV = "NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS"
 _ADMIN_LOGIN_PATH = "/admin/login"
 _ADMIN_LOGOUT_PATH = "/admin/logout"
-_ADMIN_USERNAME = "admin"
 
 
 class LanAdminSecurity(AdminSecurity):
@@ -507,5 +506,5 @@ def _single_login_value(form: Mapping[str, list[str]], name: str) -> str | None:
 
 
 def _credentials_match(security: AdminSecurity, username: str, password: str) -> bool:
-    encoded = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    encoded = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
     return security.is_authorized(f"Basic {encoded}")
