@@ -70,7 +70,7 @@ def initialize_handler_capture(
         cookie_header = None if session_id is None else f"{ADMIN_SESSION_COOKIE}={session_id}"
         if manager.resolve_session(cookie_header) is None:
             session_id = manager.create_session()
-            setattr(security, "_test_admin_session_id", session_id)
+            security._test_admin_session_id = session_id
         handler.headers["Cookie"] = f"{ADMIN_SESSION_COOKIE}={session_id}"
     handler._form = {} if form is None else form
     handler.response = None
