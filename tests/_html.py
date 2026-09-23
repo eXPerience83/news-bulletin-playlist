@@ -52,9 +52,12 @@ class _AdminHTMLAudit(HTMLParser):
         for name, value in attrs:
             if name.startswith("on"):
                 self.errors.append(f"inline event handler {name} is not allowed")
-            if name in {"action", "href", "src"} and value:
-                if value.lstrip().casefold().startswith("javascript:"):
-                    self.errors.append(f"javascript: URL is not allowed in {name}")
+            if (
+                name in {"action", "href", "src"}
+                and value
+                and value.lstrip().casefold().startswith("javascript:")
+            ):
+                self.errors.append(f"javascript: URL is not allowed in {name}")
 
         if tag == "a" and attributes.get("target") == "_blank":
             rel = set((attributes.get("rel") or "").split())
