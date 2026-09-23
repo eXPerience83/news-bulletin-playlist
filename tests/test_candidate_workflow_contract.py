@@ -22,9 +22,7 @@ def _between(text: str, start: str, end: str | None) -> str:
 
 
 def _active(block: str) -> str:
-    return "\n".join(
-        line for line in block.splitlines() if not line.lstrip().startswith("#")
-    )
+    return "\n".join(line for line in block.splitlines() if not line.lstrip().startswith("#"))
 
 
 def _assert_contains(block: str, expected: tuple[str, ...]) -> None:
