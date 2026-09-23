@@ -13,6 +13,10 @@ from typing import Any
 import pytest
 
 from news_bulletin_playlist import engine_runtime
+from news_bulletin_playlist.admin_session import (
+    ADMIN_SESSION_COOKIE,
+    admin_session_manager_for,
+)
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.engine import (
@@ -378,13 +382,16 @@ def test_operational_callback_and_status_never_expose_oauth_sentinels(
         OperationalHealthHandler.engine_lifecycle,
     )
     lifecycle = _WakeTrackingLifecycle()
+    security = AdminSecurity("long-enough-admin-password")
     OperationalHealthHandler.data_dir = tmp_path
-    OperationalHealthHandler.admin_security = AdminSecurity("long-enough-admin-password")
+    OperationalHealthHandler.admin_security = security
     OperationalHealthHandler.spotify_auth = service
     OperationalHealthHandler.operational_status = status
     OperationalHealthHandler.engine_lifecycle = lifecycle  # type: ignore[assignment]
     server = HTTPServer(("127.0.0.1", 0), OperationalHealthHandler)
     base_url = f"http://127.0.0.1:{server.server_port}"
+    session_id = admin_session_manager_for(security).create_session()
+    cookie = f"{ADMIN_SESSION_COOKIE}={session_id}"
 
     authorize_url = service.start_authorization()
     state = urllib.parse.parse_qs(urllib.parse.urlsplit(authorize_url).query)["state"][0]
@@ -396,7 +403,9 @@ def test_operational_callback_and_status_never_expose_oauth_sentinels(
     try:
         thread = _serve_one(server)
         try:
-            successful_callback = _no_redirect_open(urllib.request.Request(callback_url))
+            successful_callback = _no_redirect_open(
+                urllib.request.Request(callback_url, headers={"Cookie": cookie})
+            )
             successful_body = successful_callback.read().decode("utf-8")
             successful_headers = str(successful_callback.headers)
         finally:
@@ -406,7 +415,10 @@ def test_operational_callback_and_status_never_expose_oauth_sentinels(
         thread = _serve_one(server)
         try:
             with pytest.raises(urllib.error.HTTPError) as raised:
-                urllib.request.urlopen(callback_url, timeout=2)
+                urllib.request.urlopen(
+                    urllib.request.Request(callback_url, headers={"Cookie": cookie}),
+                    timeout=2,
+                )
             replay_body = raised.value.read().decode("utf-8")
         finally:
             thread.join(timeout=2)
