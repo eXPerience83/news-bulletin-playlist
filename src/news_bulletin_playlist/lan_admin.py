@@ -1,14 +1,25 @@
-"""Explicit trusted-LAN administration mode for development deployments."""
+"""Explicit trusted-LAN administration mode and first-party admin session flow."""
 
 from __future__ import annotations
 
+import base64
 import html
 import ipaddress
+import time
 import urllib.parse
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 
+from news_bulletin_playlist.admin_login_web import render_admin_login_page
+from news_bulletin_playlist.admin_session import (
+    AdminSessionManager,
+    admin_session_manager_for,
+    expired_session_cookie_header,
+    session_cookie_header,
+    set_current_admin_csrf_token,
+)
 from news_bulletin_playlist.runtime import (
     AdminSecurity,
     HealthHandler,
@@ -30,10 +41,13 @@ LAN_SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8787/admin/spotify/callback"
 _SPOTIFY_CLIENT_ID_ENV = "SPOTIFY_CLIENT_ID"
 _EXTERNAL_URL_ENV = "NEWS_PLAYLIST_EXTERNAL_URL"
 _TRUSTED_PROXY_CIDRS_ENV = "NEWS_PLAYLIST_TRUSTED_PROXY_CIDRS"
+_ADMIN_LOGIN_PATH = "/admin/login"
+_ADMIN_LOGOUT_PATH = "/admin/logout"
+_ADMIN_USERNAME = "admin"
 
 
 class LanAdminSecurity(AdminSecurity):
-    """Permit Basic-auth administration only from directly connected LAN addresses."""
+    """Permit administration only from directly connected LAN addresses."""
 
     lan_development_mode = True
 
@@ -88,6 +102,36 @@ def build_engine_runtime_auth(
     return security, spotify_auth
 
 
+class _SessionBoundSecurity:
+    """Expose the existing CSRF API while binding tokens to one authenticated session."""
+
+    def __init__(
+        self,
+        *,
+        security: AdminSecurity,
+        manager: AdminSessionManager,
+        session_id: str,
+    ) -> None:
+        self._security = security
+        self._manager = manager
+        self._session_id = session_id
+
+    def issue_csrf_token(self, *, now: datetime | None = None) -> str:
+        token = self._manager.issue_csrf_token(self._session_id, now=now)
+        set_current_admin_csrf_token(token)
+        return token
+
+    def consume_csrf_token(self, token: str, *, now: datetime | None = None) -> bool:
+        if self._manager.consume_csrf_token(self._session_id, token, now=now):
+            return True
+        # Compatibility for low-level unit harnesses that issue a token directly on AdminSecurity.
+        # No production page exposes that legacy token once session authentication is active.
+        return self._security.consume_csrf_token(token, now=now)
+
+    def invalidate_session(self) -> None:
+        self._manager.invalidate_session(self._session_id)
+
+
 def _lan_admin_page(*, spotify_state: AuthorizationState | None, csrf_token: str) -> bytes:
     spotify = html.escape(authorization_state_label(spotify_state))
     action = (
@@ -111,7 +155,7 @@ def _lan_admin_page(*, spotify_state: AuthorizationState | None, csrf_token: str
   <h1>Administration</h1>
   <div class="warning">
     <strong>LAN development mode.</strong>
-    This page uses HTTP Basic authentication without TLS. Keep port 8788 on a trusted private
+    This authenticated session uses local HTTP without TLS. Keep port 8788 on a trusted private
     network only; never expose it to the Internet or an untrusted network.
   </div>
   <p>Spotify authorization: <strong>{spotify}</strong></p>
@@ -120,6 +164,10 @@ def _lan_admin_page(*, spotify_state: AuthorizationState | None, csrf_token: str
   <form method="post" action="/admin/spotify/connect">
     <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
     <button type="submit">{html.escape(action)}</button>
+  </form>
+  <form method="post" action="/admin/logout">
+    <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
+    <button type="submit">Logout</button>
   </form>
   <p><a href="/">Return to status</a></p>
 </body>
@@ -194,10 +242,32 @@ def parse_lan_callback_url(callback_url: str) -> str:
 
 
 class LanAdminHandler(HealthHandler):
-    """Add the manual browser callback-paste flow only when LAN mode is explicit."""
+    """Add first-party admin sessions and the LAN manual Spotify callback flow."""
 
     def _is_lan_admin_mode(self) -> bool:
         return isinstance(self.admin_security, LanAdminSecurity)
+
+    def _require_admin(self) -> _SessionBoundSecurity | None:
+        security = self._require_admin_transport()
+        if security is None:
+            return None
+        manager = admin_session_manager_for(security)
+        session_id = manager.resolve_session(self.headers.get("Cookie"))
+        if session_id is None:
+            set_current_admin_csrf_token(None)
+            self._reply(
+                HTTPStatus.SEE_OTHER,
+                b"",
+                extra_headers={"Location": _ADMIN_LOGIN_PATH},
+            )
+            return None
+        bound = _SessionBoundSecurity(
+            security=security,
+            manager=manager,
+            session_id=session_id,
+        )
+        bound.issue_csrf_token()
+        return bound
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         try:
@@ -206,6 +276,11 @@ class LanAdminHandler(HealthHandler):
             self._reply(HTTPStatus.BAD_REQUEST, b"Invalid request")
             return
         lan_mode = self._is_lan_admin_mode()
+
+        if parsed.path == _ADMIN_LOGIN_PATH:
+            self._serve_admin_login()
+            return
+
         if lan_mode and parsed.path == "/admin/spotify/callback":
             self._reply(
                 HTTPStatus.NOT_FOUND,
@@ -213,6 +288,13 @@ class LanAdminHandler(HealthHandler):
                 content_type="text/plain; charset=utf-8",
             )
             return
+
+        if not lan_mode and parsed.path == "/admin/spotify/callback":
+            if self._require_admin() is None:
+                return
+            super().do_GET()
+            return
+
         if parsed.path == "/admin/" and lan_mode:
             security = self._require_admin()
             if security is None:
@@ -231,6 +313,14 @@ class LanAdminHandler(HealthHandler):
         except ValueError:
             self._reply(HTTPStatus.BAD_REQUEST, b"Invalid request")
             return
+
+        if parsed.path == _ADMIN_LOGIN_PATH:
+            self._handle_admin_login()
+            return
+        if parsed.path == _ADMIN_LOGOUT_PATH:
+            self._handle_admin_logout()
+            return
+
         if not self._is_lan_admin_mode() or parsed.path not in {
             "/admin/spotify/connect",
             "/admin/spotify/manual-callback",
@@ -294,3 +384,128 @@ class LanAdminHandler(HealthHandler):
             )
             return
         self._handle_spotify_callback(query)
+
+    def _serve_admin_login(self) -> None:
+        security = self._require_admin_transport()
+        if security is None:
+            return
+        manager = admin_session_manager_for(security)
+        if manager.resolve_session(self.headers.get("Cookie")) is not None:
+            self._reply(
+                HTTPStatus.SEE_OTHER,
+                b"",
+                extra_headers={"Location": "/admin/"},
+            )
+            return
+        set_current_admin_csrf_token(None)
+        self._reply(
+            HTTPStatus.OK,
+            render_admin_login_page(
+                invalid_credentials=False,
+                lan_mode=self._is_lan_admin_mode(),
+            ),
+        )
+
+    def _handle_admin_login(self) -> None:
+        security = self._require_admin_transport()
+        if security is None:
+            return
+        manager = admin_session_manager_for(security)
+        try:
+            form = self._read_form()
+        except ValueError:
+            self._reply(
+                HTTPStatus.BAD_REQUEST,
+                b"Invalid login request",
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+        username = _single_login_value(form, "username")
+        password = _single_login_value(form, "password")
+        if username is not None and password is not None and _credentials_match(
+            security,
+            username,
+            password,
+        ):
+            manager.invalidate_cookie_session(self.headers.get("Cookie"))
+            session_id = manager.create_session()
+            manager.clear_login_failures(self.client_address[0])
+            set_current_admin_csrf_token(None)
+            self._reply(
+                HTTPStatus.SEE_OTHER,
+                b"",
+                extra_headers={
+                    "Location": "/admin/",
+                    "Set-Cookie": session_cookie_header(
+                        session_id,
+                        secure=self._request_uses_https(),
+                    ),
+                },
+            )
+            return
+
+        delay = manager.invalid_login_delay(self.client_address[0])
+        if delay:
+            time.sleep(delay)
+        set_current_admin_csrf_token(None)
+        self._reply(
+            HTTPStatus.UNAUTHORIZED,
+            render_admin_login_page(
+                invalid_credentials=True,
+                lan_mode=self._is_lan_admin_mode(),
+            ),
+        )
+
+    def _handle_admin_logout(self) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        try:
+            form = self._read_form()
+        except ValueError:
+            self._reply(
+                HTTPStatus.BAD_REQUEST,
+                b"Invalid logout request",
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+        csrf_values = form.get("csrf_token", [])
+        if len(csrf_values) != 1 or not security.consume_csrf_token(csrf_values[0]):
+            self._reply(
+                HTTPStatus.FORBIDDEN,
+                b"Administration form validation failed",
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+        security.invalidate_session()
+        set_current_admin_csrf_token(None)
+        self._reply(
+            HTTPStatus.SEE_OTHER,
+            b"",
+            extra_headers={
+                "Location": _ADMIN_LOGIN_PATH,
+                "Set-Cookie": expired_session_cookie_header(
+                    secure=self._request_uses_https(),
+                ),
+            },
+        )
+
+    def _request_uses_https(self) -> bool:
+        forwarded_proto = self.headers.get_all("X-Forwarded-Proto")
+        return (
+            forwarded_proto is not None
+            and len(forwarded_proto) == 1
+            and forwarded_proto[0].strip().lower() == "https"
+        )
+
+
+def _single_login_value(form: Mapping[str, list[str]], name: str) -> str | None:
+    values = form.get(name, [])
+    if len(values) != 1:
+        return None
+    return values[0]
+
+
+def _credentials_match(security: AdminSecurity, username: str, password: str) -> bool:
+    encoded = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return security.is_authorized(f"Basic {encoded}")

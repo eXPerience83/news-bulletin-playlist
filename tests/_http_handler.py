@@ -6,6 +6,11 @@ from http import HTTPStatus
 from http.client import HTTPMessage
 from typing import Any
 
+from news_bulletin_playlist.admin_session import (
+    ADMIN_SESSION_COOKIE,
+    admin_session_manager_for,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CapturedResponse:
@@ -27,7 +32,7 @@ class HandlerCaptureMixin:
     def _reply(
         self,
         status: HTTPStatus,
-        payload: bytes,
+        payload: bytes
         *,
         content_type: str = "text/html; charset=utf-8",
         extra_headers: dict[str, str] | None = None,
@@ -57,7 +62,20 @@ def initialize_handler_capture(
     handler.client_address = (client_ip, 12345)
     handler.headers = HTTPMessage()
     if password is not None:
-        handler.headers["Authorization"] = basic_header(password)
+        security = handler.admin_security
+        assert security is not None
+        assert security.is_authorized(basic_header(password))
+        manager = admin_session_manager_for(security)
+        session_id = getattr(security, "_test_admin_session_id", None)
+        cookie_header = (
+            None
+            if session_id is None
+            else f"{ADMIN_SESSION_COOKIE}={session_id}"
+        )
+        if manager.resolve_session(cookie_header) is None:
+            session_id = manager.create_session()
+            setattr(security, "_test_admin_session_id", session_id)
+        handler.headers["Cookie"] = f"{ADMIN_SESSION_COOKIE}={session_id}"
     handler._form = {} if form is None else form
     handler.response = None
 

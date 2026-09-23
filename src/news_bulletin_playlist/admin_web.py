@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 from typing import Literal
 
+from news_bulletin_playlist.admin_session import current_admin_csrf_token
 from news_bulletin_playlist.web_ui import WEB_UI_STYLES
 
 AdminTab = Literal["playlists", "sources", "diagnostics"]
@@ -293,6 +294,17 @@ def render_admin_shell(
         _admin_tab(label=label, href=href, active=key == active_tab) for key, label, href in tabs
     )
     actions = f'<div class="page-actions">{actions_html}</div>' if actions_html else ""
+    logout_csrf_token = current_admin_csrf_token()
+    logout = (
+        ""
+        if logout_csrf_token is None
+        else (
+            '<form method="post" action="/admin/logout">'
+            f'<input type="hidden" name="csrf_token" value="{html.escape(logout_csrf_token, quote=True)}">'
+            '<button class="button" type="submit">Logout</button>'
+            "</form>"
+        )
+    )
     document = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -312,6 +324,7 @@ def render_admin_shell(
         </a>
         <div class="page-actions">
           <a class="button" href="/">Status</a>
+          {logout}
         </div>
       </div>
       <nav class="admin-nav" aria-label="Administration">{navigation}</nav>
@@ -343,8 +356,9 @@ def render_lan_warning() -> str:
 
     return (
         '<div class="warning"><strong>LAN development mode.</strong> '
-        "Administration still uses HTTP Basic authentication without TLS in this step. Keep port "
-        "8788 only on a trusted private network and never expose it to the Internet.</div>"
+        "Credentials and authenticated session traffic use local HTTP without TLS in this "
+        "deployment. Keep port 8788 only on a trusted private network and never expose it to the "
+        "Internet.</div>"
     )
 
 
