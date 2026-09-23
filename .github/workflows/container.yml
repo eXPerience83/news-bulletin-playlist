@@ -8,11 +8,10 @@ on:
       - "compose.yaml"
       - "deploy/**"
       - "README.md"
-      - "assets/**"
+      - "assets/covers/spotify/**"
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/container.yml"
-      - ".github/workflows/publish-*.yml"
 
 permissions:
   contents: read

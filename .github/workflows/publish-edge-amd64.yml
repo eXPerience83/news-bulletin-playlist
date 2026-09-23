@@ -7,7 +7,7 @@ on:
       - "Dockerfile"
       - ".dockerignore"
       - "README.md"
-      - "assets/**"
+      - "assets/covers/spotify/**"
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/publish-edge-amd64.yml"
