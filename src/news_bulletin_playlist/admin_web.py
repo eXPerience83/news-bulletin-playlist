@@ -290,8 +290,7 @@ def render_admin_shell(
         ("diagnostics", "Diagnostics", "/admin/diagnostics"),
     )
     navigation = "".join(
-        _admin_tab(label=label, href=href, active=key == active_tab)
-        for key, label, href in tabs
+        _admin_tab(label=label, href=href, active=key == active_tab) for key, label, href in tabs
     )
     actions = f'<div class="page-actions">{actions_html}</div>' if actions_html else ""
     document = f"""<!doctype html>
