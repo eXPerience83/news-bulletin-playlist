@@ -68,14 +68,20 @@ def test_session_manager_enforces_idle_and_absolute_expiry() -> None:
 
     idle_session = manager.create_session(now=_NOW)
     idle_cookie = _cookie_for(idle_session)
-    assert manager.resolve_session(
-        idle_cookie,
-        now=_NOW + ADMIN_SESSION_IDLE_TTL - timedelta(seconds=1),
-    ) == idle_session
-    assert manager.resolve_session(
-        idle_cookie,
-        now=_NOW + (ADMIN_SESSION_IDLE_TTL * 2),
-    ) is None
+    assert (
+        manager.resolve_session(
+            idle_cookie,
+            now=_NOW + ADMIN_SESSION_IDLE_TTL - timedelta(seconds=1),
+        )
+        == idle_session
+    )
+    assert (
+        manager.resolve_session(
+            idle_cookie,
+            now=_NOW + (ADMIN_SESSION_IDLE_TTL * 2),
+        )
+        is None
+    )
 
     absolute_session = manager.create_session(now=_NOW)
     absolute_cookie = _cookie_for(absolute_session)
@@ -83,10 +89,13 @@ def test_session_manager_enforces_idle_and_absolute_expiry() -> None:
     while elapsed < ADMIN_SESSION_ABSOLUTE_TTL:
         assert manager.resolve_session(absolute_cookie, now=_NOW + elapsed) == absolute_session
         elapsed += timedelta(minutes=20)
-    assert manager.resolve_session(
-        absolute_cookie,
-        now=_NOW + ADMIN_SESSION_ABSOLUTE_TTL,
-    ) is None
+    assert (
+        manager.resolve_session(
+            absolute_cookie,
+            now=_NOW + ADMIN_SESSION_ABSOLUTE_TTL,
+        )
+        is None
+    )
 
 
 def test_csrf_is_scoped_to_one_session_and_one_use() -> None:
