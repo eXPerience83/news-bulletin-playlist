@@ -173,6 +173,23 @@ def test_playlists_keep_source_controls_and_sources_move_to_read_only_page(
     assert "Remove source" not in sources
 
 
+def test_un_origin_is_rendered_in_sources_and_playlist_selectors(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _, sources = _get(tmp_path, path="/admin/sources", service=service)
+    _, playlists = _get(tmp_path, path="/admin/", service=service)
+
+    assert (
+        "United Nations — UN News Today</td><td>UN</td><td><code>INT</code></td><td>en" in sources
+    )
+    assert (
+        "United Nations — ONU en minutos</td><td>UN</td><td><code>INT</code></td><td>es" in sources
+    )
+    assert "United Nations — UN News Today (UN · INT · en)" in playlists
+    assert "United Nations — ONU en minutos (UN · INT · es)" in playlists
+    assert "United Nations — UN News Today (US ·" not in playlists
+    assert "United Nations — ONU en minutos (US ·" not in playlists
+
+
 def test_sources_requires_service_after_authentication(tmp_path: Path) -> None:
     unauthorized, _ = _get(
         tmp_path,

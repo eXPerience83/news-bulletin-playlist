@@ -5,7 +5,11 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
-No changes yet.
+### Changed
+
+- Source origin now distinguishes country and institutional providers. United Nations sources display
+  `UN · INT · en` and `UN · INT · es` without an invented country; runtime selection and persistence
+  are unchanged.
 
 ## [0.1.3] - 2026-09-22
 

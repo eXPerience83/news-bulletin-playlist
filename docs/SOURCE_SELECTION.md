@@ -17,19 +17,20 @@ Examples:
 - `ES · NAT · es-ES` — Spain provider, primarily national/general Spain news, Spanish from Spain;
 - `US · INT · es` — US provider, genuinely international/global news, general Spanish;
 - `US · INT · en` — US-based provider/product, global scope, English;
+- `UN · INT · en` — United Nations institution, global scope, English;
 - `FR · INT · fr` — French provider, global scope, French;
 - `MX · NAT · es-419` — Mexican provider, national Mexico scope, Latin-American Spanish;
 - `FR · REG · es-419` — French provider, regional Americas scope, Latin-American Spanish.
 
-The three axes are source metadata. They are deliberately independent from playlist names. A playlist may still use compact product shorthand such as `INT · ES` while selecting sources from more than one provider country.
+The three axes are source metadata. They are deliberately independent from playlist names. A playlist may still use compact product shorthand such as `INT · ES` while selecting sources with different country or institutional origins.
 
 ## Origin
 
-`ORIGIN` describes the provider/product's primary country or operational origin. It does **not** decide where the source can be used.
+`ORIGIN` describes the provider/product's country or institutional origin. It is independent of editorial scope and language, and does **not** decide where the source can be used. `countries` remains separate geographic/operational metadata in the runtime model; it is not the displayed origin.
 
 This is why **CNN 5 Cosas remains useful for the international Spain-Spanish product even though its provider country is US**: its source classification is `US · INT · es-ES`, so the editorial product is global rather than US-local.
 
-For international institutions, the runtime may use a practical operational country/HQ value when a country field is required. Editorial suitability must always come from `SCOPE`, never inferred from that country value.
+For international institutions such as the United Nations, use an institutional origin (`UN`) rather than inventing a country or using headquarters location as origin. Editorial suitability must always come from `SCOPE`, never inferred from origin.
 
 ## Editorial scope
 
@@ -57,7 +58,7 @@ Use BCP-47-compatible tags in runtime metadata whenever the variant matters:
 - `de` — German;
 - `pl` — Polish.
 
-A source can be editorially useful even when its provider country differs from the target playlist. Language and editorial scope decide suitability independently from origin.
+A source can be editorially useful regardless of its country or institutional origin. Language and editorial scope decide suitability independently from origin.
 
 ## Duration-profile gate
 
@@ -84,9 +85,9 @@ This is deliberately a source-level editorial gate. The current per-playlist def
 | Onda Cero | `ES · NAT · es-ES` | Concise | Spain/general Spanish recurring bulletins |
 | ABC — Las Noticias de ABC | `ES · NAT · es-ES` | Concise | Spain/general Spanish daily news summary |
 | CNN 5 Cosas | `US · INT · es-ES` | Concise | confirmed Spain-Spanish global briefing; default only for `INT · es-ES` |
-| UN News Today | `US · INT · en` | Concise | global English bulletin |
+| UN News Today | `UN · INT · en` | Concise | global English bulletin |
 | Reuters — World News | `GB · INT · en` | Concise | daily global English briefing; default for `INT · EN` |
-| United Nations — ONU en minutos | `US · INT · es` | Concise | filtered Spanish UN bulletin; spoken locale unresolved |
+| United Nations — ONU en minutos | `UN · INT · es` | Concise | filtered Spanish UN bulletin; spoken locale unresolved |
 | N+ Univision 24-7 | `US · INT · es` | Concise | international/US daily Spanish newscast; spoken locale unresolved |
 | DW — Actualidad en análisis | `DE · INT · es` | Mixed | international Spanish analysis, with occasional >30-minute editions; spoken locale unresolved |
 | RFI — Journal Monde | `FR · INT · fr` | Mixed | world-news bulletin; ordinary journals are concise, with occasional longer tranches |

@@ -64,7 +64,7 @@ Source research and the admin UI classify each product on three independent axes
 
 > **`ORIGIN · SCOPE · LANGUAGE`**
 
-`SCOPE` is `LOC`, `REG`, `NAT`, `INT` or `MIX`. This prevents provider country from being confused with editorial coverage: **CNN 5 Cosas is `US · INT · es-ES`**, so its US origin does not make it US-local; it is the current default only for the international Spain-Spanish product, not the Spain-national playlist. See [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md).
+`ORIGIN` is the provider's country or institution, independently of editorial coverage and language; no country is invented for an institution. `SCOPE` is `LOC`, `REG`, `NAT`, `INT` or `MIX`. **CNN 5 Cosas is `US · INT · es-ES`**, so its US origin does not make it US-local; it is the current default only for the international Spain-Spanish product, not the Spain-national playlist. See [`docs/SOURCE_SELECTION.md`](docs/SOURCE_SELECTION.md).
 
 | Provider | Classification | Duration profile | Typical format |
 | --- | --- | --- | --- |
@@ -73,9 +73,9 @@ Source research and the admin UI classify each product on three independent axes
 | Onda Cero | `ES · NAT · es-ES` | Concise | recurring radio bulletins |
 | ABC — Las Noticias de ABC | `ES · NAT · es-ES` | Concise | concise daily news editions |
 | CNN 5 Cosas | `US · INT · es-ES` | Concise | concise international briefing; default for `INT · es-ES` |
-| UN News Today | `US · INT · en` | Concise | daily concise global bulletin |
+| UN News Today | `UN · INT · en` | Concise | daily concise global bulletin |
 | Reuters — World News | `GB · INT · en` | Concise | daily global English briefing; default alongside UN News Today for `INT · EN` |
-| United Nations — ONU en minutos | `US · INT · es` | Concise | filtered global Spanish bulletin; spoken locale still unresolved |
+| United Nations — ONU en minutos | `UN · INT · es` | Concise | filtered global Spanish bulletin; spoken locale still unresolved |
 | N+ Univision 24-7 | `US · INT · es` | Concise | daily international/US Spanish newscast; spoken locale still unresolved |
 | DW — Actualidad en análisis | `DE · INT · es` | Mixed | international Spanish analysis with occasional >30-minute editions filtered by destination policy |
 | RFI — Journal Monde | `FR · INT · fr` | Concise selected product | dedicated parser/filter admits only Journal Monde editions from the mixed Spotify product |

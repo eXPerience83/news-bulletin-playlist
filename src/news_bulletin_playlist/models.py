@@ -30,6 +30,47 @@ class EditorialScope(StrEnum):
     MIXED = "MIX"
 
 
+class SourceOriginKind(StrEnum):
+    COUNTRY = "country"
+    INSTITUTION = "institution"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceOrigin:
+    """Editorial provider origin, independent of operational country metadata."""
+
+    kind: SourceOriginKind
+    code: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, SourceOriginKind):
+            raise ValueError("source origin kind must be country or institution")
+        if (
+            not isinstance(self.code, str)
+            or not self.code.isascii()
+            or not self.code.isalpha()
+            or not self.code.isupper()
+        ):
+            raise ValueError("source origin code must be uppercase ASCII letters")
+        if self.kind is SourceOriginKind.COUNTRY and len(self.code) != 2:
+            raise ValueError("country origin must be a two-letter code")
+        if self.kind is SourceOriginKind.COUNTRY and self.code == "UN":
+            raise ValueError("UN is an institutional origin, not a country")
+        if self.kind is SourceOriginKind.INSTITUTION and not 2 <= len(self.code) <= 12:
+            raise ValueError("institution origin must be 2 to 12 letters")
+
+    @classmethod
+    def country(cls, code: CountryCode) -> SourceOrigin:
+        return cls(SourceOriginKind.COUNTRY, str(code))
+
+    @classmethod
+    def institution(cls, code: str) -> SourceOrigin:
+        return cls(SourceOriginKind.INSTITUTION, code)
+
+    def __str__(self) -> str:
+        return self.code
+
+
 @dataclass(frozen=True, slots=True)
 class ExternalReference:
     """A source's identity in an external catalogue, never a write destination."""
@@ -59,8 +100,11 @@ class SourceDefinition:
     collection_filter_id: str | None = None
     editorial_scope: EditorialScope = EditorialScope.MIXED
     external_references: tuple[ExternalReference, ...] = ()
+    origin: SourceOrigin = field(kw_only=True)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.origin, SourceOrigin):
+            raise ValueError("source origin must be a SourceOrigin")
         if self.collection_filter_id is not None and not self.collection_filter_id.strip():
             raise ValueError("collection_filter_id must not be blank")
 

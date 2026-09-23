@@ -16,6 +16,7 @@ from news_bulletin_playlist.models import (
     PlaylistId,
     SourceDefinition,
     SourceId,
+    SourceOrigin,
 )
 from news_bulletin_playlist.registry import has_collection_filter, has_title_parser
 
@@ -103,6 +104,7 @@ class BuiltInCatalog:
 BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     SourceDefinition(
         id=SourceId("ser"),
+        origin=SourceOrigin.country(CountryCode("ES")),
         display_name="Cadena SER",
         countries=(CountryCode("ES"),),
         languages=(LanguageTag("es-ES"),),
@@ -114,6 +116,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("rne"),
+        origin=SourceOrigin.country(CountryCode("ES")),
         display_name="Radio Nacional de España",
         countries=(CountryCode("ES"),),
         languages=(LanguageTag("es-ES"),),
@@ -125,6 +128,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("ondacero"),
+        origin=SourceOrigin.country(CountryCode("ES")),
         display_name="Onda Cero",
         countries=(CountryCode("ES"),),
         languages=(LanguageTag("es-ES"),),
@@ -136,6 +140,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("abc"),
+        origin=SourceOrigin.country(CountryCode("ES")),
         display_name="ABC — Las Noticias de ABC",
         countries=(CountryCode("ES"),),
         languages=(LanguageTag("es-ES"),),
@@ -147,6 +152,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("cnn"),
+        origin=SourceOrigin.country(CountryCode("US")),
         display_name="CNN 5 Cosas",
         countries=(CountryCode("US"),),
         languages=(LanguageTag("es-ES"),),
@@ -158,8 +164,9 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("un_news_en"),
+        origin=SourceOrigin.institution("UN"),
         display_name="United Nations — UN News Today",
-        countries=(CountryCode("US"),),
+        countries=(),
         languages=(LanguageTag("en"),),
         timezone=ZoneInfo("UTC"),
         enabled=True,
@@ -169,6 +176,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("reuters_world"),
+        origin=SourceOrigin.country(CountryCode("GB")),
         display_name="Reuters — World News",
         countries=(CountryCode("GB"),),
         languages=(LanguageTag("en"),),
@@ -180,6 +188,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("nplus_univision"),
+        origin=SourceOrigin.country(CountryCode("US")),
         display_name="N+ Univision 24-7",
         countries=(CountryCode("US"),),
         languages=(LanguageTag("es"),),
@@ -191,6 +200,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("dw_actualidad"),
+        origin=SourceOrigin.country(CountryCode("DE")),
         display_name="DW — Actualidad en análisis",
         countries=(CountryCode("DE"),),
         languages=(LanguageTag("es"),),
@@ -202,8 +212,9 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("un_news_es"),
+        origin=SourceOrigin.institution("UN"),
         display_name="United Nations — ONU en minutos",
-        countries=(CountryCode("US"),),
+        countries=(),
         languages=(LanguageTag("es"),),
         timezone=ZoneInfo("America/New_York"),
         enabled=True,
@@ -214,6 +225,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("rfi_fr"),
+        origin=SourceOrigin.country(CountryCode("FR")),
         display_name="RFI — Journal Monde",
         countries=(CountryCode("FR"),),
         languages=(LanguageTag("fr"),),
@@ -225,6 +237,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("dlf_news"),
+        origin=SourceOrigin.country(CountryCode("DE")),
         display_name="Deutschlandfunk — Die Nachrichten",
         countries=(CountryCode("DE"),),
         languages=(LanguageTag("de"),),
@@ -236,6 +249,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
     ),
     SourceDefinition(
         id=SourceId("rmf_fakty"),
+        origin=SourceOrigin.country(CountryCode("PL")),
         display_name="RMF FM — Fakty",
         countries=(CountryCode("PL"),),
         languages=(LanguageTag("pl"),),
