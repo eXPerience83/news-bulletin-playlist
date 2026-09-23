@@ -421,10 +421,14 @@ class LanAdminHandler(HealthHandler):
             return
         username = _single_login_value(form, "username")
         password = _single_login_value(form, "password")
-        if username is not None and password is not None and _credentials_match(
-            security,
-            username,
-            password,
+        if (
+            username is not None
+            and password is not None
+            and _credentials_match(
+                security,
+                username,
+                password,
+            )
         ):
             manager.invalidate_cookie_session(self.headers.get("Cookie"))
             session_id = manager.create_session()
