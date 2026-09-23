@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 
 from news_bulletin_playlist import __version__
+from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.diagnostics import (
     MAX_DIAGNOSTIC_EXPORT_EVENTS,
     MAX_DIAGNOSTIC_QUERY_LIMIT,
@@ -120,15 +121,80 @@ def render_diagnostics_page(
     timezone_label: str = "UTC",
     spotify_metrics: SpotifyRequestMetricsSnapshot | None = None,
 ) -> bytes:
-    """Render authenticated diagnostics in the shared administration shell."""
-    from news_bulletin_playlist.admin_web import render_admin_diagnostics_page
+    """Render authenticated diagnostics directly inside the shared administration shell."""
 
-    return render_admin_diagnostics_page(
-        events=events,
-        filters=filters,
-        display_timezone=display_timezone,
-        timezone_label=timezone_label,
-        spotify_metrics=spotify_metrics,
+    rows = "".join(_event_row(event, display_timezone=display_timezone) for event in events)
+    if not rows:
+        rows = '<tr><td colspan="8">No diagnostic events match these filters.</td></tr>'
+    export_href = "/admin/diagnostics/export.zip?" + filters.query_string(include_limit=False)
+    severity_value = "" if filters.severity is None else filters.severity.value
+    source_value = "" if filters.source_id is None else filters.source_id
+    playlist_value = "" if filters.playlist_id is None else filters.playlist_id
+    hours_value = "all" if filters.hours is None else str(filters.hours)
+    metrics = _spotify_metrics_section(spotify_metrics)
+    body = f"""
+<section class="section card admin-panel" aria-labelledby="diagnostic-filters-heading">
+  <h2 id="diagnostic-filters-heading">Filters</h2>
+  <form class="filter-form" method="get" action="/admin/diagnostics">
+    <label>Severity
+      <select name="severity">{_severity_options(severity_value)}</select>
+    </label>
+    <label>Source
+      <input type="text" name="source" value="{html.escape(source_value, quote=True)}"
+             placeholder="rne">
+    </label>
+    <label>Playlist
+      <input type="text" name="playlist" value="{html.escape(playlist_value, quote=True)}"
+             placeholder="spain_spanish_news">
+    </label>
+    <label>Window
+      <select name="hours">{_hours_options(hours_value)}</select>
+    </label>
+    <label>Rows
+      <input type="number" name="limit" min="1" max="{MAX_DIAGNOSTIC_QUERY_LIMIT}"
+             value="{filters.limit}">
+    </label>
+    <button class="button" type="submit">Apply filters</button>
+  </form>
+  <p class="muted">UI limit={MAX_DIAGNOSTIC_QUERY_LIMIT}; ZIP export uses a separate bounded
+     capacity. Raw SQLite, OAuth material, authenticated provider response bodies and environment
+     variables are never exposed here. A bounded response from an unauthenticated public Spotify
+     schema failure may be retained only as a separate file in the authenticated ZIP.</p>
+  <p><a class="button" href="{html.escape(export_href, quote=True)}">Download sanitized
+     diagnostics ZIP</a></p>
+</section>
+<section class="section card admin-panel" aria-labelledby="spotify-request-metrics-heading">
+  {metrics}
+</section>
+<section class="section admin-section" aria-labelledby="diagnostic-events-heading">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">History</p>
+      <h2 id="diagnostic-events-heading">Structured events</h2>
+    </div>
+    <p class="section-note">Times shown in {html.escape(timezone_label)}</p>
+  </div>
+  <div class="card table-card"><div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th scope="col">Time ({html.escape(timezone_label)})</th>
+        <th scope="col">Level</th><th scope="col">Component</th><th scope="col">Event</th>
+        <th scope="col">Cycle</th><th scope="col">Source</th><th scope="col">Playlist</th>
+        <th scope="col">Details</th>
+      </tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+  </div></div>
+</section>
+"""
+    return render_admin_shell(
+        title="Diagnostics",
+        active_tab="diagnostics",
+        intro=(
+            "Inspect sanitized operational events, Spotify request aggregates and exportable "
+            "diagnostic evidence."
+        ),
+        body_html=body,
     )
 
 
@@ -301,8 +367,9 @@ def _spotify_metrics_document(
 
 
 def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> str:
+    heading = '<h2 id="spotify-request-metrics-heading">Spotify request metrics (last 24 hours)</h2>'
     if snapshot is None:
-        return '<p class="muted">Spotify request metrics are unavailable.</p>'
+        return heading + '<p class="muted">Spotify request metrics are unavailable.</p>'
 
     def quota_reason(metric: SpotifyRequestMetric) -> str:
         return "—" if metric.quota_reason is None else metric.quota_reason.value
@@ -335,7 +402,7 @@ def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> 
         )
     )
     return f"""
-  <h2>Spotify request metrics (last 24 hours)</h2>
+  {heading}
   <p class="muted">{summary} These are local aggregates, not account quota.</p>
   <div class="table-scroll">
     <table><thead><tr>
