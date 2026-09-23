@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -171,7 +172,11 @@ def test_available_template_requires_spotify_but_local_save_button_does_not(
         last_cycle=None,
         lan_mode=True,
     ).decode()
-    assert '<button type="submit" disabled>Create Spotify playlist</button>' in disconnected
+    create_button = re.search(
+        r"<button\b[^>]*\bdisabled\b[^>]*>Create Spotify playlist</button>",
+        disconnected,
+    )
+    assert create_button is not None
     assert "Connect Spotify before activation" in disconnected
 
     _activate(service)
@@ -183,4 +188,6 @@ def test_available_template_requires_spotify_but_local_save_button_does_not(
         last_cycle=None,
         lan_mode=True,
     ).decode()
-    assert '<button type="submit">Save playlist</button>' in managed
+    save_button = re.search(r"<button\b([^>]*)>Save playlist</button>", managed)
+    assert save_button is not None
+    assert "disabled" not in save_button.group(1)

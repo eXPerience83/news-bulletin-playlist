@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 
 from news_bulletin_playlist import __version__
+from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.diagnostics import (
     MAX_DIAGNOSTIC_EXPORT_EVENTS,
     MAX_DIAGNOSTIC_QUERY_LIMIT,
@@ -120,7 +121,8 @@ def render_diagnostics_page(
     timezone_label: str = "UTC",
     spotify_metrics: SpotifyRequestMetricsSnapshot | None = None,
 ) -> bytes:
-    """Render authenticated diagnostics without raw provider/error data."""
+    """Render authenticated diagnostics directly inside the shared administration shell."""
+
     rows = "".join(_event_row(event, display_timezone=display_timezone) for event in events)
     if not rows:
         rows = '<tr><td colspan="8">No diagnostic events match these filters.</td></tr>'
@@ -129,44 +131,20 @@ def render_diagnostics_page(
     source_value = "" if filters.source_id is None else filters.source_id
     playlist_value = "" if filters.playlist_id is None else filters.playlist_id
     hours_value = "all" if filters.hours is None else str(filters.hours)
-    timezone_heading = html.escape(timezone_label)
-    metrics_section = _spotify_metrics_section(spotify_metrics)
-
-    document = f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Diagnostics · News Bulletin Playlists</title>
-  <style>
-    :root {{ color-scheme: light dark; }}
-    body {{ font-family: system-ui, sans-serif; max-width: 92rem; margin: 2rem auto;
-           padding: 0 1rem 4rem; line-height: 1.4; }}
-    form {{ display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; }}
-    label {{ display: grid; gap: .25rem; font-weight: 650; }}
-    input, select, button {{ font: inherit; padding: .4rem .5rem; }}
-    table {{ width: 100%; border-collapse: collapse; margin-top: 1.25rem; }}
-    th, td {{ text-align: left; vertical-align: top; border-bottom: 1px solid #8885;
-              padding: .45rem .4rem; }}
-    code {{ font-family: ui-monospace, monospace; overflow-wrap: anywhere; }}
-    .muted {{ opacity: .75; }}
-  </style>
-</head>
-<body>
-  <h1>Diagnostics</h1>
-  <p class="muted">Structured operational events. Raw SQLite, OAuth material, authenticated
-     provider response bodies and environment variables are never exposed here. A bounded raw
-     response from an unauthenticated Spotify Embed/oEmbed schema failure may be retained only as
-     a separate file in the authenticated diagnostics ZIP.</p>
-  <form method="get" action="/admin/diagnostics">
+    metrics = _spotify_metrics_section(spotify_metrics)
+    body = f"""
+<section class="section card admin-panel" aria-labelledby="diagnostic-filters-heading">
+  <h2 id="diagnostic-filters-heading">Filters</h2>
+  <form class="filter-form" method="get" action="/admin/diagnostics">
     <label>Severity
       <select name="severity">{_severity_options(severity_value)}</select>
     </label>
     <label>Source
-      <input name="source" value="{html.escape(source_value, quote=True)}" placeholder="rne">
+      <input type="text" name="source" value="{html.escape(source_value, quote=True)}"
+             placeholder="rne">
     </label>
     <label>Playlist
-      <input name="playlist" value="{html.escape(playlist_value, quote=True)}"
+      <input type="text" name="playlist" value="{html.escape(playlist_value, quote=True)}"
              placeholder="spain_spanish_news">
     </label>
     <label>Window
@@ -176,24 +154,48 @@ def render_diagnostics_page(
       <input type="number" name="limit" min="1" max="{MAX_DIAGNOSTIC_QUERY_LIMIT}"
              value="{filters.limit}">
     </label>
-    <button type="submit">Apply filters</button>
+    <button class="button" type="submit">Apply filters</button>
   </form>
-  <p class="muted">UI limit={MAX_DIAGNOSTIC_QUERY_LIMIT};
-     ZIP export uses a separate bounded capacity.</p>
-  <p><a href="{html.escape(export_href, quote=True)}">Download sanitized diagnostics ZIP</a></p>
-  {metrics_section}
-  <table>
-    <thead><tr>
-      <th>Time ({timezone_heading})</th><th>Level</th><th>Component</th><th>Event</th>
-      <th>Cycle</th><th>Source</th><th>Playlist</th><th>Details</th>
-    </tr></thead>
-    <tbody>{rows}</tbody>
-  </table>
-  <p><a href="/admin/">Return to administration</a></p>
-</body>
-</html>
+  <p class="muted">UI limit={MAX_DIAGNOSTIC_QUERY_LIMIT}; ZIP export uses a separate bounded
+     capacity. Raw SQLite, OAuth material, authenticated provider response bodies and environment
+     variables are never exposed here. A bounded response from an unauthenticated public Spotify
+     schema failure may be retained only as a separate file in the authenticated ZIP.</p>
+  <p><a class="button" href="{html.escape(export_href, quote=True)}">Download sanitized
+     diagnostics ZIP</a></p>
+</section>
+<section class="section card admin-panel" aria-labelledby="spotify-request-metrics-heading">
+  {metrics}
+</section>
+<section class="section admin-section" aria-labelledby="diagnostic-events-heading">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">History</p>
+      <h2 id="diagnostic-events-heading">Structured events</h2>
+    </div>
+    <p class="section-note">Times shown in {html.escape(timezone_label)}</p>
+  </div>
+  <div class="card table-card"><div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th scope="col">Time ({html.escape(timezone_label)})</th>
+        <th scope="col">Level</th><th scope="col">Component</th><th scope="col">Event</th>
+        <th scope="col">Cycle</th><th scope="col">Source</th><th scope="col">Playlist</th>
+        <th scope="col">Details</th>
+      </tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+  </div></div>
+</section>
 """
-    return document.encode("utf-8")
+    return render_admin_shell(
+        title="Diagnostics",
+        active_tab="diagnostics",
+        intro=(
+            "Inspect sanitized operational events, Spotify request aggregates and exportable "
+            "diagnostic evidence."
+        ),
+        body_html=body,
+    )
 
 
 def build_diagnostic_bundle(
@@ -365,8 +367,10 @@ def _spotify_metrics_document(
 
 
 def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> str:
+    heading_id = "spotify-request-metrics-heading"
+    heading = f'<h2 id="{heading_id}">Spotify request metrics (last 24 hours)</h2>'
     if snapshot is None:
-        return '<p class="muted">Spotify request metrics are unavailable.</p>'
+        return heading + '<p class="muted">Spotify request metrics are unavailable.</p>'
 
     def quota_reason(metric: SpotifyRequestMetric) -> str:
         return "—" if metric.quota_reason is None else metric.quota_reason.value
@@ -378,7 +382,7 @@ def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> 
             f"<td><code>{html.escape(metric.operation)}</code></td>"
             f"<td><code>{html.escape(metric.outcome.value)}</code></td>"
             f"<td>{'—' if metric.http_status is None else metric.http_status}</td>"
-            f"<td><code>{quota_reason(metric)}</code></td>"
+            f"<td><code>{html.escape(quota_reason(metric))}</code></td>"
             f"<td>{metric.request_count}</td>"
             "</tr>"
             for metric in snapshot.metrics
@@ -399,10 +403,15 @@ def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> 
         )
     )
     return f"""
-  <h2>Spotify request metrics (last 24 hours)</h2>
+  {heading}
   <p class="muted">{summary} These are local aggregates, not account quota.</p>
-  <table><thead><tr><th>Surface</th><th>Operation</th><th>Outcome</th><th>HTTP</th>
-    <th>Quota reason</th><th>Requests</th></tr></thead><tbody>{rows}</tbody></table>
+  <div class="table-scroll">
+    <table><thead><tr>
+      <th scope="col">Surface</th><th scope="col">Operation</th>
+      <th scope="col">Outcome</th><th scope="col">HTTP</th>
+      <th scope="col">Quota reason</th><th scope="col">Requests</th>
+    </tr></thead><tbody>{rows}</tbody></table>
+  </div>
 """
 
 
