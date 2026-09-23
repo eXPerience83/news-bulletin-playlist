@@ -212,9 +212,9 @@ jobs:
     cache-mode: read
     permissions:
       actions: read
-      issues: write
+      issues: read
       packages: write
-      pull-requests: read
+      pull-requests: write
 
     steps:
       - name: Restore exact verified candidate transfer cache
@@ -400,6 +400,7 @@ jobs:
 
   cleanup:
     needs: [build, publish]
+    if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     cache-mode: none
@@ -407,7 +408,7 @@ jobs:
       actions: write
 
     steps:
-      - name: Delete transfer cache after successful publication
+      - name: Delete transfer cache after build handoff
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_KEY: ${{ needs.build.outputs.cache_key }}
