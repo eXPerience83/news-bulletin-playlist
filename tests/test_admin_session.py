@@ -4,7 +4,12 @@ from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 
-from _http_handler import HandlerCaptureMixin, basic_header, captured_response, initialize_handler_capture
+from _http_handler import (
+    HandlerCaptureMixin,
+    basic_header,
+    captured_response,
+    initialize_handler_capture,
+)
 
 from news_bulletin_playlist.admin_session import (
     ADMIN_SESSION_ABSOLUTE_TTL,
