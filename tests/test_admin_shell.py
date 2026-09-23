@@ -6,6 +6,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
+from _html import assert_valid_admin_html
 from _http_handler import HandlerCaptureMixin, captured_response, initialize_handler_capture
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -20,6 +21,7 @@ from news_bulletin_playlist.engine import (
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.lan_admin import LanAdminSecurity
 from news_bulletin_playlist.managed_admin import ManagedAdminService
+from news_bulletin_playlist.managed_admin_web import render_managed_admin_page
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
@@ -122,11 +124,12 @@ def test_admin_routes_require_auth_and_share_navigation(tmp_path: Path) -> None:
         "/admin/diagnostics": "/admin/diagnostics",
     }
     for path, body in pages.items():
+        assert_valid_admin_html(body)
         assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in body
         assert '<a class="admin-tab" href="/admin/">Playlists</a>' in body or (path == "/admin/")
         assert 'href="/admin/sources"' in body
         assert 'href="/admin/diagnostics"' in body
-        assert '<a class="button-secondary" href="/">Status</a>' in body
+        assert '<a class="button" href="/">Status</a>' in body
         assert body.count('aria-current="page"') == 1
         active = expected_active[path]
         assert f'class="admin-tab is-active" href="{active}" aria-current="page"' in body
@@ -152,6 +155,7 @@ def test_playlists_keep_source_controls_and_sources_move_to_read_only_page(
 
     assert 'id="source-catalog-heading"' in sources
     assert '<div class="card table-card"><div class="table-scroll">' in sources
+    assert '<th scope="col">Origin</th>' in sources
     assert '<th scope="col">Ownership</th>' in sources
     assert "Built-in" in sources
     for source_name in (
@@ -202,9 +206,30 @@ def test_diagnostics_shell_preserves_filters_metrics_and_mobile_table_wrapper(
     assert '<option value="168" selected>7 days</option>' in body
     assert 'name="limit" min="1" max="500"' in body
     assert "/admin/diagnostics/export.zip?" in body
+    assert 'id="spotify-request-metrics-heading"' in body
     assert "Spotify request metrics are unavailable." in body
     assert '<div class="card table-card"><div class="table-scroll">' in body
     assert '<th scope="col">Details</th>' in body
+
+
+def test_admin_shell_escapes_operator_messages(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    sentinel = '<script>alert("admin")</script> & "quoted"'
+    body = render_managed_admin_page(
+        snapshot=service.snapshot(),
+        catalog=BUILTIN_CATALOG,
+        spotify_state=AuthorizationState.CONNECTED,
+        csrf_token='csrf-<&"token',
+        last_cycle=None,
+        lan_mode=False,
+        notice=sentinel,
+        error=sentinel,
+    ).decode()
+
+    assert_valid_admin_html(body)
+    assert sentinel not in body
+    assert "&lt;script&gt;alert(&quot;" in body
+    assert 'value="csrf-&lt;&amp;&quot;token"' in body
 
 
 def test_admin_html_never_echoes_raw_cycle_errors(tmp_path: Path) -> None:
