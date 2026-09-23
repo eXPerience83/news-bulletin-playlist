@@ -149,8 +149,14 @@ jobs:
         id: archive
         run: |
           set -euo pipefail
-          docker save news-bulletin-playlist:candidate | gzip -1 > candidate-image.tar.gz
-          sha256="$(sha256sum candidate-image.tar.gz | awk '{print $1}')"
+          archive_dir="${RUNNER_TEMP}/candidate-transfer"
+          archive="${archive_dir}/candidate-image.tar.gz"
+          rm -rf "$archive_dir"
+          mkdir -p "$archive_dir"
+          docker save news-bulletin-playlist:candidate | gzip -1 > "$archive"
+          test -f "$archive"
+          test ! -L "$archive"
+          sha256="$(sha256sum "$archive" | awk '{print $1}')"
           if [[ ! "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
             echo "ERROR: invalid candidate archive hash: $sha256" >&2
             exit 1
@@ -160,7 +166,7 @@ jobs:
       - name: Save verified candidate transfer cache
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: candidate-image.tar.gz
+          path: ${{ runner.temp }}/candidate-transfer/candidate-image.tar.gz
           key: ${{ steps.pr.outputs.cache_key }}
 
   publish:
@@ -176,7 +182,7 @@ jobs:
       - name: Restore exact verified candidate transfer cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: candidate-image.tar.gz
+          path: ${{ runner.temp }}/candidate-transfer/candidate-image.tar.gz
           key: ${{ needs.build.outputs.cache_key }}
           fail-on-cache-miss: true
 
@@ -185,7 +191,9 @@ jobs:
           EXPECTED_SHA256: ${{ needs.build.outputs.archive_sha256 }}
         run: |
           set -euo pipefail
-          archive="candidate-image.tar.gz"
+          archive="${RUNNER_TEMP}/candidate-transfer/candidate-image.tar.gz"
+          test -f "$archive"
+          test ! -L "$archive"
           actual_sha256="$(sha256sum "$archive" | awk '{print $1}')"
           if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
             echo "ERROR: candidate transfer cache changed after validation" >&2
