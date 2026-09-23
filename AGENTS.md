@@ -32,6 +32,17 @@ pytest
 
 Treat CI and Container validation as independent evidence; do not claim local tests are CI.
 
+## Commit and Actions discipline
+
+- Keep commits coherent and reviewable, but avoid excessive micro-commits and push churn.
+- Batch closely related edits into a meaningful checkpoint, inspect the complete diff, and run the relevant local validation before pushing.
+- Do not create or push a new commit for every tiny correction, formatting fix, or intermediate implementation step when those edits can be validated together locally.
+- Do not push knowingly broken or obviously incomplete intermediate states merely to use GitHub Actions as the development feedback loop.
+- Prefer amending or folding unreviewed intermediate fixups when appropriate rather than creating a long chain of fixup commits.
+- A push to an open PR can trigger multiple GitHub-hosted jobs. Treat unnecessary pushes as consuming a finite CI-cost resource, especially while the repository is private.
+- Local validation is the normal feedback loop; GitHub Actions is the authoritative integration check at meaningful checkpoints.
+- This does not relax scope discipline: unrelated changes still belong in separate issues/PRs. Optimize push frequency, not change scope.
+
 ## Review discipline
 
 - Reproduce or prove a finding before changing code. Classify it as a real bug, regression risk, hardening, observability improvement, test gap, or false positive.
