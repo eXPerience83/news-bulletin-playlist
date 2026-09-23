@@ -39,7 +39,7 @@ The candidate workflow verifies that:
 - the supplied SHA is exactly the PR HEAD;
 - the exact candidate builds and passes the hardened container health/web smoke test.
 
-The build job has no package-write permission. It exports the tested image as an artifact. A separate publish job verifies the artifact hash without checking out or executing candidate code. Before `dev` moves, the workflow queries the PR again and fails closed if its state, base, repository or exact HEAD SHA changed while the candidate was being built.
+The build job has no package-write permission. It exports the exact tested image to a compressed archive and saves that archive under an exact Actions cache key bound to the workflow run, run attempt, PR number and authorized full HEAD SHA. A separate publish job restores only that exact key with cache-miss failure enabled, verifies the build job SHA-256 before loading the image, and never checks out or executes candidate code. The transfer cache uses GitHub's cache storage allowance rather than Actions artifact/Packages storage and is deleted after successful publication; a failed publication leaves only bounded cache state subject to GitHub's cache retention/eviction policy. Before `dev` moves, the workflow queries the PR again and fails closed if its state, base, repository or exact HEAD SHA changed while the candidate was being built.
 
 `candidate-pr-<PR>-<short-sha>` is treated as an immutable audit tag by the workflow. If it already exists with the same tested image, a rerun may reuse it; if it resolves to different image content, publication fails instead of overwriting it. Candidate publication is serialized so two PRs cannot race the mutable `dev` channel.
 
