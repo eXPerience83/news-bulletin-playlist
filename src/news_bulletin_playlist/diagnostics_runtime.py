@@ -26,7 +26,6 @@ from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdmin
 from news_bulletin_playlist.managed_admin_web import (
     max_duration_seconds_from_form,
     playlist_id_from_form,
-    render_sources_page,
     single_form_value,
 )
 from news_bulletin_playlist.managed_state import ManagedStateError
@@ -37,6 +36,7 @@ from news_bulletin_playlist.runtime import (
     DEFAULT_HEALTH_PORT,
     _data_dir_ready,
 )
+from news_bulletin_playlist.sources_admin_web import render_sources_page
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 from news_bulletin_playlist.spotify_metrics import (
