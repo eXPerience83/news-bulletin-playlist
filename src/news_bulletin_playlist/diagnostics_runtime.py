@@ -26,8 +26,10 @@ from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdmin
 from news_bulletin_playlist.managed_admin_web import (
     max_duration_seconds_from_form,
     playlist_id_from_form,
+    render_sources_page,
     single_form_value,
 )
+from news_bulletin_playlist.managed_state import ManagedStateError
 from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
@@ -61,6 +63,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
 
         if parsed.path == "/":
             self._serve_safe_public_status()
+            return
+        if parsed.path == "/admin/sources":
+            self._serve_sources()
             return
         if parsed.path == "/admin/diagnostics":
             self._serve_diagnostics(parsed.query)
@@ -130,6 +135,43 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         self._reply(
             HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
             payload,
+        )
+
+    def _serve_sources(self) -> None:
+        if self._require_admin() is None:
+            return
+        service = self.managed_admin_service
+        if service is None:
+            self._reply(
+                HTTPStatus.NOT_FOUND,
+                b"Not found",
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+        synchronization = self.configuration_synchronization
+        try:
+            if synchronization is None:
+                snapshot = service.snapshot()
+            else:
+                with synchronization.hold():
+                    snapshot = service.snapshot()
+        except ManagedStateError, OSError:
+            self._reply(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                b"Managed playlist state could not be loaded safely",
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+        status = self.operational_status
+        last_cycle = None if status is None else status.snapshot().last_cycle
+        self._reply(
+            HTTPStatus.OK,
+            render_sources_page(
+                snapshot=snapshot,
+                catalog=service.catalog,
+                last_cycle=last_cycle,
+                lan_mode=self._is_lan_admin_mode(),
+            ),
         )
 
     def _serve_diagnostics(self, query: str) -> None:

@@ -120,80 +120,16 @@ def render_diagnostics_page(
     timezone_label: str = "UTC",
     spotify_metrics: SpotifyRequestMetricsSnapshot | None = None,
 ) -> bytes:
-    """Render authenticated diagnostics without raw provider/error data."""
-    rows = "".join(_event_row(event, display_timezone=display_timezone) for event in events)
-    if not rows:
-        rows = '<tr><td colspan="8">No diagnostic events match these filters.</td></tr>'
-    export_href = "/admin/diagnostics/export.zip?" + filters.query_string(include_limit=False)
-    severity_value = "" if filters.severity is None else filters.severity.value
-    source_value = "" if filters.source_id is None else filters.source_id
-    playlist_value = "" if filters.playlist_id is None else filters.playlist_id
-    hours_value = "all" if filters.hours is None else str(filters.hours)
-    timezone_heading = html.escape(timezone_label)
-    metrics_section = _spotify_metrics_section(spotify_metrics)
+    """Render authenticated diagnostics in the shared administration shell."""
+    from news_bulletin_playlist.admin_web import render_admin_diagnostics_page
 
-    document = f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Diagnostics · News Bulletin Playlists</title>
-  <style>
-    :root {{ color-scheme: light dark; }}
-    body {{ font-family: system-ui, sans-serif; max-width: 92rem; margin: 2rem auto;
-           padding: 0 1rem 4rem; line-height: 1.4; }}
-    form {{ display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; }}
-    label {{ display: grid; gap: .25rem; font-weight: 650; }}
-    input, select, button {{ font: inherit; padding: .4rem .5rem; }}
-    table {{ width: 100%; border-collapse: collapse; margin-top: 1.25rem; }}
-    th, td {{ text-align: left; vertical-align: top; border-bottom: 1px solid #8885;
-              padding: .45rem .4rem; }}
-    code {{ font-family: ui-monospace, monospace; overflow-wrap: anywhere; }}
-    .muted {{ opacity: .75; }}
-  </style>
-</head>
-<body>
-  <h1>Diagnostics</h1>
-  <p class="muted">Structured operational events. Raw SQLite, OAuth material, authenticated
-     provider response bodies and environment variables are never exposed here. A bounded raw
-     response from an unauthenticated Spotify Embed/oEmbed schema failure may be retained only as
-     a separate file in the authenticated diagnostics ZIP.</p>
-  <form method="get" action="/admin/diagnostics">
-    <label>Severity
-      <select name="severity">{_severity_options(severity_value)}</select>
-    </label>
-    <label>Source
-      <input name="source" value="{html.escape(source_value, quote=True)}" placeholder="rne">
-    </label>
-    <label>Playlist
-      <input name="playlist" value="{html.escape(playlist_value, quote=True)}"
-             placeholder="spain_spanish_news">
-    </label>
-    <label>Window
-      <select name="hours">{_hours_options(hours_value)}</select>
-    </label>
-    <label>Rows
-      <input type="number" name="limit" min="1" max="{MAX_DIAGNOSTIC_QUERY_LIMIT}"
-             value="{filters.limit}">
-    </label>
-    <button type="submit">Apply filters</button>
-  </form>
-  <p class="muted">UI limit={MAX_DIAGNOSTIC_QUERY_LIMIT};
-     ZIP export uses a separate bounded capacity.</p>
-  <p><a href="{html.escape(export_href, quote=True)}">Download sanitized diagnostics ZIP</a></p>
-  {metrics_section}
-  <table>
-    <thead><tr>
-      <th>Time ({timezone_heading})</th><th>Level</th><th>Component</th><th>Event</th>
-      <th>Cycle</th><th>Source</th><th>Playlist</th><th>Details</th>
-    </tr></thead>
-    <tbody>{rows}</tbody>
-  </table>
-  <p><a href="/admin/">Return to administration</a></p>
-</body>
-</html>
-"""
-    return document.encode("utf-8")
+    return render_admin_diagnostics_page(
+        events=events,
+        filters=filters,
+        display_timezone=display_timezone,
+        timezone_label=timezone_label,
+        spotify_metrics=spotify_metrics,
+    )
 
 
 def build_diagnostic_bundle(
@@ -378,7 +314,7 @@ def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> 
             f"<td><code>{html.escape(metric.operation)}</code></td>"
             f"<td><code>{html.escape(metric.outcome.value)}</code></td>"
             f"<td>{'—' if metric.http_status is None else metric.http_status}</td>"
-            f"<td><code>{quota_reason(metric)}</code></td>"
+            f"<td><code>{html.escape(quota_reason(metric))}</code></td>"
             f"<td>{metric.request_count}</td>"
             "</tr>"
             for metric in snapshot.metrics
@@ -401,8 +337,13 @@ def _spotify_metrics_section(snapshot: SpotifyRequestMetricsSnapshot | None) -> 
     return f"""
   <h2>Spotify request metrics (last 24 hours)</h2>
   <p class="muted">{summary} These are local aggregates, not account quota.</p>
-  <table><thead><tr><th>Surface</th><th>Operation</th><th>Outcome</th><th>HTTP</th>
-    <th>Quota reason</th><th>Requests</th></tr></thead><tbody>{rows}</tbody></table>
+  <div class="table-scroll">
+    <table><thead><tr>
+      <th scope="col">Surface</th><th scope="col">Operation</th>
+      <th scope="col">Outcome</th><th scope="col">HTTP</th>
+      <th scope="col">Quota reason</th><th scope="col">Requests</th>
+    </tr></thead><tbody>{rows}</tbody></table>
+  </div>
 """
 
 
