@@ -1,0 +1,424 @@
+name: Publish reviewed PR candidate worker AMD64
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Authorized pull request number
+        required: true
+        type: string
+      head_sha:
+        description: Authorized full pull-request HEAD SHA
+        required: true
+        type: string
+      authorization_comment_id:
+        description: Owner authorization comment ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-pr-candidate-dev-amd64
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    cache-mode: write-only
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.candidate.outputs.pr_number }}
+      head_sha: ${{ steps.candidate.outputs.head_sha }}
+      short_sha: ${{ steps.candidate.outputs.short_sha }}
+      authorization_comment_id: ${{ steps.candidate.outputs.comment_id }}
+      cache_key: ${{ steps.candidate.outputs.cache_key }}
+      archive_sha256: ${{ steps.archive.outputs.sha256 }}
+
+    steps:
+      - name: Revalidate owner authorization and pull-request head
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_HEAD_SHA: ${{ inputs.head_sha }}
+          INPUT_COMMENT_ID: ${{ inputs.authorization_comment_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "ERROR: candidate worker must run from refs/heads/main; got $GITHUB_REF" >&2
+            exit 1
+          fi
+          if [[ ! "$INPUT_PR_NUMBER" =~ ^[0-9]+$ || ! "$INPUT_COMMENT_ID" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: invalid PR/comment identity" >&2
+            exit 1
+          fi
+          if [[ ! "$INPUT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: invalid authorized HEAD SHA" >&2
+            exit 1
+          fi
+
+          comment_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${INPUT_COMMENT_ID}")"
+          comment_user="$(jq -r '.user.login' <<<"$comment_json")"
+          comment_body="$(jq -r '.body' <<<"$comment_json")"
+          comment_issue_url="$(jq -r '.issue_url' <<<"$comment_json")"
+          comment_issue_number="${comment_issue_url##*/}"
+          expected_body="/publish-candidate ${INPUT_HEAD_SHA}"
+
+          if [[ "$comment_user" != "$GITHUB_REPOSITORY_OWNER" ]]; then
+            echo "ERROR: authorization comment is not owned by $GITHUB_REPOSITORY_OWNER" >&2
+            exit 1
+          fi
+          if [[ "$comment_issue_number" != "$INPUT_PR_NUMBER" ]]; then
+            echo "ERROR: authorization comment belongs to issue $comment_issue_number, not PR $INPUT_PR_NUMBER" >&2
+            exit 1
+          fi
+          if [[ "$comment_body" != "$expected_body" ]]; then
+            echo "ERROR: authorization comment no longer matches the exact requested SHA" >&2
+            exit 1
+          fi
+
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${INPUT_PR_NUMBER}")"
+          head_repo="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
+          head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          base_ref="$(jq -r '.base.ref' <<<"$pr_json")"
+          state="$(jq -r '.state' <<<"$pr_json")"
+
+          if [[ "$head_repo" != "$GITHUB_REPOSITORY" ]]; then
+            echo "ERROR: candidate publication is limited to branches in $GITHUB_REPOSITORY" >&2
+            exit 1
+          fi
+          if [[ "$base_ref" != main ]]; then
+            echo "ERROR: candidate pull request must target main; got $base_ref" >&2
+            exit 1
+          fi
+          if [[ "$state" != open ]]; then
+            echo "ERROR: candidate pull request must be open; got $state" >&2
+            exit 1
+          fi
+          if [[ "$head_sha" != "$INPUT_HEAD_SHA" ]]; then
+            echo "ERROR: authorized SHA $INPUT_HEAD_SHA is no longer PR HEAD $head_sha" >&2
+            exit 1
+          fi
+
+          short_sha="${head_sha:0:12}"
+          cache_key="candidate-image-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}-pr-${INPUT_PR_NUMBER}-${head_sha}"
+          echo "pr_number=$INPUT_PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "comment_id=$INPUT_COMMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "cache_key=$cache_key" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the exact pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.candidate.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Verify the checked-out revision
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Validate configuration and build exact candidate
+        env:
+          SOURCE_REVISION: ${{ steps.candidate.outputs.head_sha }}
+          PR_NUMBER: ${{ steps.candidate.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml config --quiet
+          docker compose -f deploy/truenas.yaml config --quiet
+          docker build \
+            --platform linux/amd64 \
+            --build-arg "SOURCE_REVISION=${SOURCE_REVISION}" \
+            --label "org.opencontainers.image.revision=${SOURCE_REVISION}" \
+            --label "org.opencontainers.image.version=candidate-pr-${PR_NUMBER}" \
+            --tag news-bulletin-playlist:candidate \
+            .
+
+      - name: Smoke test the exact candidate
+        run: |
+          set -euo pipefail
+          docker volume create news-bulletin-candidate-data
+          docker run --detach --rm \
+            --name news-bulletin-playlist-candidate \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --publish 127.0.0.1:18789:8080 \
+            --mount source=news-bulletin-candidate-data,target=/data \
+            news-bulletin-playlist:candidate
+
+          remaining=20
+          while [ "$remaining" -gt 0 ]; do
+            status="$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-candidate)"
+            if [ "$status" = healthy ]; then
+              break
+            fi
+            if [ "$status" = unhealthy ]; then
+              docker logs news-bulletin-playlist-candidate
+              exit 1
+            fi
+            remaining=$((remaining - 1))
+            sleep 1
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-candidate)" = healthy
+          curl --fail --silent --show-error http://127.0.0.1:18789/ | grep -q 'News Bulletin Playlists'
+          curl --fail --silent --show-error http://127.0.0.1:18789/healthz | grep -q '"status":"ok"'
+
+      - name: Stop candidate container
+        if: always()
+        run: |
+          docker stop news-bulletin-playlist-candidate 2>/dev/null || true
+          docker volume rm news-bulletin-candidate-data 2>/dev/null || true
+
+      - name: Export exact candidate image
+        id: archive
+        run: |
+          set -euo pipefail
+          archive_dir="${RUNNER_TEMP}/candidate-transfer"
+          archive="${archive_dir}/candidate-image.tar.gz"
+          rm -rf "$archive_dir"
+          mkdir -p "$archive_dir"
+          docker save news-bulletin-playlist:candidate | gzip -1 > "$archive"
+          test -f "$archive"
+          test ! -L "$archive"
+          sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          if [[ ! "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: invalid candidate archive hash: $sha256" >&2
+            exit 1
+          fi
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Save verified candidate transfer cache
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/candidate-transfer/candidate-image.tar.gz
+          key: ${{ steps.candidate.outputs.cache_key }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    cache-mode: read
+    permissions:
+      actions: read
+      issues: write
+      packages: write
+      pull-requests: read
+
+    steps:
+      - name: Restore exact verified candidate transfer cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/candidate-transfer/candidate-image.tar.gz
+          key: ${{ needs.build.outputs.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Verify transfer cache hash and load image
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/candidate-transfer/candidate-image.tar.gz"
+          test -f "$archive"
+          test ! -L "$archive"
+          actual_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
+            echo "ERROR: candidate transfer cache changed after validation" >&2
+            exit 1
+          fi
+          gzip -dc "$archive" | docker load
+
+      - name: Revalidate authorization before registry publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.build.outputs.pr_number }}
+          AUTHORIZED_SHA: ${{ needs.build.outputs.head_sha }}
+          COMMENT_ID: ${{ needs.build.outputs.authorization_comment_id }}
+        run: |
+          set -euo pipefail
+          comment_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}")"
+          comment_user="$(jq -r '.user.login' <<<"$comment_json")"
+          comment_body="$(jq -r '.body' <<<"$comment_json")"
+          comment_issue_url="$(jq -r '.issue_url' <<<"$comment_json")"
+          comment_issue_number="${comment_issue_url##*/}"
+          expected_body="/publish-candidate ${AUTHORIZED_SHA}"
+          if [[ "$comment_user" != "$GITHUB_REPOSITORY_OWNER" || "$comment_issue_number" != "$PR_NUMBER" || "$comment_body" != "$expected_body" ]]; then
+            echo "ERROR: candidate authorization changed before registry publication" >&2
+            exit 1
+          fi
+
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          current_state="$(jq -r '.state' <<<"$pr_json")"
+          current_base="$(jq -r '.base.ref' <<<"$pr_json")"
+          current_head_repo="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
+          current_head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          if [[ "$current_state" != open || "$current_base" != main || "$current_head_repo" != "$GITHUB_REPOSITORY" || "$current_head_sha" != "$AUTHORIZED_SHA" ]]; then
+            echo "ERROR: PR authorization changed before registry publication" >&2
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish or reuse immutable candidate tag
+        id: candidate
+        env:
+          PR_NUMBER: ${{ needs.build.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.build.outputs.head_sha }}
+          SHORT_SHA: ${{ needs.build.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          namespace="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${namespace}/news-bulletin-playlist"
+          candidate_tag="candidate-pr-${PR_NUMBER}-${SHORT_SHA}"
+          candidate_ref="${image}:${candidate_tag}"
+          local_id="$(docker image inspect news-bulletin-playlist:candidate --format '{{.Id}}')"
+
+          inspect_error="$(mktemp)"
+          trap 'rm -f "$inspect_error"' EXIT
+          if digest="$(docker buildx imagetools inspect "$candidate_ref" --format '{{json .Manifest.Digest}}' 2>"$inspect_error" | tr -d '"')"; then
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: existing candidate tag returned invalid digest: $digest" >&2
+              exit 1
+            fi
+          else
+            if ! grep -Fqi 'manifest unknown' "$inspect_error" && ! grep -Fqi "${candidate_ref}: not found" "$inspect_error"; then
+              cat "$inspect_error" >&2
+              echo "ERROR: could not safely determine whether immutable candidate tag exists" >&2
+              exit 1
+            fi
+            docker tag news-bulletin-playlist:candidate "$candidate_ref"
+            docker push "$candidate_ref"
+            digest="$(docker buildx imagetools inspect "$candidate_ref" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: could not resolve published candidate digest: $digest" >&2
+              exit 1
+            fi
+          fi
+
+          resolved_ref="${image}@${digest}"
+          docker pull "$resolved_ref"
+          resolved_id="$(docker image inspect "$resolved_ref" --format '{{.Id}}')"
+          if [[ "$resolved_id" != "$local_id" ]]; then
+            echo "ERROR: immutable candidate digest does not match the tested image" >&2
+            exit 1
+          fi
+
+          echo "candidate_ref=$candidate_ref" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "dev_ref=${image}:dev-amd64" >> "$GITHUB_OUTPUT"
+          echo "source=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Revalidate authorization immediately before dev promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.build.outputs.pr_number }}
+          AUTHORIZED_SHA: ${{ needs.build.outputs.head_sha }}
+          COMMENT_ID: ${{ needs.build.outputs.authorization_comment_id }}
+        run: |
+          set -euo pipefail
+          comment_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}")"
+          comment_user="$(jq -r '.user.login' <<<"$comment_json")"
+          comment_body="$(jq -r '.body' <<<"$comment_json")"
+          comment_issue_url="$(jq -r '.issue_url' <<<"$comment_json")"
+          comment_issue_number="${comment_issue_url##*/}"
+          expected_body="/publish-candidate ${AUTHORIZED_SHA}"
+          if [[ "$comment_user" != "$GITHUB_REPOSITORY_OWNER" || "$comment_issue_number" != "$PR_NUMBER" || "$comment_body" != "$expected_body" ]]; then
+            echo "ERROR: candidate authorization changed before dev promotion" >&2
+            exit 1
+          fi
+
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          current_state="$(jq -r '.state' <<<"$pr_json")"
+          current_base="$(jq -r '.base.ref' <<<"$pr_json")"
+          current_head_repo="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
+          current_head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          if [[ "$current_state" != open || "$current_base" != main || "$current_head_repo" != "$GITHUB_REPOSITORY" || "$current_head_sha" != "$AUTHORIZED_SHA" ]]; then
+            echo "ERROR: PR authorization changed before dev promotion" >&2
+            exit 1
+          fi
+
+      - name: Promote exact candidate digest to dev aliases
+        env:
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          IMAGE_DIGEST: ${{ steps.candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="${CANDIDATE_REF%:*}"
+          source_ref="${image}@${IMAGE_DIGEST}"
+
+          docker buildx imagetools create \
+            --prefer-index=false \
+            --tag "${image}:dev" \
+            --tag "${image}:dev-amd64" \
+            "$source_ref"
+
+          for tag in dev dev-amd64; do
+            actual="$(docker buildx imagetools inspect "${image}:${tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [[ "$actual" != "$IMAGE_DIGEST" ]]; then
+              echo "ERROR: ${image}:${tag} resolved to $actual instead of $IMAGE_DIGEST" >&2
+              exit 1
+            fi
+          done
+
+          candidate_digest="$(docker buildx imagetools inspect "$CANDIDATE_REF" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          if [[ "$candidate_digest" != "$IMAGE_DIGEST" ]]; then
+            echo "ERROR: immutable candidate tag changed during dev promotion" >&2
+            exit 1
+          fi
+
+      - name: Comment the published candidate on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.build.outputs.pr_number }}
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          IMAGE_DIGEST: ${{ steps.candidate.outputs.digest }}
+          DEV_REF: ${{ steps.candidate.outputs.dev_ref }}
+          SOURCE_REVISION: ${{ steps.candidate.outputs.source }}
+        run: |
+          set -euo pipefail
+          image="${CANDIDATE_REF%:*}"
+          body="Published the reviewed AMD64 candidate after owner-comment authorization, trusted-worker revalidation, exact-head build validation, hardened runtime smoke tests, transfer-cache hash verification, registry preflight revalidation, and immediate pre-promotion revalidation passed.\n\n- Candidate: \`${CANDIDATE_REF}\`\n- Dev channel: \`${DEV_REF}\`\n- Immutable: \`${image}@${IMAGE_DIGEST}\`\n- Source revision: \`${SOURCE_REVISION}\`\n\nThe mutable \`dev\` channel may contain unmerged code. It is not \`edge\`, \`stable\`, or \`latest\`."
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$body"
+
+  cleanup:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    cache-mode: none
+    permissions:
+      actions: write
+
+    steps:
+      - name: Delete transfer cache after successful publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ needs.build.outputs.cache_key }}
+        run: |
+          set -euo pipefail
+          response="$(
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/actions/caches?key=${CACHE_KEY}&ref=refs/heads/main"
+          )"
+          deleted_count="$(jq -r '.total_count // 0' <<<"$response")"
+          if [[ "$deleted_count" != "1" ]]; then
+            echo "ERROR: expected exactly one transfer cache for $CACHE_KEY; deleted: $deleted_count" >&2
+            exit 1
+          fi
