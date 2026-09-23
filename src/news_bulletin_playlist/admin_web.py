@@ -338,6 +338,16 @@ def render_admin_shell(
     return document.encode("utf-8")
 
 
+def render_lan_warning() -> str:
+    """Render the shared trusted-LAN warning for authenticated admin pages."""
+
+    return (
+        '<div class="warning"><strong>LAN development mode.</strong> '
+        "Administration still uses HTTP Basic authentication without TLS in this step. Keep port "
+        "8788 only on a trusted private network and never expose it to the Internet.</div>"
+    )
+
+
 def _admin_tab(*, label: str, href: str, active: bool) -> str:
     active_class = " is-active" if active else ""
     current = ' aria-current="page"' if active else ""
