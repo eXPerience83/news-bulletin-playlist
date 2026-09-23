@@ -31,15 +31,11 @@ To publish a candidate, the repository owner comments on an open PR targeting `m
 
 `/publish-candidate <full-40-character-head-sha>`
 
-The candidate workflow verifies that:
+The low-trust `issue_comment` workflow only validates the owner command and current PR identity; it does not checkout or execute PR code and has cache access disabled. It then dispatches a separate `workflow_dispatch` worker on `main`, passing the PR number, exact HEAD SHA and authorization-comment ID. The worker independently reloads that comment and requires it to still belong to the same PR, be authored by the repository owner and contain the exact command for the authorized SHA. It also revalidates that the PR is open, targets `main`, belongs to this repository and still has the authorized HEAD.
 
-- the PR is open;
-- it targets `main`;
-- its head branch belongs to this repository;
-- the supplied SHA is exactly the PR HEAD;
-- the exact candidate builds and passes the hardened container health/web smoke test.
+The trusted worker then builds and smoke-tests that exact candidate in a job with no package-write permission. Its cache access is `write-only`, so it cannot restore repository caches. The tested image archive is created under `RUNNER_TEMP`, outside the PR checkout, and saved under an exact cache key bound to worker run ID, run attempt, PR number and authorized full HEAD SHA. A separate publish job uses `cache-mode: read`, has package-write permission, never checks out or executes candidate code, restores only that exact key with cache-miss failure enabled, and verifies the build-job SHA-256 before loading the image. The worker revalidates the owner comment and PR immediately before registry publication and again immediately before moving `dev`.
 
-The build job has no package-write permission. It exports the tested image as an artifact. A separate publish job verifies the artifact hash without checking out or executing candidate code. Before `dev` moves, the workflow queries the PR again and fails closed if its state, base, repository or exact HEAD SHA changed while the candidate was being built.
+The transfer cache has no fallback restore keys and a rerun cannot reuse a previous attempt's entry. It uses GitHub's cache storage allowance rather than Actions artifact/Packages storage and is deleted after successful publication; a failed publication leaves only bounded cache state subject to GitHub's cache retention/eviction policy. The cleanup job has cache access disabled and uses only its narrowly scoped Actions-write REST permission to delete the exact transfer key.
 
 `candidate-pr-<PR>-<short-sha>` is treated as an immutable audit tag by the workflow. If it already exists with the same tested image, a rerun may reuse it; if it resolves to different image content, publication fails instead of overwriting it. Candidate publication is serialized so two PRs cannot race the mutable `dev` channel.
 
