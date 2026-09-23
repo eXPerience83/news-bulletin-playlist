@@ -300,7 +300,8 @@ def render_admin_shell(
         if logout_csrf_token is None
         else (
             '<form method="post" action="/admin/logout">'
-            f'<input type="hidden" name="csrf_token" value="{html.escape(logout_csrf_token, quote=True)}">'
+            '<input type="hidden" name="csrf_token" '
+            f'value="{html.escape(logout_csrf_token, quote=True)}">'
             '<button class="button" type="submit">Logout</button>'
             "</form>"
         )
