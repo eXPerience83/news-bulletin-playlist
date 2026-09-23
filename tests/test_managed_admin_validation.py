@@ -173,7 +173,7 @@ def test_available_template_requires_spotify_but_local_save_button_does_not(
         lan_mode=True,
     ).decode()
     create_button = re.search(
-        r'<button\b[^>]*\bdisabled\b[^>]*>Create Spotify playlist</button>',
+        r"<button\b[^>]*\bdisabled\b[^>]*>Create Spotify playlist</button>",
         disconnected,
     )
     assert create_button is not None
@@ -188,6 +188,6 @@ def test_available_template_requires_spotify_but_local_save_button_does_not(
         last_cycle=None,
         lan_mode=True,
     ).decode()
-    save_button = re.search(r'<button\b([^>]*)>Save playlist</button>', managed)
+    save_button = re.search(r"<button\b([^>]*)>Save playlist</button>", managed)
     assert save_button is not None
     assert "disabled" not in save_button.group(1)
