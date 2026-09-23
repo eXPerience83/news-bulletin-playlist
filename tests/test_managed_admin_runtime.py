@@ -244,7 +244,9 @@ def test_dashboard_requires_auth_and_exposes_available_template(tmp_path: Path) 
         password=None,
     )
     unauthorized.do_GET()
-    assert _response(unauthorized).status == HTTPStatus.UNAUTHORIZED
+    response = _response(unauthorized)
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/login"
 
     authorized = _HandlerHarness(
         tmp_path=tmp_path,
@@ -751,7 +753,9 @@ def test_bundled_cover_route_is_authenticated_and_rejects_unknown_ids(tmp_path: 
         password=None,
     )
     unauthorized.do_GET()
-    assert _response(unauthorized).status == HTTPStatus.UNAUTHORIZED
+    response = _response(unauthorized)
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/login"
 
 
 def test_lifecycle_starts_stops_and_can_start_again_without_idle_cycles() -> None:

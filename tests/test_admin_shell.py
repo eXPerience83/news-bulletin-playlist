@@ -115,7 +115,7 @@ def test_admin_routes_require_auth_and_share_navigation(tmp_path: Path) -> None:
 
     for path in paths:
         status, _body = _get(tmp_path, path=path, service=service, password=None)
-        assert status is HTTPStatus.UNAUTHORIZED
+        assert status is HTTPStatus.SEE_OTHER
 
     pages = {path: _get(tmp_path, path=path, service=service)[1] for path in paths}
     expected_active = {
@@ -130,6 +130,7 @@ def test_admin_routes_require_auth_and_share_navigation(tmp_path: Path) -> None:
         assert 'href="/admin/sources"' in body
         assert 'href="/admin/diagnostics"' in body
         assert '<a class="button" href="/">Status</a>' in body
+        assert 'action="/admin/logout"' in body
         assert body.count('aria-current="page"') == 1
         active = expected_active[path]
         assert f'class="admin-tab is-active" href="{active}" aria-current="page"' in body
@@ -166,7 +167,7 @@ def test_playlists_keep_source_controls_and_sources_move_to_read_only_page(
         "CNN 5 Cosas",
     ):
         assert source_name in sources
-    assert "<form" not in sources
+    assert 'action="/admin/logout"' in sources
     assert 'name="source_id"' not in sources
     assert "Add source" not in sources
     assert "Remove source" not in sources
@@ -185,7 +186,7 @@ def test_sources_requires_service_after_authentication(tmp_path: Path) -> None:
         service=None,
     )
 
-    assert unauthorized is HTTPStatus.UNAUTHORIZED
+    assert unauthorized is HTTPStatus.SEE_OTHER
     assert authenticated is HTTPStatus.NOT_FOUND
     assert body == "Not found"
 

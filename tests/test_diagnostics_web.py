@@ -13,11 +13,16 @@ from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import HTTPServer
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from news_bulletin_playlist import diagnostics_runtime, engine_runtime
+from news_bulletin_playlist.admin_session import (
+    ADMIN_SESSION_COOKIE,
+    admin_session_manager_for,
+)
 from news_bulletin_playlist.diagnostics import (
     DiagnosticEvent,
     DiagnosticEventStore,
@@ -102,15 +107,43 @@ def _basic_auth() -> str:
     return f"Basic {encoded}"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
 def _serve_one(server: HTTPServer) -> threading.Thread:
     thread = threading.Thread(target=server.handle_request)
     thread.start()
     return thread
 
 
-def _request(url: str, *, authenticated: bool = False) -> urllib.request.Request:
+def _no_redirect_open(request: urllib.request.Request) -> urllib.error.HTTPError:
+    opener = urllib.request.build_opener(_NoRedirect())
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        opener.open(request, timeout=2)
+    return raised.value
+
+
+def _request(
+    url: str,
+    *,
+    authenticated: bool = False,
+    cookie: str | None = None,
+) -> urllib.request.Request:
     request = urllib.request.Request(url)
-    if authenticated:
+    if cookie is not None:
+        request.add_header("Cookie", cookie)
+    elif authenticated:
         request.add_header("Authorization", _basic_auth())
     return request
 
@@ -429,7 +462,8 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
         handler.diagnostic_timezone_label,
     )
     handler.data_dir = tmp_path
-    handler.admin_security = AdminSecurity(PASSWORD)
+    security = AdminSecurity(PASSWORD)
+    handler.admin_security = security
     handler.spotify_auth = None
     handler.operational_status = status
     handler.diagnostic_store = store
@@ -437,23 +471,23 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
     handler.diagnostic_timezone_label = "Europe/Madrid"
     server = HTTPServer(("127.0.0.1", 0), handler)
     base_url = f"http://127.0.0.1:{server.server_port}"
+    session_id = admin_session_manager_for(security).create_session()
+    admin_cookie = f"{ADMIN_SESSION_COOKIE}={session_id}"
 
     try:
         thread = _serve_one(server)
         try:
-            with pytest.raises(urllib.error.HTTPError) as raised:
-                urllib.request.urlopen(
-                    _request(f"{base_url}/admin/diagnostics"),
-                    timeout=2,
-                )
+            anonymous = _no_redirect_open(_request(f"{base_url}/admin/diagnostics"))
         finally:
             thread.join(timeout=2)
-        assert raised.value.code == HTTPStatus.UNAUTHORIZED
+        assert anonymous.code == HTTPStatus.SEE_OTHER
+        assert anonymous.headers.get("Location") == "/admin/login"
+        assert anonymous.headers.get("WWW-Authenticate") is None
 
         thread = _serve_one(server)
         try:
             with urllib.request.urlopen(
-                _request(f"{base_url}/admin/diagnostics?hours=all", authenticated=True),
+                _request(f"{base_url}/admin/diagnostics?hours=all", cookie=admin_cookie),
                 timeout=2,
             ) as response:
                 diagnostics_body = response.read()
@@ -469,7 +503,7 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
             with urllib.request.urlopen(
                 _request(
                     f"{base_url}/admin/diagnostics/export.zip?hours=all",
-                    authenticated=True,
+                    cookie=admin_cookie,
                 ),
                 timeout=2,
             ) as response:

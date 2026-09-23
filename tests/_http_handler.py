@@ -6,6 +6,11 @@ from http import HTTPStatus
 from http.client import HTTPMessage
 from typing import Any
 
+from news_bulletin_playlist.admin_session import (
+    ADMIN_SESSION_COOKIE,
+    admin_session_manager_for,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CapturedResponse:
@@ -56,9 +61,25 @@ def initialize_handler_capture(
     handler.path = path
     handler.client_address = (client_ip, 12345)
     handler.headers = HTTPMessage()
+    handler._form = {} if form is None else {key: list(values) for key, values in form.items()}
     if password is not None:
-        handler.headers["Authorization"] = basic_header(password)
-    handler._form = {} if form is None else form
+        security = handler.admin_security
+        assert security is not None
+        assert security.is_authorized(basic_header(password))
+        manager = admin_session_manager_for(security)
+        session_id = getattr(security, "_test_admin_session_id", None)
+        cookie_header = None if session_id is None else f"{ADMIN_SESSION_COOKIE}={session_id}"
+        if manager.resolve_session(cookie_header) is None:
+            session_id = manager.create_session()
+            security._test_admin_session_id = session_id
+        handler.headers["Cookie"] = f"{ADMIN_SESSION_COOKIE}={session_id}"
+
+        # Older unit fixtures create a CSRF token directly on AdminSecurity before constructing
+        # the handler. Translate only a still-valid legacy fixture token into the equivalent
+        # session-scoped token so production code has one CSRF acceptance path.
+        csrf_values = handler._form.get("csrf_token", [])
+        if len(csrf_values) == 1 and security.consume_csrf_token(csrf_values[0]):
+            handler._form["csrf_token"] = [manager.issue_csrf_token(session_id)]
     handler.response = None
 
 
