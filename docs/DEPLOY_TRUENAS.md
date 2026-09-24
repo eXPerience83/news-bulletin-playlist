@@ -160,7 +160,7 @@ The `/` page reports, without token material:
 - source result, last success, persisted episode count, refresh/request evidence and current error summary;
 - playlist result, last success, desired/verified count, whether Spotify changed, and current error summary.
 
-Operational cycle status is in memory; authoritative Spotify-first source/destination state, retained episode metadata, managed installation choices, request metrics/diagnostics and Spotify refresh authorization remain under `/data` and survive container restart. Database format 1 contains only the supported Spotify-first schema; the separate pre-0.1 SQLite file may remain temporarily beside it solely as manual rollback evidence during the controlled cutover and is never read by the new runtime. After restart the scheduler immediately runs a new cycle when at least one playlist is enabled and reconstructs the current status from the durable engine state.
+Operational cycle status is in memory; authoritative Spotify-first source/destination state, retained episode metadata, managed installation choices, request metrics/diagnostics and Spotify refresh authorization remain under `/data` and survive container restart. The current database format is 2 and retains accepted-episode research history separately from operational state; the separate pre-0.1 SQLite file may remain temporarily beside it solely as manual rollback evidence during the controlled cutover and is never read by the new runtime. After restart the scheduler immediately runs a new cycle when at least one playlist is enabled and reconstructs the current status from the durable engine state.
 
 ### Duration evidence
 
@@ -232,14 +232,14 @@ For the controlled TrueNAS cutover:
 1. keep a backup of the complete `/data` dataset;
 2. preserve `managed-state.json`, `spotify-auth.json`, admin credential files and
    `managed-playlist-provisioning.json` if present;
-3. deploy the new image; it creates the v1 SQLite database automatically;
+3. deploy the new image; it creates or upgrades to format 2 at the existing v1-named SQLite path;
 4. expect the first cycle to rebuild detector/catalogue/destination evidence conservatively;
 5. verify existing Spotify destination IDs are reused and playlists converge without being recreated;
-6. inspect the new database read-only and verify database format 1 contains only the expected
-   Spotify-first schema;
+6. inspect the new database read-only and verify database format 2 contains only the expected
+   Spotify-first schema and separate accepted-episode history;
 7. allow subsequent cycles to confirm pending snapshots and demonstrate quiet-cycle reuse without
    unnecessary catalogue reads;
-8. restart/redeploy once more after v1 state exists and verify the runtime reuses that state without
+8. restart/redeploy once more after current-format state exists and verify the runtime reuses that state without
    another bootstrap;
 9. keep the old SQLite file until the new baseline has been validated, then archive/remove it
    deliberately together with any old `-wal`/`-shm` companions.

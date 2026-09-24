@@ -282,6 +282,8 @@ Compatibility fields that existed only to render pre-Spotify-first diagnostic ro
 with this baseline. From database format 1 forward, persistence compatibility is explicit: every
 format change requires a reviewed forward migration from a supported format rather than legacy
 schema replay.
+Current format 2 adds a separate 30-day accepted-episode history. Covered catalogue replacement
+still removes absent episodes from operational state; historical rows never feed playlist decisions.
 
 ## Desired playlist state
 

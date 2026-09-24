@@ -444,6 +444,8 @@ class EngineRunner:
 
         with suppress(PersistenceError):
             self.first_journal.prune(before=started_at - SPOTIFY_FIRST_STATE_RETENTION)
+        with suppress(PersistenceError):
+            self.first_journal.prune_history(now=started_at)
 
         ordered_sources = tuple(source_outcomes[source.id] for source in required)
         ok = all(source.ok for source in ordered_sources) and all(

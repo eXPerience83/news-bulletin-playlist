@@ -9,6 +9,8 @@ Version **0.1.0** establishes the first supported persistence compatibility base
 format 1 in `/data/news-bulletin-playlist-v1.sqlite3`. The private-development database at
 `/data/news-bulletin-playlist.sqlite3` is not migrated into this baseline. From 0.1.0 forward,
 persistence changes require explicit reviewed forward migrations from database format 1.
+The current format is 2: startup migrates format 1 in place, backfilling existing accepted
+Spotify-first episode rows into a separate exact-duration research history. The filename is unchanged.
 
 ## Goal
 

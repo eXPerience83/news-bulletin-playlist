@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Collection, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
@@ -19,6 +19,10 @@ from news_bulletin_playlist.spotify.first_models import (
     as_utc,
 )
 from news_bulletin_playlist.spotify.public_detector import spotify_show_id
+from news_bulletin_playlist.spotify_first_history_schema import EPISODE_HISTORY_COLUMNS
+
+SPOTIFY_FIRST_HISTORY_RETENTION = timedelta(days=30)
+MAX_EPISODE_HISTORY_ROWS = 1000
 
 _EPISODE_TABLE = """
 CREATE TABLE IF NOT EXISTS spotify_first_episode_state (
@@ -109,6 +113,39 @@ ON CONFLICT(source_id, spotify_episode_id) DO UPDATE SET
 WHERE excluded.last_seen_at >= spotify_first_episode_state.last_seen_at
 """
 
+_UPSERT_HISTORY = """
+INSERT INTO spotify_first_episode_history (
+    source_id, spotify_show_id, spotify_episode_id, spotify_episode_uri, title,
+    edition_at, timestamp_source, release_date_raw, release_date_precision,
+    duration_seconds, first_seen_at, last_seen_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(source_id, spotify_episode_id) DO UPDATE SET
+    spotify_show_id = CASE WHEN excluded.last_seen_at >= spotify_first_episode_history.last_seen_at
+        THEN excluded.spotify_show_id ELSE spotify_first_episode_history.spotify_show_id END,
+    spotify_episode_uri = CASE
+        WHEN excluded.last_seen_at >= spotify_first_episode_history.last_seen_at
+        THEN excluded.spotify_episode_uri
+        ELSE spotify_first_episode_history.spotify_episode_uri END,
+    title = CASE WHEN excluded.last_seen_at >= spotify_first_episode_history.last_seen_at
+        THEN excluded.title ELSE spotify_first_episode_history.title END,
+    edition_at = CASE WHEN excluded.last_seen_at >= spotify_first_episode_history.last_seen_at
+        THEN excluded.edition_at ELSE spotify_first_episode_history.edition_at END,
+    timestamp_source = CASE WHEN excluded.last_seen_at >= spotify_first_episode_history.last_seen_at
+        THEN excluded.timestamp_source ELSE spotify_first_episode_history.timestamp_source END,
+    release_date_raw = CASE WHEN excluded.last_seen_at >= spotify_first_episode_history.last_seen_at
+        THEN excluded.release_date_raw ELSE spotify_first_episode_history.release_date_raw END,
+    release_date_precision = CASE
+        WHEN excluded.last_seen_at >= spotify_first_episode_history.last_seen_at
+        THEN excluded.release_date_precision
+        ELSE spotify_first_episode_history.release_date_precision END,
+    duration_seconds = CASE
+        WHEN excluded.last_seen_at >= spotify_first_episode_history.last_seen_at
+            THEN COALESCE(excluded.duration_seconds, spotify_first_episode_history.duration_seconds)
+        ELSE spotify_first_episode_history.duration_seconds END,
+    first_seen_at = MIN(spotify_first_episode_history.first_seen_at, excluded.first_seen_at),
+    last_seen_at = MAX(spotify_first_episode_history.last_seen_at, excluded.last_seen_at)
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class DestinationVerificationState:
@@ -197,7 +234,9 @@ class SpotifyFirstJournal:
         with self._connection("replace Spotify-first source catalogue") as connection:
             self._ensure_tables(connection)
             for episode in values:
-                connection.execute(_UPSERT_EPISODE, _episode_values(episode))
+                episode_values = _episode_values(episode)
+                connection.execute(_UPSERT_EPISODE, episode_values)
+                connection.execute(_UPSERT_HISTORY, episode_values)
 
             if coverage_proven:
                 keep_ids = tuple(episode.spotify_episode_id for episode in values)
@@ -219,6 +258,40 @@ class SpotifyFirstJournal:
                 removed = max(cursor.rowcount, 0)
 
         return UpsertCounts(removed=removed)
+
+    def list_episode_history(
+        self,
+        *,
+        observed_since: datetime,
+        observed_until: datetime,
+        source_id: SourceId | None = None,
+        limit: int = 500,
+    ) -> tuple[SpotifyFirstEpisode, ...]:
+        """Read bounded accepted-episode evidence, never runtime catalogue state."""
+        since, until = as_utc(observed_since), as_utc(observed_until)
+        if until < since:
+            raise ValueError("history observed_until precedes observed_since")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= MAX_EPISODE_HISTORY_ROWS
+        ):
+            raise ValueError("history limit is outside the supported range")
+        columns = ", ".join(EPISODE_HISTORY_COLUMNS)
+        params: list[object] = [_format_timestamp(since), _format_timestamp(until)]
+        source_clause = ""
+        if source_id is not None:
+            source_clause = " AND source_id = ?"
+            params.append(str(source_id))
+        params.append(limit)
+        with self._connection("list Spotify-first episode history") as connection:
+            rows = connection.execute(
+                f"SELECT {columns} FROM spotify_first_episode_history "
+                f"WHERE last_seen_at >= ? AND last_seen_at <= ?{source_clause} "
+                "ORDER BY last_seen_at DESC, source_id, spotify_episode_id LIMIT ?",
+                params,
+            ).fetchall()
+        return tuple(_episode_from_row(row) for row in rows)
 
     def record_refresh(
         self,
@@ -420,11 +493,20 @@ class SpotifyFirstJournal:
             )
 
     def prune(self, *, before: datetime) -> int:
-        with self._connection("prune Spotify-first episode history") as connection:
+        with self._connection("prune Spotify-first current episodes") as connection:
             self._ensure_tables(connection)
             cursor = connection.execute(
                 "DELETE FROM spotify_first_episode_state WHERE last_seen_at < ?",
                 (_format_timestamp(before),),
+            )
+            return max(cursor.rowcount, 0)
+
+    def prune_history(self, *, now: datetime) -> int:
+        cutoff = as_utc(now) - SPOTIFY_FIRST_HISTORY_RETENTION
+        with self._connection("prune Spotify-first episode history") as connection:
+            cursor = connection.execute(
+                "DELETE FROM spotify_first_episode_history WHERE last_seen_at < ?",
+                (_format_timestamp(cutoff),),
             )
             return max(cursor.rowcount, 0)
 
