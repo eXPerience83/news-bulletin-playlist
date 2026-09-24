@@ -27,6 +27,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     activate_template,
     compile_engine_config,
+    effective_sources,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
 from news_bulletin_playlist.spotify.client import (
@@ -213,7 +214,7 @@ class ManagedAdminService:
             display_name=_playlist_name(display_name),
             description=_playlist_description(description),
             cover_id=self._cover_id(cover_id),
-            source_ids=self._source_ids(source_ids, allow_empty=False),
+            source_ids=self._source_ids(source_ids, state=state, allow_empty=False),
             retention_hours=template.retention_hours,
             max_episodes=template.max_episodes,
             max_duration_seconds=(
@@ -279,7 +280,7 @@ class ManagedAdminService:
             display_name=intent.display_name,
             description=intent.description,
             cover_id=intent.cover_id,
-            source_ids=self._source_ids(intent.source_ids, allow_empty=False),
+            source_ids=self._source_ids(intent.source_ids, state=state, allow_empty=False),
             retention_hours=intent.retention_hours,
             max_episodes=intent.max_episodes,
             max_duration_seconds=intent.max_duration_seconds,
@@ -287,6 +288,7 @@ class ManagedAdminService:
         self._save_validated(
             ManagedState(
                 schema_version=state.schema_version,
+                sources=state.sources,
                 playlists=state.playlists + (managed,),
             )
         )
@@ -348,7 +350,12 @@ class ManagedAdminService:
         del access_token
         state = self.store.load()
         current = self._managed(state, playlist_id)
-        selected_sources = self._source_ids(source_ids, allow_empty=not enabled)
+        selected_sources = self._source_ids(
+            source_ids,
+            state=state,
+            allow_empty=not enabled,
+            existing=current.source_ids,
+        )
         duration_max = (
             current.max_duration_seconds
             if max_duration_seconds is None
@@ -425,7 +432,13 @@ class ManagedAdminService:
         state = self.store.load()
         current = self._managed(state, playlist_id)
         remaining = tuple(playlist for playlist in state.playlists if playlist.id != current.id)
-        self._save_validated(ManagedState(schema_version=state.schema_version, playlists=remaining))
+        self._save_validated(
+            ManagedState(
+                schema_version=state.schema_version,
+                sources=state.sources,
+                playlists=remaining,
+            )
+        )
         return current.destination.external_id
 
     def _apply_metadata_with_attribution_fallback(
@@ -477,7 +490,9 @@ class ManagedAdminService:
         playlists = tuple(
             updated if playlist.id == updated.id else playlist for playlist in state.playlists
         )
-        return ManagedState(schema_version=state.schema_version, playlists=playlists)
+        return ManagedState(
+            schema_version=state.schema_version, sources=state.sources, playlists=playlists
+        )
 
     def _validate_state(self, state: ManagedState) -> None:
         compile_engine_config(self.catalog, state)
@@ -504,7 +519,9 @@ class ManagedAdminService:
         self,
         source_ids: Sequence[SourceId | str],
         *,
+        state: ManagedState,
         allow_empty: bool,
+        existing: tuple[SourceId, ...] = (),
     ) -> tuple[SourceId, ...]:
         selected = tuple(SourceId(str(source_id).strip()) for source_id in source_ids)
         if not selected and not allow_empty:
@@ -513,10 +530,21 @@ class ManagedAdminService:
             raise ManagedAdminError("source id must not be empty")
         if len(selected) != len(set(selected)):
             raise ManagedAdminError("source selection contains duplicates")
-        known = {source.id for source in self.catalog.sources}
+        sources = effective_sources(self.catalog, state)
+        known = {source.id for source in sources}
         unknown = next((source_id for source_id in selected if source_id not in known), None)
         if unknown is not None:
             raise ManagedAdminError(f"unknown catalog source: {unknown}")
+        disabled = next(
+            (
+                source.id
+                for source in sources
+                if source.id in selected and not source.enabled and source.id not in existing
+            ),
+            None,
+        )
+        if disabled is not None:
+            raise ManagedAdminError(f"disabled source cannot be newly assigned: {disabled}")
         return selected
 
     def _cover_id(self, value: str) -> str:

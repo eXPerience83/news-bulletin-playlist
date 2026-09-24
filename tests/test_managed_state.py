@@ -86,12 +86,13 @@ def test_activation_snapshots_defaults_instead_of_copying_the_catalog() -> None:
     assert managed.max_duration_seconds == 1800
 
 
-def test_source_origin_does_not_change_managed_state_schema_or_payload() -> None:
+def test_builtin_source_origin_is_not_copied_into_managed_playlists() -> None:
     template = BUILTIN_CATALOG.playlist("international_english_news")
     managed = activate_template(template, "spotify-playlist-id")
     payload = serialize_managed_state(ManagedState(playlists=(managed,)))
 
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
+    assert payload["sources"] == []
     assert payload["playlists"][0]["source_ids"] == ["un_news_en", "reuters_world"]
     assert "origin" not in json.dumps(payload)
     assert "countries" not in json.dumps(payload)
@@ -154,7 +155,8 @@ def test_managed_state_store_round_trip_is_owner_only(tmp_path: Path) -> None:
     assert os.stat(path).st_mode & 0o777 == 0o600
     raw = path.read_text(encoding="utf-8")
     assert "Noticias en Español" in raw
-    assert '"schema_version": 2' in raw
+    assert '"schema_version": 3' in raw
+    assert '"sources": []' in raw
     assert '"max_duration_seconds": 1800' in raw
     assert "endpoint_url" not in raw
     assert "spotify_show_id" not in raw
@@ -235,10 +237,12 @@ def test_legacy_managed_state_without_duration_is_migrated_and_pinned(tmp_path: 
 
     state = ManagedStateStore(path).load()
 
-    assert state.schema_version == 2
+    assert state.schema_version == 3
+    assert state.sources == ()
     assert state.playlists[0].max_duration_seconds == 1800
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 2
+    assert persisted["schema_version"] == 3
+    assert persisted["sources"] == []
     assert persisted["playlists"][0]["max_duration_seconds"] == 1800
 
     old_template = BUILTIN_CATALOG.playlist("spain_spanish_news")
@@ -266,18 +270,24 @@ def test_legacy_managed_state_preserves_explicit_duration_during_migration(tmp_p
 
     state = ManagedStateStore(path).load()
 
-    assert state.schema_version == 2
+    assert state.schema_version == 3
+    assert state.sources == ()
     assert state.playlists[0].max_duration_seconds == 1234
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["playlists"][0]["max_duration_seconds"] == 1234
 
 
+@pytest.mark.parametrize("version", [1, 2])
 def test_legacy_migration_failure_preserves_original_document(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    version: int,
 ) -> None:
     path = tmp_path / MANAGED_STATE_FILENAME
-    original = _legacy_document().encode()
+    document = _legacy_document(
+        max_duration_line=',\n    "max_duration_seconds": 1800' if version == 2 else ""
+    ).replace('"schema_version": 1', f'"schema_version": {version}')
+    original = document.encode()
     path.write_bytes(original)
 
     def fail_replace(source: object, destination: object) -> None:

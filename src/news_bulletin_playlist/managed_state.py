@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.file_durability import fsync_directory
@@ -18,17 +20,32 @@ from news_bulletin_playlist.models import (
     AdapterId,
     DestinationReference,
     DurationPolicy,
+    EditorialScope,
     EngineConfig,
+    ExternalReference,
+    LanguageTag,
+    ParserId,
     PlaylistDefinition,
     PlaylistId,
+    SourceDefinition,
     SourceId,
+    SourceOrigin,
+    SourceOriginKind,
     SourceSelection,
 )
+from news_bulletin_playlist.registry import has_collection_filter, has_title_parser
+from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 MANAGED_STATE_FILENAME = "managed-state.json"
-_MANAGED_STATE_SCHEMA_VERSION = 2
+_MANAGED_STATE_SCHEMA_VERSION = 3
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
+_LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
+_MAX_SOURCE_DISPLAY_NAME_LENGTH = 120
+_MAX_SOURCE_TIMEZONE_LENGTH = 128
+_CUSTOM_SOURCE_PARSERS = frozenset({"release_date_title"})
+_CUSTOM_SOURCE_FILTERS: frozenset[str] = frozenset()
+_SOURCE_LANGUAGE_TAG = re.compile(r"[a-z]{2,3}(?:-(?:[A-Z]{2}|[0-9]{3}))?")
 
 
 class ManagedStateError(ValueError):
@@ -51,8 +68,23 @@ class ManagedPlaylist:
 
 
 @dataclass(frozen=True, slots=True)
+class ManagedSource:
+    id: SourceId
+    spotify_show_id: str
+    display_name: str
+    origin: SourceOrigin
+    language: LanguageTag
+    editorial_scope: EditorialScope
+    timezone: str
+    parser_id: ParserId
+    collection_filter_id: str | None
+    enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ManagedState:
     schema_version: int = _MANAGED_STATE_SCHEMA_VERSION
+    sources: tuple[ManagedSource, ...] = ()
     playlists: tuple[ManagedPlaylist, ...] = ()
 
 
@@ -137,7 +169,8 @@ def activate_template(
 
 def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> EngineConfig:
     """Compile immutable catalog knowledge plus local choices into the existing engine model."""
-    source_ids = {source.id for source in catalog.sources}
+    sources = effective_sources(catalog, state)
+    source_ids = {source.id for source in sources}
     templates = {template.id: template for template in catalog.playlists}
     playlists: list[PlaylistDefinition] = []
     seen_ids: set[PlaylistId] = set()
@@ -206,9 +239,56 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
         )
 
     return EngineConfig(
-        sources=catalog.sources,
+        sources=sources,
         playlists=tuple(playlists),
     )
+
+
+def effective_sources(catalog: BuiltInCatalog, state: ManagedState) -> tuple[SourceDefinition, ...]:
+    """Compile a deterministic, immutable built-in plus installation-owned source set."""
+    built_in_ids = {source.id for source in catalog.sources}
+    built_in_shows = {
+        reference.external_id.strip()
+        for source in catalog.sources
+        for reference in source.external_references
+        if reference.system.casefold() == "spotify" and reference.resource_type.casefold() == "show"
+    }
+    seen_ids: set[SourceId] = set()
+    seen_shows: set[str] = set()
+    custom: list[SourceDefinition] = []
+    for index, managed in enumerate(state.sources):
+        path = f"sources[{index}]"
+        _validate_source(managed, path)
+        if managed.id in seen_ids:
+            raise ManagedStateError(f"{path}.id: duplicate custom source id {managed.id}")
+        if managed.spotify_show_id in seen_shows:
+            raise ManagedStateError(
+                f"{path}.spotify_show_id: duplicate custom show id {managed.spotify_show_id}"
+            )
+        if managed.id in built_in_ids:
+            raise ManagedStateError(f"{path}.id: conflicts with built-in source {managed.id}")
+        if managed.spotify_show_id in built_in_shows:
+            raise ManagedStateError(f"{path}.spotify_show_id: conflicts with built-in Spotify show")
+        seen_ids.add(managed.id)
+        seen_shows.add(managed.spotify_show_id)
+        custom.append(
+            SourceDefinition(
+                id=managed.id,
+                display_name=managed.display_name,
+                origin=managed.origin,
+                countries=(),
+                languages=(managed.language,),
+                timezone=ZoneInfo(managed.timezone),
+                enabled=managed.enabled,
+                parser_id=managed.parser_id,
+                collection_filter_id=managed.collection_filter_id,
+                editorial_scope=managed.editorial_scope,
+                external_references=(
+                    ExternalReference("spotify", "show", managed.spotify_show_id),
+                ),
+            )
+        )
+    return catalog.sources + tuple(sorted(custom, key=lambda source: str(source.id)))
 
 
 def parse_managed_state(payload: object) -> ManagedState:
@@ -219,17 +299,45 @@ def parse_managed_state(payload: object) -> ManagedState:
 
 def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, int | None]:
     root = _mapping(payload, "managed state")
-    _known_keys(root, {"schema_version", "playlists"}, "managed state")
     source_schema_version = _integer(
         _required(root, "schema_version", "managed state"), "schema_version"
     )
     if source_schema_version not in {
         _LEGACY_MANAGED_STATE_SCHEMA_VERSION,
+        _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION,
         _MANAGED_STATE_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
             f"unsupported managed-state schema version: {source_schema_version}"
         )
+    _known_keys(
+        root,
+        {"schema_version", "playlists", "sources"}
+        if source_schema_version == _MANAGED_STATE_SCHEMA_VERSION
+        else {"schema_version", "playlists"},
+        "managed state",
+    )
+    sources = (
+        tuple(
+            _parse_source(item, f"sources[{index}]")
+            for index, item in enumerate(
+                _sequence(_required(root, "sources", "managed state"), "sources")
+            )
+        )
+        if source_schema_version == _MANAGED_STATE_SCHEMA_VERSION
+        else ()
+    )
+    seen_source_ids: set[SourceId] = set()
+    seen_show_ids: set[str] = set()
+    for index, source in enumerate(sources):
+        if source.id in seen_source_ids:
+            raise ManagedStateError(f"sources[{index}].id: duplicate custom source id {source.id}")
+        if source.spotify_show_id in seen_show_ids:
+            raise ManagedStateError(
+                f"sources[{index}].spotify_show_id: duplicate custom Spotify show id"
+            )
+        seen_source_ids.add(source.id)
+        seen_show_ids.add(source.spotify_show_id)
     raw_playlists = _sequence(_required(root, "playlists", "managed state"), "playlists")
     playlists = tuple(
         _parse_playlist(
@@ -261,8 +369,13 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     migrated_from = (
         source_schema_version if source_schema_version != _MANAGED_STATE_SCHEMA_VERSION else None
     )
+    sources = tuple(sorted(sources, key=lambda source: str(source.id)))
     return (
-        ManagedState(schema_version=_MANAGED_STATE_SCHEMA_VERSION, playlists=playlists),
+        ManagedState(
+            schema_version=_MANAGED_STATE_SCHEMA_VERSION,
+            sources=sources,
+            playlists=playlists,
+        ),
         migrated_from,
     )
 
@@ -270,6 +383,8 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
 def serialize_managed_state(state: ManagedState) -> dict[str, object]:
     if state.schema_version != _MANAGED_STATE_SCHEMA_VERSION:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
+    for index, source in enumerate(state.sources):
+        _validate_source(source, f"sources[{index}]")
     serialized_playlists: list[dict[str, object]] = []
     for playlist in state.playlists:
         item: dict[str, object] = {
@@ -289,14 +404,132 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
             "max_duration_seconds": playlist.max_duration_seconds,
         }
         serialized_playlists.append(item)
+    sorted_sources = tuple(sorted(state.sources, key=lambda source: str(source.id)))
     payload: dict[str, object] = {
         "schema_version": state.schema_version,
+        "sources": [_serialize_source(source) for source in sorted_sources],
         "playlists": serialized_playlists,
     }
     canonical = parse_managed_state(payload)
-    if canonical != state:
+    if canonical != replace(state, sources=sorted_sources):
         raise ManagedStateError("managed state contains non-canonical values")
     return payload
+
+
+def _serialize_source(source: ManagedSource) -> dict[str, object]:
+    return {
+        "id": str(source.id),
+        "spotify_show_id": source.spotify_show_id,
+        "display_name": source.display_name,
+        "origin": {"kind": source.origin.kind.value, "code": source.origin.code},
+        "language": str(source.language),
+        "editorial_scope": source.editorial_scope.value,
+        "timezone": source.timezone,
+        "parser_id": str(source.parser_id),
+        "collection_filter_id": source.collection_filter_id,
+        "enabled": source.enabled,
+    }
+
+
+def _parse_source(value: object, path: str) -> ManagedSource:
+    data = _mapping(value, path)
+    _known_keys(
+        data,
+        {
+            "id",
+            "spotify_show_id",
+            "display_name",
+            "origin",
+            "language",
+            "editorial_scope",
+            "timezone",
+            "parser_id",
+            "collection_filter_id",
+            "enabled",
+        },
+        path,
+    )
+    origin_data = _mapping(_required(data, "origin", path), f"{path}.origin")
+    _known_keys(origin_data, {"kind", "code"}, f"{path}.origin")
+    try:
+        kind_text = _string(_required(origin_data, "kind", f"{path}.origin"), f"{path}.origin.kind")
+        origin = SourceOrigin(
+            SourceOriginKind(kind_text),
+            _string(_required(origin_data, "code", f"{path}.origin"), f"{path}.origin.code"),
+        )
+    except ValueError as exc:
+        raise ManagedStateError(f"{path}.origin: {exc}") from exc
+    scope_text = _string(_required(data, "editorial_scope", path), f"{path}.editorial_scope")
+    try:
+        scope = EditorialScope(scope_text)
+    except ValueError as exc:
+        raise ManagedStateError(
+            f"{path}.editorial_scope: unsupported value {scope_text!r}"
+        ) from exc
+    source = ManagedSource(
+        id=SourceId(_string(_required(data, "id", path), f"{path}.id")),
+        spotify_show_id=_string(
+            _required(data, "spotify_show_id", path), f"{path}.spotify_show_id"
+        ),
+        display_name=_nonempty_string(
+            _required(data, "display_name", path), f"{path}.display_name"
+        ),
+        origin=origin,
+        language=LanguageTag(_string(_required(data, "language", path), f"{path}.language")),
+        editorial_scope=scope,
+        timezone=_string(_required(data, "timezone", path), f"{path}.timezone"),
+        parser_id=ParserId(_string(_required(data, "parser_id", path), f"{path}.parser_id")),
+        collection_filter_id=(
+            None
+            if data.get("collection_filter_id") is None
+            else _string(data["collection_filter_id"], f"{path}.collection_filter_id")
+        ),
+        enabled=_boolean(_required(data, "enabled", path), f"{path}.enabled"),
+    )
+    _validate_source(source, path)
+    return source
+
+
+def _validate_source(source: ManagedSource, path: str) -> None:
+    if not isinstance(source.spotify_show_id, str) or not is_spotify_id(source.spotify_show_id):
+        raise ManagedStateError(f"{path}.spotify_show_id: expected a canonical Spotify show ID")
+    if source.id != SourceId(f"custom_{source.spotify_show_id}"):
+        raise ManagedStateError(f"{path}.id: must equal custom_<spotify_show_id>")
+    if (
+        not isinstance(source.display_name, str)
+        or not 1 <= len(source.display_name) <= _MAX_SOURCE_DISPLAY_NAME_LENGTH
+        or source.display_name != source.display_name.strip()
+        or not source.display_name.isprintable()
+    ):
+        raise ManagedStateError(f"{path}.display_name: must be trimmed and 1-120 characters")
+    if not isinstance(source.origin, SourceOrigin):
+        raise ManagedStateError(f"{path}.origin: expected a valid source origin")
+    if _SOURCE_LANGUAGE_TAG.fullmatch(str(source.language)) is None:
+        raise ManagedStateError(f"{path}.language: expected a language tag such as en or es-ES")
+    if not isinstance(source.editorial_scope, EditorialScope):
+        raise ManagedStateError(f"{path}.editorial_scope: unsupported value")
+    if (
+        not isinstance(source.timezone, str)
+        or not 1 <= len(source.timezone) <= _MAX_SOURCE_TIMEZONE_LENGTH
+        or source.timezone != source.timezone.strip()
+    ):
+        raise ManagedStateError(f"{path}.timezone: expected a bounded IANA timezone")
+    try:
+        ZoneInfo(source.timezone)
+    except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
+        raise ManagedStateError(f"{path}.timezone: unknown IANA timezone") from exc
+    if str(source.parser_id) not in _CUSTOM_SOURCE_PARSERS or not has_title_parser(
+        str(source.parser_id)
+    ):
+        raise ManagedStateError(f"{path}.parser_id: not allowed for custom sources")
+    if source.collection_filter_id is not None and (
+        not isinstance(source.collection_filter_id, str)
+        or source.collection_filter_id not in _CUSTOM_SOURCE_FILTERS
+        or not has_collection_filter(source.collection_filter_id)
+    ):
+        raise ManagedStateError(f"{path}.collection_filter_id: not allowed for custom sources")
+    if not isinstance(source.enabled, bool):
+        raise ManagedStateError(f"{path}.enabled: expected a boolean")
 
 
 def _parse_playlist(

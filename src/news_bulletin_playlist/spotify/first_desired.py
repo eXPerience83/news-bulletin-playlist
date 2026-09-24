@@ -39,6 +39,13 @@ def build_spotify_first_desired_state(
     observed = as_utc(now)
     cutoff = observed - timedelta(hours=playlist.retention_hours)
     selected = set(playlist.source_selection.explicit)
+    unavailable = [
+        source_id
+        for source_id in selected
+        if source_id not in sources or not sources[source_id].enabled
+    ]
+    if unavailable:
+        raise ValueError(f"selected source {sorted(unavailable)[0]} is missing or disabled")
     source_timezones = {source_id: source.timezone for source_id, source in sources.items()}
     candidates: list[tuple[DesiredPlaylistItem, SpotifyFirstEpisode]] = []
     decisions = []

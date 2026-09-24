@@ -212,6 +212,12 @@ def _managed_card(
         source_prefix=f"edit-{playlist.id}",
         enabled=playlist.enabled,
     )
+    built_in_ids = {source.id for source in catalog.sources}
+    retained_source_ids = "".join(
+        _hidden_input("source_id", str(source_id))
+        for source_id in playlist.source_ids
+        if source_id not in built_in_ids
+    )
     return f"""
 <article class="card playlist-card">
   <div class="card-head">
@@ -229,6 +235,7 @@ def _managed_card(
     {_hidden_input("playlist_id", str(playlist.id))}
     {_hidden_input("cover_id", playlist.cover_id)}
     {fields}
+    {retained_source_ids}
     <button class="button" type="submit">Save playlist</button>
   </form>
   <form method="post" action="/admin/playlists/sync">
