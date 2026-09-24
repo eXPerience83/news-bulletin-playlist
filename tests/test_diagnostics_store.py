@@ -10,7 +10,7 @@ from news_bulletin_playlist.diagnostics import (
     DiagnosticEventStore,
     DiagnosticSeverity,
 )
-from news_bulletin_playlist.persistence import SQLiteStore
+from news_bulletin_playlist.persistence import DATABASE_FORMAT_VERSION, SQLiteStore
 
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
 
@@ -37,7 +37,7 @@ def test_diagnostics_survive_store_recreation_and_share_application_database(
     tmp_path: Path,
 ) -> None:
     operational, diagnostics = _stores(tmp_path)
-    assert operational.format_version() == 1
+    assert operational.format_version() == DATABASE_FORMAT_VERSION == 2
 
     event_id = diagnostics.record(
         occurred_at=NOW,

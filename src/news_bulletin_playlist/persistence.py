@@ -8,10 +8,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from news_bulletin_playlist.models import PlaylistId
+from news_bulletin_playlist.spotify_first_history_schema import (
+    EPISODE_HISTORY_COLUMNS,
+    EPISODE_HISTORY_INDEX,
+    EPISODE_HISTORY_TABLE,
+)
 
 DEFAULT_DB_FILENAME = "news-bulletin-playlist-v1.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
-DATABASE_FORMAT_VERSION = 1
+DATABASE_FORMAT_VERSION = 2
 
 
 class PersistenceError(RuntimeError):
@@ -115,6 +120,7 @@ class SQLiteStore:
             connection.execute("PRAGMA journal_mode=WAL")
             tables = self._application_tables(connection)
             if not tables:
+                connection.execute("BEGIN IMMEDIATE")
                 self._create_baseline(connection, created_at=datetime.now(UTC))
                 return
 
@@ -130,16 +136,18 @@ class SQLiteStore:
                     f"database format {current} is newer than supported "
                     f"version {DATABASE_FORMAT_VERSION}"
                 )
-            if current < DATABASE_FORMAT_VERSION:
-                raise PersistenceError(
-                    f"database format {current} requires a forward migration to "
-                    f"{DATABASE_FORMAT_VERSION}, but no migration is implemented"
-                )
-
             missing = sorted(_REQUIRED_BASELINE_TABLES - tables)
             if missing:
                 raise PersistenceError(
                     "database format is missing required tables: " + ", ".join(missing)
+                )
+            if current == 1:
+                self._migrate_format_1_to_2(connection, tables)
+            elif current != DATABASE_FORMAT_VERSION:
+                raise PersistenceError(f"database format {current} has no supported migration")
+            elif "spotify_first_episode_history" not in tables:
+                raise PersistenceError(
+                    "database format is missing required tables: spotify_first_episode_history"
                 )
 
     def format_version(self) -> int:
@@ -180,6 +188,8 @@ class SQLiteStore:
         connection.execute(_FORMAT_TABLE_SQL)
         for statement in _BASELINE_STATEMENTS:
             connection.execute(statement)
+        connection.execute(EPISODE_HISTORY_TABLE)
+        connection.execute(EPISODE_HISTORY_INDEX)
         connection.execute(
             """
             INSERT INTO database_format(singleton, format_version, created_at)
@@ -195,6 +205,20 @@ class SQLiteStore:
             """,
             (created,),
         )
+
+    @staticmethod
+    def _migrate_format_1_to_2(connection: sqlite3.Connection, tables: frozenset[str]) -> None:
+        # DDL, backfill and version marker commit or roll back together.
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(EPISODE_HISTORY_TABLE)
+        connection.execute(EPISODE_HISTORY_INDEX)
+        if "spotify_first_episode_state" in tables:
+            columns = ", ".join(EPISODE_HISTORY_COLUMNS)
+            connection.execute(
+                f"INSERT INTO spotify_first_episode_history ({columns}) "
+                f"SELECT {columns} FROM spotify_first_episode_state"
+            )
+        connection.execute("UPDATE database_format SET format_version = 2 WHERE singleton = 1")
 
     def record_playlist_state(
         self,
