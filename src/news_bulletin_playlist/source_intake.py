@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -14,35 +14,21 @@ from news_bulletin_playlist.catalog import BuiltInCatalog
 from news_bulletin_playlist.custom_source_policy import custom_strategy_allowed
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateError, effective_sources
 from news_bulletin_playlist.models import ExternalReference, ParserId, SourceId
-from news_bulletin_playlist.persistence import PersistenceError
-from news_bulletin_playlist.spotify.auth import SpotifyAuthError
-from news_bulletin_playlist.spotify.client import (
-    SpotifyApiError,
-    SpotifyClient,
-    SpotifyTransportError,
+from news_bulletin_playlist.source_inspection import (
+    InspectionFailure,
+    SourceInspection,
+    SourceInspectionError,
+    inspect_source,
 )
-from news_bulletin_playlist.spotify.first_catalogue import (
-    CatalogueResponseError,
-    fetch_source_catalogue,
-)
-from news_bulletin_playlist.spotify.first_models import TimestampSource, as_utc
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 from news_bulletin_playlist.spotify.public_detector import (
+    PublicShowClient,
     PublicShowConfigurationError,
     spotify_show_id,
 )
-from news_bulletin_playlist.spotify_backoff import (
-    SpotifyRateLimitBackoffActive,
-    SpotifyRateLimitGuardAuth,
-    SpotifyRateLimitGuardClient,
-    SpotifyRateLimitJournal,
-    SpotifyRateLimitStateUnavailable,
-    SpotifyRateLimitSuppressed,
-)
+from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
-_LANGUAGE_HINT = re.compile(r"[a-z]{2,3}")
-_INSPECTION_RETENTION = timedelta(hours=48)
 _DEFAULT_PARSER = ParserId("release_date_title")
 _MAX_LOCATOR_LENGTH = 512
 
@@ -90,32 +76,6 @@ class SourceIntakeError(ValueError):
     def __init__(self, failure: SourceIntakeFailure) -> None:
         self.failure = failure
         super().__init__(_MESSAGES[failure])
-
-
-@dataclass(frozen=True, slots=True)
-class SourceInspection:
-    spotify_show_id: str
-    spotify_uri: str
-    spotify_url: str
-    display_name_hint: str
-    language_hints: tuple[str, ...]
-    publisher_hint: str | None
-    total_episodes_hint: int | None
-    parser_id: ParserId
-    collection_filter_id: str | None
-    catalogue_requests: int
-    catalogue_complete: bool
-    coverage_proven: bool
-    observed_episodes: int
-    accepted_episodes: int
-    filter_rejected_count: int
-    title_timestamp_count: int
-    first_seen_timestamp_count: int
-    duration_known_count: int
-    duration_missing_count: int
-    min_duration_seconds: int | None
-    max_duration_seconds: int | None
-    warnings: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +140,8 @@ def inspect_spotify_source(
     parser_id: ParserId = _DEFAULT_PARSER,
     collection_filter_id: str | None = None,
     client_factory: Callable[[str], Any] | None = None,
+    public_client: PublicShowClient | None = None,
+    observe_public: bool = False,
     metrics: SpotifyRequestMetrics | None = None,
     clock: Callable[[], datetime] = _utc_now,
 ) -> SourceInspection:
@@ -197,115 +159,40 @@ def inspect_spotify_source(
     except (ManagedStateError, PublicShowConfigurationError) as exc:
         raise SourceIntakeError(SourceIntakeFailure.CONFIGURATION) from exc
 
-    observed = as_utc(now)
-    guarded_auth = SpotifyRateLimitGuardAuth(auth, rate_limit, clock=clock)
-    factory = client_factory or (lambda token: SpotifyClient(token, metrics=metrics))
     try:
-        token = guarded_auth.get_access_token()
-        client = SpotifyRateLimitGuardClient(factory(token), rate_limit, clock=clock)
-        details = _show_hints(client.show_details(show_id), show_id)
         source = _CandidateCatalogueSource(
             candidate_id,
             (ExternalReference("spotify", "show", show_id),),
             parser_id,
             collection_filter_id,
         )
-        snapshot = fetch_source_catalogue(
-            client, source, now=observed, cutoff=observed - _INSPECTION_RETENTION
+        report = inspect_source(
+            source,
+            ownership="candidate",
+            timezone=None,
+            auth=auth,
+            rate_limit=rate_limit,
+            now=now,
+            client_factory=client_factory,
+            public_client=public_client,
+            observe_public=observe_public,
+            metrics=metrics,
+            clock=clock,
         )
-    except SourceIntakeError:
-        raise
-    except SpotifyRateLimitBackoffActive, SpotifyRateLimitSuppressed:
-        raise SourceIntakeError(SourceIntakeFailure.RATE_LIMITED) from None
-    except SpotifyRateLimitStateUnavailable, SpotifyTransportError, PersistenceError:
-        raise SourceIntakeError(SourceIntakeFailure.UNAVAILABLE) from None
-    except SpotifyAuthError:
-        raise SourceIntakeError(SourceIntakeFailure.AUTHORIZATION) from None
-    except SpotifyApiError as exc:
-        if exc.message in {"invalid JSON response", "unexpected non-object JSON response"}:
-            failure = SourceIntakeFailure.MALFORMED_RESPONSE
-        else:
-            failure = {
-                400: SourceIntakeFailure.PROVIDER_REJECTION,
-                401: SourceIntakeFailure.AUTHORIZATION,
-                403: SourceIntakeFailure.FORBIDDEN,
-                404: SourceIntakeFailure.PROVIDER_REJECTION,
-                429: SourceIntakeFailure.RATE_LIMITED,
-            }.get(exc.status, SourceIntakeFailure.UNAVAILABLE)
-        raise SourceIntakeError(failure) from None
-    except CatalogueResponseError:
-        raise SourceIntakeError(SourceIntakeFailure.MALFORMED_RESPONSE) from None
+    except SourceInspectionError as exc:
+        mapping = {
+            InspectionFailure.AUTHORIZATION: SourceIntakeFailure.AUTHORIZATION,
+            InspectionFailure.FORBIDDEN: SourceIntakeFailure.FORBIDDEN,
+            InspectionFailure.PROVIDER_REJECTION: SourceIntakeFailure.PROVIDER_REJECTION,
+            InspectionFailure.RATE_LIMITED: SourceIntakeFailure.RATE_LIMITED,
+            InspectionFailure.UNAVAILABLE: SourceIntakeFailure.UNAVAILABLE,
+            InspectionFailure.MALFORMED_RESPONSE: SourceIntakeFailure.MALFORMED_RESPONSE,
+            InspectionFailure.CONFIGURATION: SourceIntakeFailure.CONFIGURATION,
+        }
+        raise SourceIntakeError(mapping[exc.failure]) from None
 
-    if not snapshot.coverage_proven:
+    if not report.coverage_proven:
         raise SourceIntakeError(SourceIntakeFailure.INSUFFICIENT_COVERAGE)
-    if not snapshot.episodes:
+    if not report.accepted_episodes:
         raise SourceIntakeError(SourceIntakeFailure.NO_USABLE_EPISODES)
-    durations = [episode.duration_seconds for episode in snapshot.episodes]
-    known = [seconds for seconds in durations if seconds is not None]
-    first_seen = sum(
-        episode.timestamp_source is TimestampSource.FIRST_SEEN for episode in snapshot.episodes
-    )
-    warnings = ("Some episodes have no duration metadata.",) if len(known) != len(durations) else ()
-    return SourceInspection(
-        spotify_show_id=show_id,
-        spotify_uri=f"spotify:show:{show_id}",
-        spotify_url=f"https://open.spotify.com/show/{show_id}",
-        display_name_hint=details[0],
-        language_hints=details[1],
-        publisher_hint=details[2],
-        total_episodes_hint=details[3],
-        parser_id=parser_id,
-        collection_filter_id=collection_filter_id,
-        catalogue_requests=snapshot.request_count,
-        catalogue_complete=snapshot.complete,
-        coverage_proven=snapshot.coverage_proven,
-        observed_episodes=len(snapshot.api_ids),
-        accepted_episodes=len(snapshot.episodes),
-        filter_rejected_count=snapshot.filter_rejected_count,
-        title_timestamp_count=len(snapshot.episodes) - first_seen,
-        first_seen_timestamp_count=first_seen,
-        duration_known_count=len(known),
-        duration_missing_count=len(durations) - len(known),
-        min_duration_seconds=min(known) if known else None,
-        max_duration_seconds=max(known) if known else None,
-        warnings=warnings,
-    )
-
-
-def _show_hints(
-    payload: object, show_id: str
-) -> tuple[str, tuple[str, ...], str | None, int | None]:
-    if not isinstance(payload, dict):
-        raise SourceIntakeError(SourceIntakeFailure.MALFORMED_RESPONSE)
-    if (
-        payload.get("id") != show_id
-        or payload.get("type") != "show"
-        or payload.get("uri") != f"spotify:show:{show_id}"
-    ):
-        raise SourceIntakeError(SourceIntakeFailure.MALFORMED_RESPONSE)
-    name = payload.get("name")
-    if (
-        not isinstance(name, str)
-        or not 1 <= len(name) <= 120
-        or not name.strip()
-        or not name.isprintable()
-    ):
-        raise SourceIntakeError(SourceIntakeFailure.MALFORMED_RESPONSE)
-    languages = payload.get("languages", [])
-    if (
-        not isinstance(languages, list)
-        or len(languages) > 16
-        or any(
-            not isinstance(item, str) or not _LANGUAGE_HINT.fullmatch(item) for item in languages
-        )
-    ):
-        raise SourceIntakeError(SourceIntakeFailure.MALFORMED_RESPONSE)
-    publisher = payload.get("publisher")
-    if publisher is not None and (
-        not isinstance(publisher, str) or len(publisher) > 120 or not publisher.isprintable()
-    ):
-        raise SourceIntakeError(SourceIntakeFailure.MALFORMED_RESPONSE)
-    total = payload.get("total_episodes")
-    if total is not None and (isinstance(total, bool) or not isinstance(total, int) or total < 0):
-        raise SourceIntakeError(SourceIntakeFailure.MALFORMED_RESPONSE)
-    return name.strip(), tuple(languages), publisher, total
+    return report
