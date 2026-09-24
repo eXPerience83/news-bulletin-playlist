@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -17,7 +20,12 @@ from _http_handler import (
 )
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
+from news_bulletin_playlist.engine import (
+    EngineCycleResult,
+    EngineRunner,
+    OperationalStatus,
+    _required_sources,
+)
 from news_bulletin_playlist.engine_runtime import (
     ConfigurationSynchronization,
     EngineLifecycleController,
@@ -31,8 +39,21 @@ from news_bulletin_playlist.managed_provisioning import (
     ProvisioningJournal,
     ProvisioningState,
 )
-from news_bulletin_playlist.managed_state import ManagedStateStore, compile_engine_config
-from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.managed_state import (
+    ManagedSource,
+    ManagedState,
+    ManagedStateStore,
+    activate_template,
+    compile_engine_config,
+)
+from news_bulletin_playlist.models import (
+    CountryCode,
+    EditorialScope,
+    LanguageTag,
+    ParserId,
+    SourceId,
+    SourceOrigin,
+)
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.client import SpotifyTransportError
 
@@ -483,6 +504,104 @@ def test_update_route_persists_exact_duration_without_metadata_io(tmp_path: Path
     assert _response(handler).status == HTTPStatus.SEE_OTHER
     assert service.snapshot().managed[0].max_duration_seconds == 720
     assert factory.client.update_calls == []
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_playlist_save_preserves_unrendered_custom_source(tmp_path: Path, disabled: bool) -> None:
+    service, factory = _service(tmp_path)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    custom_show_id = "A" * 22
+    custom = ManagedSource(
+        id=SourceId(f"custom_{custom_show_id}"),
+        spotify_show_id=custom_show_id,
+        display_name="Installation source",
+        origin=SourceOrigin.country(CountryCode("ES")),
+        language=LanguageTag("es-419"),
+        editorial_scope=EditorialScope.INTERNATIONAL,
+        timezone="Europe/Madrid",
+        parser_id=ParserId("release_date_title"),
+        collection_filter_id=None,
+        enabled=not disabled,
+    )
+    playlist = replace(
+        activate_template(template, "destination"),
+        source_ids=(SourceId("ser"), custom.id),
+    )
+    service.store.save(ManagedState(sources=(custom,), playlists=(playlist,)))
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    get_handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/",
+        security=security,
+    )
+    get_handler.do_GET()
+    response = _response(get_handler)
+    assert response.status == HTTPStatus.OK
+    page = response.payload.decode()
+    form_html = page.split('<form method="post" action="/admin/playlists/update">', 1)[1].split(
+        "</form>", 1
+    )[0]
+    checked = re.findall(
+        r'<input id="[^"]+" type="checkbox" name="source_id" value="([^"]+)" checked>',
+        form_html,
+    )
+    retained = re.findall(r'<input type="hidden" name="source_id" value="([^"]+)">', form_html)
+    assert checked == ["ser"]
+    assert retained == [str(custom.id)]
+    assert f'type="checkbox" name="source_id" value="{custom.id}"' not in page
+    assert '<input type="hidden" name="source_id" value="ser">' not in form_html
+    csrf_token = re.search(r'<input type="hidden" name="csrf_token" value="([^"]+)">', form_html)
+    assert csrf_token is not None
+
+    post_handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/update",
+        form={
+            "csrf_token": [csrf_token.group(1)],
+            "playlist_id": [str(playlist.id)],
+            "display_name": ["Renamed playlist"],
+            "description": [playlist.description],
+            "cover_id": [playlist.cover_id],
+            "source_id": checked + retained,
+            "enabled": ["1"],
+            "max_duration_minutes": ["12"],
+            "max_duration_seconds_remainder": ["0"],
+        },
+        security=security,
+    )
+    post_handler.do_POST()
+    assert _response(post_handler).status == HTTPStatus.SEE_OTHER
+    persisted = service.store.load()
+    assert persisted.sources == (custom,)
+    assert persisted.playlists[0].source_ids == (SourceId("ser"), custom.id)
+    assert persisted.playlists[0].display_name == "Renamed playlist"
+    assert persisted.playlists[0].max_duration_seconds == 720
+    assert factory.tokens == []
+    assert factory.client.update_calls == []
+
+    if disabled:
+        config = compile_engine_config(BUILTIN_CATALOG, persisted)
+        assert tuple(source.id for source in _required_sources(config)) == (SourceId("ser"),)
+        runner = object.__new__(EngineRunner)
+        runner.config = config
+
+        class ReadyBuiltInOnly:
+            def get_source_state(self, source_id: SourceId) -> SimpleNamespace:
+                assert source_id == SourceId("ser")
+                ser = next(source for source in config.sources if source.id == source_id)
+                return SimpleNamespace(
+                    spotify_show_id=ser.external_references[0].external_id,
+                    coverage_proven=True,
+                    coverage_cutoff_at=NOW - timedelta(hours=48),
+                )
+
+        runner.first_journal = ReadyBuiltInOnly()  # type: ignore[assignment]
+        assert not runner._playlist_sources_ready(config.playlists[0], now=NOW)
 
 
 @pytest.mark.parametrize(

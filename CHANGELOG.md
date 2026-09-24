@@ -7,9 +7,13 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ### Changed
 
+- Managed state now uses schema v3 with durable, strictly validated installation-owned Spotify-first
+  source definitions. v1/v2 files migrate atomically with an empty `sources` collection; built-in
+  definitions remain image-owned. Disabled selected sources preserve the current destination. Add
+  Source and source lifecycle UI are not included yet.
 - Source origin now distinguishes country and institutional providers. United Nations sources display
-  `UN · INT · en` and `UN · INT · es` without an invented country; runtime selection and persistence
-  are unchanged.
+  `UN · INT · en` and `UN · INT · es` without an invented country; origin classification does not
+  change runtime selection.
 
 ## [0.1.3] - 2026-09-22
 

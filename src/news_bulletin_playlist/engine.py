@@ -672,7 +672,7 @@ class EngineRunner:
         sources = {source.id: source for source in self.config.sources}
         for source_id in playlist.source_selection.explicit:
             source = sources.get(source_id)
-            if source is None:
+            if source is None or not source.enabled:
                 return False
             state = self.first_journal.get_source_state(source_id)
             if (
