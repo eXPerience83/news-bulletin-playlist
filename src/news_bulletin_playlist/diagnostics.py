@@ -24,6 +24,10 @@ MAX_DIAGNOSTIC_EXPORT_EVENTS = 10_000
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _ALLOWED_DETAIL_KEYS = frozenset(
     {
+        "10_to_15m",
+        "15_to_30m",
+        "30_to_60m",
+        "60m_plus",
         "accepted_count",
         "applied_count",
         "backoff_source",
@@ -39,7 +43,6 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "eligibility_reason",
         "failure_class",
         "failure_reason",
-        "gt_30m",
         "http_status",
         "parser_fallback_count",
         "pending_snapshot_created",
@@ -89,12 +92,6 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "consecutive_failure_count",
         "last_failure_at",
         "limit",
-        "lt_5m",
-        "m10_lt15",
-        "m15_lt20",
-        "m20_le30",
-        "m5_lt8",
-        "m8_lt10",
         "metadata_outcome",
         "max_seconds",
         "next_state",
@@ -108,6 +105,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "returned_count",
         "sample_count",
         "total",
+        "under_10m",
         "unavailable_count",
         "unavailable_media_count",
         "unavailable_media_phase",
@@ -367,6 +365,12 @@ _INDEXES = (
     """,
 )
 
+_DELETE_LEGACY_DURATION_PROFILES_SQL = """
+DELETE FROM diagnostic_events
+WHERE event_name = 'duration_profile'
+  AND instr(details_json, '"under_10m":') = 0
+"""
+
 
 class DiagnosticEventStore:
     """Persist a compact allow-listed event stream in the application's SQLite database."""
@@ -396,6 +400,10 @@ class DiagnosticEventStore:
             connection.execute(_SCHEMA_SQL)
             for statement in _INDEXES:
                 connection.execute(statement)
+            # The legacy seven-bucket aggregate cannot be losslessly converted to the
+            # canonical five-bucket profile. Drop only non-canonical duration profiles;
+            # exact accepted-episode duration evidence is retained separately by #398.
+            connection.execute(_DELETE_LEGACY_DURATION_PROFILES_SQL)
 
     def record(
         self,
