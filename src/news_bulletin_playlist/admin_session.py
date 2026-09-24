@@ -33,6 +33,17 @@ class _AdminSession:
     last_seen_at: datetime
     csrf_token: str | None = None
     csrf_expires_at: datetime | None = None
+    source_inspection: SourceInspectionContext | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceInspectionContext:
+    """Normalized, ephemeral review binding; never an authorization to persist."""
+
+    spotify_show_id: str
+    parser_id: str
+    collection_filter_id: str | None
+    report_json: bytes
 
 
 class AdminSessionManager:
@@ -78,6 +89,20 @@ class AdminSessionManager:
     def invalidate_session(self, session_id: str) -> None:
         with self._lock:
             self._sessions.pop(session_id, None)
+
+    def source_inspection(self, session_id: str) -> SourceInspectionContext | None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            return None if session is None else session.source_inspection
+
+    def set_source_inspection(
+        self, session_id: str, context: SourceInspectionContext | None
+    ) -> None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                raise RuntimeError("administration session is unavailable")
+            session.source_inspection = context
 
     def invalidate_cookie_session(self, cookie_header: str | None) -> None:
         session_id = _session_id_from_cookie(cookie_header)

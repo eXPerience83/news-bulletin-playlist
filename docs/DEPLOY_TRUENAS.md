@@ -56,7 +56,7 @@ The source table and selectors distinguish **provider origin** (country or insti
 
 ## Managed configuration only
 
-The runtime configuration is the image-owned built-in catalog plus schema v3 `/data/managed-state.json`. Existing v1/v2 managed state migrates atomically to v3 with an empty installation-owned `sources` collection. The custom Spotify-first source persistence foundation exists, but Add Source and lifecycle UI do not yet exist; managed state does not store OAuth secrets or raw provider responses.
+The runtime configuration is the image-owned built-in catalog plus schema v3 `/data/managed-state.json`. Existing v1/v2 managed state migrates atomically to v3 with an empty installation-owned `sources` collection. Admin Sources can inspect and add validated custom Spotify-first sources; editing, disabling, deleting and playlist assignment UI are not yet available. Managed state does not store OAuth secrets, inspection reports or raw provider responses.
 Playlist activation, metadata, source membership and duration policy are managed through `/admin/`; there is no longer a second full-YAML runtime configuration path.
 
 The pre-1.0 settings `NEWS_PLAYLIST_CONFIG` and `/data/news-bulletin-playlist.yaml` are obsolete.

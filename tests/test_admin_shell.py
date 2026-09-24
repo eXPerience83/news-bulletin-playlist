@@ -169,7 +169,7 @@ def test_playlists_keep_source_controls_and_sources_move_to_read_only_page(
         assert source_name in sources
     assert 'action="/admin/logout"' in sources
     assert 'name="source_id"' not in sources
-    assert "Add source" not in sources
+    assert 'href="/admin/sources/new">Add source</a>' in sources
     assert "Remove source" not in sources
 
 
@@ -178,11 +178,13 @@ def test_un_origin_is_rendered_in_sources_and_playlist_selectors(tmp_path: Path)
     _, sources = _get(tmp_path, path="/admin/sources", service=service)
     _, playlists = _get(tmp_path, path="/admin/", service=service)
 
-    assert (
-        "United Nations — UN News Today</td><td>UN</td><td><code>INT</code></td><td>en" in sources
+    assert re.search(
+        r"United Nations — UN News Today.*?</td><td>UN</td><td><code>INT</code></td><td>en",
+        sources,
     )
-    assert (
-        "United Nations — ONU en minutos</td><td>UN</td><td><code>INT</code></td><td>es" in sources
+    assert re.search(
+        r"United Nations — ONU en minutos.*?</td><td>UN</td><td><code>INT</code></td><td>es",
+        sources,
     )
     assert "United Nations — UN News Today (UN · INT · en)" in playlists
     assert "United Nations — ONU en minutos (UN · INT · es)" in playlists

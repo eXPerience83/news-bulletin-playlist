@@ -13,6 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist import __version__, engine_runtime
+from news_bulletin_playlist.admin_session import SourceInspectionContext
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
 from news_bulletin_playlist.diagnostics import MAX_DIAGNOSTIC_EXPORT_EVENTS, DiagnosticEvent
 from news_bulletin_playlist.diagnostics_web import (
@@ -28,7 +29,8 @@ from news_bulletin_playlist.managed_admin_web import (
     playlist_id_from_form,
     single_form_value,
 )
-from news_bulletin_playlist.managed_state import ManagedStateError
+from news_bulletin_playlist.managed_state import ManagedStateError, effective_sources
+from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
@@ -36,6 +38,12 @@ from news_bulletin_playlist.runtime import (
     DEFAULT_HEALTH_PORT,
     _data_dir_ready,
 )
+from news_bulletin_playlist.source_admin_web import (
+    render_new_source_page,
+    render_source_review_page,
+)
+from news_bulletin_playlist.source_inspection import serialize_source_inspection
+from news_bulletin_playlist.source_intake import SourceIntakeError, SourceIntakeFailure
 from news_bulletin_playlist.sources_admin_web import render_sources_page
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
@@ -65,7 +73,13 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._serve_safe_public_status()
             return
         if parsed.path == "/admin/sources":
-            self._serve_sources()
+            self._serve_sources(parsed.query)
+            return
+        if parsed.path == "/admin/sources/new":
+            self._serve_source_new()
+            return
+        if parsed.path == "/admin/sources/inspection-report.json":
+            self._serve_source_report()
             return
         if parsed.path == "/admin/diagnostics":
             self._serve_diagnostics(parsed.query)
@@ -74,6 +88,174 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._serve_diagnostics_export(parsed.query)
             return
         super().do_GET()
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        try:
+            path = urllib.parse.urlsplit(self.path).path
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid request")
+            return
+        if path in {"/admin/sources/inspect", "/admin/sources/create"}:
+            self._handle_source_post(path)
+            return
+        super().do_POST()
+
+    def _source_error(self, status: HTTPStatus, message: str) -> None:
+        self._reply(status, message.encode("utf-8"), content_type="text/plain; charset=utf-8")
+
+    def _serve_source_new(self) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        if self.source_admin_service is None:
+            self._source_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+        self._reply(
+            HTTPStatus.OK,
+            render_new_source_page(
+                csrf_token=security.issue_csrf_token(), lan_mode=self._is_lan_admin_mode()
+            ),
+        )
+
+    def _serve_source_report(self) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        context = security.source_inspection()
+        if context is None:
+            self._source_error(HTTPStatus.NOT_FOUND, "No active inspection report")
+            return
+        self._reply(
+            HTTPStatus.OK,
+            context.report_json,
+            content_type="application/json; charset=utf-8",
+            extra_headers={
+                "Content-Disposition": (
+                    f'attachment; filename="source-inspection-{context.spotify_show_id}.json"'
+                )
+            },
+        )
+
+    def _handle_source_post(self, path: str) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.source_admin_service
+        if service is None:
+            self._source_error(
+                HTTPStatus.SERVICE_UNAVAILABLE, "Source administration is unavailable"
+            )
+            return
+        try:
+            form = self._read_form()
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source form")
+            return
+        csrf_values = form.get("csrf_token", [])
+        if len(csrf_values) != 1 or not security.consume_csrf_token(csrf_values[0]):
+            self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+            return
+        if path == "/admin/sources/inspect":
+            security.set_source_inspection(None)
+        try:
+            allowed = (
+                {"csrf_token", "locator"}
+                if path == "/admin/sources/inspect"
+                else {
+                    "csrf_token",
+                    "spotify_show_id",
+                    "display_name",
+                    "origin_kind",
+                    "origin_code",
+                    "language",
+                    "editorial_scope",
+                    "timezone",
+                    "parser_id",
+                    "collection_filter_id",
+                }
+            )
+            if set(form) != allowed:
+                raise ValueError("Invalid source form fields")
+            if path == "/admin/sources/inspect":
+                report = service.inspect(
+                    single_form_value(form, "locator"),
+                    parser_id=ParserId("release_date_title"),
+                    collection_filter_id=None,
+                )
+                context = SourceInspectionContext(
+                    report.spotify_show_id,
+                    str(report.parser_id),
+                    report.collection_filter_id,
+                    serialize_source_inspection(report),
+                )
+                payload = render_source_review_page(
+                    report,
+                    csrf_token=security.issue_csrf_token(),
+                    lan_mode=self._is_lan_admin_mode(),
+                )
+                security.set_source_inspection(context)
+                self._reply(HTTPStatus.OK, payload)
+                return
+
+            values = {name: single_form_value(form, name) for name in allowed - {"csrf_token"}}
+            reviewed = security.source_inspection()
+            if reviewed is None:
+                raise ValueError("Inspect this source before creating it")
+            filter_id = values["collection_filter_id"] or None
+            if (
+                values["spotify_show_id"] != reviewed.spotify_show_id
+                or values["parser_id"] != reviewed.parser_id
+                or filter_id != reviewed.collection_filter_id
+            ):
+                raise ValueError("Source review no longer matches the inspected show")
+            source = service.validate_new_source(
+                show_id=values["spotify_show_id"],
+                display_name=values["display_name"],
+                origin_kind=values["origin_kind"],
+                origin_code=values["origin_code"],
+                language=values["language"],
+                editorial_scope=values["editorial_scope"],
+                timezone=values["timezone"],
+                parser_id=values["parser_id"],
+                collection_filter_id=filter_id,
+            )
+            service.create(source)
+            security.set_source_inspection(None)
+            self._reply(
+                HTTPStatus.SEE_OTHER,
+                b"",
+                extra_headers={"Location": "/admin/sources?notice=source-added"},
+            )
+        except SourceIntakeError as exc:
+            status = (
+                HTTPStatus.CONFLICT
+                if exc.failure is SourceIntakeFailure.DUPLICATE_SHOW
+                else HTTPStatus.BAD_REQUEST
+                if exc.failure
+                in {
+                    SourceIntakeFailure.INVALID_LOCATOR,
+                    SourceIntakeFailure.STRATEGY,
+                    SourceIntakeFailure.PROVIDER_REJECTION,
+                }
+                else HTTPStatus.UNPROCESSABLE_ENTITY
+                if exc.failure
+                in {
+                    SourceIntakeFailure.INSUFFICIENT_COVERAGE,
+                    SourceIntakeFailure.NO_USABLE_EPISODES,
+                }
+                else HTTPStatus.BAD_GATEWAY
+                if exc.failure is SourceIntakeFailure.MALFORMED_RESPONSE
+                else HTTPStatus.INTERNAL_SERVER_ERROR
+                if exc.failure is SourceIntakeFailure.CONFIGURATION
+                else HTTPStatus.SERVICE_UNAVAILABLE
+            )
+            self._source_error(status, str(exc))
+        except ManagedStateError, OSError:
+            self._source_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "Managed source state is unavailable"
+            )
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source classification or review")
 
     def _activate_managed_playlist(
         self,
@@ -137,7 +319,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             payload,
         )
 
-    def _serve_sources(self) -> None:
+    def _serve_sources(self, query: str = "") -> None:
         if self._require_admin() is None:
             return
         service = self.managed_admin_service
@@ -152,9 +334,12 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         try:
             if synchronization is None:
                 snapshot = service.snapshot()
+                state = service.store.load()
             else:
                 with synchronization.hold():
                     snapshot = service.snapshot()
+                    state = service.store.load()
+            effective_sources(service.catalog, state)
         except ManagedStateError, OSError:
             self._reply(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -168,9 +353,16 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             HTTPStatus.OK,
             render_sources_page(
                 snapshot=snapshot,
+                state=state,
                 catalog=service.catalog,
                 last_cycle=last_cycle,
                 lan_mode=self._is_lan_admin_mode(),
+                notice=(
+                    "Custom source added successfully."
+                    if urllib.parse.parse_qs(query, keep_blank_values=True).get("notice")
+                    == ["source-added"]
+                    else None
+                ),
             ),
         )
 

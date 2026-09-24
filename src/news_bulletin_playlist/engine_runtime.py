@@ -61,6 +61,7 @@ from news_bulletin_playlist.runtime import (
     initialize_runtime_storage,
 )
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
+from news_bulletin_playlist.source_admin import SourceAdminService
 from news_bulletin_playlist.spotify.auth import (
     AuthorizationState,
     SpotifyAuthError,
@@ -509,6 +510,7 @@ class OperationalHealthHandler(LanAdminHandler):
     configuration_synchronization: ConfigurationSynchronization | None = None
     managed_admin_service: ManagedAdminService | None = None
     managed_admin_auth: SpotifyAuthProvider | None = None
+    source_admin_service: SourceAdminService | None = None
     diagnostic_store: DiagnosticEventStore | None = None
     spotify_request_metrics: SpotifyRequestMetrics | None = None
     operational_diagnostics: OperationalDiagnostics | None = None
@@ -1086,6 +1088,17 @@ def serve(
     handler_type.configuration_synchronization = configuration_synchronization
     handler_type.managed_admin_service = managed_admin_service
     handler_type.managed_admin_auth = managed_admin_auth
+    handler_type.source_admin_service = (
+        None
+        if managed_admin_service is None or auth_provider is None
+        else SourceAdminService(
+            managed_admin_service.store,
+            configuration_synchronization,
+            auth_provider,
+            rate_limit_journal,
+            request_metrics,
+        )
+    )
     handler_type.diagnostic_store = diagnostic_store
     handler_type.operational_diagnostics = diagnostics
     handler_type.spotify_request_metrics = request_metrics
@@ -1135,6 +1148,7 @@ def serve(
         handler_type.configuration_synchronization = None
         handler_type.managed_admin_service = None
         handler_type.managed_admin_auth = None
+        handler_type.source_admin_service = None
         handler_type.diagnostic_store = None
         handler_type.spotify_request_metrics = None
         if handlers_installed:
