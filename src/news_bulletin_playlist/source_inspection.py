@@ -1,0 +1,557 @@
+"""On-demand, normalized evidence for a Spotify show without source-state writes."""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from typing import Any, Protocol
+
+from news_bulletin_playlist import __version__
+from news_bulletin_playlist.build_info import build_revision
+from news_bulletin_playlist.catalog import BuiltInCatalog
+from news_bulletin_playlist.duration_profile import (
+    DurationProfile,
+    duration_profile,
+    profile_as_dict,
+)
+from news_bulletin_playlist.managed_state import ManagedState, ManagedStateError, effective_sources
+from news_bulletin_playlist.models import ParserId, SourceId
+from news_bulletin_playlist.persistence import PersistenceError
+from news_bulletin_playlist.registry import has_collection_filter, has_title_parser
+from news_bulletin_playlist.spotify.auth import SpotifyAuthError
+from news_bulletin_playlist.spotify.client import (
+    SpotifyApiError,
+    SpotifyClient,
+    SpotifyTransportError,
+)
+from news_bulletin_playlist.spotify.first_catalogue import (
+    DEFAULT_MAX_PAGES,
+    DEFAULT_PAGE_SIZE,
+    CatalogueEpisodeEvidence,
+    CatalogueResponseError,
+    CatalogueSource,
+    fetch_source_catalogue,
+)
+from news_bulletin_playlist.spotify.first_models import TimestampSource, as_utc
+from news_bulletin_playlist.spotify.public_detector import (
+    PublicEpisodeObservation,
+    PublicShowClient,
+    PublicShowConfigurationError,
+    PublicShowDetectorError,
+    spotify_show_id,
+)
+from news_bulletin_playlist.spotify_backoff import (
+    SpotifyRateLimitBackoffActive,
+    SpotifyRateLimitGuardAuth,
+    SpotifyRateLimitGuardClient,
+    SpotifyRateLimitJournal,
+    SpotifyRateLimitStateUnavailable,
+    SpotifyRateLimitSuppressed,
+)
+from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
+
+REPORT_SCHEMA_VERSION = 1
+INSPECTION_RETENTION = timedelta(hours=48)
+_LANGUAGE_HINT = re.compile(r"[a-z]{2,3}")
+_MAX_REPORT_TEXT = 200
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+class InspectionFailure(StrEnum):
+    AUTHORIZATION = "authorization"
+    FORBIDDEN = "forbidden"
+    PROVIDER_REJECTION = "provider_rejection"
+    RATE_LIMITED = "rate_limited"
+    UNAVAILABLE = "unavailable"
+    MALFORMED_RESPONSE = "malformed_response"
+    CONFIGURATION = "configuration"
+
+
+_MESSAGES = {
+    InspectionFailure.AUTHORIZATION: "Reconnect Spotify authorization and try again.",
+    InspectionFailure.FORBIDDEN: "Spotify denied access to this show; check account access.",
+    InspectionFailure.PROVIDER_REJECTION: (
+        "Spotify rejected this show; verify the ID and account market."
+    ),
+    InspectionFailure.RATE_LIMITED: "Spotify rate-limit cooldown is active; try again later.",
+    InspectionFailure.UNAVAILABLE: "Spotify is temporarily unavailable; try again later.",
+    InspectionFailure.MALFORMED_RESPONSE: "Spotify returned invalid show or catalogue data.",
+    InspectionFailure.CONFIGURATION: "Configured source or strategy is invalid.",
+}
+
+
+class SourceInspectionError(ValueError):
+    def __init__(self, failure: InspectionFailure) -> None:
+        self.failure = failure
+        super().__init__(_MESSAGES[failure])
+
+
+class _Auth(Protocol):
+    def get_access_token(self, *, now: datetime | None = None) -> str: ...
+
+
+class _PublicClient(Protocol):
+    def observe_episode(
+        self, source_id: SourceId, spotify_show_id: str, *, observed_at: datetime
+    ) -> PublicEpisodeObservation: ...
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeInspectionEvidence:
+    catalogue_position: int
+    spotify_episode_id: str
+    spotify_episode_uri: str
+    title: str
+    title_truncated: bool
+    release_date: str
+    release_date_precision: str
+    duration_seconds: int | None
+    collection_filter_outcome: str
+    parser_outcome: str
+    edition_at: datetime | None
+    timestamp_source: TimestampSource | None
+    ordering_evidence: str
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PublicInspectionEvidence:
+    episode_id: str
+    episode_uri: str | None
+    title: str
+    title_truncated: bool
+    duration_seconds: int | None
+    release_date: str | None
+    release_date_truncated: bool
+    release_date_shape: str
+    detector_schema_version: int
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SourceInspection:
+    schema_version: int
+    inspected_at: datetime
+    application_version: str
+    build_revision: str
+    ownership: str
+    source_id: SourceId | None
+    spotify_show_id: str
+    spotify_uri: str
+    spotify_url: str
+    display_name_hint: str
+    language_hints: tuple[str, ...]
+    publisher_hint: str | None
+    total_episodes_hint: int | None
+    parser_id: ParserId
+    collection_filter_id: str | None
+    timezone: str | None
+    retention_hours: int
+    cutoff_at: datetime
+    page_size: int
+    max_pages: int
+    catalogue_requests: int
+    catalogue_complete: bool
+    coverage_proven: bool
+    observed_episodes: int
+    accepted_episodes: int
+    filter_rejected_count: int
+    parser_fallback_count: int
+    title_timestamp_count: int
+    first_seen_timestamp_count: int
+    duration_known_count: int
+    duration_missing_count: int
+    observed_duration_missing_count: int
+    min_duration_seconds: int | None
+    max_duration_seconds: int | None
+    duration_buckets: DurationProfile
+    observed_duration_buckets: DurationProfile
+    warnings: tuple[str, ...]
+    episodes: tuple[EpisodeInspectionEvidence, ...]
+    public_status: str
+    public_observation: PublicInspectionEvidence | None
+
+
+def _bounded(value: str) -> tuple[str, bool]:
+    return value[:_MAX_REPORT_TEXT], len(value) > _MAX_REPORT_TEXT
+
+
+def _show_hints(
+    payload: object, show_id: str
+) -> tuple[str, tuple[str, ...], str | None, int | None]:
+    if not isinstance(payload, dict) or (
+        payload.get("id") != show_id
+        or payload.get("type") != "show"
+        or payload.get("uri") != f"spotify:show:{show_id}"
+    ):
+        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
+    name = payload.get("name")
+    if (
+        not isinstance(name, str)
+        or not 1 <= len(name) <= 120
+        or not name.strip()
+        or not name.isprintable()
+    ):
+        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
+    languages = payload.get("languages", [])
+    if (
+        not isinstance(languages, list)
+        or len(languages) > 16
+        or any(
+            not isinstance(item, str) or not _LANGUAGE_HINT.fullmatch(item) for item in languages
+        )
+    ):
+        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
+    publisher = payload.get("publisher")
+    if publisher is not None and (
+        not isinstance(publisher, str) or len(publisher) > 120 or not publisher.isprintable()
+    ):
+        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
+    total = payload.get("total_episodes")
+    if total is not None and (isinstance(total, bool) or not isinstance(total, int) or total < 0):
+        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
+    return name.strip(), tuple(languages), publisher, total
+
+
+def _episode_evidence(
+    items: tuple[CatalogueEpisodeEvidence, ...],
+) -> tuple[EpisodeInspectionEvidence, ...]:
+    coarse_counts: dict[str, int] = {}
+    for item in items:
+        if (
+            item.filter_outcome == "accepted"
+            and item.edition_at is None
+            and item.release_date_precision == "day"
+        ):
+            coarse_counts[item.release_date] = coarse_counts.get(item.release_date, 0) + 1
+    result = []
+    for item in items:
+        title, truncated = _bounded(item.title)
+        ambiguous = (
+            item.filter_outcome == "accepted"
+            and item.edition_at is None
+            and item.release_date_precision == "day"
+            and coarse_counts[item.release_date] > 1
+        )
+        ordering = (
+            "not_evaluated"
+            if item.filter_outcome == "rejected"
+            else "exact"
+            if item.edition_at is not None
+            else "ambiguous"
+            if ambiguous
+            else "coarse"
+        )
+        result.append(
+            EpisodeInspectionEvidence(
+                item.position,
+                item.spotify_episode_id,
+                item.spotify_episode_uri,
+                title,
+                truncated,
+                item.release_date,
+                item.release_date_precision,
+                item.duration_seconds,
+                item.filter_outcome,
+                item.parser_outcome,
+                item.edition_at,
+                item.timestamp_source,
+                ordering,
+                ("same_day_order_ambiguous",) if ambiguous else (),
+            )
+        )
+    return tuple(result)
+
+
+def _public_evidence(observation: PublicEpisodeObservation) -> PublicInspectionEvidence:
+    title, truncated = _bounded(observation.title)
+    release_date = observation.release_date_raw
+    release_date_truncated = False
+    if release_date is not None:
+        release_date, release_date_truncated = _bounded(release_date)
+    return PublicInspectionEvidence(
+        observation.episode_id,
+        observation.episode_uri,
+        title,
+        truncated,
+        None if observation.duration_ms is None else round(observation.duration_ms / 1000),
+        release_date,
+        release_date_truncated,
+        observation.release_date_shape.value,
+        observation.detector_schema_version,
+        observation.observed_at,
+    )
+
+
+def inspect_source(
+    source: CatalogueSource,
+    *,
+    ownership: str,
+    timezone: str | None,
+    auth: _Auth,
+    rate_limit: SpotifyRateLimitJournal,
+    now: datetime,
+    client_factory: Callable[[str], Any] | None = None,
+    public_client: _PublicClient | None = None,
+    observe_public: bool = True,
+    metrics: SpotifyRequestMetrics | None = None,
+    clock: Callable[[], datetime] = _utc_now,
+) -> SourceInspection:
+    """Inspect configured or candidate strategy through the one production catalogue path."""
+    if (
+        ownership not in {"candidate", "custom", "built_in"}
+        or not has_title_parser(str(source.parser_id))
+        or (
+            source.collection_filter_id is not None
+            and not has_collection_filter(source.collection_filter_id)
+        )
+    ):
+        raise SourceInspectionError(InspectionFailure.CONFIGURATION)
+    try:
+        show_id = spotify_show_id(source)
+    except PublicShowConfigurationError:
+        raise SourceInspectionError(InspectionFailure.CONFIGURATION) from None
+    observed = as_utc(now)
+    guarded_auth = SpotifyRateLimitGuardAuth(auth, rate_limit, clock=clock)
+    factory = client_factory or (lambda token: SpotifyClient(token, metrics=metrics))
+    try:
+        token = guarded_auth.get_access_token()
+        client = SpotifyRateLimitGuardClient(factory(token), rate_limit, clock=clock)
+        details = _show_hints(client.show_details(show_id), show_id)
+        snapshot = fetch_source_catalogue(
+            client,
+            source,
+            now=observed,
+            cutoff=observed - INSPECTION_RETENTION,
+            collect_evidence=True,
+        )
+    except SourceInspectionError:
+        raise
+    except SpotifyRateLimitBackoffActive, SpotifyRateLimitSuppressed:
+        raise SourceInspectionError(InspectionFailure.RATE_LIMITED) from None
+    except SpotifyRateLimitStateUnavailable, SpotifyTransportError, PersistenceError:
+        raise SourceInspectionError(InspectionFailure.UNAVAILABLE) from None
+    except SpotifyAuthError:
+        raise SourceInspectionError(InspectionFailure.AUTHORIZATION) from None
+    except SpotifyApiError as exc:
+        if exc.message in {"invalid JSON response", "unexpected non-object JSON response"}:
+            failure = InspectionFailure.MALFORMED_RESPONSE
+        else:
+            failure = {
+                400: InspectionFailure.PROVIDER_REJECTION,
+                401: InspectionFailure.AUTHORIZATION,
+                403: InspectionFailure.FORBIDDEN,
+                404: InspectionFailure.PROVIDER_REJECTION,
+                429: InspectionFailure.RATE_LIMITED,
+            }.get(exc.status, InspectionFailure.UNAVAILABLE)
+        raise SourceInspectionError(failure) from None
+    except CatalogueResponseError:
+        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE) from None
+
+    evidence = _episode_evidence(snapshot.evidence)
+    known = [
+        episode.duration_seconds
+        for episode in snapshot.episodes
+        if episode.duration_seconds is not None
+    ]
+    observed_known = [
+        item.duration_seconds for item in snapshot.evidence if item.duration_seconds is not None
+    ]
+    first_seen = sum(
+        episode.timestamp_source is TimestampSource.FIRST_SEEN for episode in snapshot.episodes
+    )
+    warnings = []
+    if not snapshot.coverage_proven:
+        warnings.append("coverage_unproven")
+    if not snapshot.episodes:
+        warnings.append("no_usable_episodes")
+    if len(known) != len(snapshot.episodes):
+        warnings.append("duration_missing")
+    if any(item.ordering_evidence == "ambiguous" for item in evidence):
+        warnings.append("same_day_order_ambiguous")
+    if observe_public and public_client is None:
+        public_client = PublicShowClient(metrics=metrics)
+    public_status = "not_requested" if not observe_public else "available"
+    public_observation = None
+    if observe_public and public_client is not None:
+        try:
+            public_observation = _public_evidence(
+                public_client.observe_episode(source.id, show_id, observed_at=observed)
+            )
+        except PublicShowDetectorError, ValueError:
+            public_status = "unavailable"
+            warnings.append("public_observation_unavailable")
+
+    return SourceInspection(
+        schema_version=REPORT_SCHEMA_VERSION,
+        inspected_at=observed,
+        application_version=__version__,
+        build_revision=build_revision(),
+        ownership=ownership,
+        source_id=None if ownership == "candidate" else source.id,
+        spotify_show_id=show_id,
+        spotify_uri=f"spotify:show:{show_id}",
+        spotify_url=f"https://open.spotify.com/show/{show_id}",
+        display_name_hint=details[0],
+        language_hints=details[1],
+        publisher_hint=details[2],
+        total_episodes_hint=details[3],
+        parser_id=source.parser_id,
+        collection_filter_id=source.collection_filter_id,
+        timezone=timezone,
+        retention_hours=48,
+        cutoff_at=observed - INSPECTION_RETENTION,
+        page_size=DEFAULT_PAGE_SIZE,
+        max_pages=DEFAULT_MAX_PAGES,
+        catalogue_requests=snapshot.request_count,
+        catalogue_complete=snapshot.complete,
+        coverage_proven=snapshot.coverage_proven,
+        observed_episodes=len(snapshot.api_ids),
+        accepted_episodes=len(snapshot.episodes),
+        filter_rejected_count=snapshot.filter_rejected_count,
+        parser_fallback_count=snapshot.parser_fallback_count,
+        title_timestamp_count=len(snapshot.episodes) - first_seen,
+        first_seen_timestamp_count=first_seen,
+        duration_known_count=len(known),
+        duration_missing_count=len(snapshot.episodes) - len(known),
+        observed_duration_missing_count=len(snapshot.evidence) - len(observed_known),
+        min_duration_seconds=min(known) if known else None,
+        max_duration_seconds=max(known) if known else None,
+        duration_buckets=duration_profile(known),
+        observed_duration_buckets=duration_profile(observed_known),
+        warnings=tuple(warnings),
+        episodes=evidence,
+        public_status=public_status,
+        public_observation=public_observation,
+    )
+
+
+def inspect_configured_source(
+    source_id: SourceId,
+    *,
+    catalog: BuiltInCatalog,
+    state: ManagedState,
+    auth: _Auth,
+    rate_limit: SpotifyRateLimitJournal,
+    now: datetime,
+    client_factory: Callable[[str], Any] | None = None,
+    public_client: _PublicClient | None = None,
+    observe_public: bool = True,
+    metrics: SpotifyRequestMetrics | None = None,
+    clock: Callable[[], datetime] = _utc_now,
+) -> SourceInspection:
+    """Manually audit any effective source, including a disabled custom source."""
+    try:
+        sources = effective_sources(catalog, state)
+    except ManagedStateError:
+        raise SourceInspectionError(InspectionFailure.CONFIGURATION) from None
+    source = next((item for item in sources if item.id == source_id), None)
+    if source is None:
+        raise SourceInspectionError(InspectionFailure.CONFIGURATION)
+    ownership = "built_in" if source_id in {item.id for item in catalog.sources} else "custom"
+    return inspect_source(
+        source,
+        ownership=ownership,
+        timezone=str(source.timezone),
+        auth=auth,
+        rate_limit=rate_limit,
+        now=now,
+        client_factory=client_factory,
+        public_client=public_client,
+        observe_public=observe_public,
+        metrics=metrics,
+        clock=clock,
+    )
+
+
+def serialize_source_inspection(report: SourceInspection) -> bytes:
+    """Serialize only normalized, allow-listed V1 report fields as deterministic UTF-8 JSON."""
+
+    def iso(value: datetime | None) -> str | None:
+        return None if value is None else as_utc(value).isoformat()
+
+    episodes = [
+        {
+            "catalogue_position": item.catalogue_position,
+            "spotify_episode_id": item.spotify_episode_id,
+            "spotify_episode_uri": item.spotify_episode_uri,
+            "title": item.title,
+            "title_truncated": item.title_truncated,
+            "release_date": item.release_date,
+            "release_date_precision": item.release_date_precision,
+            "duration_seconds": item.duration_seconds,
+            "collection_filter_outcome": item.collection_filter_outcome,
+            "parser_outcome": item.parser_outcome,
+            "edition_at": iso(item.edition_at),
+            "timestamp_source": (
+                None if item.timestamp_source is None else item.timestamp_source.value
+            ),
+            "ordering_evidence": item.ordering_evidence,
+            "warnings": list(item.warnings),
+        }
+        for item in report.episodes
+    ]
+    public = report.public_observation
+    payload = {
+        "schema_version": report.schema_version,
+        "inspected_at": iso(report.inspected_at),
+        "application_version": report.application_version,
+        "build_revision": report.build_revision,
+        "ownership": report.ownership,
+        "source_id": report.source_id,
+        "spotify_show_id": report.spotify_show_id,
+        "spotify_uri": report.spotify_uri,
+        "spotify_url": report.spotify_url,
+        "display_name_hint": report.display_name_hint,
+        "language_hints": list(report.language_hints),
+        "publisher_hint": report.publisher_hint,
+        "total_episodes_hint": report.total_episodes_hint,
+        "parser_id": report.parser_id,
+        "collection_filter_id": report.collection_filter_id,
+        "timezone": report.timezone,
+        "retention_hours": report.retention_hours,
+        "cutoff_at": iso(report.cutoff_at),
+        "page_size": report.page_size,
+        "max_pages": report.max_pages,
+        "catalogue_requests": report.catalogue_requests,
+        "catalogue_complete": report.catalogue_complete,
+        "coverage_proven": report.coverage_proven,
+        "observed_episodes": report.observed_episodes,
+        "accepted_episodes": report.accepted_episodes,
+        "filter_rejected_count": report.filter_rejected_count,
+        "parser_fallback_count": report.parser_fallback_count,
+        "title_timestamp_count": report.title_timestamp_count,
+        "first_seen_timestamp_count": report.first_seen_timestamp_count,
+        "duration_known_count": report.duration_known_count,
+        "duration_missing_count": report.duration_missing_count,
+        "observed_duration_missing_count": report.observed_duration_missing_count,
+        "min_duration_seconds": report.min_duration_seconds,
+        "max_duration_seconds": report.max_duration_seconds,
+        "duration_buckets": profile_as_dict(report.duration_buckets),
+        "observed_duration_buckets": profile_as_dict(report.observed_duration_buckets),
+        "warnings": list(report.warnings),
+        "episodes": episodes,
+        "public_status": report.public_status,
+        "public_observation": None
+        if public is None
+        else {
+            "episode_id": public.episode_id,
+            "episode_uri": public.episode_uri,
+            "title": public.title,
+            "title_truncated": public.title_truncated,
+            "duration_seconds": public.duration_seconds,
+            "release_date": public.release_date,
+            "release_date_truncated": public.release_date_truncated,
+            "release_date_shape": public.release_date_shape,
+            "detector_schema_version": public.detector_schema_version,
+            "observed_at": iso(public.observed_at),
+        },
+    }
+    return (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")

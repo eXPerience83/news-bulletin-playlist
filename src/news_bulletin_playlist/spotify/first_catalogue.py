@@ -55,6 +55,22 @@ class CatalogueSnapshot:
     api_latest_id: str | None
     parser_fallback_count: int
     filter_rejected_count: int
+    evidence: tuple[CatalogueEpisodeEvidence, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogueEpisodeEvidence:
+    position: int
+    spotify_episode_id: str
+    spotify_episode_uri: str
+    title: str
+    release_date: str
+    release_date_precision: str
+    duration_seconds: int | None
+    filter_outcome: str
+    parser_outcome: str
+    edition_at: datetime | None
+    timestamp_source: TimestampSource | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +90,7 @@ def fetch_source_catalogue(
     now: datetime,
     cutoff: datetime,
     max_pages: int = DEFAULT_MAX_PAGES,
+    collect_evidence: bool = False,
 ) -> CatalogueSnapshot:
     """Read a bounded official catalogue and normalize it directly to Spotify identity."""
     if max_pages <= 0:
@@ -98,12 +115,29 @@ def fetch_source_catalogue(
     api_ids: list[str] = []
     parser_fallbacks = 0
     filter_rejected = 0
+    evidence: list[CatalogueEpisodeEvidence] = []
 
-    for candidate in candidates:
+    for position, candidate in enumerate(candidates, start=1):
         api_ids.append(candidate.episode_id)
         periods.append(release_period(candidate.release_date, candidate.release_date_precision))
         if collection_filter is not None and not collection_filter.accepts(candidate.title):
             filter_rejected += 1
+            if collect_evidence:
+                evidence.append(
+                    CatalogueEpisodeEvidence(
+                        position,
+                        candidate.episode_id,
+                        candidate.uri,
+                        candidate.title,
+                        candidate.release_date,
+                        candidate.release_date_precision,
+                        candidate.duration_seconds,
+                        "rejected",
+                        "not_evaluated",
+                        None,
+                        None,
+                    )
+                )
             continue
 
         parsed = parser.parse(candidate.title)
@@ -129,6 +163,22 @@ def fetch_source_catalogue(
                 last_seen_at=observed,
             )
         )
+        if collect_evidence:
+            evidence.append(
+                CatalogueEpisodeEvidence(
+                    position,
+                    candidate.episode_id,
+                    candidate.uri,
+                    candidate.title,
+                    candidate.release_date,
+                    candidate.release_date_precision,
+                    candidate.duration_seconds,
+                    "accepted",
+                    "fallback" if parsed is None else "exact",
+                    episodes[-1].edition_at,
+                    episodes[-1].timestamp_source,
+                )
+            )
 
     return CatalogueSnapshot(
         episodes=tuple(episodes),
@@ -139,6 +189,7 @@ def fetch_source_catalogue(
         api_latest_id=_provable_latest_id(episodes),
         parser_fallback_count=parser_fallbacks,
         filter_rejected_count=filter_rejected,
+        evidence=tuple(evidence),
     )
 
 

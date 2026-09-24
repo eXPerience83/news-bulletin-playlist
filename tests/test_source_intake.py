@@ -261,7 +261,7 @@ def test_success_is_bounded_and_has_no_source_state_side_effect(tmp_path: Path) 
     assert result.publisher_hint is None
     assert not hasattr(result, "origin")
     assert not hasattr(result, "editorial_scope")
-    assert not hasattr(result, "timezone")
+    assert result.timezone is None
     assert not hasattr(result, "language")
     assert result.coverage_proven and result.catalogue_complete
     assert result.catalogue_requests == 1
