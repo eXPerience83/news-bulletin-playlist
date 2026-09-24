@@ -13,6 +13,7 @@ from news_bulletin_playlist.desired_state import (
     DurationEligibilityDecision,
 )
 from news_bulletin_playlist.diagnostics import DiagnosticSeverity
+from news_bulletin_playlist.duration_profile import duration_profile, profile_as_dict
 from news_bulletin_playlist.engine import (
     EngineCycleResult,
     EngineCycleRunner,
@@ -366,33 +367,10 @@ class InstrumentedEngineCycleRunner:
             if self._duration_profile_signatures.get(key) == signature:
                 continue
 
-            buckets = {
-                "lt_5m": 0,
-                "m5_lt8": 0,
-                "m8_lt10": 0,
-                "m10_lt15": 0,
-                "m15_lt20": 0,
-                "m20_le30": 0,
-                "gt_30m": 0,
-            }
-            accepted = 0
-            for decision in source_decisions:
-                duration = decision.duration_seconds
-                if duration < 300:
-                    buckets["lt_5m"] += 1
-                elif duration < 480:
-                    buckets["m5_lt8"] += 1
-                elif duration < 600:
-                    buckets["m8_lt10"] += 1
-                elif duration < 900:
-                    buckets["m10_lt15"] += 1
-                elif duration < 1200:
-                    buckets["m15_lt20"] += 1
-                elif duration <= 1800:
-                    buckets["m20_le30"] += 1
-                else:
-                    buckets["gt_30m"] += 1
-                accepted += int(decision.accepted)
+            buckets = profile_as_dict(
+                duration_profile(decision.duration_seconds for decision in source_decisions)
+            )
+            accepted = sum(int(decision.accepted) for decision in source_decisions)
 
             self.diagnostics.emit(
                 occurred_at=occurred_at,

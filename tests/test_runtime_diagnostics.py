@@ -472,23 +472,21 @@ def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: P
         if event.event_name == "duration_profile" and event.source_id == "rne"
     )
     assert rne_profile.details == {
+        "10_to_15m": 0,
+        "15_to_30m": 0,
+        "30_to_60m": 0,
+        "60m_plus": 0,
         "accepted_count": 1,
         "excluded_count": 1,
-        "gt_30m": 0,
-        "lt_5m": 1,
-        "m10_lt15": 0,
-        "m15_lt20": 0,
-        "m20_le30": 0,
-        "m5_lt8": 0,
-        "m8_lt10": 1,
         "sample_count": 2,
+        "under_10m": 2,
     }
     ser_profile = next(
         event
         for event in policy_events
         if event.event_name == "duration_profile" and event.source_id == "ser"
     )
-    assert ser_profile.details["m20_le30"] == 1
+    assert ser_profile.details["15_to_30m"] == 1
     assert ser_profile.details["sample_count"] == 1
     rendered = output.getvalue()
     assert "must-not-be-persisted" not in rendered
