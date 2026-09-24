@@ -27,7 +27,7 @@ Keep three concerns separate:
    Spotify contracts plus automated tests.
 3. **Installation state (`/data/managed-state.json`):** explicit playlist selections and, since
    schema v3, canonical installation-owned Spotify-first source definitions. This is a persistence
-   foundation only; there is no Add Source UI yet.
+   foundation with an authenticated Add Source UI; existing-source lifecycle and assignment UI remain future work.
 
 Research candidates must never be loaded dynamically into production configuration. Promotion is a
 code change reviewed through the normal PR, CI and provider-contract process.

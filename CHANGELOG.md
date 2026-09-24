@@ -7,14 +7,16 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ### Changed
 
+- Admin Sources now supports authenticated, CSRF-protected inspection and creation of validated
+  custom Spotify shows. Review reports stay in the Admin session; Create validates with Spotify
+  again before saving. Existing-source lifecycle and playlist assignment UI remain future work.
 - Added a bounded Spotify show intake service: canonical raw IDs, show URIs and Spotify show URLs
   are normalized locally; duplicate identities are rejected before provider calls, and official show
-  metadata plus catalogue coverage are inspected without persisting candidate/source state. The Add
-  Source Web flow remains future work.
+  metadata plus catalogue coverage are inspected without persisting candidate/source state.
 - Managed state now uses schema v3 with durable, strictly validated installation-owned Spotify-first
   source definitions. v1/v2 files migrate atomically with an empty `sources` collection; built-in
   definitions remain image-owned. Disabled selected sources preserve the current destination. Add
-  Source and source lifecycle UI are not included yet.
+  Source lifecycle UI is not included yet.
 - Source origin now distinguishes country and institutional providers. United Nations sources display
   `UN · INT · en` and `UN · INT · es` without an invented country; origin classification does not
   change runtime selection.
