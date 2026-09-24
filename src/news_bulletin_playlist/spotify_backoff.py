@@ -375,6 +375,9 @@ class SpotifyRateLimitGuardClient:
         self.diagnostics = journal.diagnostics if diagnostics is None else diagnostics
         self._cycle_limited: SpotifyRateLimitState | None = None
 
+    def show_details(self, show_id: str) -> dict[str, object]:
+        return self._call(lambda: self.client.show_details(show_id))
+
     def show_episodes(
         self,
         show_id: str,

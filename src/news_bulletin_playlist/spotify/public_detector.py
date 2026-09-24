@@ -22,7 +22,7 @@ from news_bulletin_playlist.diagnostics import DiagnosticSeverity, DiagnosticVal
 from news_bulletin_playlist.models import SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
-from news_bulletin_playlist.spotify.identifiers import is_spotify_id
+from news_bulletin_playlist.spotify.identifiers import SpotifyShowSource, is_spotify_id
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 from news_bulletin_playlist.spotify_metrics import (
     SpotifyPublicOperation,
@@ -551,7 +551,7 @@ def parse_public_show_embed(
         ) from exc
 
 
-def spotify_show_id(source: SourceDefinition) -> str:
+def spotify_show_id(source: SpotifyShowSource) -> str:
     show_ids = {
         reference.external_id.strip()
         for reference in source.external_references

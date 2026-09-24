@@ -14,6 +14,7 @@ from typing import cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_source_policy import custom_strategy_allowed
 from news_bulletin_playlist.file_durability import fsync_directory
 from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
 from news_bulletin_playlist.models import (
@@ -33,7 +34,6 @@ from news_bulletin_playlist.models import (
     SourceOriginKind,
     SourceSelection,
 )
-from news_bulletin_playlist.registry import has_collection_filter, has_title_parser
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 MANAGED_STATE_FILENAME = "managed-state.json"
@@ -43,8 +43,6 @@ _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
 _MAX_SOURCE_DISPLAY_NAME_LENGTH = 120
 _MAX_SOURCE_TIMEZONE_LENGTH = 128
-_CUSTOM_SOURCE_PARSERS = frozenset({"release_date_title"})
-_CUSTOM_SOURCE_FILTERS: frozenset[str] = frozenset()
 _SOURCE_LANGUAGE_TAG = re.compile(r"[a-z]{2,3}(?:-(?:[A-Z]{2}|[0-9]{3}))?")
 
 
@@ -518,15 +516,9 @@ def _validate_source(source: ManagedSource, path: str) -> None:
         ZoneInfo(source.timezone)
     except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
         raise ManagedStateError(f"{path}.timezone: unknown IANA timezone") from exc
-    if str(source.parser_id) not in _CUSTOM_SOURCE_PARSERS or not has_title_parser(
-        str(source.parser_id)
-    ):
+    if not custom_strategy_allowed(str(source.parser_id), None):
         raise ManagedStateError(f"{path}.parser_id: not allowed for custom sources")
-    if source.collection_filter_id is not None and (
-        not isinstance(source.collection_filter_id, str)
-        or source.collection_filter_id not in _CUSTOM_SOURCE_FILTERS
-        or not has_collection_filter(source.collection_filter_id)
-    ):
+    if not custom_strategy_allowed(str(source.parser_id), source.collection_filter_id):
         raise ManagedStateError(f"{path}.collection_filter_id: not allowed for custom sources")
     if not isinstance(source.enabled, bool):
         raise ManagedStateError(f"{path}.enabled: expected a boolean")
