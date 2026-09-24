@@ -108,8 +108,10 @@ jobs:
           docker volume create news-bulletin-ci-data
           start_container
           wait_healthy
-          curl --fail --silent --show-error http://127.0.0.1:18788/ | grep -q 'News Bulletin Playlists'
-          curl --fail --silent --show-error http://127.0.0.1:18788/healthz | grep -q '"status":"ok"'
+          curl --fail --silent --show-error --output /tmp/news-bulletin-home.html http://127.0.0.1:18788/
+          grep -Fq 'News Bulletin Playlists' /tmp/news-bulletin-home.html
+          curl --fail --silent --show-error --output /tmp/news-bulletin-health.json http://127.0.0.1:18788/healthz
+          grep -Fq '"status":"ok"' /tmp/news-bulletin-health.json
 
           # Regression guard: the exact candidate must restart cleanly against the durable
           # database/schema it created on first boot. Keep the volume; replace only the process.
@@ -117,7 +119,8 @@ jobs:
           docker rm news-bulletin-playlist-ci
           start_container
           wait_healthy
-          curl --fail --silent --show-error http://127.0.0.1:18788/healthz | grep -q '"status":"ok"'
+          curl --fail --silent --show-error --output /tmp/news-bulletin-health.json http://127.0.0.1:18788/healthz
+          grep -Fq '"status":"ok"' /tmp/news-bulletin-health.json
 
       - name: Stop validation container
         if: always()
