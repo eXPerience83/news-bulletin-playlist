@@ -20,6 +20,7 @@ Clock = Callable[[], datetime]
 
 
 class SpotifyWebApiOperation(StrEnum):
+    SHOW_DETAILS = "show_details"
     SHOW_EPISODES = "show_episodes"
     SEARCH_SHOWS = "search_shows"
     CREATE_PLAYLIST = "create_playlist"

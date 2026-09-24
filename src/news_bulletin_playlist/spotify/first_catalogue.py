@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol
 
-from news_bulletin_playlist.models import SourceDefinition
+from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.registry import get_collection_filter, get_title_parser
 from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
@@ -15,6 +15,7 @@ from news_bulletin_playlist.spotify.first_models import (
     release_period,
     spotify_id,
 )
+from news_bulletin_playlist.spotify.identifiers import SpotifyShowSource
 from news_bulletin_playlist.spotify.public_detector import spotify_show_id
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 
@@ -30,6 +31,14 @@ class SpotifyCatalogueClient(Protocol):
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]: ...
+
+
+class CatalogueSource(SpotifyShowSource, Protocol):
+    @property
+    def parser_id(self) -> ParserId: ...
+
+    @property
+    def collection_filter_id(self) -> str | None: ...
 
 
 class CatalogueResponseError(RuntimeError):
@@ -60,7 +69,7 @@ class _EpisodeCandidate:
 
 def fetch_source_catalogue(
     client: SpotifyCatalogueClient,
-    source: SourceDefinition,
+    source: CatalogueSource,
     *,
     now: datetime,
     cutoff: datetime,

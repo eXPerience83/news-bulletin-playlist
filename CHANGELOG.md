@@ -7,6 +7,10 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ### Changed
 
+- Added a bounded Spotify show intake service: canonical raw IDs, show URIs and Spotify show URLs
+  are normalized locally; duplicate identities are rejected before provider calls, and official show
+  metadata plus catalogue coverage are inspected without persisting candidate/source state. The Add
+  Source Web flow remains future work.
 - Managed state now uses schema v3 with durable, strictly validated installation-owned Spotify-first
   source definitions. v1/v2 files migrate atomically with an empty `sources` collection; built-in
   definitions remain image-owned. Disabled selected sources preserve the current destination. Add

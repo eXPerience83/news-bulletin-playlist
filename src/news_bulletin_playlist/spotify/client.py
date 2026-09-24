@@ -8,6 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, cast
 
+from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 from news_bulletin_playlist.spotify_metrics import (
     SpotifyQuotaReason,
@@ -47,6 +48,14 @@ class SpotifyClient:
     market: str | None = None
     api_base: str = _API_BASE
     metrics: SpotifyRequestMetrics | None = None
+
+    def show_details(self, show_id: str) -> dict[str, Any]:
+        if not is_spotify_id(show_id):
+            raise ValueError("show id must be canonical")
+        query = None if self.market is None else {"market": self.market}
+        return self._request(
+            SpotifyWebApiOperation.SHOW_DETAILS, "GET", f"/shows/{show_id}", query=query
+        )
 
     def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         if not 1 <= limit <= 50:
