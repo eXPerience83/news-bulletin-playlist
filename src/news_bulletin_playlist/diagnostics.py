@@ -234,11 +234,13 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "running",
             "scheduled",
             "stopped",
+            "updated",
         }
     ),
     "operation": frozenset(
         {
             "playlist_configuration",
+            "source_configuration",
             "playlist_cover_upload",
             "playlist_items",
             "playlist_metadata",

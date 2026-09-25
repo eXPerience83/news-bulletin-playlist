@@ -16,7 +16,7 @@ from news_bulletin_playlist.managed_admin import (
 )
 from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
-from news_bulletin_playlist.managed_state import ManagedPlaylist
+from news_bulletin_playlist.managed_state import ManagedPlaylist, ManagedSource
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
@@ -33,6 +33,7 @@ def render_managed_admin_page(
     lan_mode: bool,
     notice: str | None = None,
     error: str | None = None,
+    custom_sources: tuple[ManagedSource, ...] = (),
 ) -> bytes:
     """Render playlist policy and lifecycle controls in the shared admin shell."""
 
@@ -45,6 +46,7 @@ def render_managed_admin_page(
                 catalog=catalog,
                 csrf_token=csrf_token,
                 last_cycle=last_cycle,
+                custom_sources=custom_sources,
             )
             for playlist in snapshot.managed
         )
@@ -175,6 +177,7 @@ def _managed_card(
     catalog: BuiltInCatalog,
     csrf_token: str,
     last_cycle: EngineCycleResult | None,
+    custom_sources: tuple[ManagedSource, ...],
 ) -> str:
     outcome = None
     if last_cycle is not None:
@@ -218,6 +221,14 @@ def _managed_card(
         for source_id in playlist.source_ids
         if source_id not in built_in_ids
     )
+    disabled_warnings = "".join(
+        '<p class="warning">Custom source '
+        f'"{html.escape(source.display_name)}" is Disabled. This playlist preserves its '
+        "Spotify destination and will not update until the source is re-enabled or explicitly "
+        "unassigned.</p>"
+        for source in custom_sources
+        if source.id in playlist.source_ids and not source.enabled
+    )
     return f"""
 <article class="card playlist-card">
   <div class="card-head">
@@ -235,6 +246,7 @@ def _managed_card(
     {_hidden_input("playlist_id", str(playlist.id))}
     {_hidden_input("cover_id", playlist.cover_id)}
     {fields}
+    {disabled_warnings}
     {retained_source_ids}
     <button class="button" type="submit">Save playlist</button>
   </form>

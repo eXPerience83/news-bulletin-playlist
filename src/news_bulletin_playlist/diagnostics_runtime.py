@@ -15,7 +15,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from news_bulletin_playlist import __version__, engine_runtime
 from news_bulletin_playlist.admin_session import SourceInspectionContext
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
-from news_bulletin_playlist.diagnostics import MAX_DIAGNOSTIC_EXPORT_EVENTS, DiagnosticEvent
+from news_bulletin_playlist.diagnostics import (
+    MAX_DIAGNOSTIC_EXPORT_EVENTS,
+    DiagnosticEvent,
+    DiagnosticSeverity,
+)
 from news_bulletin_playlist.diagnostics_web import (
     DiagnosticFilters,
     build_diagnostic_bundle,
@@ -38,13 +42,14 @@ from news_bulletin_playlist.runtime import (
     DEFAULT_HEALTH_PORT,
     _data_dir_ready,
 )
+from news_bulletin_playlist.source_admin import SourceMutationError
 from news_bulletin_playlist.source_admin_web import (
     render_new_source_page,
     render_source_review_page,
 )
 from news_bulletin_playlist.source_inspection import serialize_source_inspection
 from news_bulletin_playlist.source_intake import SourceIntakeError, SourceIntakeFailure
-from news_bulletin_playlist.sources_admin_web import render_sources_page
+from news_bulletin_playlist.sources_admin_web import render_edit_source_page, render_sources_page
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 from news_bulletin_playlist.spotify_metrics import (
@@ -78,6 +83,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if parsed.path == "/admin/sources/new":
             self._serve_source_new()
             return
+        if parsed.path == "/admin/sources/edit":
+            self._serve_source_edit(parsed.query)
+            return
         if parsed.path == "/admin/sources/inspection-report.json":
             self._serve_source_report()
             return
@@ -98,6 +106,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if path in {"/admin/sources/inspect", "/admin/sources/create"}:
             self._handle_source_post(path)
             return
+        if path in {"/admin/sources/update", "/admin/sources/set-enabled"}:
+            self._handle_source_mutation(path)
+            return
         super().do_POST()
 
     def _source_error(self, status: HTTPStatus, message: str) -> None:
@@ -115,6 +126,132 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             render_new_source_page(
                 csrf_token=security.issue_csrf_token(), lan_mode=self._is_lan_admin_mode()
             ),
+        )
+
+    def _serve_source_edit(self, query: str) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.source_admin_service
+        if service is None:
+            self._source_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+        values = urllib.parse.parse_qs(query, keep_blank_values=True)
+        if set(values) != {"source_id"} or len(values["source_id"]) != 1:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source ID")
+            return
+        try:
+            source = service.get_custom_source(values["source_id"][0])
+            state = service.snapshot()
+        except SourceMutationError:
+            self._source_error(HTTPStatus.NOT_FOUND, "Custom source not found")
+            return
+        except ManagedStateError, OSError:
+            self._source_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "Managed source state is unavailable"
+            )
+            return
+        self._reply(
+            HTTPStatus.OK,
+            render_edit_source_page(
+                source,
+                used_by=tuple(
+                    playlist.display_name
+                    for playlist in state.playlists
+                    if source.id in playlist.source_ids
+                ),
+                csrf_token=security.issue_csrf_token(),
+                lan_mode=self._is_lan_admin_mode(),
+            ),
+        )
+
+    def _handle_source_mutation(self, path: str) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.source_admin_service
+        if service is None:
+            self._source_error(
+                HTTPStatus.SERVICE_UNAVAILABLE, "Source administration is unavailable"
+            )
+            return
+        try:
+            form = self._read_form()
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source form")
+            return
+        tokens = form.get("csrf_token", [])
+        if len(tokens) != 1 or not security.consume_csrf_token(tokens[0]):
+            self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+            return
+        try:
+            allowed = (
+                {
+                    "csrf_token",
+                    "source_id",
+                    "display_name",
+                    "origin_kind",
+                    "origin_code",
+                    "language",
+                    "editorial_scope",
+                }
+                if path == "/admin/sources/update"
+                else {"csrf_token", "source_id", "enabled"}
+            )
+            if set(form) != allowed:
+                raise ValueError("Invalid source form")
+            values = {name: single_form_value(form, name) for name in allowed - {"csrf_token"}}
+            if path == "/admin/sources/update":
+                updated, configured = service.update_metadata(
+                    values["source_id"],
+                    display_name=values["display_name"],
+                    origin_kind=values["origin_kind"],
+                    origin_code=values["origin_code"],
+                    language=values["language"],
+                    editorial_scope=values["editorial_scope"],
+                )
+                event_name, next_state, notice = (
+                    "admin_source_updated",
+                    "updated",
+                    "source-updated",
+                )
+            else:
+                if values["enabled"] not in {"0", "1"}:
+                    raise ValueError("Invalid source state")
+                enabled = values["enabled"] == "1"
+                updated, configured = service.set_enabled(values["source_id"], enabled)
+                next_state = "enabled" if enabled else "disabled"
+                event_name, notice = f"admin_source_{next_state}", f"source-{next_state}"
+        except SourceMutationError:
+            self._source_error(HTTPStatus.CONFLICT, "Custom source is unavailable or not editable")
+            return
+        except ManagedStateError, OSError:
+            self._source_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "Managed source state is unavailable"
+            )
+            return
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source metadata or form")
+            return
+        lifecycle = self.engine_lifecycle
+        if lifecycle is not None:
+            lifecycle.reconcile(configured=configured)
+        self._admin_diagnostics().emit(
+            occurred_at=datetime.now(UTC),
+            severity=DiagnosticSeverity.INFO,
+            component="admin",
+            event_name=event_name,
+            source_id=str(updated.id),
+            details={
+                "operation": "source_configuration",
+                "outcome": "applied",
+                "next_state": next_state,
+            },
+        )
+        self._reply(
+            HTTPStatus.SEE_OTHER,
+            b"",
+            extra_headers={"Location": f"/admin/sources?notice={notice}"},
         )
 
     def _serve_source_report(self) -> None:
@@ -320,7 +457,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         )
 
     def _serve_sources(self, query: str = "") -> None:
-        if self._require_admin() is None:
+        security = self._require_admin()
+        if security is None:
             return
         service = self.managed_admin_service
         if service is None:
@@ -349,6 +487,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         status = self.operational_status
         last_cycle = None if status is None else status.snapshot().last_cycle
+        notice_values = urllib.parse.parse_qs(query, keep_blank_values=True).get("notice", [])
+        notice_key = notice_values[0] if len(notice_values) == 1 else ""
         self._reply(
             HTTPStatus.OK,
             render_sources_page(
@@ -357,12 +497,13 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 catalog=service.catalog,
                 last_cycle=last_cycle,
                 lan_mode=self._is_lan_admin_mode(),
-                notice=(
-                    "Custom source added successfully."
-                    if urllib.parse.parse_qs(query, keep_blank_values=True).get("notice")
-                    == ["source-added"]
-                    else None
-                ),
+                csrf_token=security.issue_csrf_token(),
+                notice={
+                    "source-added": "Custom source added successfully.",
+                    "source-updated": "Custom source updated successfully.",
+                    "source-enabled": "Custom source enabled successfully.",
+                    "source-disabled": "Custom source disabled successfully.",
+                }.get(notice_key),
             ),
         )
 

@@ -1,4 +1,4 @@
-"""Application boundary for authenticated, reviewed custom-source creation."""
+"""Application boundary for custom-source creation and safe local lifecycle changes."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedSource,
     ManagedState,
     ManagedStateStore,
+    compile_engine_config,
     effective_sources,
     serialize_managed_state,
 )
@@ -44,8 +45,12 @@ class _Auth(Protocol):
     def get_access_token(self, *, now: datetime | None = None) -> str: ...
 
 
+class SourceMutationError(ValueError):
+    """A requested source is absent or image-owned, not installation-owned."""
+
+
 class SourceAdminService:
-    """Keep provider I/O outside the configuration lock and save only canonical sources."""
+    """Keep provider I/O outside the configuration lock; serialize local mutations."""
 
     def __init__(
         self,
@@ -136,6 +141,59 @@ class SourceAdminService:
             latest = self.store.load()
             self._check_duplicate(latest, source)
             self.store.save(replace(latest, sources=(*latest.sources, source)))
+
+    def get_custom_source(self, source_id: str) -> ManagedSource:
+        state = self.snapshot()
+        return self._custom_source(state, source_id)
+
+    def update_metadata(
+        self,
+        source_id: str,
+        *,
+        display_name: str,
+        origin_kind: str,
+        origin_code: str,
+        language: str,
+        editorial_scope: str,
+    ) -> tuple[ManagedSource, bool]:
+        with self.synchronization.hold():
+            state = self.store.load()
+            current = self._custom_source(state, source_id)
+            try:
+                updated = replace(
+                    current,
+                    display_name=display_name.strip(),
+                    origin=SourceOrigin(SourceOriginKind(origin_kind), origin_code),
+                    language=LanguageTag(language),
+                    editorial_scope=EditorialScope(editorial_scope),
+                )
+                serialize_managed_state(ManagedState(sources=(updated,)))
+            except ValueError as exc:
+                raise ValueError("Source metadata is invalid") from exc
+            self._save_replacement(state, updated)
+            return updated, any(playlist.enabled for playlist in state.playlists)
+
+    def set_enabled(self, source_id: str, enabled: bool) -> tuple[ManagedSource, bool]:
+        with self.synchronization.hold():
+            state = self.store.load()
+            current = self._custom_source(state, source_id)
+            updated = replace(current, enabled=enabled)
+            self._save_replacement(state, updated)
+            return updated, any(playlist.enabled for playlist in state.playlists)
+
+    def _custom_source(self, state: ManagedState, source_id: str) -> ManagedSource:
+        source = next((item for item in state.sources if item.id == source_id), None)
+        if source is None:
+            raise SourceMutationError("Custom source is unavailable or not editable")
+        return source
+
+    def _save_replacement(self, state: ManagedState, updated: ManagedSource) -> None:
+        next_state = replace(
+            state,
+            sources=tuple(updated if item.id == updated.id else item for item in state.sources),
+        )
+        compile_engine_config(self.catalog, next_state)
+        self.store.save(next_state)
 
     def _check_duplicate(self, state: ManagedState, source: ManagedSource) -> None:
         sources = effective_sources(self.catalog, state)
