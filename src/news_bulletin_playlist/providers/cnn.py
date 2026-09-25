@@ -4,12 +4,17 @@ import re
 
 from news_bulletin_playlist.models import ParsedEdition
 from news_bulletin_playlist.providers.base import RecoveringTitleParserBase
-from news_bulletin_playlist.providers.common import NEW_YORK, aware_datetime, expand_two_digit_year
+from news_bulletin_playlist.providers.common import (
+    NEW_YORK,
+    clock_12h_pattern,
+    datetime_from_match,
+    numeric_date_pattern,
+)
 
+_DATE = numeric_date_pattern(order="mdy", separators="/", year_digits=(2, 4))
+_CLOCK = clock_12h_pattern(separators=":", minute_optional=True)
 _PATTERN = re.compile(
-    r"^CNN 5 cosas\s+"
-    r"(?P<month>[0-9]{1,2})/(?P<day>[0-9]{1,2})/(?P<year>[0-9]{2}|[0-9]{4})\s+"
-    r"(?P<hour>[0-9]{1,2})(?::(?P<minute>[0-5][0-9]))?\s*(?P<ampm>am|pm)$",
+    rf"^CNN 5 cosas\s+{_DATE}\s+{_CLOCK}\s*(?P<ampm>am|pm)$",
     re.IGNORECASE,
 )
 
@@ -21,23 +26,7 @@ class CnnParser(RecoveringTitleParserBase):
         match = _PATTERN.match(title.strip())
         if match is None:
             return None
-        hour = int(match.group("hour"))
-        if not 1 <= hour <= 12:
-            return None
-        minute = int(match.group("minute") or "0")
-        if match.group("ampm").lower() == "pm" and hour != 12:
-            hour += 12
-        elif match.group("ampm").lower() == "am" and hour == 12:
-            hour = 0
-        try:
-            edition_at = aware_datetime(
-                expand_two_digit_year(int(match.group("year"))),
-                int(match.group("month")),
-                int(match.group("day")),
-                hour,
-                minute,
-                tz=NEW_YORK,
-            )
-        except ValueError:
+        edition_at = datetime_from_match(match, tz=NEW_YORK, clock="12h")
+        if edition_at is None:
             return None
         return ParsedEdition(self.provider_id, title, edition_at)

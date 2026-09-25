@@ -136,7 +136,7 @@ def test_builtin_runtime_identity_and_classification_remain_unchanged() -> None:
         ),
         "rfi_fr": ("rfi_journal_monde", "UTC", "fr", "INT", "6y3v3GWUBwANr9hK9m1frF"),
         "dlf_news": ("release_date_title", "Europe/Berlin", "de", "MIX", "4eYPgoQH9VLTfgAxIbwHqs"),
-        "rmf_fakty": ("release_date_title", "Europe/Warsaw", "pl", "MIX", "2BeZqsvzZUSldlZWvjeGe3"),
+        "rmf_fakty": ("rmf_fakty", "Europe/Warsaw", "pl", "MIX", "2BeZqsvzZUSldlZWvjeGe3"),
     }
     assert {
         str(source.id): (

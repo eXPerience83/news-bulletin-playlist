@@ -4,12 +4,17 @@ import re
 
 from news_bulletin_playlist.models import ParsedEdition
 from news_bulletin_playlist.providers.base import RecoveringTitleParserBase
-from news_bulletin_playlist.providers.common import MADRID, aware_datetime
+from news_bulletin_playlist.providers.common import (
+    MADRID,
+    clock_24h_pattern,
+    datetime_from_match,
+    numeric_date_pattern,
+)
 
+_CLOCK = clock_24h_pattern(separators=":")
+_DATE = numeric_date_pattern(order="dmy", separators="/", year_digits=(4,))
 _PATTERN = re.compile(
-    r"^Las noticias de Onda Cero de las\s+"
-    r"(?P<hour>[01]?[0-9]|2[0-3]):(?P<minute>[0-5][0-9])h\s*"
-    r"\((?P<day>[0-9]{1,2})/(?P<month>[0-9]{1,2})/(?P<year>[0-9]{4})\)$",
+    rf"^Las noticias de Onda Cero de las\s+{_CLOCK}h\s*\({_DATE}\)$",
     re.IGNORECASE,
 )
 
@@ -21,16 +26,7 @@ class OndaCeroParser(RecoveringTitleParserBase):
         match = _PATTERN.match(title.strip())
         if match is None:
             return None
-        values = {key: int(value) for key, value in match.groupdict().items()}
-        try:
-            edition_at = aware_datetime(
-                values["year"],
-                values["month"],
-                values["day"],
-                values["hour"],
-                values["minute"],
-                tz=MADRID,
-            )
-        except ValueError:
+        edition_at = datetime_from_match(match, tz=MADRID)
+        if edition_at is None:
             return None
         return ParsedEdition(self.provider_id, title, edition_at)

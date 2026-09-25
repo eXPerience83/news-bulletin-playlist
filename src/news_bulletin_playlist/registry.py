@@ -12,6 +12,7 @@ from news_bulletin_playlist.providers.cope import CopeParser
 from news_bulletin_playlist.providers.ondacero import OndaCeroParser
 from news_bulletin_playlist.providers.release_date_title import ReleaseDateTitleParser
 from news_bulletin_playlist.providers.rfi import RfiJournalMondeParser
+from news_bulletin_playlist.providers.rmf import RmfFaktyParser
 from news_bulletin_playlist.providers.rne import RneParser
 from news_bulletin_playlist.providers.ser import SerParser
 
@@ -26,6 +27,7 @@ RECOVERY_TITLE_PARSERS: dict[str, RecoveryTitleParser] = {
 TITLE_PARSERS: dict[str, TitleParser] = {
     **RECOVERY_TITLE_PARSERS,
     "release_date_title": ReleaseDateTitleParser(),
+    "rmf_fakty": RmfFaktyParser(),
 }
 COLLECTION_FILTERS: dict[str, CollectionFilter] = {
     "un_news_es_minutes": UnNewsEsMinutesFilter(),
