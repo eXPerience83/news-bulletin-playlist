@@ -46,6 +46,15 @@ class _FailingRunner:
         raise RuntimeError("access-token-sentinel must never be logged")
 
 
+class _CustomFailure(Exception):
+    pass
+
+
+class _CustomFailingRunner:
+    def run_cycle(self) -> EngineCycleResult:
+        raise _CustomFailure("provider-body-sentinel must never be logged")
+
+
 class _NestedDiagnosticRunner:
     def __init__(
         self,
@@ -321,8 +330,38 @@ def test_unexpected_runner_exception_logs_only_safe_classification(tmp_path: Pat
         "cycle_started",
         "cycle_unexpected_failure",
     ]
-    assert events[0].details == {"phase": "scheduler"}
+    assert events[0].details == {
+        "exception_class": "runtime_error",
+        "phase": "scheduler",
+        "stage": "engine_execution",
+    }
     assert "access-token-sentinel" not in output.getvalue()
+
+
+def test_unknown_runner_exception_collapses_to_safe_classification(tmp_path: Path) -> None:
+    diagnostics, store, output = _diagnostics(tmp_path)
+    runner = InstrumentedEngineCycleRunner(
+        _CustomFailingRunner(),
+        diagnostics,
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(_CustomFailure, match="provider-body-sentinel"):
+        runner.run_cycle()
+
+    event = next(
+        item
+        for item in store.list_events(limit=10)
+        if item.event_name == "cycle_unexpected_failure"
+    )
+    assert event.details == {
+        "exception_class": "unexpected_error",
+        "phase": "scheduler",
+        "stage": "engine_execution",
+    }
+    rendered = output.getvalue()
+    assert "provider-body-sentinel" not in rendered
+    assert "_CustomFailure" not in rendered
 
 
 def test_runtime_emitter_rejects_unsafe_allowed_field_without_leaking_it(tmp_path: Path) -> None:
@@ -335,6 +374,28 @@ def test_runtime_emitter_rejects_unsafe_allowed_field_without_leaking_it(tmp_pat
         component="spotify.auth",
         event_name="authorization_failed",
         details={"phase": sentinel},
+    )
+
+    assert store.list_events() == ()
+    rendered = output.getvalue()
+    assert "diagnostic_persistence_failed" in rendered
+    assert sentinel not in rendered
+
+
+def test_runtime_emitter_rejects_unknown_exception_class(tmp_path: Path) -> None:
+    diagnostics, store, output = _diagnostics(tmp_path)
+    sentinel = "arbitrary-exception-class-sentinel"
+
+    diagnostics.emit(
+        occurred_at=NOW,
+        severity=DiagnosticSeverity.ERROR,
+        component="engine",
+        event_name="cycle_unexpected_failure",
+        details={
+            "exception_class": sentinel,
+            "phase": "scheduler",
+            "stage": "engine_execution",
+        },
     )
 
     assert store.list_events() == ()
