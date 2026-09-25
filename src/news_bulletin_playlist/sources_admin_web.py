@@ -90,12 +90,18 @@ def _sources_table(
             else ("Enabled" if source.enabled else "Disabled")
         )
         controls = ""
+        safe_id = html.escape(str(source.id), quote=True)
+        safe_csrf = html.escape(csrf_token, quote=True)
+        controls += (
+            '<form method="post" action="/admin/sources/audit">'
+            f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
+            f'<input type="hidden" name="source_id" value="{safe_id}">'
+            '<button class="button" type="submit">Audit</button></form>'
+        )
         if source.id not in built_in_ids:
             next_enabled = not source.enabled
             verb = "Enable" if next_enabled else "Disable"
-            safe_id = html.escape(str(source.id), quote=True)
-            safe_csrf = html.escape(csrf_token, quote=True)
-            controls = (
+            controls += (
                 f'<a href="/admin/sources/edit?source_id={safe_id}">'
                 "Edit</a>"
                 '<form method="post" action="/admin/sources/set-enabled">'

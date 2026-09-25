@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import json
 import re
 import sqlite3
 import threading
@@ -32,10 +33,10 @@ from news_bulletin_playlist.managed_state import (
     activate_template,
     compile_engine_config,
 )
-from news_bulletin_playlist.models import SourceOrigin
+from news_bulletin_playlist.models import SourceId, SourceOrigin
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.source_admin import SourceAdminService
-from news_bulletin_playlist.spotify.client import SpotifyApiError
+from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 from news_bulletin_playlist.spotify.first_models import (
     RefreshReason,
     SpotifyFirstEpisode,
@@ -45,6 +46,7 @@ from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorJournal,
     PublicEpisodeObservation,
+    PublicShowDetectorError,
 )
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 
@@ -122,6 +124,31 @@ class _Client:
         }
 
 
+class _PublicAudit:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.fail = False
+
+    def observe_episode(
+        self, source_id: SourceId, spotify_show_id: str, *, observed_at: datetime
+    ) -> PublicEpisodeObservation:
+        self.calls += 1
+        if self.fail:
+            raise PublicShowDetectorError("secret-public-body")
+        return PublicEpisodeObservation(
+            source_id=source_id,
+            spotify_show_id=spotify_show_id,
+            episode_id=OTHER,
+            episode_uri=f"spotify:episode:{OTHER}",
+            name="Public bulletin",
+            title="Public bulletin",
+            release_date_raw=observed_at.date().isoformat(),
+            duration_ms=305_000,
+            related_entity_uri=f"spotify:show:{spotify_show_id}",
+            observed_at=observed_at,
+        )
+
+
 class _Handler(DiagnosticOperationalHealthHandler):
     def log_message(self, format: str, *args: object) -> None:
         del format, args
@@ -174,6 +201,7 @@ def _server(
         detector_journal=detector_journal,
         cycle_synchronization=cycle_synchronization,
         provisioning_journal=_Handler.managed_admin_service.provisioning_journal,
+        public_client=_PublicAudit(),
     )
     server = HTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -230,6 +258,19 @@ def _inspect(server: HTTPServer, cookie: str, locator: str = SHOW) -> tuple[int,
         "/admin/sources/inspect",
         cookie=cookie,
         form={"csrf_token": _csrf(page), "locator": locator},
+    )
+    return status, review
+
+
+def _audit(server: HTTPServer, cookie: str, source_id: str) -> tuple[int, bytes]:
+    status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+    assert status == HTTPStatus.OK
+    status, _, review = _request(
+        server,
+        "POST",
+        "/admin/sources/audit",
+        cookie=cookie,
+        form={"csrf_token": _csrf(page), "source_id": source_id},
     )
     return status, review
 
@@ -1521,3 +1562,167 @@ def test_operator_display_name_is_escaped_after_create(tmp_path: Path) -> None:
         assert b"<img src=x onerror" not in page
         assert b"&lt;img src=x onerror=alert(1)&gt;" in page
         assert store.load().sources[0].display_name == form["display_name"]
+
+
+@pytest.mark.parametrize("kind", ["built_in", "custom", "disabled_custom"])
+def test_configured_audit_is_read_only_and_downloadable(tmp_path: Path, kind: str) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source_id = str(BUILTIN_CATALOG.sources[0].id)
+        if kind != "built_in":
+            source = _configured_source(store, enabled=kind == "custom")
+            source_id = str(source.id)
+        before = store.path.read_bytes() if store.path.exists() else None
+        with sqlite3.connect(tmp_path / "state.sqlite3") as connection:
+            current_before = {
+                table: connection.execute(f"SELECT * FROM {table}").fetchall()
+                for table in (
+                    "spotify_first_episode_state",
+                    "spotify_first_source_state",
+                    "spotify_public_detector_state",
+                    "spotify_first_destination_state",
+                )
+            }
+        with sqlite3.connect(tmp_path / "diagnostics.sqlite3") as connection:
+            diagnostics_before = connection.execute(
+                "SELECT COUNT(*) FROM diagnostic_events"
+            ).fetchone()
+        cookie = _login(server)
+        status, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200 and b"/admin/sources/audit" in sources
+        assert sources.count(b'action="/admin/sources/audit"') == len(BUILTIN_CATALOG.sources) + (
+            kind != "built_in"
+        )
+        assert client.calls == []
+        status, review = _audit(server, cookie, source_id)
+        assert status == 200
+        assert b"Read-only audit" in review and source_id.encode() in review
+        assert b"Provider-derived evidence" in review
+        assert b"&lt;img src=x onerror=alert(1)&gt;" in review
+        assert b"/admin/sources/create" not in review
+        assert client.calls == ["details", "episodes"]
+        status, _, report = _request(
+            server, "GET", "/admin/sources/inspection-report.json", cookie=cookie
+        )
+        assert status == 200 and client.calls == ["details", "episodes"]
+        parsed = json.loads(report)
+        assert parsed["schema_version"] == 1
+        assert parsed["ownership"] == kind.removeprefix("disabled_")
+        assert parsed["source_id"] == source_id
+        assert parsed["episodes"] and parsed["public_status"] == "available"
+        assert (
+            report
+            == admin_session_manager_for(_Handler.admin_security)
+            .source_inspection(cookie.partition("=")[2])
+            .report_json
+        )
+        for secret in (
+            b"secret-provider-body",
+            b"secret-refresh-token",
+            b"secret-access-token",
+            cookie.encode(),
+            _csrf(review).encode(),
+        ):
+            assert secret not in report
+        assert store.load().sources == (() if kind == "built_in" else (source,))
+        assert (store.path.read_bytes() if store.path.exists() else None) == before
+        with sqlite3.connect(tmp_path / "state.sqlite3") as connection:
+            for table, rows in current_before.items():
+                assert connection.execute(f"SELECT * FROM {table}").fetchall() == rows
+        with sqlite3.connect(tmp_path / "diagnostics.sqlite3") as connection:
+            assert connection.execute("SELECT COUNT(*) FROM diagnostic_events").fetchone() == (
+                diagnostics_before
+            )
+        other_cookie = _login(server)
+        assert (
+            _request(server, "GET", "/admin/sources/inspection-report.json", cookie=other_cookie)[0]
+            == 404
+        )
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/create",
+                cookie=cookie,
+                form=_create_form(review),
+            )[0]
+            == 400
+        )
+        assert client.calls == ["details", "episodes"]
+
+
+def test_configured_audit_auth_csrf_and_stale_identity(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        assert _request(server, "POST", "/admin/sources/audit")[0] == 303
+        cookie = _login(server)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/audit",
+                cookie=cookie,
+                form={"csrf_token": "wrong", "source_id": str(source.id)},
+            )[0]
+            == 403
+        )
+        assert client.calls == []
+        page = _request(server, "GET", "/admin/sources", cookie=cookie)[2]
+        token = _csrf(page)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/audit",
+                cookie=cookie,
+                form={"csrf_token": token, "source_id": "custom_missing"},
+            )[0]
+            == 404
+        )
+        assert client.calls == []
+        page = _request(server, "GET", "/admin/sources", cookie=cookie)[2]
+        form = {"csrf_token": _csrf(page), "source_id": str(source.id)}
+        assert _request(server, "POST", "/admin/sources/audit", cookie=cookie, form=form)[0] == 200
+        assert _request(server, "POST", "/admin/sources/audit", cookie=cookie, form=form)[0] == 403
+        assert client.calls == ["details", "episodes"]
+        store.save(ManagedState())
+        assert _audit(server, cookie, str(source.id))[0] == 404
+        assert (
+            _request(server, "GET", "/admin/sources/inspection-report.json", cookie=cookie)[0]
+            == 404
+        )
+        assert client.calls == ["details", "episodes"]
+
+
+def test_configured_audit_provider_failure_and_global_cooldown(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        cookie = _login(server)
+        client.error = SpotifyApiError(503, "secret-provider-body")
+        status, body = _audit(server, cookie, str(source.id))
+        assert status == 503 and b"secret-provider-body" not in body
+        client.error = SpotifyTransportError("secret-access-token")
+        status, body = _audit(server, cookie, str(source.id))
+        assert status == 503 and b"secret-access-token" not in body
+        client.error = SpotifyApiError(429, "secret-provider-body", retry_after=60)
+        status, body = _audit(server, cookie, str(source.id))
+        assert status == 503 and b"secret-provider-body" not in body
+        assert _Handler.source_admin_service.rate_limit.get() is not None  # type: ignore[union-attr]
+        calls = client.calls[:]
+        assert _audit(server, cookie, str(source.id))[0] == 503
+        assert client.calls == calls
+        assert store.load().sources == (source,)
+
+
+def test_configured_audit_public_failure_is_optional(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store, enabled=False)
+        service = _Handler.source_admin_service
+        assert service is not None and isinstance(service.public_client, _PublicAudit)
+        service.public_client.fail = True
+        cookie = _login(server)
+        status, review = _audit(server, cookie, str(source.id))
+        assert status == 200 and b"unavailable" in review
+        report = _request(server, "GET", "/admin/sources/inspection-report.json", cookie=cookie)[2]
+        assert json.loads(report)["public_status"] == "unavailable"
+        assert b"secret-public-body" not in report + review
+        assert client.calls == ["details", "episodes"]

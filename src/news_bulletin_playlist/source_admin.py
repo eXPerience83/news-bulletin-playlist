@@ -30,7 +30,10 @@ from news_bulletin_playlist.models import (
     SourceOrigin,
     SourceOriginKind,
 )
-from news_bulletin_playlist.source_inspection import SourceInspection
+from news_bulletin_playlist.source_inspection import (
+    SourceInspection,
+    inspect_configured_source,
+)
 from news_bulletin_playlist.source_intake import (
     SourceIntakeError,
     SourceIntakeFailure,
@@ -80,6 +83,7 @@ class SourceAdminService:
         detector_journal: PublicDetectorJournal | None = None,
         cycle_synchronization: EngineCycleSynchronization | None = None,
         provisioning_journal: ProvisioningJournal | None = None,
+        public_client: Any | None = None,
     ) -> None:
         self.store = store
         self.synchronization = synchronization
@@ -94,6 +98,7 @@ class SourceAdminService:
         self.provisioning_journal = provisioning_journal or ProvisioningJournal(
             store.path.with_name(MANAGED_PROVISIONING_FILENAME)
         )
+        self.public_client = public_client
 
     def snapshot(self) -> ManagedState:
         with self.synchronization.hold():
@@ -116,6 +121,23 @@ class SourceAdminService:
             collection_filter_id=collection_filter_id,
             client_factory=self.client_factory,
             observe_public=False,
+            metrics=self.metrics,
+        )
+
+    def audit(self, source_id: str) -> SourceInspection:
+        """Inspect one current effective source without changing configured or runtime state."""
+        state = self.snapshot()
+        if source_id not in {str(source.id) for source in effective_sources(self.catalog, state)}:
+            raise SourceMutationError("Configured source not found")
+        return inspect_configured_source(
+            SourceId(source_id),
+            catalog=self.catalog,
+            state=state,
+            auth=self.auth,
+            rate_limit=self.rate_limit,
+            now=datetime.now(UTC),
+            client_factory=self.client_factory,
+            public_client=self.public_client,
             metrics=self.metrics,
         )
 
