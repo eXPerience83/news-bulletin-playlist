@@ -30,6 +30,7 @@ from news_bulletin_playlist.engine import (
     SpotifyAuthProvider,
     SpotifyClientFactory,
 )
+from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
 from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
 from news_bulletin_playlist.managed_admin import (
@@ -49,6 +50,7 @@ from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     ManagedStateError,
     ManagedStateStore,
+    effective_sources,
 )
 from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
@@ -348,6 +350,7 @@ class ReloadingEngineCycleRunner:
         clock: Clock | None = None,
         request_metrics: SpotifyRequestMetrics | None = None,
         source_inactivity: timedelta = timedelta(hours=24),
+        cycle_synchronization: EngineCycleSynchronization | None = None,
     ) -> None:
         self.data_dir = data_dir
         self.environ = environ
@@ -361,8 +364,16 @@ class ReloadingEngineCycleRunner:
         self.clock = clock
         self.request_metrics = request_metrics
         self.source_inactivity = source_inactivity
+        self.cycle_synchronization = cycle_synchronization
 
     def run_cycle(self) -> EngineCycleResult:
+        gate = self.cycle_synchronization
+        if gate is None:
+            return self._run_cycle()
+        with gate.hold_cycle():
+            return self._run_cycle()
+
+    def _run_cycle(self) -> EngineCycleResult:
         started_at = datetime.now(UTC)
         synchronization = self.configuration_synchronization
         try:
@@ -615,6 +626,7 @@ class OperationalHealthHandler(LanAdminHandler):
                 with synchronization.hold():
                     snapshot = service.snapshot()
                     state = service.store.load()
+            effective_sources(service.catalog, state)
         except ManagedStateError, OSError:
             self._reply(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -634,7 +646,7 @@ class OperationalHealthHandler(LanAdminHandler):
             last_cycle=last_cycle,
             lan_mode=self._is_lan_admin_mode(),
             notice=notice,
-            custom_sources=state.sources,
+            state=state,
         )
         self._reply(HTTPStatus.OK, payload)
 
@@ -1030,6 +1042,7 @@ def serve(
     scheduler_interval = interval if interval is not None else _runtime_interval(env)
     auth_synchronization = AuthSynchronization()
     configuration_synchronization = ConfigurationSynchronization()
+    cycle_synchronization = EngineCycleSynchronization()
     auth_provider = (
         None if spotify_auth is None else _LockedAuthProvider(spotify_auth, auth_synchronization)
     )
@@ -1069,6 +1082,7 @@ def serve(
             configuration_synchronization,
             request_metrics=request_metrics,
             source_inactivity=_spotify_inactivity(env),
+            cycle_synchronization=cycle_synchronization,
         )
         runner = InstrumentedEngineCycleRunner(base_runner, diagnostics)
         lifecycle = EngineLifecycleController(
@@ -1100,6 +1114,10 @@ def serve(
             auth_provider,
             rate_limit_journal,
             request_metrics,
+            first_journal=first_journal,
+            detector_journal=detector_journal,
+            cycle_synchronization=cycle_synchronization,
+            provisioning_journal=managed_admin_service.provisioning_journal,
         )
     )
     handler_type.diagnostic_store = diagnostic_store

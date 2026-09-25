@@ -7,12 +7,15 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ### Changed
 
+- Admin Playlists can assign enabled custom sources, visibly preserve or explicitly unassign
+  selected disabled sources, and safely delete unreferenced custom definitions after source-local
+  operational cleanup. Accepted-episode research history and Spotify destinations are preserved.
 - Admin Sources now permits safe custom-source metadata edits and reversible enable/disable without
   changing source identity, parser, filter or timezone. Selected disabled sources keep playlist
   assignments and preserve existing Spotify destinations.
 - Admin Sources now supports authenticated, CSRF-protected inspection and creation of validated
   custom Spotify shows. Review reports stay in the Admin session; Create validates with Spotify
-  again before saving. Playlist assignment and deletion UI remain future work.
+  again before saving.
 - Added a bounded Spotify show intake service: canonical raw IDs, show URIs and Spotify show URLs
   are normalized locally; duplicate identities are rejected before provider calls, and official show
   metadata plus catalogue coverage are inspected without persisting candidate/source state.

@@ -8,7 +8,7 @@ import urllib.parse
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import HTTPServer
 from pathlib import Path
@@ -21,6 +21,7 @@ from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.diagnostics_runtime import DiagnosticOperationalHealthHandler
 from news_bulletin_playlist.engine import OperationalStatus
+from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.lan_admin import LanAdminSecurity
 from news_bulletin_playlist.managed_admin import ManagedAdminService
@@ -29,11 +30,22 @@ from news_bulletin_playlist.managed_state import (
     ManagedState,
     ManagedStateStore,
     activate_template,
+    compile_engine_config,
 )
 from news_bulletin_playlist.models import SourceOrigin
-from news_bulletin_playlist.persistence import SQLiteStore
+from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.source_admin import SourceAdminService
 from news_bulletin_playlist.spotify.client import SpotifyApiError
+from news_bulletin_playlist.spotify.first_models import (
+    RefreshReason,
+    SpotifyFirstEpisode,
+    TimestampSource,
+)
+from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
+from news_bulletin_playlist.spotify.public_detector import (
+    PublicDetectorJournal,
+    PublicEpisodeObservation,
+)
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 
 SHOW = "A" * 22
@@ -135,7 +147,7 @@ def _server(
     _Handler.data_dir = tmp_path
     _Handler.spotify_auth = None
     _Handler.operational_status = OperationalStatus(configured=False)
-    _Handler.engine_lifecycle = lifecycle  # type: ignore[assignment]
+    _Handler.engine_lifecycle = lifecycle or _Lifecycle()  # type: ignore[assignment]
     _Handler.auth_synchronization = None
     _Handler.configuration_synchronization = synchronization
     _Handler.managed_admin_service = ManagedAdminService(store)
@@ -144,13 +156,24 @@ def _server(
     diagnostic_store.initialize()
     _Handler.diagnostic_store = diagnostic_store
     _Handler.operational_diagnostics = None
+    runtime_store = SQLiteStore(tmp_path / "state.sqlite3")
+    runtime_store.initialize()
+    first_journal = SpotifyFirstJournal(runtime_store)
+    first_journal.initialize()
+    detector_journal = PublicDetectorJournal(runtime_store)
+    detector_journal.initialize()
+    cycle_synchronization = EngineCycleSynchronization()
     _Handler.source_admin_service = SourceAdminService(
         store,
         synchronization,
         auth,
-        SpotifyRateLimitJournal(SQLiteStore(tmp_path / "state.sqlite3")),
+        SpotifyRateLimitJournal(runtime_store),
         None,
         client_factory=lambda token: client,
+        first_journal=first_journal,
+        detector_journal=detector_journal,
+        cycle_synchronization=cycle_synchronization,
+        provisioning_journal=_Handler.managed_admin_service.provisioning_journal,
     )
     server = HTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -263,6 +286,490 @@ def _lifecycle_form(token: str, *, enabled: str) -> dict[str, str]:
     return {"csrf_token": token, "source_id": f"custom_{SHOW}", "enabled": enabled}
 
 
+def _playlist_form(token: str, source_ids: list[str]) -> dict[str, str | list[str]]:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    return {
+        "csrf_token": token,
+        "playlist_id": str(template.id),
+        "display_name": "Operator playlist",
+        "description": "",
+        "cover_id": template.cover_id,
+        "source_id": source_ids,
+        "enabled": "1",
+        "max_duration_minutes": "30",
+        "max_duration_seconds_remainder": "0",
+    }
+
+
+def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        service = _Handler.source_admin_service
+        assert service is not None
+        source = _configured_source(store)
+        original = store.load()
+        updated = replace(original.playlists[0], source_ids=("ser",))
+        store.save(replace(original, playlists=(updated,)))
+        for path in ("/admin/sources/delete?source_id=" + str(source.id),):
+            assert _request(server, "GET", path)[0] == 303
+        anonymous_delete = _request(
+            server, "POST", "/admin/sources/delete", form={"source_id": str(source.id)}
+        )
+        assert anonymous_delete[0] == 303
+
+        cookie = _login(server)
+        _, _, playlists = _request(server, "GET", "/admin/", cookie=cookie)
+        control = f'type="checkbox" name="source_id" value="{source.id}"'.encode()
+        assert control in playlists and b"Custom" in playlists
+        assert b'type="hidden" name="source_id" value="custom_' not in playlists
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/playlists/update",
+                cookie=cookie,
+                form=_playlist_form(_csrf(playlists), ["ser", str(source.id)]),
+            )[0]
+            == 303
+        )
+        assert store.load().playlists[0].source_ids == ("ser", source.id)
+        assert client.calls == [] and service.auth.calls == 0  # type: ignore[attr-defined]
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert b"Operator playlist" in sources and b"Unassign before deletion" in sources
+        for row in re.findall(rb"<tr>.*?</tr>", sources, flags=re.DOTALL):
+            if b"Built-in" in row:
+                assert b"/admin/sources/delete" not in row
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie,
+                form=_lifecycle_form(_csrf(sources), enabled="0"),
+            )[0]
+            == 303
+        )
+        _, _, playlists = _request(server, "GET", "/admin/", cookie=cookie)
+        assert control + b" checked" in playlists
+        assert "Disabled · currently selected".encode() in playlists
+        assert b"preserves its Spotify destination" in playlists
+        assert b'type="hidden" name="source_id" value="custom_' not in playlists
+        delete_path = f"/admin/sources/delete?source_id={source.id}"
+        assert b"Unassign this source" in _request(server, "GET", delete_path, cookie=cookie)[2]
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/delete",
+                cookie=cookie,
+                form={"csrf_token": _csrf(sources), "source_id": str(source.id)},
+            )[0]
+            == 409
+        )
+        assert store.load().sources == (replace(source, enabled=False),)
+        events = _Handler.diagnostic_store.list_events(source_id=str(source.id))
+        assert not any(event.event_name == "admin_source_deleted" for event in events)
+
+        _, _, playlists = _request(server, "GET", "/admin/", cookie=cookie)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/playlists/update",
+                cookie=cookie,
+                form=_playlist_form(_csrf(playlists), ["ser"]),
+            )[0]
+            == 303
+        )
+        assert store.load().sources == (replace(source, enabled=False),)
+        assert store.load().playlists[0].source_ids == ("ser",)
+        _, _, confirm = _request(server, "GET", delete_path, cookie=cookie)
+        assert b"Delete custom source" in confirm and b"30-day" in confirm
+        token = _csrf(confirm)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/delete",
+                cookie=cookie,
+                form={"csrf_token": "invalid", "source_id": str(source.id)},
+            )[0]
+            == 403
+        )
+        status, headers, _ = _request(
+            server,
+            "POST",
+            "/admin/sources/delete",
+            cookie=cookie,
+            form={"csrf_token": token, "source_id": str(source.id)},
+        )
+        assert status == 303 and headers["Location"] == "/admin/sources?notice=source-deleted"
+        assert store.load().sources == ()
+        assert store.load().playlists[0].source_ids == ("ser",)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/delete",
+                cookie=cookie,
+                form={"csrf_token": token, "source_id": str(source.id)},
+            )[0]
+            == 403
+        )
+        assert client.calls == [] and service.auth.calls == 0  # type: ignore[attr-defined]
+        events = tuple(
+            event
+            for event in _Handler.diagnostic_store.list_events(source_id=str(source.id))
+            if event.event_name == "admin_source_deleted"
+        )
+        assert len(events) == 1 and events[0].source_id == str(source.id)
+        assert events[0].details == {
+            "operation": "source_configuration",
+            "outcome": "applied",
+            "next_state": "deleted",
+        }
+        assert "secret" not in str(events[0].details)
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert b"Source A" not in sources
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/logout",
+                cookie=cookie,
+                form={"csrf_token": _csrf(sources)},
+            )[0]
+            == 303
+        )
+        assert _request(server, "GET", delete_path, cookie=cookie)[0] == 303
+
+
+def test_disabled_unselected_source_is_not_offered_and_backend_rejects_manual_assignment(
+    tmp_path: Path,
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store, enabled=False)
+        current = store.load()
+        playlist = replace(current.playlists[0], source_ids=("ser",))
+        store.save(replace(current, playlists=(playlist,)))
+        cookie = _login(server)
+        _, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+        assert f'type="checkbox" name="source_id" value="{source.id}"'.encode() not in page
+        status = _request(
+            server,
+            "POST",
+            "/admin/playlists/update",
+            cookie=cookie,
+            form=_playlist_form(_csrf(page), ["ser", str(source.id)]),
+        )[0]
+        assert status == 409
+        assert store.load().playlists[0].source_ids == ("ser",)
+        assert client.calls == []
+
+
+def test_delete_rejects_builtin_bad_form_and_busy_cycle_over_http(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        current = store.load()
+        store.save(replace(current, playlists=()))
+        service = _Handler.source_admin_service
+        assert service is not None and service.cycle_synchronization is not None
+        cookie = _login(server)
+        builtin_delete = _request(
+            server, "GET", "/admin/sources/delete?source_id=ser", cookie=cookie
+        )
+        assert builtin_delete[0] == 404
+        assert (
+            _request(
+                server,
+                "GET",
+                f"/admin/sources/delete?source_id={source.id}&source_id=ser",
+                cookie=cookie,
+            )[0]
+            == 400
+        )
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/delete",
+                cookie=cookie,
+                form={"csrf_token": _csrf(sources), "source_id": "ser"},
+            )[0]
+            == 409
+        )
+        _, _, confirm = _request(
+            server, "GET", f"/admin/sources/delete?source_id={source.id}", cookie=cookie
+        )
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/delete",
+                cookie=cookie,
+                form={"csrf_token": _csrf(confirm), "source_id": str(source.id), "enabled": "0"},
+            )[0]
+            == 400
+        )
+        _, _, confirm = _request(
+            server, "GET", f"/admin/sources/delete?source_id={source.id}", cookie=cookie
+        )
+        with service.cycle_synchronization.hold_cycle():
+            assert (
+                _request(
+                    server,
+                    "POST",
+                    "/admin/sources/delete",
+                    cookie=cookie,
+                    form={"csrf_token": _csrf(confirm), "source_id": str(source.id)},
+                )[0]
+                == 409
+            )
+        assert store.load().sources == (source,)
+        events = _Handler.diagnostic_store.list_events(source_id=str(source.id))
+        assert not any(event.event_name == "admin_source_deleted" for event in events)
+        _, _, confirm = _request(
+            server, "GET", f"/admin/sources/delete?source_id={source.id}", cookie=cookie
+        )
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/delete",
+                cookie=cookie,
+                form={"csrf_token": _csrf(confirm), "source_id": str(source.id)},
+            )[0]
+            == 303
+        )
+        assert store.load().sources == () and client.calls == []
+
+
+def test_stale_playlist_form_cannot_assign_source_deleted_after_render(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        current = store.load()
+        playlist = replace(current.playlists[0], source_ids=("ser",))
+        store.save(replace(current, playlists=(playlist,)))
+        cookie = _login(server)
+        _, _, old_form = _request(server, "GET", "/admin/", cookie=cookie)
+        service = _Handler.source_admin_service
+        assert service is not None
+        assert service.delete(str(source.id)) is True
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/playlists/update",
+                cookie=cookie,
+                form=_playlist_form(_csrf(old_form), ["ser", str(source.id)]),
+            )[0]
+            == 409
+        )
+        assert store.load().playlists[0].source_ids == ("ser",)
+        assert client.calls == []
+
+
+def test_selected_disabled_source_cannot_be_removed_from_active_playlist_to_empty(
+    tmp_path: Path,
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store, enabled=False)
+        cookie = _login(server)
+        _, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+        assert f'value="{source.id}" checked'.encode() in page
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/playlists/update",
+                cookie=cookie,
+                form=_playlist_form(_csrf(page), []),
+            )[0]
+            == 409
+        )
+        assert store.load().playlists[0].source_ids == (source.id,)
+        _, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+        pause_form = _playlist_form(_csrf(page), [])
+        del pause_form["enabled"]
+        assert (
+            _request(server, "POST", "/admin/playlists/update", cookie=cookie, form=pause_form)[0]
+            == 303
+        )
+        assert store.load().playlists[0].source_ids == ()
+        assert store.load().sources[0] == source
+        assert client.calls == []
+
+
+def test_delete_confirmation_escapes_name_and_rejects_duplicate_post_field(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        hostile = replace(source, display_name="<img src=x onerror=alert(1)>")
+        store.save(ManagedState(sources=(hostile,)))
+        cookie = _login(server)
+        path = f"/admin/sources/delete?source_id={source.id}"
+        status, headers, confirm = _request(server, "GET", path, cookie=cookie)
+        assert status == 200 and headers["Cache-Control"] == "no-store"
+        assert b"<img src=x onerror" not in confirm
+        assert b"&lt;img src=x onerror=alert(1)&gt;" in confirm
+        token = _csrf(confirm)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/delete",
+                cookie=cookie,
+                form={"csrf_token": token, "source_id": [str(source.id), "ser"]},
+            )[0]
+            == 400
+        )
+        assert store.load().sources == (hostile,)
+        assert client.calls == []
+
+
+def test_failed_runtime_cleanup_emits_no_success_event_and_can_be_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        store.save(ManagedState(sources=(source,)))
+        service = _Handler.source_admin_service
+        assert service is not None and service.detector_journal is not None
+        original = service.detector_journal.clear_source_state
+
+        def fail(source_id: object) -> None:
+            del source_id
+            raise PersistenceError("secret-sqlite-path")
+
+        monkeypatch.setattr(service.detector_journal, "clear_source_state", fail)
+        cookie = _login(server)
+        path = f"/admin/sources/delete?source_id={source.id}"
+        _, _, confirm = _request(server, "GET", path, cookie=cookie)
+        status, _, body = _request(
+            server,
+            "POST",
+            "/admin/sources/delete",
+            cookie=cookie,
+            form={"csrf_token": _csrf(confirm), "source_id": str(source.id)},
+        )
+        assert status == 500 and b"secret-sqlite-path" not in body
+        assert store.load().sources == (source,)
+        events = _Handler.diagnostic_store.list_events(source_id=str(source.id))
+        assert not any(event.event_name == "admin_source_deleted" for event in events)
+        monkeypatch.setattr(service.detector_journal, "clear_source_state", original)
+        _, _, confirm = _request(server, "GET", path, cookie=cookie)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/delete",
+                cookie=cookie,
+                form={"csrf_token": _csrf(confirm), "source_id": str(source.id)},
+            )[0]
+            == 303
+        )
+        assert store.load().sources == () and client.calls == []
+
+
+def test_http_delete_then_fresh_create_same_show_cannot_reuse_old_runtime_state(
+    tmp_path: Path,
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        store.save(ManagedState(sources=(source,)))
+        service = _Handler.source_admin_service
+        assert service is not None
+        first = service.first_journal
+        detector = service.detector_journal
+        assert first is not None and detector is not None
+        now = datetime.now(UTC)
+        episode = SpotifyFirstEpisode(
+            source_id=source.id,
+            spotify_show_id=SHOW,
+            spotify_episode_id=OTHER,
+            spotify_episode_uri=f"spotify:episode:{OTHER}",
+            title="Old accepted bulletin",
+            edition_at=None,
+            timestamp_source=TimestampSource.FIRST_SEEN,
+            release_date_raw=now.date().isoformat(),
+            release_date_precision="day",
+            duration_seconds=305,
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+        first.replace_source_episodes(source.id, (episode,), coverage_proven=True)
+        definition = compile_engine_config(BUILTIN_CATALOG, store.load()).sources[-1]
+        first.record_refresh(
+            definition,
+            refreshed_at=now,
+            reason=RefreshReason.BOOTSTRAP,
+            detector_episode_id=OTHER,
+            api_episode_id=OTHER,
+            request_count=1,
+            complete=True,
+            coverage_proven=True,
+            coverage_cutoff_at=now - timedelta(hours=48),
+        )
+        detector.record_success(
+            PublicEpisodeObservation(
+                source_id=source.id,
+                spotify_show_id=SHOW,
+                episode_id=OTHER,
+                episode_uri=f"spotify:episode:{OTHER}",
+                name="Old accepted bulletin",
+                title="Old accepted bulletin",
+                release_date_raw=now.date().isoformat(),
+                duration_ms=305_000,
+                related_entity_uri=f"spotify:show:{SHOW}",
+                observed_at=now,
+            )
+        )
+        cookie = _login(server)
+        _, _, confirm = _request(
+            server, "GET", f"/admin/sources/delete?source_id={source.id}", cookie=cookie
+        )
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/delete",
+                cookie=cookie,
+                form={"csrf_token": _csrf(confirm), "source_id": str(source.id)},
+            )[0]
+            == 303
+        )
+        assert first.get_source_state(source.id) is None
+        assert first.list_episodes(source_ids=(source.id,)) == ()
+        assert detector.get(source.id, SHOW) is None
+        history = first.list_episode_history(
+            observed_since=now - timedelta(days=1),
+            observed_until=now + timedelta(days=1),
+            source_id=source.id,
+        )
+        assert len(history) == 1 and history[0].duration_seconds == 305
+        status, review = _inspect(server, cookie)
+        assert status == 200
+        assert (
+            _request(
+                server, "POST", "/admin/sources/create", cookie=cookie, form=_create_form(review)
+            )[0]
+            == 303
+        )
+        assert store.load().sources[0].id == source.id
+        assert first.get_source_state(source.id) is None
+        assert first.list_episodes(source_ids=(source.id,)) == ()
+        assert detector.get(source.id, SHOW) is None
+        assert (
+            first.list_episode_history(
+                observed_since=now - timedelta(days=1),
+                observed_until=now + timedelta(days=1),
+                source_id=source.id,
+            )
+            == history
+        )
+        assert client.calls == ["details", "episodes", "details", "episodes"]
+
+
 def test_real_http_custom_lifecycle_is_local_and_preserves_references(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
         original = _configured_source(store)
@@ -320,7 +827,9 @@ def test_real_http_custom_lifecycle_is_local_and_preserves_references(tmp_path: 
         _, _, playlists = _request(server, "GET", "/admin/", cookie=cookie)
         assert b"Revised news" in playlists and b"preserves its Spotify destination" in playlists
         assert f'name="source_id" value="custom_{SHOW}"'.encode() in playlists
-        assert f'type="checkbox" name="source_id" value="custom_{SHOW}"'.encode() not in playlists
+        selected_control = f'type="checkbox" name="source_id" value="custom_{SHOW}" checked'
+        assert selected_control.encode() in playlists
+        assert f'type="hidden" name="source_id" value="custom_{SHOW}"'.encode() not in playlists
         token = _csrf(sources)
         status, headers, _ = _request(
             server,
@@ -685,15 +1194,17 @@ def test_real_http_login_inspect_download_create_logout(tmp_path: Path) -> None:
             True,
         )
         with sqlite3.connect(tmp_path / "state.sqlite3") as connection:
-            tables = {
-                row[0]
-                for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-            }
+            current_count = connection.execute(
+                "SELECT COUNT(*) FROM spotify_first_episode_state"
+            ).fetchone()
+            history_count = connection.execute(
+                "SELECT COUNT(*) FROM spotify_first_episode_history"
+            ).fetchone()
             diagnostic_count = connection.execute(
                 "SELECT COUNT(*) FROM diagnostic_events"
             ).fetchone()
-        assert "spotify_first_episode_state" not in tables
-        assert "spotify_first_episode_history" not in tables
+        assert current_count == (0,)
+        assert history_count == (0,)
         assert diagnostic_count == (0,)
         assert (
             _request(server, "GET", "/admin/sources/inspection-report.json", cookie=cookie)[0]

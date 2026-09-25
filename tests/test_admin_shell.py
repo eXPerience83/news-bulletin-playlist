@@ -237,6 +237,7 @@ def test_admin_shell_escapes_operator_messages(tmp_path: Path) -> None:
     sentinel = '<script>alert("admin")</script> & "quoted"'
     body = render_managed_admin_page(
         snapshot=service.snapshot(),
+        state=service.store.load(),
         catalog=BUILTIN_CATALOG,
         spotify_state=AuthorizationState.CONNECTED,
         csrf_token='csrf-<&"token',

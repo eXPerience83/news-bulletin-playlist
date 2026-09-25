@@ -33,6 +33,7 @@ from news_bulletin_playlist.managed_admin_web import (
     playlist_id_from_form,
     single_form_value,
 )
+from news_bulletin_playlist.managed_provisioning import ProvisioningJournalError
 from news_bulletin_playlist.managed_state import ManagedStateError, effective_sources
 from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.persistence import PersistenceError
@@ -42,14 +43,22 @@ from news_bulletin_playlist.runtime import (
     DEFAULT_HEALTH_PORT,
     _data_dir_ready,
 )
-from news_bulletin_playlist.source_admin import SourceMutationError
+from news_bulletin_playlist.source_admin import (
+    EngineCycleBusyError,
+    SourceMutationError,
+    SourceReferencedError,
+)
 from news_bulletin_playlist.source_admin_web import (
     render_new_source_page,
     render_source_review_page,
 )
 from news_bulletin_playlist.source_inspection import serialize_source_inspection
 from news_bulletin_playlist.source_intake import SourceIntakeError, SourceIntakeFailure
-from news_bulletin_playlist.sources_admin_web import render_edit_source_page, render_sources_page
+from news_bulletin_playlist.sources_admin_web import (
+    render_delete_source_page,
+    render_edit_source_page,
+    render_sources_page,
+)
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 from news_bulletin_playlist.spotify_metrics import (
@@ -86,6 +95,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if parsed.path == "/admin/sources/edit":
             self._serve_source_edit(parsed.query)
             return
+        if parsed.path == "/admin/sources/delete":
+            self._serve_source_delete(parsed.query)
+            return
         if parsed.path == "/admin/sources/inspection-report.json":
             self._serve_source_report()
             return
@@ -108,6 +120,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         if path in {"/admin/sources/update", "/admin/sources/set-enabled"}:
             self._handle_source_mutation(path)
+            return
+        if path == "/admin/sources/delete":
+            self._handle_source_delete()
             return
         super().do_POST()
 
@@ -163,6 +178,95 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 csrf_token=security.issue_csrf_token(),
                 lan_mode=self._is_lan_admin_mode(),
             ),
+        )
+
+    def _serve_source_delete(self, query: str) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.source_admin_service
+        if service is None:
+            self._source_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+        values = urllib.parse.parse_qs(query, keep_blank_values=True)
+        if set(values) != {"source_id"} or len(values["source_id"]) != 1:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source ID")
+            return
+        try:
+            source, used_by, pending = service.deletion_references(values["source_id"][0])
+        except SourceMutationError:
+            self._source_error(HTTPStatus.NOT_FOUND, "Custom source not found")
+            return
+        except ManagedStateError, ProvisioningJournalError, OSError:
+            self._source_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Source state is unavailable")
+            return
+        self._reply(
+            HTTPStatus.OK,
+            render_delete_source_page(
+                source,
+                used_by=used_by,
+                pending=pending,
+                csrf_token=security.issue_csrf_token(),
+                lan_mode=self._is_lan_admin_mode(),
+            ),
+        )
+
+    def _handle_source_delete(self) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.source_admin_service
+        if service is None:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Source deletion is unavailable")
+            return
+        try:
+            form = self._read_form()
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source form")
+            return
+        tokens = form.get("csrf_token", [])
+        if len(tokens) != 1 or not security.consume_csrf_token(tokens[0]):
+            self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+            return
+        try:
+            if set(form) != {"csrf_token", "source_id"}:
+                raise ValueError
+            source_id = single_form_value(form, "source_id")
+            configured = service.delete(source_id)
+        except EngineCycleBusyError:
+            self._source_error(HTTPStatus.CONFLICT, "Engine cycle is active; retry shortly")
+            return
+        except SourceReferencedError:
+            self._source_error(HTTPStatus.CONFLICT, "Unassign source before deletion")
+            return
+        except SourceMutationError:
+            self._source_error(HTTPStatus.CONFLICT, "Custom source is unavailable")
+            return
+        except ManagedStateError, ProvisioningJournalError, PersistenceError, OSError, RuntimeError:
+            self._source_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Source deletion is unavailable")
+            return
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source form")
+            return
+        lifecycle = self.engine_lifecycle
+        if lifecycle is not None:
+            lifecycle.reconcile(configured=configured)
+        self._admin_diagnostics().emit(
+            occurred_at=datetime.now(UTC),
+            severity=DiagnosticSeverity.INFO,
+            component="admin",
+            event_name="admin_source_deleted",
+            source_id=source_id,
+            details={
+                "operation": "source_configuration",
+                "outcome": "applied",
+                "next_state": "deleted",
+            },
+        )
+        self._reply(
+            HTTPStatus.SEE_OTHER,
+            b"",
+            extra_headers={"Location": "/admin/sources?notice=source-deleted"},
         )
 
     def _handle_source_mutation(self, path: str) -> None:
@@ -503,6 +607,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     "source-updated": "Custom source updated successfully.",
                     "source-enabled": "Custom source enabled successfully.",
                     "source-disabled": "Custom source disabled successfully.",
+                    "source-deleted": "Custom source deleted successfully.",
                 }.get(notice_key),
             ),
         )

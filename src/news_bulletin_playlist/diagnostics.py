@@ -224,6 +224,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
         {
             "connected",
             "disabled",
+            "deleted",
             "disconnected",
             "enabled",
             "expired",

@@ -180,6 +180,17 @@ class SpotifyFirstJournal:
             ).fetchone()
         return None if row is None else _source_state_from_row(row)
 
+    def clear_source_runtime_state(self, source_id: SourceId) -> None:
+        """Clear only current source authority; history and destination state remain."""
+        with self._connection("clear Spotify-first source runtime state") as connection:
+            self._ensure_tables(connection)
+            connection.execute(
+                "DELETE FROM spotify_first_episode_state WHERE source_id = ?", (str(source_id),)
+            )
+            connection.execute(
+                "DELETE FROM spotify_first_source_state WHERE source_id = ?", (str(source_id),)
+            )
+
     def list_episodes(
         self,
         *,
