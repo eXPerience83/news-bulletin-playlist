@@ -5,14 +5,18 @@ from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import ParsedEdition
 from news_bulletin_playlist.providers.base import RecoveringTitleParserBase
-from news_bulletin_playlist.providers.common import aware_datetime
+from news_bulletin_playlist.providers.common import (
+    clock_24h_pattern,
+    datetime_from_match,
+    numeric_date_pattern,
+)
 
 UTC = ZoneInfo("UTC")
 
+_DATE = numeric_date_pattern(order="dmy", separators="/", year_digits=(4,))
+_CLOCK = clock_24h_pattern(separators="h")
 _PATTERN = re.compile(
-    r"^Journal\s+"
-    r"(?P<day>[0-9]{1,2})/(?P<month>[0-9]{1,2})/(?P<year>[0-9]{4})\s+"
-    r"(?P<hour>[01]?[0-9]|2[0-3])h(?P<minute>[0-5][0-9])\s+GMT$",
+    rf"^Journal\s+{_DATE}\s+{_CLOCK}\s+GMT$",
     re.IGNORECASE,
 )
 
@@ -26,16 +30,7 @@ class RfiJournalMondeParser(RecoveringTitleParserBase):
         match = _PATTERN.match(title.strip())
         if match is None:
             return None
-        values = {key: int(value) for key, value in match.groupdict().items()}
-        try:
-            edition_at = aware_datetime(
-                values["year"],
-                values["month"],
-                values["day"],
-                values["hour"],
-                values["minute"],
-                tz=UTC,
-            )
-        except ValueError:
+        edition_at = datetime_from_match(match, tz=UTC)
+        if edition_at is None:
             return None
         return ParsedEdition(self.provider_id, title, edition_at)

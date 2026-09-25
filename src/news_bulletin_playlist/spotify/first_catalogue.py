@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import ParserId
+from news_bulletin_playlist.providers.base import CatalogueParseContext, parse_title
 from news_bulletin_playlist.registry import get_collection_filter, get_title_parser
 from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
@@ -117,6 +119,9 @@ def fetch_source_catalogue(
     filter_rejected = 0
     evidence: list[CatalogueEpisodeEvidence] = []
 
+    source_timezone = getattr(source, "timezone", None)
+    catalogue_timezone = source_timezone if isinstance(source_timezone, ZoneInfo) else None
+
     for position, candidate in enumerate(candidates, start=1):
         api_ids.append(candidate.episode_id)
         periods.append(release_period(candidate.release_date, candidate.release_date_precision))
@@ -140,12 +145,23 @@ def fetch_source_catalogue(
                 )
             continue
 
-        parsed = parser.parse(candidate.title)
+        attempt = parse_title(
+            parser,
+            candidate.title,
+            context=CatalogueParseContext(
+                release_date=candidate.release_date,
+                release_date_precision=candidate.release_date_precision,
+                timezone=catalogue_timezone,
+            ),
+        )
+        parsed = attempt.parsed
         timestamp_source = TimestampSource.TITLE
         edition_at = None if parsed is None else parsed.edition_at
+        parser_outcome: str = attempt.mode
         if parsed is None:
             timestamp_source = TimestampSource.FIRST_SEEN
             parser_fallbacks += 1
+            parser_outcome = "fallback"
 
         episodes.append(
             SpotifyFirstEpisode(
@@ -174,7 +190,7 @@ def fetch_source_catalogue(
                     candidate.release_date_precision,
                     candidate.duration_seconds,
                     "accepted",
-                    "fallback" if parsed is None else "exact",
+                    parser_outcome,
                     episodes[-1].edition_at,
                     episodes[-1].timestamp_source,
                 )

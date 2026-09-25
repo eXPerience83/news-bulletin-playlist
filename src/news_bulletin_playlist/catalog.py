@@ -255,7 +255,7 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         languages=(LanguageTag("pl"),),
         timezone=ZoneInfo("Europe/Warsaw"),
         enabled=True,
-        parser_id=ParserId("release_date_title"),
+        parser_id=ParserId("rmf_fakty"),
         editorial_scope=EditorialScope.MIXED,
         external_references=(ExternalReference("spotify", "show", "2BeZqsvzZUSldlZWvjeGe3"),),
     ),

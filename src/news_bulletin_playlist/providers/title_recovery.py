@@ -7,8 +7,15 @@ from dataclasses import dataclass
 from typing import Literal
 
 from news_bulletin_playlist.models import ParsedEdition
+from news_bulletin_playlist.providers.common import clock_24h_pattern, numeric_date_pattern
 
-type TitleParseMode = Literal["exact", "normalized", "provider_compat", "rejected"]
+type TitleParseMode = Literal[
+    "exact",
+    "normalized",
+    "provider_compat",
+    "catalogue_context",
+    "rejected",
+]
 type StrictTitleParser = Callable[[str], ParsedEdition | None]
 type CompatCanonicalizer = Callable[[str], str | None]
 
@@ -33,24 +40,27 @@ _ZERO_WIDTH = str.maketrans({"\u200b": None, "\u200c": None, "\u200d": None, "\u
 # them before the historical IGNORECASE regex can broaden product identity.
 _UNICODE_IGNORECASE_CONFUSABLES = frozenset({"\u0130", "\u0131", "\u017f", "\u212a"})
 
+_COMPAT_DMY_DATE = numeric_date_pattern(order="dmy", separators="./-", year_digits=(2, 4))
+_COMPAT_CLOCK = clock_24h_pattern(separators=".:,")
+_RNE_COMPAT_CLOCK = clock_24h_pattern(separators=".:,", minute_optional=True)
+
 _RNE_COMPAT = re.compile(
     r"^(?P<product>NOTICIAS\s+RNE|RNE\s+NOTICIAS)\s*(?:[-|:]\s*)?"
-    r"(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})\.?"
-    r"(?:\s+|\s*[-|:]\s*)"
-    r"(?P<hour>[0-9]{1,2})(?:[.:,](?P<minute>[0-9]{2}))?\s*H?\.?$",
+    rf"{_COMPAT_DMY_DATE}\.?"
+    rf"(?:\s+|\s*[-|:]\s*){_RNE_COMPAT_CLOCK}\s*H?\.?$",
     re.IGNORECASE,
 )
 _SER_COMPAT = re.compile(
     r"^Las\s+noticias\s+de\s+la\s+SER,?\s*(?:[-|:]\s*)?"
-    r"(?P<hour>[0-9]{1,2})[.:,](?P<minute>[0-9]{2})\s+"
-    r"(?P<open>[\(\[])?\s*(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})"
+    rf"{_COMPAT_CLOCK}\s+"
+    rf"(?P<open>[\(\[])?\s*{_COMPAT_DMY_DATE}"
     r"\s*(?P<close>[\)\]])?\.?$",
     re.IGNORECASE,
 )
 _ONDACERO_COMPAT = re.compile(
     r"^Las\s+noticias\s+de\s+Onda\s+Cero\s+de\s+las\s+"
-    r"(?P<hour>[0-9]{1,2})[.:,](?P<minute>[0-9]{2})\s*[hH]?\s+"
-    r"(?P<open>[\(\[])?\s*(?P<day>[0-9]{1,2})[./-](?P<month>[0-9]{1,2})[./-](?P<year>[0-9]{2}|[0-9]{4})"
+    rf"{_COMPAT_CLOCK}\s*[hH]?\s+"
+    rf"(?P<open>[\(\[])?\s*{_COMPAT_DMY_DATE}"
     r"\s*(?P<close>[\)\]])?\.?$",
     re.IGNORECASE,
 )

@@ -4,12 +4,23 @@ import re
 
 from news_bulletin_playlist.models import ParsedEdition
 from news_bulletin_playlist.providers.base import RecoveringTitleParserBase
-from news_bulletin_playlist.providers.common import MADRID, aware_datetime, spanish_month
+from news_bulletin_playlist.providers.common import (
+    MADRID,
+    SPANISH_MONTH_NAMES,
+    clock_24h_pattern,
+    datetime_from_match,
+    named_month_date_pattern,
+    spanish_month,
+)
 
+_CLOCK = clock_24h_pattern(separators=":")
+_DATE = named_month_date_pattern(
+    order="dmy",
+    month_names=SPANISH_MONTH_NAMES,
+    year_digits=(4,),
+)
 _PATTERN = re.compile(
-    r"^(?P<hour>[01]?[0-9]|2[0-3]):(?P<minute>[0-5][0-9])H\s*\|\s*"
-    r"(?P<day>[0-9]{1,2})\s+(?P<month>[A-ZÁÉÍÓÚÜÑ]{3,5})\s+(?P<year>[0-9]{4})\s*\|\s*"
-    r"(?P<label>.+)$",
+    rf"^{_CLOCK}H\s*\|\s*{_DATE}\s*\|\s*(?P<label>.+)$",
     re.IGNORECASE,
 )
 
@@ -26,18 +37,11 @@ class CopeParser(RecoveringTitleParserBase):
         match = _PATTERN.match(title.strip())
         if match is None or not _is_national_bulletin(match.group("label")):
             return None
-        month = spanish_month(match.group("month"))
-        if month is None:
-            return None
-        try:
-            edition_at = aware_datetime(
-                int(match.group("year")),
-                month,
-                int(match.group("day")),
-                int(match.group("hour")),
-                int(match.group("minute")),
-                tz=MADRID,
-            )
-        except ValueError:
+        edition_at = datetime_from_match(
+            match,
+            tz=MADRID,
+            month_resolver=spanish_month,
+        )
+        if edition_at is None:
             return None
         return ParsedEdition(self.provider_id, title, edition_at)
