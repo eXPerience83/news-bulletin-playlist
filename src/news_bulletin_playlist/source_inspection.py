@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.build_info import build_revision
 from news_bulletin_playlist.catalog import BuiltInCatalog
+from news_bulletin_playlist.diagnostics import DiagnosticSeverity
 from news_bulletin_playlist.duration_profile import (
     DurationProfile,
     duration_profile,
@@ -56,8 +57,9 @@ from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
 REPORT_SCHEMA_VERSION = 1
 INSPECTION_RETENTION = timedelta(hours=48)
-_LANGUAGE_HINT = re.compile(r"[a-z]{2,3}")
+_LANGUAGE_HINT = re.compile(r"[a-z]{2,8}(?:-[A-Za-z0-9]{1,8}){0,3}")
 _MAX_REPORT_TEXT = 200
+_MAX_DISPLAY_NAME_HINT = 120
 
 
 def _utc_now() -> datetime:
@@ -74,6 +76,17 @@ class InspectionFailure(StrEnum):
     CONFIGURATION = "configuration"
 
 
+class InspectionResponseReason(StrEnum):
+    SHOW_OBJECT = "show_object"
+    SHOW_IDENTITY = "show_identity"
+    SHOW_NAME = "show_name"
+    SHOW_LANGUAGES = "show_languages"
+    SHOW_PUBLISHER = "show_publisher"
+    SHOW_TOTAL_EPISODES = "show_total_episodes"
+    PROVIDER_JSON = "provider_json"
+    CATALOGUE_SHAPE = "catalogue_shape"
+
+
 _MESSAGES = {
     InspectionFailure.AUTHORIZATION: "Reconnect Spotify authorization and try again.",
     InspectionFailure.FORBIDDEN: "Spotify denied access to this show; check account access.",
@@ -88,8 +101,13 @@ _MESSAGES = {
 
 
 class SourceInspectionError(ValueError):
-    def __init__(self, failure: InspectionFailure) -> None:
+    def __init__(
+        self,
+        failure: InspectionFailure,
+        response_reason: InspectionResponseReason | None = None,
+    ) -> None:
         self.failure = failure
+        self.response_reason = response_reason
         super().__init__(_MESSAGES[failure])
 
 
@@ -183,41 +201,81 @@ def _bounded(value: str) -> tuple[str, bool]:
     return value[:_MAX_REPORT_TEXT], len(value) > _MAX_REPORT_TEXT
 
 
+def _malformed(reason: InspectionResponseReason) -> SourceInspectionError:
+    return SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE, reason)
+
+
 def _show_hints(
     payload: object, show_id: str
 ) -> tuple[str, tuple[str, ...], str | None, int | None]:
-    if not isinstance(payload, dict) or (
-        payload.get("id") != show_id
-        or payload.get("type") != "show"
-        or payload.get("uri") != f"spotify:show:{show_id}"
-    ):
-        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
+    if not isinstance(payload, dict):
+        raise _malformed(InspectionResponseReason.SHOW_OBJECT)
+    if payload.get("id") != show_id:
+        raise _malformed(InspectionResponseReason.SHOW_IDENTITY)
+    show_type = payload.get("type")
+    if show_type is not None and show_type != "show":
+        raise _malformed(InspectionResponseReason.SHOW_IDENTITY)
+    uri = payload.get("uri")
+    if uri is not None and uri != f"spotify:show:{show_id}":
+        raise _malformed(InspectionResponseReason.SHOW_IDENTITY)
+
     name = payload.get("name")
-    if (
-        not isinstance(name, str)
-        or not 1 <= len(name) <= 120
-        or not name.strip()
-        or not name.isprintable()
-    ):
-        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
-    languages = payload.get("languages", [])
-    if (
-        not isinstance(languages, list)
-        or len(languages) > 16
-        or any(
-            not isinstance(item, str) or not _LANGUAGE_HINT.fullmatch(item) for item in languages
-        )
-    ):
-        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
+    if not isinstance(name, str) or not name.strip() or not name.isprintable():
+        raise _malformed(InspectionResponseReason.SHOW_NAME)
+    display_name_hint = name.strip()[:_MAX_DISPLAY_NAME_HINT]
+
+    languages = payload.get("languages")
+    if languages is None:
+        language_hints: tuple[str, ...] = ()
+    else:
+        if (
+            not isinstance(languages, list)
+            or len(languages) > 16
+            or any(
+                not isinstance(item, str) or not _LANGUAGE_HINT.fullmatch(item)
+                for item in languages
+            )
+        ):
+            raise _malformed(InspectionResponseReason.SHOW_LANGUAGES)
+        language_hints = tuple(languages)
+
     publisher = payload.get("publisher")
-    if publisher is not None and (
-        not isinstance(publisher, str) or len(publisher) > 120 or not publisher.isprintable()
-    ):
-        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
+    if publisher is None or publisher == "":
+        publisher_hint = None
+    elif not isinstance(publisher, str) or not publisher.isprintable():
+        raise _malformed(InspectionResponseReason.SHOW_PUBLISHER)
+    else:
+        publisher_hint, _ = _bounded(publisher)
+
     total = payload.get("total_episodes")
     if total is not None and (isinstance(total, bool) or not isinstance(total, int) or total < 0):
-        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE)
-    return name.strip(), tuple(languages), publisher, total
+        raise _malformed(InspectionResponseReason.SHOW_TOTAL_EPISODES)
+    return display_name_hint, language_hints, publisher_hint, total
+
+
+def _emit_response_failure(
+    rate_limit: SpotifyRateLimitJournal,
+    *,
+    source_id: SourceId,
+    occurred_at: datetime,
+    reason: InspectionResponseReason,
+) -> None:
+    diagnostics = rate_limit.diagnostics
+    if diagnostics is None:
+        return
+    collection_reason = reason in {
+        InspectionResponseReason.CATALOGUE_SHAPE,
+        InspectionResponseReason.PROVIDER_JSON,
+    }
+    phase = "collection" if collection_reason else "configuration"
+    diagnostics.emit(
+        occurred_at=occurred_at,
+        severity=DiagnosticSeverity.WARNING,
+        component="source_inspection",
+        event_name=f"source_inspection_{reason.value}_invalid",
+        source_id=str(source_id),
+        details={"failure_class": "response_shape_error", "phase": phase},
+    )
 
 
 def _episode_evidence(
@@ -332,7 +390,14 @@ def inspect_source(
             cutoff=observed - INSPECTION_RETENTION,
             collect_evidence=True,
         )
-    except SourceInspectionError:
+    except SourceInspectionError as exc:
+        if exc.failure is InspectionFailure.MALFORMED_RESPONSE and exc.response_reason is not None:
+            _emit_response_failure(
+                rate_limit,
+                source_id=source.id,
+                occurred_at=observed,
+                reason=exc.response_reason,
+            )
         raise
     except SpotifyRateLimitBackoffActive, SpotifyRateLimitSuppressed:
         raise SourceInspectionError(InspectionFailure.RATE_LIMITED) from None
@@ -342,18 +407,36 @@ def inspect_source(
         raise SourceInspectionError(InspectionFailure.AUTHORIZATION) from None
     except SpotifyApiError as exc:
         if exc.message in {"invalid JSON response", "unexpected non-object JSON response"}:
-            failure = InspectionFailure.MALFORMED_RESPONSE
-        else:
-            failure = {
-                400: InspectionFailure.PROVIDER_REJECTION,
-                401: InspectionFailure.AUTHORIZATION,
-                403: InspectionFailure.FORBIDDEN,
-                404: InspectionFailure.PROVIDER_REJECTION,
-                429: InspectionFailure.RATE_LIMITED,
-            }.get(exc.status, InspectionFailure.UNAVAILABLE)
-        raise SourceInspectionError(failure) from None
+            failure = SourceInspectionError(
+                InspectionFailure.MALFORMED_RESPONSE,
+                InspectionResponseReason.PROVIDER_JSON,
+            )
+            _emit_response_failure(
+                rate_limit,
+                source_id=source.id,
+                occurred_at=observed,
+                reason=InspectionResponseReason.PROVIDER_JSON,
+            )
+            raise failure from None
+        failure_kind = {
+            400: InspectionFailure.PROVIDER_REJECTION,
+            401: InspectionFailure.AUTHORIZATION,
+            403: InspectionFailure.FORBIDDEN,
+            404: InspectionFailure.PROVIDER_REJECTION,
+            429: InspectionFailure.RATE_LIMITED,
+        }.get(exc.status, InspectionFailure.UNAVAILABLE)
+        raise SourceInspectionError(failure_kind) from None
     except CatalogueResponseError:
-        raise SourceInspectionError(InspectionFailure.MALFORMED_RESPONSE) from None
+        _emit_response_failure(
+            rate_limit,
+            source_id=source.id,
+            occurred_at=observed,
+            reason=InspectionResponseReason.CATALOGUE_SHAPE,
+        )
+        raise SourceInspectionError(
+            InspectionFailure.MALFORMED_RESPONSE,
+            InspectionResponseReason.CATALOGUE_SHAPE,
+        ) from None
 
     evidence = _episode_evidence(snapshot.evidence)
     known = [
