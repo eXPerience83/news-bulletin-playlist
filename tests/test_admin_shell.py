@@ -168,7 +168,8 @@ def test_playlists_keep_source_controls_and_sources_move_to_read_only_page(
     ):
         assert source_name in sources
     assert 'action="/admin/logout"' in sources
-    assert 'name="source_id"' not in sources
+    assert 'type="checkbox" name="source_id"' not in sources
+    assert 'action="/admin/sources/audit"' in sources
     assert 'href="/admin/sources/new">Add source</a>' in sources
     assert "Remove source" not in sources
 

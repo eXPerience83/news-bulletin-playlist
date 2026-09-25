@@ -52,7 +52,11 @@ from news_bulletin_playlist.source_admin_web import (
     render_new_source_page,
     render_source_review_page,
 )
-from news_bulletin_playlist.source_inspection import serialize_source_inspection
+from news_bulletin_playlist.source_inspection import (
+    InspectionFailure,
+    SourceInspectionError,
+    serialize_source_inspection,
+)
 from news_bulletin_playlist.source_intake import SourceIntakeError, SourceIntakeFailure
 from news_bulletin_playlist.sources_admin_web import (
     render_delete_source_page,
@@ -117,6 +121,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         if path in {"/admin/sources/inspect", "/admin/sources/create"}:
             self._handle_source_post(path)
+            return
+        if path == "/admin/sources/audit":
+            self._handle_source_audit()
             return
         if path in {"/admin/sources/update", "/admin/sources/set-enabled"}:
             self._handle_source_mutation(path)
@@ -377,6 +384,59 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             },
         )
 
+    def _handle_source_audit(self) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.source_admin_service
+        if service is None:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Source audit is unavailable")
+            return
+        try:
+            form = self._read_form()
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source form")
+            return
+        tokens = form.get("csrf_token", [])
+        if len(tokens) != 1 or not security.consume_csrf_token(tokens[0]):
+            self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+            return
+        security.set_source_inspection(None)
+        try:
+            if set(form) != {"csrf_token", "source_id"}:
+                raise ValueError
+            report = service.audit(single_form_value(form, "source_id"))
+            context = SourceInspectionContext(
+                report.spotify_show_id,
+                str(report.parser_id),
+                report.collection_filter_id,
+                serialize_source_inspection(report),
+                purpose="configured",
+            )
+            payload = render_source_review_page(
+                report,
+                csrf_token=security.issue_csrf_token(),
+                lan_mode=self._is_lan_admin_mode(),
+                audit=True,
+            )
+            security.set_source_inspection(context)
+            self._reply(HTTPStatus.OK, payload)
+        except SourceMutationError:
+            self._source_error(HTTPStatus.NOT_FOUND, "Configured source not found")
+        except SourceInspectionError as exc:
+            status = (
+                HTTPStatus.INTERNAL_SERVER_ERROR
+                if exc.failure is InspectionFailure.CONFIGURATION
+                else HTTPStatus.BAD_GATEWAY
+                if exc.failure is InspectionFailure.MALFORMED_RESPONSE
+                else HTTPStatus.SERVICE_UNAVAILABLE
+            )
+            self._source_error(status, str(exc))
+        except ManagedStateError, OSError:
+            self._source_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Source state is unavailable")
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source form")
+
     def _handle_source_post(self, path: str) -> None:
         security = self._require_admin()
         if security is None:
@@ -440,7 +500,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
 
             values = {name: single_form_value(form, name) for name in allowed - {"csrf_token"}}
             reviewed = security.source_inspection()
-            if reviewed is None:
+            if reviewed is None or reviewed.purpose != "candidate":
                 raise ValueError("Inspect this source before creating it")
             filter_id = values["collection_filter_id"] or None
             if (

@@ -38,7 +38,7 @@ def render_new_source_page(*, csrf_token: str, lan_mode: bool) -> bytes:
 
 
 def render_source_review_page(
-    report: SourceInspection, *, csrf_token: str, lan_mode: bool
+    report: SourceInspection, *, csrf_token: str, lan_mode: bool, audit: bool = False
 ) -> bytes:
     def esc(value: object) -> str:
         return html.escape(str(value), quote=True)
@@ -77,36 +77,8 @@ def render_source_review_page(
         f">{esc(parser)}</option>"
         for parser in sorted(CUSTOM_SOURCE_PARSERS)
     )
-    body = (
-        (render_lan_warning() if lan_mode else "")
-        + f"""
-<section class="section admin-section">
-  <h2>Provider-derived evidence</h2>
-  <p>Spotify show: <strong>{esc(report.display_name_hint)}</strong></p>
-  <p>Publisher hint: {esc(report.publisher_hint or "Unavailable")}</p>
-  <p>Language hints: {esc(", ".join(report.language_hints) or "Unavailable")}</p>
-  <p>Canonical ID: <code>{esc(report.spotify_show_id)}</code></p>
-  <p>URI: <code>{esc(report.spotify_uri)}</code></p>
-  <p><a href="{esc(report.spotify_url)}" target="_blank" rel="noopener noreferrer">
-     Open canonical Spotify show</a></p>
-  <p>Catalogue coverage proven: {str(report.coverage_proven).lower()};
-     observed: {report.observed_episodes}; accepted: {report.accepted_episodes};
-     filter-rejected: {report.filter_rejected_count};
-     parser fallback: {report.parser_fallback_count}.</p>
-  <p>Duration known: {report.duration_known_count}; missing: {report.duration_missing_count};
-     min: {esc(report.min_duration_seconds)}; max: {esc(report.max_duration_seconds)} seconds.</p>
-  <h3>Accepted duration profile</h3><ul>{buckets}</ul>
-  <h3>Observed duration profile</h3><ul>{observed_buckets}</ul>
-  <p>Observed items without duration: {report.observed_duration_missing_count}.</p>
-  <p>Warnings are evidence, not an ordering guarantee.</p><ul>{warnings}</ul>
-  <p><a href="/admin/sources/inspection-report.json">Download inspection report</a></p>
-  <p>Showing {min(len(report.episodes), _PREVIEW_LIMIT)} of
-     {len(report.episodes)} evidence rows.</p>
-  <div class="table-scroll"><table><thead><tr><th>Position</th><th>Title</th><th>Release</th>
-    <th>Seconds</th><th>Filter</th><th>Parser</th><th>Edition</th>
-    <th>Provenance</th><th>Ordering</th><th>Warnings</th></tr></thead>
-    <tbody>{rows}</tbody></table></div>
-</section>
+    classification = (
+        f"""
 <section class="section admin-section">
   <h2>Operator classification</h2>
   <p>Confirm these fields explicitly. Spotify hints do not set origin, scope or timezone.</p>
@@ -127,10 +99,69 @@ def render_source_review_page(
   </form>
 </section>
 """
+        if not audit
+        else ""
+    )
+    audit_intro = (
+        f"<p>Read-only audit of {esc(report.ownership)} source "
+        f"<code>{esc(report.source_id)}</code>. This report does not modify the source "
+        "or its playlists.</p>"
+        f"<p>Evaluated timezone: {esc(report.timezone)}; parser: {esc(report.parser_id)}; "
+        f"filter: {esc(report.collection_filter_id or 'none')}.</p>"
+        if audit
+        else ""
+    )
+    public = report.public_observation
+    public_evidence = (
+        f"<p>Latest public episode: <code>{esc(public.episode_id)}</code>; "
+        f"title: {esc(public.title)}; release-date shape: {esc(public.release_date_shape)}; "
+        f"release date: {esc(public.release_date or 'Unavailable')}.</p>"
+        if public is not None
+        else ""
+    )
+    body = (
+        (render_lan_warning() if lan_mode else "")
+        + f"""
+<section class="section admin-section">
+  {audit_intro}
+  <h2>Provider-derived evidence</h2>
+  <p>Spotify show: <strong>{esc(report.display_name_hint)}</strong></p>
+  <p>Publisher hint: {esc(report.publisher_hint or "Unavailable")}</p>
+  <p>Language hints: {esc(", ".join(report.language_hints) or "Unavailable")}</p>
+  <p>Canonical ID: <code>{esc(report.spotify_show_id)}</code></p>
+  <p>URI: <code>{esc(report.spotify_uri)}</code></p>
+  <p><a href="{esc(report.spotify_url)}" target="_blank" rel="noopener noreferrer">
+     Open canonical Spotify show</a></p>
+  <p>Catalogue coverage proven: {str(report.coverage_proven).lower()};
+     observed: {report.observed_episodes}; accepted: {report.accepted_episodes};
+     filter-rejected: {report.filter_rejected_count};
+     parser fallback: {report.parser_fallback_count}.</p>
+  <p>Duration known: {report.duration_known_count}; missing: {report.duration_missing_count};
+     min: {esc(report.min_duration_seconds)}; max: {esc(report.max_duration_seconds)} seconds.</p>
+  <h3>Accepted duration profile</h3><ul>{buckets}</ul>
+  <h3>Observed duration profile</h3><ul>{observed_buckets}</ul>
+  <p>Observed items without duration: {report.observed_duration_missing_count}.</p>
+  <p>Warnings are evidence, not an ordering guarantee.</p><ul>{warnings}</ul>
+  <p>Public observation: {esc(report.public_status)}.</p>{public_evidence}
+  <p><a href="/admin/sources/inspection-report.json">Download inspection report</a></p>
+  <p><a href="/admin/sources">Back to Sources</a></p>
+  <p>Showing {min(len(report.episodes), _PREVIEW_LIMIT)} of
+     {len(report.episodes)} evidence rows.</p>
+  <div class="table-scroll"><table><thead><tr><th>Position</th><th>Title</th><th>Release</th>
+    <th>Seconds</th><th>Filter</th><th>Parser</th><th>Edition</th>
+    <th>Provenance</th><th>Ordering</th><th>Warnings</th></tr></thead>
+    <tbody>{rows}</tbody></table></div>
+</section>
+{classification}
+"""
     )
     return render_admin_shell(
-        title="Review source",
+        title="Source audit" if audit else "Review source",
         active_tab="sources",
-        intro="Review bounded evidence and classify this source.",
+        intro=(
+            "Read-only configured source inspection."
+            if audit
+            else "Review bounded evidence and classify this source."
+        ),
         body_html=body,
     )

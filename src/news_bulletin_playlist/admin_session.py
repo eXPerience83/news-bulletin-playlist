@@ -44,6 +44,7 @@ class SourceInspectionContext:
     parser_id: str
     collection_filter_id: str | None
     report_json: bytes
+    purpose: str = "candidate"
 
 
 class AdminSessionManager:
