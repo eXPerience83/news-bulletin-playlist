@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -20,6 +21,7 @@ from news_bulletin_playlist.engine import (
     PlaylistCycleOutcome,
     SourceCycleOutcome,
 )
+from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.reconciliation_diagnostics import (
     classify_reconciliation_failure,
     classify_reconciliation_warning,
@@ -88,14 +90,14 @@ class InstrumentedEngineCycleRunner:
                 with metrics.request_scope() as request_scope:
                     try:
                         result = self.runner.run_cycle()
-                    except Exception:  # noqa: BLE001 - scheduler isolation; never log exception text
+                    except Exception as exc:  # noqa: BLE001 - scheduler isolation; safe labels only
                         occurred_at = _as_utc(self.clock())
                         self._emit_spotify_request_scope(
                             request_scope.snapshot(),
                             cycle_id=cycle_id,
                             occurred_at=occurred_at,
                         )
-                        self._emit_unexpected(cycle_id, occurred_at)
+                        self._emit_unexpected(cycle_id, occurred_at, exc)
                         raise
                     request_snapshot = request_scope.snapshot()
 
@@ -105,18 +107,27 @@ class InstrumentedEngineCycleRunner:
     def _run_guarded(self, cycle_id: str) -> EngineCycleResult:
         try:
             return self.runner.run_cycle()
-        except Exception:  # noqa: BLE001 - scheduler isolation; never log exception text
-            self._emit_unexpected(cycle_id, _as_utc(self.clock()))
+        except Exception as exc:  # noqa: BLE001 - scheduler isolation; safe labels only
+            self._emit_unexpected(cycle_id, _as_utc(self.clock()), exc)
             raise
 
-    def _emit_unexpected(self, cycle_id: str, occurred_at: datetime) -> None:
+    def _emit_unexpected(
+        self,
+        cycle_id: str,
+        occurred_at: datetime,
+        exc: Exception,
+    ) -> None:
         self.diagnostics.emit(
             occurred_at=occurred_at,
             severity=DiagnosticSeverity.ERROR,
             component="engine",
             event_name="cycle_unexpected_failure",
             cycle_id=cycle_id,
-            details={"phase": "scheduler"},
+            details={
+                "exception_class": _unexpected_exception_class(exc),
+                "phase": "scheduler",
+                "stage": "engine_execution",
+            },
         )
 
     def _emit_result(
@@ -483,6 +494,24 @@ class InstrumentedEngineCycleRunner:
                 cycle_id=cycle_id,
                 details={"total": snapshot.quota_exceeded},
             )
+
+
+def _unexpected_exception_class(exc: Exception) -> str:
+    if isinstance(exc, PersistenceError):
+        return "persistence_error"
+    if isinstance(exc, sqlite3.Error):
+        return "sqlite_error"
+    if isinstance(exc, TimeoutError):
+        return "timeout_error"
+    if isinstance(exc, OSError):
+        return "io_error"
+    if isinstance(exc, TypeError):
+        return "type_error"
+    if isinstance(exc, ValueError):
+        return "value_error"
+    if isinstance(exc, RuntimeError):
+        return "runtime_error"
+    return "unexpected_error"
 
 
 def _duration_decision_signature(

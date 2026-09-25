@@ -38,6 +38,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "duration_unavailable_count",
         "episode_count",
         "excluded_count",
+        "exception_class",
         "filter_rejected_count",
         "duration_seconds",
         "eligibility_reason",
@@ -65,6 +66,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "refreshed",
         "removed_count",
         "stale_escalation",
+        "stage",
         "detector_changed_count",
         "detector_failure_count",
         "detector_degraded_change_count",
@@ -117,6 +119,18 @@ _ALLOWED_DETAIL_KEYS = frozenset(
 _ALLOWED_DETAIL_STRING_VALUES = {
     "backoff_source": frozenset({"fallback", "spotify_header"}),
     "backoff_state": frozenset({"activated", "active", "expired"}),
+    "exception_class": frozenset(
+        {
+            "io_error",
+            "persistence_error",
+            "runtime_error",
+            "sqlite_error",
+            "timeout_error",
+            "type_error",
+            "unexpected_error",
+            "value_error",
+        }
+    ),
     "failure_class": frozenset(
         {
             "api_error",
@@ -262,6 +276,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "unexpected_snapshot",
         }
     ),
+    "stage": frozenset({"engine_execution"}),
     "unavailable_media_phase": frozenset({"prewrite", "readback", "pending_confirmation"}),
     "phase": frozenset(
         {
