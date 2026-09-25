@@ -1090,8 +1090,6 @@ def serve(
             interval=scheduler_interval,
             diagnostics=diagnostics,
         )
-        with configuration_synchronization.hold():
-            lifecycle.reconcile(configured=configured)
         status: OperationalStatus = lifecycle.status
     else:
         status = _MutableOperationalStatus(configured=configured)
@@ -1150,6 +1148,9 @@ def serve(
         details={"next_state": "running"},
     )
     try:
+        if lifecycle is not None:
+            with configuration_synchronization.hold():
+                lifecycle.reconcile(configured=configured)
         while not stopped.is_set():
             server.handle_request()
     finally:
