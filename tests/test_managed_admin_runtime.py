@@ -507,7 +507,7 @@ def test_update_route_persists_exact_duration_without_metadata_io(tmp_path: Path
 
 
 @pytest.mark.parametrize("disabled", [False, True])
-def test_playlist_save_preserves_unrendered_custom_source(tmp_path: Path, disabled: bool) -> None:
+def test_playlist_save_preserves_visible_custom_source(tmp_path: Path, disabled: bool) -> None:
     service, factory = _service(tmp_path)
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
     custom_show_id = "A" * 22
@@ -549,9 +549,11 @@ def test_playlist_save_preserves_unrendered_custom_source(tmp_path: Path, disabl
         form_html,
     )
     retained = re.findall(r'<input type="hidden" name="source_id" value="([^"]+)">', form_html)
-    assert checked == ["ser"]
-    assert retained == [str(custom.id)]
-    assert f'type="checkbox" name="source_id" value="{custom.id}"' not in page
+    assert checked == ["ser", str(custom.id)]
+    assert retained == []
+    assert f'type="checkbox" name="source_id" value="{custom.id}" checked' in page
+    if disabled:
+        assert "Disabled · currently selected" in page
     assert '<input type="hidden" name="source_id" value="ser">' not in form_html
     csrf_token = re.search(r'<input type="hidden" name="csrf_token" value="([^"]+)">', form_html)
     assert csrf_token is not None

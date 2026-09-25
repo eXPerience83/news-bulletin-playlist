@@ -109,6 +109,14 @@ def _sources_table(
                     '<p class="muted">Disabling keeps assignments and Spotify content, pauses '
                     "affected destination updates, and is reversible.</p>"
                 )
+            pending = (
+                snapshot.provisioning_intent is not None
+                and source.id in snapshot.provisioning_intent.source_ids
+            )
+            if used_by.get(source.id) or pending:
+                controls += '<p class="muted">Unassign before deletion.</p>'
+            else:
+                controls += f'<a href="/admin/sources/delete?source_id={safe_id}">Delete</a>'
         rows.append(
             "<tr>"
             f"<td>{html.escape(source.display_name)} "
@@ -189,6 +197,56 @@ def render_edit_source_page(
         title="Edit source",
         active_tab="sources",
         intro="Edit safe custom-source metadata.",
+        body_html=body,
+    )
+
+
+def render_delete_source_page(
+    source: ManagedSource,
+    *,
+    used_by: tuple[str, ...],
+    pending: bool,
+    csrf_token: str,
+    lan_mode: bool,
+) -> bytes:
+    """Show current references, without treating this GET as deletion authorization."""
+    safe_name = html.escape(source.display_name)
+    safe_id = html.escape(str(source.id), quote=True)
+    safe_show = html.escape(source.spotify_show_id, quote=True)
+    references = html.escape(", ".join(used_by) or "Not used")
+    pending_text = "Pending playlist activation" if pending else "None"
+    blocked = bool(used_by) or pending
+    action = (
+        '<p class="warning">Unassign this source from every playlist and resolve pending '
+        "activation before deletion.</p>"
+        if blocked
+        else f"""
+<form method="post" action="/admin/sources/delete">
+  <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
+  <input type="hidden" name="source_id" value="{safe_id}">
+  <button class="button button-danger" type="submit">Delete custom source</button>
+</form>"""
+    )
+    body = (
+        (render_lan_warning() if lan_mode else "")
+        + f"""
+<section class="section admin-section">
+  <h2>Delete custom source</h2>
+  <p>{safe_name} · <code>{safe_id}</code> · {"Enabled" if source.enabled else "Disabled"}</p>
+  <p><a href="https://open.spotify.com/show/{safe_show}" target="_blank"
+        rel="noopener noreferrer">Open Spotify show</a></p>
+  <p>Used by: {references}. Pending activation: {pending_text}.</p>
+  <p>This removes the installation-owned custom definition, current accepted catalogue,
+     source refresh state and public detector state. It does not delete the Spotify show,
+     Spotify playlists, playlist definitions, 30-day accepted-episode research history,
+     diagnostic history or authorization.</p>
+  {action}
+</section>"""
+    )
+    return render_admin_shell(
+        title="Delete source",
+        active_tab="sources",
+        intro="Confirm local source deletion.",
         body_html=body,
     )
 

@@ -9,6 +9,11 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
+from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
+from news_bulletin_playlist.managed_provisioning import (
+    MANAGED_PROVISIONING_FILENAME,
+    ProvisioningJournal,
+)
 from news_bulletin_playlist.managed_state import (
     ManagedSource,
     ManagedState,
@@ -32,7 +37,8 @@ from news_bulletin_playlist.source_intake import (
     inspect_spotify_source,
     normalize_spotify_show_locator,
 )
-from news_bulletin_playlist.spotify.public_detector import spotify_show_id
+from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
+from news_bulletin_playlist.spotify.public_detector import PublicDetectorJournal, spotify_show_id
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
@@ -49,6 +55,14 @@ class SourceMutationError(ValueError):
     """A requested source is absent or image-owned, not installation-owned."""
 
 
+class SourceReferencedError(SourceMutationError):
+    """A durable playlist or provisioning intent still owns this source."""
+
+
+class EngineCycleBusyError(SourceMutationError):
+    """The engine cycle owns the destructive-maintenance gate."""
+
+
 class SourceAdminService:
     """Keep provider I/O outside the configuration lock; serialize local mutations."""
 
@@ -62,6 +76,10 @@ class SourceAdminService:
         *,
         catalog: BuiltInCatalog = BUILTIN_CATALOG,
         client_factory: Callable[[str], Any] | None = None,
+        first_journal: SpotifyFirstJournal | None = None,
+        detector_journal: PublicDetectorJournal | None = None,
+        cycle_synchronization: EngineCycleSynchronization | None = None,
+        provisioning_journal: ProvisioningJournal | None = None,
     ) -> None:
         self.store = store
         self.synchronization = synchronization
@@ -70,6 +88,12 @@ class SourceAdminService:
         self.metrics = metrics
         self.catalog = catalog
         self.client_factory = client_factory
+        self.first_journal = first_journal
+        self.detector_journal = detector_journal
+        self.cycle_synchronization = cycle_synchronization
+        self.provisioning_journal = provisioning_journal or ProvisioningJournal(
+            store.path.with_name(MANAGED_PROVISIONING_FILENAME)
+        )
 
     def snapshot(self) -> ManagedState:
         with self.synchronization.hold():
@@ -180,6 +204,54 @@ class SourceAdminService:
             updated = replace(current, enabled=enabled)
             self._save_replacement(state, updated)
             return updated, any(playlist.enabled for playlist in state.playlists)
+
+    def deletion_references(self, source_id: str) -> tuple[ManagedSource, tuple[str, ...], bool]:
+        """Read current references for confirmation; Delete checks them again under both locks."""
+        with self.synchronization.hold():
+            state = self.store.load()
+            source = self._custom_source(state, source_id)
+            used_by = tuple(
+                playlist.display_name
+                for playlist in state.playlists
+                if source.id in playlist.source_ids
+            )
+            intent = self.provisioning_journal.load()
+            pending = intent is not None and source.id in intent.source_ids
+            return source, used_by, pending
+
+    def delete(self, source_id: str) -> bool:
+        """Remove the definition last, after source-local caches are cleared.
+
+        A partial failure leaves the stable definition owning its ID. A retry is safe because
+        both journal clear operations are idempotent and missing current state requires bootstrap.
+        """
+        _, used_by, pending = self.deletion_references(source_id)
+        if used_by or pending:
+            raise SourceReferencedError("Unassign this source before deletion")
+        gate = self.cycle_synchronization
+        if gate is None or self.first_journal is None or self.detector_journal is None:
+            raise RuntimeError("Source deletion is unavailable")
+        with gate.try_hold_maintenance() as acquired:
+            if not acquired:
+                raise EngineCycleBusyError("Engine cycle is active; retry deletion shortly")
+            # Lock order is always cycle gate -> configuration lock, also in the cycle runner.
+            with self.synchronization.hold():
+                state = self.store.load()
+                source = self._custom_source(state, source_id)
+                intent = self.provisioning_journal.load()
+                if any(source.id in playlist.source_ids for playlist in state.playlists) or (
+                    intent is not None and source.id in intent.source_ids
+                ):
+                    raise SourceReferencedError("Unassign this source before deletion")
+                next_state = replace(
+                    state,
+                    sources=tuple(item for item in state.sources if item.id != source.id),
+                )
+                compile_engine_config(self.catalog, next_state)
+                self.first_journal.clear_source_runtime_state(source.id)
+                self.detector_journal.clear_source_state(source.id)
+                self.store.save(next_state)
+                return any(playlist.enabled for playlist in state.playlists)
 
     def _custom_source(self, state: ManagedState, source_id: str) -> ManagedSource:
         source = next((item for item in state.sources if item.id == source_id), None)

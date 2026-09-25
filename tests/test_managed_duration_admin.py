@@ -124,6 +124,7 @@ def test_admin_page_exposes_current_duration_ceiling(tmp_path: Path) -> None:
 
     page = render_managed_admin_page(
         snapshot=service.snapshot(),
+        state=service.store.load(),
         catalog=BUILTIN_CATALOG,
         spotify_state=AuthorizationState.CONNECTED,
         csrf_token="csrf",
@@ -145,6 +146,7 @@ def test_legacy_seconds_render_and_round_trip_exactly(tmp_path: Path) -> None:
 
     page = render_managed_admin_page(
         snapshot=service.snapshot(),
+        state=service.store.load(),
         catalog=BUILTIN_CATALOG,
         spotify_state=AuthorizationState.CONNECTED,
         csrf_token="csrf",

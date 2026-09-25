@@ -15,6 +15,7 @@ from news_bulletin_playlist.engine_runtime import (
     _playlist_write_contract,
 )
 from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
+from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import (
     ManagedSource,
     ManagedState,
@@ -38,6 +39,7 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
 from news_bulletin_playlist.source_admin import SourceAdminService
+from news_bulletin_playlist.spotify.auth import SpotifyAuthError
 from news_bulletin_playlist.spotify.first_desired import build_spotify_first_desired_state
 from news_bulletin_playlist.spotify.first_models import (
     RefreshReason,
@@ -341,6 +343,97 @@ def test_disabled_selected_source_never_authorizes_old_episode_state() -> None:
         )
     with pytest.raises(ValueError, match="missing or disabled"):
         build_spotify_first_desired_state(config.playlists[0], (), sources={}, now=NOW)
+
+
+def test_shared_custom_source_is_observed_and_planned_only_once_per_cycle(tmp_path: Path) -> None:
+    custom = _source()
+    first_playlist = _state(custom).playlists[0]
+    second_playlist = replace(
+        activate_template(BUILTIN_CATALOG.playlist("international_english_news"), "destination-2"),
+        source_ids=(custom.id,),
+    )
+    config = compile_engine_config(
+        BUILTIN_CATALOG,
+        ManagedState(sources=(custom,), playlists=(first_playlist, second_playlist)),
+    )
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    first = SpotifyFirstJournal(store)
+    first.initialize()
+    detector_journal = PublicDetectorJournal(store)
+    detector_journal.initialize()
+
+    class Detector:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def observe_sources(
+            self, sources: object, *, observed_at: datetime
+        ) -> PublicDetectorCycleSummary:
+            self.calls += 1
+            assert tuple(source.id for source in sources) == (custom.id,)  # type: ignore[attr-defined]
+            return PublicDetectorCycleSummary(1, 0, 1, 0)
+
+    class UnavailableAuth:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def acquire_provider_session(self, *, now: datetime) -> None:
+            self.calls += 1
+            raise SpotifyAuthError("test authorization unavailable")
+
+    detector = Detector()
+    auth = UnavailableAuth()
+    runner = EngineRunner(
+        config,
+        store,
+        auth,
+        detector,
+        detector_journal,
+        first,
+        client_factory=lambda token: pytest.fail(f"unexpected provider client: {token}"),
+        clock=lambda: NOW,
+    )  # type: ignore[arg-type]
+    result = runner.run_cycle()
+    assert detector.calls == 1
+    assert auth.calls == 1  # One bootstrap plan despite two playlists selecting the same source.
+    assert len(result.sources) == 1 and result.sources[0].source_id == custom.id
+    assert len(result.playlists) == 2
+
+
+def test_pending_custom_assignment_round_trips_and_recovery_preserves_identity(
+    tmp_path: Path,
+) -> None:
+    custom = _source()
+    service = ManagedAdminService(ManagedStateStore(tmp_path / "managed-state.json"))
+    service.store.save(ManagedState(sources=(custom,)))
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    intent = ProvisioningIntent(
+        state=ProvisioningState.DESTINATION_KNOWN,
+        template_id=template.id,
+        display_name="Custom playlist",
+        description="",
+        cover_id=template.cover_id,
+        source_ids=(custom.id,),
+        retention_hours=template.retention_hours,
+        max_episodes=template.max_episodes,
+        max_duration_seconds=template.duration_policy.default_max_seconds,
+        destination_id="destination",
+    )
+    service.provisioning_journal.save(intent)
+    assert service.provisioning_journal.load() == intent
+    recovered = service.finalize_known_provisioning()
+    assert recovered is not None and recovered.source_ids == (custom.id,)
+    assert service.store.load().playlists == (recovered,)
+    assert service.provisioning_journal.load() is None
+
+    # Recovery must not silently drop a custom source that became disabled before finalization.
+    service.store.save(ManagedState(sources=(replace(custom, enabled=False),)))
+    service.provisioning_journal.save(intent)
+    with pytest.raises(ManagedAdminError, match="disabled source"):
+        service.finalize_known_provisioning()
+    assert service.store.load().playlists == ()
+    assert service.provisioning_journal.load() == intent
 
 
 def test_disabled_selected_source_preserves_destination_in_real_cycle(tmp_path: Path) -> None:

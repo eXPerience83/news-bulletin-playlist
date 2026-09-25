@@ -16,7 +16,12 @@ from news_bulletin_playlist.managed_admin import (
 )
 from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
-from news_bulletin_playlist.managed_state import ManagedPlaylist, ManagedSource
+from news_bulletin_playlist.managed_state import (
+    ManagedPlaylist,
+    ManagedSource,
+    ManagedState,
+    effective_sources,
+)
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
@@ -31,13 +36,14 @@ def render_managed_admin_page(
     csrf_token: str,
     last_cycle: EngineCycleResult | None,
     lan_mode: bool,
+    state: ManagedState,
     notice: str | None = None,
     error: str | None = None,
-    custom_sources: tuple[ManagedSource, ...] = (),
 ) -> bytes:
     """Render playlist policy and lifecycle controls in the shared admin shell."""
 
     spotify_connected = spotify_state is AuthorizationState.CONNECTED
+    sources = effective_sources(catalog, state)
     spotify_label = authorization_state_label(spotify_state)
     managed = (
         "".join(
@@ -46,7 +52,8 @@ def render_managed_admin_page(
                 catalog=catalog,
                 csrf_token=csrf_token,
                 last_cycle=last_cycle,
-                custom_sources=custom_sources,
+                custom_sources=state.sources,
+                sources=sources,
             )
             for playlist in snapshot.managed
         )
@@ -65,6 +72,8 @@ def render_managed_admin_page(
                     catalog=catalog,
                     csrf_token=csrf_token,
                     spotify_connected=spotify_connected,
+                    sources=sources,
+                    custom_source_ids=frozenset(source.id for source in state.sources),
                 )
                 for template in snapshot.available_templates
             )
@@ -178,6 +187,7 @@ def _managed_card(
     csrf_token: str,
     last_cycle: EngineCycleResult | None,
     custom_sources: tuple[ManagedSource, ...],
+    sources: tuple[SourceDefinition, ...],
 ) -> str:
     outcome = None
     if last_cycle is not None:
@@ -210,16 +220,11 @@ def _managed_card(
         display_name=playlist.display_name,
         description=playlist.description,
         duration_seconds=effective_duration_seconds,
-        catalog=catalog,
+        sources=sources,
+        custom_source_ids=frozenset(source.id for source in custom_sources),
         selected_source_ids=set(playlist.source_ids),
         source_prefix=f"edit-{playlist.id}",
         enabled=playlist.enabled,
-    )
-    built_in_ids = {source.id for source in catalog.sources}
-    retained_source_ids = "".join(
-        _hidden_input("source_id", str(source_id))
-        for source_id in playlist.source_ids
-        if source_id not in built_in_ids
     )
     disabled_warnings = "".join(
         '<p class="warning">Custom source '
@@ -247,7 +252,6 @@ def _managed_card(
     {_hidden_input("cover_id", playlist.cover_id)}
     {fields}
     {disabled_warnings}
-    {retained_source_ids}
     <button class="button" type="submit">Save playlist</button>
   </form>
   <form method="post" action="/admin/playlists/sync">
@@ -272,6 +276,8 @@ def _template_card(
     catalog: BuiltInCatalog,
     csrf_token: str,
     spotify_connected: bool,
+    sources: tuple[SourceDefinition, ...],
+    custom_source_ids: frozenset[SourceId],
 ) -> str:
     disabled = "" if spotify_connected else " disabled"
     hint = "" if spotify_connected else '<p class="muted">Connect Spotify before activation.</p>'
@@ -279,7 +285,8 @@ def _template_card(
         display_name=template.display_name,
         description=template.description,
         duration_seconds=template.duration_policy.default_max_seconds,
-        catalog=catalog,
+        sources=sources,
+        custom_source_ids=custom_source_ids,
         selected_source_ids=set(template.default_source_ids),
         source_prefix=f"new-{template.id}",
         enabled=None,
@@ -311,7 +318,8 @@ def _playlist_policy_fields(
     display_name: str,
     description: str,
     duration_seconds: int,
-    catalog: BuiltInCatalog,
+    sources: tuple[SourceDefinition, ...],
+    custom_source_ids: frozenset[SourceId],
     selected_source_ids: set[SourceId],
     source_prefix: str,
     enabled: bool | None,
@@ -320,7 +328,8 @@ def _playlist_policy_fields(
 
     duration_minutes, duration_remainder = divmod(duration_seconds, 60)
     source_controls = _source_checkboxes(
-        catalog,
+        sources,
+        custom_source_ids=custom_source_ids,
         selected=selected_source_ids,
         prefix=source_prefix,
     )
@@ -356,13 +365,16 @@ def _playlist_policy_fields(
 
 
 def _source_checkboxes(
-    catalog: BuiltInCatalog,
+    sources: tuple[SourceDefinition, ...],
     *,
+    custom_source_ids: frozenset[SourceId],
     selected: set[SourceId],
     prefix: str,
 ) -> str:
     rows = []
-    for source in catalog.sources:
+    for source in sources:
+        if not source.enabled and source.id not in selected:
+            continue
         checked = " checked" if source.id in selected else ""
         control_id = f"{prefix}-{source.id}"
         safe_control_id = html.escape(control_id, quote=True)
@@ -370,7 +382,10 @@ def _source_checkboxes(
             f'<label for="{safe_control_id}">'
             f'<input id="{safe_control_id}" type="checkbox" name="source_id" '
             f'value="{html.escape(str(source.id), quote=True)}"{checked}> '
-            f"{html.escape(_source_label(source))}</label>"
+            f"{html.escape(_source_label(source))}"
+            f"{' · Custom' if source.id in custom_source_ids else ''}"
+            f"{' — Disabled · currently selected' if not source.enabled else ''}"
+            "</label>"
         )
     return "".join(rows)
 

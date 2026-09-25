@@ -142,6 +142,7 @@ def test_dashboard_uses_service_limits_and_keeps_destination_server_owned(
 
     body = render_managed_admin_page(
         snapshot=service.snapshot(),
+        state=service.store.load(),
         catalog=BUILTIN_CATALOG,
         spotify_state=AuthorizationState.CONNECTED,
         csrf_token="csrf-token",
@@ -166,6 +167,7 @@ def test_available_template_requires_spotify_but_local_save_button_does_not(
     service, _ = _service(tmp_path)
     disconnected = render_managed_admin_page(
         snapshot=service.snapshot(),
+        state=service.store.load(),
         catalog=BUILTIN_CATALOG,
         spotify_state=AuthorizationState.DISCONNECTED,
         csrf_token="csrf-token",
@@ -182,6 +184,7 @@ def test_available_template_requires_spotify_but_local_save_button_does_not(
     _activate(service)
     managed = render_managed_admin_page(
         snapshot=service.snapshot(),
+        state=service.store.load(),
         catalog=BUILTIN_CATALOG,
         spotify_state=AuthorizationState.DISCONNECTED,
         csrf_token="csrf-token-2",

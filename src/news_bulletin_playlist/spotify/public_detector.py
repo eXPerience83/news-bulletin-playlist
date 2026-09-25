@@ -648,6 +648,15 @@ class PublicDetectorJournal:
             row = self._select(connection, source_id, show_id)
         return None if row is None else _state_from_row(row)
 
+    def clear_source_state(self, source_id: SourceId) -> None:
+        """Remove only this source's current detector observations."""
+        with self._connection("clear Spotify public detector source state") as connection:
+            self._ensure_table(connection)
+            connection.execute(
+                "DELETE FROM spotify_public_detector_state WHERE source_id = ?",
+                (str(source_id),),
+            )
+
     def record_success(
         self,
         observation: PublicEpisodeObservation,
