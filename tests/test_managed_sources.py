@@ -9,7 +9,11 @@ import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.engine import EngineRunner, _required_sources
-from news_bulletin_playlist.engine_runtime import _playlist_write_contract
+from news_bulletin_playlist.engine_runtime import (
+    ConfigurationSynchronization,
+    ReloadingEngineCycleRunner,
+    _playlist_write_contract,
+)
 from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
 from news_bulletin_playlist.managed_state import (
     ManagedSource,
@@ -32,6 +36,8 @@ from news_bulletin_playlist.models import (
     SourceOrigin,
 )
 from news_bulletin_playlist.persistence import SQLiteStore
+from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
+from news_bulletin_playlist.source_admin import SourceAdminService
 from news_bulletin_playlist.spotify.first_desired import build_spotify_first_desired_state
 from news_bulletin_playlist.spotify.first_models import (
     RefreshReason,
@@ -43,6 +49,7 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorCycleSummary,
     PublicDetectorJournal,
 )
+from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 
 SHOW_A = "A" * 22
 SHOW_B = "B" * 22
@@ -410,6 +417,162 @@ def test_disabled_selected_source_preserves_destination_in_real_cycle(tmp_path: 
     assert result.playlists[0].write_outcome == "not_attempted"
     assert "destination preserved" in (result.playlists[0].error or "")
     assert first.list_episodes(source_ids=(state.sources[0].id,))
+
+
+def test_enabled_builtin_plus_disabled_custom_never_writes_reduced_destination(
+    tmp_path: Path,
+) -> None:
+    custom = _source(enabled=False)
+    state = _state(custom)
+    state = replace(
+        state,
+        playlists=(replace(state.playlists[0], source_ids=(SourceId("ser"), custom.id)),),
+    )
+    config = compile_engine_config(BUILTIN_CATALOG, state)
+    sqlite_store = SQLiteStore(tmp_path / "state.sqlite3")
+    sqlite_store.initialize()
+    first = SpotifyFirstJournal(sqlite_store)
+    first.initialize()
+    detector_journal = PublicDetectorJournal(sqlite_store)
+    detector_journal.initialize()
+    ser = next(source for source in config.sources if source.id == SourceId("ser"))
+    first.record_refresh(
+        ser,
+        refreshed_at=NOW,
+        reason=RefreshReason.BOOTSTRAP,
+        detector_episode_id=None,
+        api_episode_id=None,
+        request_count=1,
+        complete=True,
+        coverage_proven=True,
+        coverage_cutoff_at=NOW - timedelta(hours=48),
+    )
+
+    class NoAuth:
+        def acquire_provider_session(self, *, now: datetime) -> None:
+            raise AssertionError(f"no catalogue refresh expected at {now}")
+
+    class Detector:
+        def observe_sources(
+            self, sources: object, *, observed_at: datetime
+        ) -> PublicDetectorCycleSummary:
+            assert tuple(source.id for source in sources) == (SourceId("ser"),)  # type: ignore[attr-defined]
+            assert observed_at == NOW
+            return PublicDetectorCycleSummary(0, 0, 0, 0)
+
+    writes: list[str] = []
+
+    def client_factory(token: str) -> None:
+        writes.append(token)
+        raise AssertionError("destination must not be mutated")
+
+    runner = EngineRunner(
+        config,
+        sqlite_store,
+        NoAuth(),
+        Detector(),
+        detector_journal,
+        first,
+        client_factory=client_factory,
+        clock=lambda: NOW,
+    )  # type: ignore[arg-type]
+    result = runner.run_cycle()
+    assert result.playlists[0].ok is False
+    assert result.playlists[0].write_outcome == "not_attempted"
+    assert "destination preserved" in (result.playlists[0].error or "")
+    assert writes == []
+
+
+def test_mid_cycle_disable_blocks_write_but_safe_metadata_change_does_not(
+    tmp_path: Path,
+) -> None:
+    state = _state()
+    original = compile_engine_config(BUILTIN_CATALOG, state)
+    managed_store = ManagedStateStore(tmp_path / "managed-state.json")
+    managed_store.save(state)
+    synchronization = ConfigurationSynchronization()
+
+    class NoAuth:
+        def get_access_token(self, *, now: datetime | None = None) -> str:
+            raise AssertionError(f"no provider call expected at {now}")
+
+    service = SourceAdminService(
+        managed_store,
+        synchronization,
+        NoAuth(),
+        SpotifyRateLimitJournal(SQLiteStore(tmp_path / "rate-limit.sqlite3")),
+        None,
+    )
+    runner = object.__new__(ReloadingEngineCycleRunner)
+    runner.data_dir = tmp_path
+    runner.environ = {}
+    runner.configuration_synchronization = synchronization
+    writes: list[str] = []
+
+    service.set_enabled(str(state.sources[0].id), False)
+    with (
+        pytest.raises(SpotifyReconciliationError, match="destination preserved"),
+        runner._playlist_mutation_guard(original, original.playlists[0]),
+    ):
+        writes.append("spotify mutation")
+    assert writes == []
+
+    service.set_enabled(str(state.sources[0].id), True)
+    service.update_metadata(
+        str(state.sources[0].id),
+        display_name="Renamed",
+        origin_kind="institution",
+        origin_code="UN",
+        language="en",
+        editorial_scope="MIX",
+    )
+    with runner._playlist_mutation_guard(original, original.playlists[0]):
+        writes.append("allowed")
+    assert writes == ["allowed"]
+
+
+def test_reenabled_source_uses_normal_coverage_readiness(tmp_path: Path) -> None:
+    state = _state(_source(enabled=False))
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    first = SpotifyFirstJournal(store)
+    first.initialize()
+    runner = object.__new__(EngineRunner)
+    runner.first_journal = first
+    runner.config = compile_engine_config(BUILTIN_CATALOG, state)
+    playlist = runner.config.playlists[0]
+    assert not runner._playlist_sources_ready(playlist, now=NOW)
+
+    runner.config = compile_engine_config(
+        BUILTIN_CATALOG, replace(state, sources=(replace(state.sources[0], enabled=True),))
+    )
+    playlist = runner.config.playlists[0]
+    assert not runner._playlist_sources_ready(playlist, now=NOW)
+    source = next(source for source in runner.config.sources if source.id == state.sources[0].id)
+    first.record_refresh(
+        source,
+        refreshed_at=NOW,
+        reason=RefreshReason.BOOTSTRAP,
+        detector_episode_id=None,
+        api_episode_id=None,
+        request_count=1,
+        complete=True,
+        coverage_proven=False,
+        coverage_cutoff_at=NOW - timedelta(hours=48),
+    )
+    assert not runner._playlist_sources_ready(playlist, now=NOW)
+    first.record_refresh(
+        source,
+        refreshed_at=NOW,
+        reason=RefreshReason.BOOTSTRAP,
+        detector_episode_id=None,
+        api_episode_id=None,
+        request_count=1,
+        complete=True,
+        coverage_proven=True,
+        coverage_cutoff_at=NOW - timedelta(hours=48),
+    )
+    assert runner._playlist_sources_ready(playlist, now=NOW)
 
 
 def test_source_semantics_change_write_contract_but_classification_does_not() -> None:

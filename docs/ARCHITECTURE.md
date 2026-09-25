@@ -66,7 +66,8 @@ invent provider work.
 Application-owned built-in source/catalog knowledge is separate from installation-owned playlist and
 custom Spotify-first source choices. Managed-state schema v3 persists only canonical custom source
 configuration; v1/v2 migrate atomically with no custom sources. Authenticated Add Source
-inspection and creation are available; existing-source lifecycle and assignment UI are not yet.
+inspection and creation are available; safe metadata editing and enable/disable are available for
+custom sources, while assignment and deletion UI are not yet.
 
 The built-in source catalog defines, for each supported source:
 

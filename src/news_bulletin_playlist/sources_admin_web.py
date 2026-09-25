@@ -8,8 +8,8 @@ from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warn
 from news_bulletin_playlist.catalog import BuiltInCatalog
 from news_bulletin_playlist.engine import EngineCycleResult, SourceCycleOutcome
 from news_bulletin_playlist.managed_admin import ManagedAdminSnapshot
-from news_bulletin_playlist.managed_state import ManagedState, effective_sources
-from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.managed_state import ManagedSource, ManagedState, effective_sources
+from news_bulletin_playlist.models import EditorialScope, SourceId, SourceOriginKind
 from news_bulletin_playlist.web_ui import status_badge
 
 
@@ -20,9 +20,10 @@ def render_sources_page(
     catalog: BuiltInCatalog,
     last_cycle: EngineCycleResult | None,
     lan_mode: bool,
+    csrf_token: str,
     notice: str | None = None,
 ) -> bytes:
-    """Render built-in and installation-owned sources without management controls."""
+    """Render effective sources, with lifecycle actions only for custom definitions."""
 
     body = "".join(
         (
@@ -40,7 +41,7 @@ def render_sources_page(
   <p><a class="button button-primary" href="/admin/sources/new">Add source</a></p>
   <p class="muted">Provider origin, editorial scope and language are separate; an institutional
      origin need not be a country.</p>
-  {_sources_table(snapshot, catalog, state, last_cycle)}
+  {_sources_table(snapshot, catalog, state, last_cycle, csrf_token)}
 </section>
 """,
         )
@@ -61,6 +62,7 @@ def _sources_table(
     catalog: BuiltInCatalog,
     state: ManagedState,
     last_cycle: EngineCycleResult | None,
+    csrf_token: str,
 ) -> str:
     source_outcomes = (
         {} if last_cycle is None else {outcome.source_id: outcome for outcome in last_cycle.sources}
@@ -87,6 +89,26 @@ def _sources_table(
             if source.id in built_in_ids
             else ("Enabled" if source.enabled else "Disabled")
         )
+        controls = ""
+        if source.id not in built_in_ids:
+            next_enabled = not source.enabled
+            verb = "Enable" if next_enabled else "Disable"
+            safe_id = html.escape(str(source.id), quote=True)
+            safe_csrf = html.escape(csrf_token, quote=True)
+            controls = (
+                f'<a href="/admin/sources/edit?source_id={safe_id}">'
+                "Edit</a>"
+                '<form method="post" action="/admin/sources/set-enabled">'
+                f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
+                f'<input type="hidden" name="source_id" value="{safe_id}">'
+                f'<input type="hidden" name="enabled" value="{int(next_enabled)}">'
+                f'<button class="button" type="submit">{verb}</button></form>'
+            )
+            if not next_enabled and used_by.get(source.id):
+                controls += (
+                    '<p class="muted">Disabling keeps assignments and Spotify content, pauses '
+                    "affected destination updates, and is reversible.</p>"
+                )
         rows.append(
             "<tr>"
             f"<td>{html.escape(source.display_name)} "
@@ -99,6 +121,7 @@ def _sources_table(
             f"<td>{html.escape(state_label)}</td>"
             f"<td>{html.escape(playlists)}</td>"
             f"<td>{status_badge(ownership, tone='muted')}</td>"
+            f"<td>{controls}</td>"
             "</tr>"
         )
     return (
@@ -107,9 +130,66 @@ def _sources_table(
         '<th scope="col">Source</th><th scope="col">Origin</th>'
         '<th scope="col">Scope</th><th scope="col">Language</th>'
         '<th scope="col">Health</th><th scope="col">State</th><th scope="col">Used by</th>'
-        '<th scope="col">Ownership</th></tr></thead><tbody>'
+        '<th scope="col">Ownership</th><th scope="col">Actions</th></tr></thead><tbody>'
         + "".join(rows)
         + "</tbody></table></div></div>"
+    )
+
+
+def render_edit_source_page(
+    source: ManagedSource,
+    *,
+    used_by: tuple[str, ...],
+    csrf_token: str,
+    lan_mode: bool,
+) -> bytes:
+    def esc(value: object) -> str:
+        return html.escape(str(value), quote=True)
+
+    origins = "".join(
+        f'<option value="{kind.value}"'
+        f"{' selected' if kind is source.origin.kind else ''}>{kind.value.title()}</option>"
+        for kind in SourceOriginKind
+    )
+    scopes = "".join(
+        f'<option value="{scope.value}"'
+        f"{' selected' if scope is source.editorial_scope else ''}>{scope.value}</option>"
+        for scope in EditorialScope
+    )
+    body = (
+        (render_lan_warning() if lan_mode else "")
+        + f"""
+<section class="section admin-section">
+  <h2>Edit custom source</h2>
+  <p>Source ID: <code>{esc(source.id)}</code></p>
+  <p>Spotify show ID: <code>{esc(source.spotify_show_id)}</code>
+     <a href="https://open.spotify.com/show/{esc(source.spotify_show_id)}"
+        target="_blank" rel="noopener noreferrer">Open in Spotify</a></p>
+  <p>Timezone: {esc(source.timezone)}; parser: {esc(source.parser_id)};
+     filter: {esc(source.collection_filter_id or "none")};
+     state: {"Enabled" if source.enabled else "Disabled"}.</p>
+  <p>Used by: {esc(", ".join(used_by) or "Not used")}</p>
+  <p class="muted">Show identity, timezone and parsing strategy cannot be changed here.</p>
+  <form method="post" action="/admin/sources/update">
+    <input type="hidden" name="csrf_token" value="{esc(csrf_token)}">
+    <input type="hidden" name="source_id" value="{esc(source.id)}">
+    <label>Display name <input name="display_name" maxlength="120" required
+           value="{esc(source.display_name)}"></label>
+    <label>Origin kind <select name="origin_kind">{origins}</select></label>
+    <label>Origin code <input name="origin_code" maxlength="12" required
+           value="{esc(source.origin.code)}"></label>
+    <label>Language <input name="language" required value="{esc(source.language)}"></label>
+    <label>Editorial scope <select name="editorial_scope">{scopes}</select></label>
+    <button class="button button-primary" type="submit">Save source</button>
+  </form>
+</section>
+"""
+    )
+    return render_admin_shell(
+        title="Edit source",
+        active_tab="sources",
+        intro="Edit safe custom-source metadata.",
+        body_html=body,
     )
 
 

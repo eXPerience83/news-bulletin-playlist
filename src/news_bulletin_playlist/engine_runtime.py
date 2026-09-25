@@ -610,9 +610,11 @@ class OperationalHealthHandler(LanAdminHandler):
         try:
             if synchronization is None:
                 snapshot = service.snapshot()
+                state = service.store.load()
             else:
                 with synchronization.hold():
                     snapshot = service.snapshot()
+                    state = service.store.load()
         except ManagedStateError, OSError:
             self._reply(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -632,6 +634,7 @@ class OperationalHealthHandler(LanAdminHandler):
             last_cycle=last_cycle,
             lan_mode=self._is_lan_admin_mode(),
             notice=notice,
+            custom_sources=state.sources,
         )
         self._reply(HTTPStatus.OK, payload)
 

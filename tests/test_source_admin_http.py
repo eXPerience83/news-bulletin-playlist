@@ -18,6 +18,7 @@ import pytest
 
 from news_bulletin_playlist.admin_session import admin_session_manager_for
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.diagnostics_runtime import DiagnosticOperationalHealthHandler
 from news_bulletin_playlist.engine import OperationalStatus
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
@@ -29,6 +30,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     activate_template,
 )
+from news_bulletin_playlist.models import SourceOrigin
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.source_admin import SourceAdminService
 from news_bulletin_playlist.spotify.client import SpotifyApiError
@@ -113,8 +115,18 @@ class _Handler(DiagnosticOperationalHealthHandler):
         del format, args
 
 
+class _Lifecycle:
+    def __init__(self) -> None:
+        self.reconcile_calls: list[bool] = []
+
+    def reconcile(self, *, configured: bool) -> None:
+        self.reconcile_calls.append(configured)
+
+
 @contextmanager
-def _server(tmp_path: Path) -> Iterator[tuple[HTTPServer, _Client, ManagedStateStore]]:
+def _server(
+    tmp_path: Path, *, lifecycle: _Lifecycle | None = None
+) -> Iterator[tuple[HTTPServer, _Client, ManagedStateStore]]:
     store = ManagedStateStore(tmp_path / "managed-state.json")
     synchronization = ConfigurationSynchronization()
     auth = _Auth()
@@ -123,11 +135,15 @@ def _server(tmp_path: Path) -> Iterator[tuple[HTTPServer, _Client, ManagedStateS
     _Handler.data_dir = tmp_path
     _Handler.spotify_auth = None
     _Handler.operational_status = OperationalStatus(configured=False)
-    _Handler.engine_lifecycle = None
+    _Handler.engine_lifecycle = lifecycle  # type: ignore[assignment]
     _Handler.auth_synchronization = None
     _Handler.configuration_synchronization = synchronization
     _Handler.managed_admin_service = ManagedAdminService(store)
     _Handler.managed_admin_auth = None
+    diagnostic_store = DiagnosticEventStore(tmp_path / "diagnostics.sqlite3")
+    diagnostic_store.initialize()
+    _Handler.diagnostic_store = diagnostic_store
+    _Handler.operational_diagnostics = None
     _Handler.source_admin_service = SourceAdminService(
         store,
         synchronization,
@@ -208,6 +224,395 @@ def _create_form(review: bytes) -> dict[str, str]:
         "parser_id": "release_date_title",
         "collection_filter_id": "",
     }
+
+
+def _configured_source(store: ManagedStateStore, *, enabled: bool = True) -> ManagedSource:
+    source = _Handler.source_admin_service.validate_new_source(  # type: ignore[union-attr]
+        show_id=SHOW,
+        display_name="Original news",
+        origin_kind="country",
+        origin_code="ES",
+        language="es",
+        editorial_scope="NAT",
+        timezone="Europe/Madrid",
+        parser_id="release_date_title",
+        collection_filter_id=None,
+    )
+    source = replace(source, enabled=enabled)
+    playlist = replace(
+        activate_template(BUILTIN_CATALOG.playlist("spain_spanish_news"), "destination"),
+        source_ids=(source.id,),
+    )
+    store.save(ManagedState(sources=(source,), playlists=(playlist,)))
+    return source
+
+
+def _update_form(token: str) -> dict[str, str]:
+    return {
+        "csrf_token": token,
+        "source_id": f"custom_{SHOW}",
+        "display_name": "  Revised news  ",
+        "origin_kind": "institution",
+        "origin_code": "UN",
+        "language": "es-419",
+        "editorial_scope": "INT",
+    }
+
+
+def _lifecycle_form(token: str, *, enabled: str) -> dict[str, str]:
+    return {"csrf_token": token, "source_id": f"custom_{SHOW}", "enabled": enabled}
+
+
+def test_real_http_custom_lifecycle_is_local_and_preserves_references(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        original = _configured_source(store)
+        auth = _Handler.source_admin_service.auth  # type: ignore[union-attr]
+        for path in ("/admin/sources/edit?source_id=custom_" + SHOW,):
+            assert _request(server, "GET", path)[0] == 303
+        for path in ("/admin/sources/update", "/admin/sources/set-enabled"):
+            assert _request(server, "POST", path, form={"csrf_token": "bad"})[0] == 303
+        cookie = _login(server)
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert b"Edit" in sources and b"Disable" in sources
+        for row in re.findall(rb"<tr>.*?</tr>", sources, flags=re.DOTALL):
+            if b"Built-in" in row:
+                assert b"/admin/sources/edit" not in row
+                assert b"/admin/sources/set-enabled" not in row
+        edit_path = f"/admin/sources/edit?source_id=custom_{SHOW}"
+        status, _, edit = _request(server, "GET", edit_path, cookie=cookie)
+        assert status == 200 and b"Europe/Madrid" in edit and b"release_date_title" in edit
+        assert b'name="timezone"' not in edit and b'name="parser_id"' not in edit
+        token = _csrf(edit)
+        status, headers, _ = _request(
+            server, "POST", "/admin/sources/update", cookie=cookie, form=_update_form(token)
+        )
+        assert status == 303 and headers["Location"] == "/admin/sources?notice=source-updated"
+        assert (
+            _request(
+                server, "POST", "/admin/sources/update", cookie=cookie, form=_update_form(token)
+            )[0]
+            == 403
+        )
+        edited = ManagedStateStore(store.path).load().sources[0]
+        assert edited == replace(
+            original,
+            display_name="Revised news",
+            origin=SourceOrigin.institution("UN"),
+            language="es-419",
+            editorial_scope="INT",
+        )
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert b"Revised news" in sources
+        token = _csrf(sources)
+        status, headers, _ = _request(
+            server,
+            "POST",
+            "/admin/sources/set-enabled",
+            cookie=cookie,
+            form=_lifecycle_form(token, enabled="0"),
+        )
+        assert status == 303 and headers["Location"] == "/admin/sources?notice=source-disabled"
+        disabled_state = ManagedStateStore(store.path).load()
+        assert disabled_state.sources == (replace(edited, enabled=False),)
+        assert disabled_state.playlists[0].source_ids == (original.id,)
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert b"Disabled" in sources and b"Enable" in sources
+        _, _, playlists = _request(server, "GET", "/admin/", cookie=cookie)
+        assert b"Revised news" in playlists and b"preserves its Spotify destination" in playlists
+        assert f'name="source_id" value="custom_{SHOW}"'.encode() in playlists
+        assert f'type="checkbox" name="source_id" value="custom_{SHOW}"'.encode() not in playlists
+        token = _csrf(sources)
+        status, headers, _ = _request(
+            server,
+            "POST",
+            "/admin/sources/set-enabled",
+            cookie=cookie,
+            form=_lifecycle_form(token, enabled="1"),
+        )
+        assert status == 303 and headers["Location"] == "/admin/sources?notice=source-enabled"
+        assert ManagedStateStore(store.path).load().sources == (edited,)
+        assert client.calls == [] and auth.calls == 0
+        events = _Handler.diagnostic_store.list_events(source_id=str(original.id))
+        assert {event.event_name for event in events} == {
+            "admin_source_updated",
+            "admin_source_disabled",
+            "admin_source_enabled",
+        }
+        assert all(event.details["outcome"] == "applied" for event in events)
+        assert all(event.details["operation"] == "source_configuration" for event in events)
+        assert all("Revised" not in str(event.details) for event in events)
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert (
+            _request(
+                server, "POST", "/admin/logout", cookie=cookie, form={"csrf_token": _csrf(sources)}
+            )[0]
+            == 303
+        )
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie,
+                form=_lifecycle_form(token, enabled="0"),
+            )[0]
+            == 303
+        )
+
+
+@pytest.mark.parametrize(
+    ("extra", "value"),
+    [
+        ("spotify_show_id", OTHER),
+        ("timezone", "UTC"),
+        ("parser_id", "other"),
+        ("collection_filter_id", "other"),
+        ("id", "custom_other"),
+        ("enabled", "0"),
+    ],
+)
+def test_update_rejects_immutable_post_fields(tmp_path: Path, extra: str, value: str) -> None:
+    with _server(tmp_path) as (server, client, store):
+        original = _configured_source(store)
+        cookie = _login(server)
+        _, _, edit = _request(
+            server, "GET", f"/admin/sources/edit?source_id={original.id}", cookie=cookie
+        )
+        form = _update_form(_csrf(edit))
+        form[extra] = value
+        assert _request(server, "POST", "/admin/sources/update", cookie=cookie, form=form)[0] == 400
+        assert store.load().sources == (original,)
+        assert client.calls == []
+        assert _Handler.diagnostic_store.list_events(source_id=str(original.id)) == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("display_name", " "),
+        ("display_name", "X" * 121),
+        ("display_name", "line\nbreak"),
+        ("origin_kind", "other"),
+        ("origin_code", "UN"),
+        ("language", "es_US"),
+        ("editorial_scope", "OTHER"),
+    ],
+)
+def test_update_rejects_invalid_metadata_without_provider_call(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        original = _configured_source(store)
+        cookie = _login(server)
+        _, _, edit = _request(
+            server, "GET", f"/admin/sources/edit?source_id={original.id}", cookie=cookie
+        )
+        form = _update_form(_csrf(edit))
+        if field == "origin_code":
+            form["origin_kind"] = "country"
+        form[field] = value
+        assert _request(server, "POST", "/admin/sources/update", cookie=cookie, form=form)[0] == 400
+        assert store.load().sources == (original,)
+        assert client.calls == []
+
+
+def test_lifecycle_forms_reject_unknown_fields_duplicate_values_and_bad_boolean(
+    tmp_path: Path,
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        original = _configured_source(store)
+        cookie = _login(server)
+        for modified in (
+            {"timezone": "UTC"},
+            {"enabled": "true"},
+            {"source_id": [str(original.id), str(original.id)]},
+        ):
+            _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+            form: dict[str, str | list[str]] = _lifecycle_form(_csrf(page), enabled="0")
+            form.update(modified)
+            assert (
+                _request(server, "POST", "/admin/sources/set-enabled", cookie=cookie, form=form)[0]
+                == 400
+            )
+        assert store.load().sources == (original,)
+        assert client.calls == []
+        assert _Handler.diagnostic_store.list_events() == ()
+
+
+def test_builtin_lifecycle_rejected_and_invalid_csrf_has_no_effect(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        _configured_source(store)
+        cookie = _login(server)
+        builtin = str(BUILTIN_CATALOG.sources[0].id)
+        assert (
+            _request(server, "GET", f"/admin/sources/edit?source_id={builtin}", cookie=cookie)[0]
+            == 404
+        )
+        _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        token = _csrf(page)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie,
+                form=_lifecycle_form("bad", enabled="0"),
+            )[0]
+            == 403
+        )
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/update",
+                cookie=cookie,
+                form={**_update_form(token), "source_id": builtin},
+            )[0]
+            == 409
+        )
+        _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie,
+                form={**_lifecycle_form(_csrf(page), enabled="0"), "source_id": builtin},
+            )[0]
+            == 409
+        )
+        assert len(store.load().sources) == 1 and client.calls == []
+        assert _Handler.diagnostic_store.list_events() == ()
+
+
+def test_lifecycle_reconciles_active_playlists_but_not_sources_alone(tmp_path: Path) -> None:
+    lifecycle = _Lifecycle()
+    with _server(tmp_path, lifecycle=lifecycle) as (server, client, store):
+        source = _configured_source(store)
+        cookie = _login(server)
+        _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie,
+                form=_lifecycle_form(_csrf(page), enabled="0"),
+            )[0]
+            == 303
+        )
+        assert lifecycle.reconcile_calls == [True]
+        state = store.load()
+        store.save(replace(state, playlists=()))
+        _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie,
+                form=_lifecycle_form(_csrf(page), enabled="1"),
+            )[0]
+            == 303
+        )
+        assert lifecycle.reconcile_calls == [True, False]
+        assert store.load().sources == (source,)
+        assert client.calls == []
+
+
+def test_invalid_metadata_and_failed_save_emit_no_success_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        cookie = _login(server)
+        _, _, edit = _request(
+            server, "GET", f"/admin/sources/edit?source_id={source.id}", cookie=cookie
+        )
+        invalid = _update_form(_csrf(edit))
+        invalid["origin_kind"] = "country"
+        invalid["origin_code"] = "UN"
+        assert (
+            _request(server, "POST", "/admin/sources/update", cookie=cookie, form=invalid)[0] == 400
+        )
+        _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+
+        def fail_save(state: ManagedState) -> None:
+            del state
+            raise OSError("secret-path /data/internal")
+
+        monkeypatch.setattr(store, "save", fail_save)
+        status, _, body = _request(
+            server,
+            "POST",
+            "/admin/sources/set-enabled",
+            cookie=cookie,
+            form=_lifecycle_form(_csrf(page), enabled="0"),
+        )
+        assert status == 500 and b"secret-path" not in body
+        assert store.load().sources == (source,)
+        assert _Handler.diagnostic_store.list_events() == ()
+        assert client.calls == []
+
+
+def test_source_csrf_cannot_cross_sessions_or_be_reused(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        cookie_a = _login(server)
+        cookie_b = _login(server)
+        _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie_a)
+        token = _csrf(page)
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie_b,
+                form=_lifecycle_form(token, enabled="0"),
+            )[0]
+            == 403
+        )
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie_a,
+                form=_lifecycle_form(token, enabled="0"),
+            )[0]
+            == 303
+        )
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie_a,
+                form=_lifecycle_form(token, enabled="1"),
+            )[0]
+            == 403
+        )
+        assert store.load().sources == (replace(source, enabled=False),)
+        assert client.calls == []
+
+
+def test_edited_operator_name_is_escaped_in_sources_and_edit(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        cookie = _login(server)
+        _, _, edit = _request(
+            server, "GET", f"/admin/sources/edit?source_id={source.id}", cookie=cookie
+        )
+        form = _update_form(_csrf(edit))
+        form["display_name"] = "<img src=x onerror=alert(1)>"
+        assert _request(server, "POST", "/admin/sources/update", cookie=cookie, form=form)[0] == 303
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        _, _, edit = _request(
+            server, "GET", f"/admin/sources/edit?source_id={source.id}", cookie=cookie
+        )
+        assert b"<img src=x onerror" not in sources + edit
+        assert b"&lt;img src=x onerror=alert(1)&gt;" in sources + edit
+        assert client.calls == []
 
 
 def test_real_http_login_inspect_download_create_logout(tmp_path: Path) -> None:
