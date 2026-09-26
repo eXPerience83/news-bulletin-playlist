@@ -58,14 +58,19 @@ def _source_outcome() -> SourceCycleOutcome:
     )
 
 
-def _playlist_outcome(playlist_id: str, *, stale_escalation: bool) -> PlaylistCycleOutcome:
+def _playlist_outcome(
+    playlist_id: str,
+    *,
+    stale_escalation: bool,
+    ok: bool = True,
+) -> PlaylistCycleOutcome:
     return PlaylistCycleOutcome(
         playlist_id=playlist_id,  # type: ignore[arg-type]
-        ok=True,
+        ok=ok,
         desired_count=1,
-        applied_count=1,
-        wrote=False,
-        last_success_at=NOW,
+        applied_count=1 if ok else None,
+        wrote=False if ok else None,
+        last_success_at=NOW if ok else None,
         stale_escalation=stale_escalation,
     )
 
@@ -74,6 +79,7 @@ def _runner(
     monkeypatch: pytest.MonkeyPatch,
     *,
     stale_first: bool,
+    failed_first: bool = False,
 ) -> tuple[EngineRunner, _EpisodeJournal, dict[str, tuple[str, ...]]]:
     source = SimpleNamespace(id="shared-source", enabled=True)
     playlists = (
@@ -133,10 +139,16 @@ def _runner(
         now: datetime,
     ) -> PlaylistCycleOutcome:
         del now
-        stale_escalation = stale_first and playlist.id == "playlist-a"
-        if stale_escalation:
+        is_first = playlist.id == "playlist-a"
+        stale_escalation = stale_first and is_first
+        failed = failed_first and is_first
+        if stale_escalation or failed:
             journal.episodes = ("persisted-refreshed",)
-        return _playlist_outcome(playlist.id, stale_escalation=stale_escalation)
+        return _playlist_outcome(
+            playlist.id,
+            stale_escalation=stale_escalation,
+            ok=not failed,
+        )
 
     runner._reconcile_playlist = reconcile  # type: ignore[method-assign]
     return runner, journal, builds
@@ -166,6 +178,25 @@ def test_stale_escalation_reloads_catalogue_for_later_playlist(
 
     assert result.ok is True
     assert result.playlists[0].stale_escalation is True
+    assert journal.full_reads == 2
+    assert builds["playlist-a"] == ("persisted-old",)
+    assert builds["playlist-b"] == ("persisted-refreshed",)
+
+
+def test_failed_reconciliation_reloads_catalogue_for_later_playlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, journal, builds = _runner(
+        monkeypatch,
+        stale_first=False,
+        failed_first=True,
+    )
+
+    result = runner._run_cycle()
+
+    assert result.ok is False
+    assert result.playlists[0].ok is False
+    assert result.playlists[0].stale_escalation is False
     assert journal.full_reads == 2
     assert builds["playlist-a"] == ("persisted-old",)
     assert builds["playlist-b"] == ("persisted-refreshed",)
