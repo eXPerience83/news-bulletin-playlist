@@ -440,7 +440,8 @@ class EngineRunner:
                 now=started_at,
             )
             playlist_outcomes.append(outcome)
-            episodes = self.first_journal.list_episodes()
+            if outcome.stale_escalation:
+                episodes = self.first_journal.list_episodes()
 
         with suppress(PersistenceError):
             self.first_journal.prune(before=started_at - SPOTIFY_FIRST_STATE_RETENTION)
