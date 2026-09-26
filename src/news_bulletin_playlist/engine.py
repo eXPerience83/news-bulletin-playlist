@@ -440,7 +440,7 @@ class EngineRunner:
                 now=started_at,
             )
             playlist_outcomes.append(outcome)
-            if outcome.stale_escalation:
+            if outcome.stale_escalation or not outcome.ok:
                 episodes = self.first_journal.list_episodes()
 
         with suppress(PersistenceError):
