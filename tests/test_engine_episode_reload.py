@@ -106,7 +106,9 @@ def _runner(
     monkeypatch.setattr(engine_module, "build_spotify_first_desired_state", build_desired)
 
     runner = object.__new__(EngineRunner)
-    runner.config = SimpleNamespace(sources=(source,), playlists=playlists)  # type: ignore[assignment]
+    runner.config = SimpleNamespace(  # type: ignore[assignment]
+        sources=(source,), playlists=playlists
+    )
     runner.clock = lambda: NOW
     runner.public_detector = SimpleNamespace(observe_sources=lambda *args, **kwargs: object())
     runner.first_journal = journal  # type: ignore[assignment]
