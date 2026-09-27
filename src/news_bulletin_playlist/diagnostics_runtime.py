@@ -44,13 +44,20 @@ from news_bulletin_playlist.runtime import (
     _data_dir_ready,
 )
 from news_bulletin_playlist.source_admin import (
+    MAX_SOURCE_AUDIT_BATCH_SOURCES,
     EngineCycleBusyError,
+    SourceAuditBatchLimitError,
+    SourceAuditBatchStateError,
     SourceMutationError,
     SourceReferencedError,
 )
 from news_bulletin_playlist.source_admin_web import (
     render_new_source_page,
     render_source_review_page,
+)
+from news_bulletin_playlist.source_audit_export import (
+    build_source_audit_bundle,
+    source_audit_archive_filename,
 )
 from news_bulletin_playlist.source_inspection import (
     InspectionFailure,
@@ -124,6 +131,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         if path == "/admin/sources/audit":
             self._handle_source_audit()
+            return
+        if path == "/admin/sources/audits/export":
+            self._handle_source_audit_export()
             return
         if path in {"/admin/sources/update", "/admin/sources/set-enabled"}:
             self._handle_source_mutation(path)
@@ -380,6 +390,52 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             extra_headers={
                 "Content-Disposition": (
                     f'attachment; filename="source-inspection-{context.spotify_show_id}.json"'
+                )
+            },
+        )
+
+    def _handle_source_audit_export(self) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.source_admin_service
+        if service is None:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Source audit is unavailable")
+            return
+        try:
+            form = self._read_form()
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source audit export form")
+            return
+        tokens = form.get("csrf_token", [])
+        if len(tokens) != 1 or not security.consume_csrf_token(tokens[0]):
+            self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+            return
+        if set(form) != {"csrf_token"}:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source audit export form")
+            return
+        try:
+            batch = service.audit_all()
+            payload = build_source_audit_bundle(batch, build_revision=self.build_revision)
+        except SourceAuditBatchLimitError:
+            self._source_error(
+                HTTPStatus.CONFLICT,
+                f"Source audit export supports at most {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources",
+            )
+            return
+        except SourceAuditBatchStateError, ManagedStateError, OSError, ValueError:
+            self._source_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Source audit export could not be built safely",
+            )
+            return
+        self._reply(
+            HTTPStatus.OK,
+            payload,
+            content_type="application/zip",
+            extra_headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{source_audit_archive_filename(batch.generated_at)}"'
                 )
             },
         )

@@ -471,7 +471,7 @@ def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) ->
         }
         assert "secret" not in str(events[0].details)
         _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
-        assert b"Source A" not in sources
+        assert str(source.id).encode() not in sources
         assert (
             _request(
                 server,

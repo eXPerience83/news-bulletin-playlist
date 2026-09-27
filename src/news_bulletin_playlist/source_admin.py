@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
@@ -31,7 +32,10 @@ from news_bulletin_playlist.models import (
     SourceOriginKind,
 )
 from news_bulletin_playlist.source_inspection import (
+    InspectionFailure,
+    InspectionResponseReason,
     SourceInspection,
+    SourceInspectionError,
     inspect_configured_source,
 )
 from news_bulletin_playlist.source_intake import (
@@ -41,9 +45,26 @@ from news_bulletin_playlist.source_intake import (
     normalize_spotify_show_locator,
 )
 from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
-from news_bulletin_playlist.spotify.public_detector import PublicDetectorJournal, spotify_show_id
+from news_bulletin_playlist.spotify.public_detector import (
+    PublicDetectorJournal,
+    PublicEpisodeObservation,
+    PublicShowClient,
+    PublicShowHttpError,
+    PublicShowTransportError,
+    spotify_show_id,
+)
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
+
+MAX_SOURCE_AUDIT_BATCH_SOURCES = 20
+_SAFE_AUDIT_ARCHIVE_SOURCE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+_GLOBAL_AUDIT_FAILURES = frozenset(
+    {
+        InspectionFailure.AUTHORIZATION,
+        InspectionFailure.RATE_LIMITED,
+        InspectionFailure.UNAVAILABLE,
+    }
+)
 
 
 class _Synchronization(Protocol):
@@ -52,6 +73,38 @@ class _Synchronization(Protocol):
 
 class _Auth(Protocol):
     def get_access_token(self, *, now: datetime | None = None) -> str: ...
+
+
+class _BatchPublicClient:
+    """Remember only public failures that justify suppressing later batch observations."""
+
+    def __init__(self, client: Any) -> None:
+        self.client = client
+        self.global_failure = False
+
+    def observe_episode(
+        self,
+        source_id: SourceId,
+        spotify_show_id: str,
+        *,
+        observed_at: datetime,
+    ) -> PublicEpisodeObservation:
+        try:
+            return cast(
+                PublicEpisodeObservation,
+                self.client.observe_episode(
+                    source_id,
+                    spotify_show_id,
+                    observed_at=observed_at,
+                ),
+            )
+        except PublicShowTransportError:
+            self.global_failure = True
+            raise
+        except PublicShowHttpError as exc:
+            if exc.status == 429 or exc.status >= 500:
+                self.global_failure = True
+            raise
 
 
 class SourceMutationError(ValueError):
@@ -64,6 +117,34 @@ class SourceReferencedError(SourceMutationError):
 
 class EngineCycleBusyError(SourceMutationError):
     """The engine cycle owns the destructive-maintenance gate."""
+
+
+class SourceAuditBatchLimitError(ValueError):
+    """The effective source set is too large for one bounded audit export."""
+
+
+class SourceAuditBatchStateError(ValueError):
+    """The effective source set cannot be represented safely in an audit archive."""
+
+
+@dataclass(frozen=True, slots=True)
+class SourceAuditBatchItem:
+    source_id: SourceId
+    display_name: str
+    ownership: str
+    enabled: bool
+    status: str
+    report: SourceInspection | None = None
+    failure: InspectionFailure | None = None
+    response_reason: InspectionResponseReason | None = None
+    not_attempted_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceAuditBatch:
+    generated_at: datetime
+    items: tuple[SourceAuditBatchItem, ...]
+    public_observation_suppressed_after: SourceId | None = None
 
 
 class SourceAdminService:
@@ -129,15 +210,122 @@ class SourceAdminService:
         state = self.snapshot()
         if source_id not in {str(source.id) for source in effective_sources(self.catalog, state)}:
             raise SourceMutationError("Configured source not found")
-        return inspect_configured_source(
+        return self._audit_from_snapshot(
+            state,
             SourceId(source_id),
+            now=datetime.now(UTC),
+            observe_public=True,
+            public_client=self.public_client,
+        )
+
+    def audit_all(self) -> SourceAuditBatch:
+        """Audit one immutable effective-source snapshot through the normal inspection contract."""
+        state = self.snapshot()
+        sources = effective_sources(self.catalog, state)
+        if len(sources) > MAX_SOURCE_AUDIT_BATCH_SOURCES:
+            raise SourceAuditBatchLimitError(
+                f"source audit batch exceeds {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources"
+            )
+        unsafe = next(
+            (
+                source.id
+                for source in sources
+                if _SAFE_AUDIT_ARCHIVE_SOURCE_ID.fullmatch(str(source.id)) is None
+            ),
+            None,
+        )
+        if unsafe is not None:
+            raise SourceAuditBatchStateError("effective source id is unsafe for archive export")
+
+        generated_at = datetime.now(UTC)
+        built_in_ids = {source.id for source in self.catalog.sources}
+        items: list[SourceAuditBatchItem] = []
+        stop_failure: InspectionFailure | None = None
+        public_observation_enabled = True
+        public_suppressed_after: SourceId | None = None
+        public_client = _BatchPublicClient(
+            self.public_client
+            if self.public_client is not None
+            else PublicShowClient(metrics=self.metrics)
+        )
+
+        for source in sources:
+            ownership = "built_in" if source.id in built_in_ids else "custom"
+            if stop_failure is not None:
+                items.append(
+                    SourceAuditBatchItem(
+                        source_id=source.id,
+                        display_name=source.display_name,
+                        ownership=ownership,
+                        enabled=source.enabled,
+                        status="not_attempted",
+                        not_attempted_reason=f"batch_stopped_{stop_failure.value}",
+                    )
+                )
+                continue
+            try:
+                report = self._audit_from_snapshot(
+                    state,
+                    source.id,
+                    now=generated_at,
+                    observe_public=public_observation_enabled,
+                    public_client=public_client,
+                )
+            except SourceInspectionError as exc:
+                items.append(
+                    SourceAuditBatchItem(
+                        source_id=source.id,
+                        display_name=source.display_name,
+                        ownership=ownership,
+                        enabled=source.enabled,
+                        status="failed",
+                        failure=exc.failure,
+                        response_reason=exc.response_reason,
+                    )
+                )
+                if exc.failure in _GLOBAL_AUDIT_FAILURES:
+                    stop_failure = exc.failure
+                continue
+
+            items.append(
+                SourceAuditBatchItem(
+                    source_id=source.id,
+                    display_name=source.display_name,
+                    ownership=ownership,
+                    enabled=source.enabled,
+                    status="succeeded",
+                    report=report,
+                )
+            )
+            if public_observation_enabled and public_client.global_failure:
+                public_observation_enabled = False
+                public_suppressed_after = source.id
+
+        return SourceAuditBatch(
+            generated_at=generated_at,
+            items=tuple(items),
+            public_observation_suppressed_after=public_suppressed_after,
+        )
+
+    def _audit_from_snapshot(
+        self,
+        state: ManagedState,
+        source_id: SourceId,
+        *,
+        now: datetime,
+        observe_public: bool,
+        public_client: Any | None,
+    ) -> SourceInspection:
+        return inspect_configured_source(
+            source_id,
             catalog=self.catalog,
             state=state,
             auth=self.auth,
             rate_limit=self.rate_limit,
-            now=datetime.now(UTC),
+            now=now,
             client_factory=self.client_factory,
-            public_client=self.public_client,
+            public_client=public_client,
+            observe_public=observe_public,
             metrics=self.metrics,
         )
 
