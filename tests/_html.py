@@ -94,7 +94,7 @@ class _AdminHTMLAudit(HTMLParser):
         action = form["action"]
         if not isinstance(method, str) or not isinstance(action, str):
             raise AssertionError("invalid internal HTML audit state")
-        if action and not action.startswith("/"):
+        if action and (not action.startswith("/") or action.startswith("//")):
             self.errors.append(f"form action must remain same-origin: {action}")
         if (
             method == "post"

@@ -3,7 +3,6 @@ from __future__ import annotations
 from http import HTTPStatus
 
 import pytest
-
 from _html import assert_valid_document_html
 from _http_handler import (
     HandlerCaptureMixin,
@@ -124,6 +123,16 @@ def test_login_csrf_exemption_is_action_specific() -> None:
             arbitrary_post,
             csrf_exempt_post_actions=_LOGIN_CSRF_EXEMPT_ACTIONS,
         )
+
+
+def test_protocol_relative_form_action_is_rejected() -> None:
+    document = _document_with_form(action="//attacker.example/collect", csrf=True)
+
+    with pytest.raises(
+        AssertionError,
+        match=r"form action must remain same-origin: //attacker\.example/collect",
+    ):
+        assert_valid_document_html(document)
 
 
 def test_post_with_csrf_remains_valid_by_default() -> None:
