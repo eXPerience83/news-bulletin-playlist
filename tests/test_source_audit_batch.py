@@ -25,11 +25,12 @@ from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.lan_admin import LanAdminSecurity
 from news_bulletin_playlist.managed_admin import ManagedAdminService
 from news_bulletin_playlist.managed_state import (
+    ManagedSource,
     ManagedState,
     ManagedStateStore,
     effective_sources,
 )
-from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.models import SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.source_admin import (
     MAX_SOURCE_AUDIT_BATCH_SOURCES,
@@ -234,16 +235,15 @@ def _csrf(body: bytes) -> str:
     return match.group(1).decode()
 
 
-def _show_id(source: object) -> str:
-    references = getattr(source, "external_references")
+def _show_id(source: SourceDefinition) -> str:
     return next(
         reference.external_id
-        for reference in references
+        for reference in source.external_references
         if reference.system == "spotify" and reference.resource_type == "show"
     )
 
 
-def _custom_source(service: SourceAdminService, show_id: str = CUSTOM_SHOW):
+def _custom_source(service: SourceAdminService, show_id: str = CUSTOM_SHOW) -> ManagedSource:
     return service.validate_new_source(
         show_id=show_id,
         display_name="Custom news",
@@ -296,11 +296,17 @@ def test_batch_export_uses_one_snapshot_and_includes_disabled_custom(tmp_path: P
         page = _request(server, "GET", "/admin/sources", cookie=cookie)[2]
         assert b"Export all audits" in page
         assert page.count(b'action="/admin/sources/audit"') == len(sources)
+        token = _csrf(page)
 
         store.loads = 0
-        status, headers, payload, used_token = _export(server, cookie)
-        # _export performs one page GET before POST; count only the POST snapshot.
-        assert store.loads == 3
+        status, headers, payload = _request(
+            server,
+            "POST",
+            "/admin/sources/audits/export",
+            cookie=cookie,
+            form={"csrf_token": token},
+        )
+        assert store.loads == 1
         assert status == HTTPStatus.OK
         assert headers["Content-Type"] == "application/zip"
         assert headers["Cache-Control"] == "no-store"
@@ -337,7 +343,7 @@ def test_batch_export_uses_one_snapshot_and_includes_disabled_custom(tmp_path: P
             "POST",
             "/admin/sources/audits/export",
             cookie=cookie,
-            form={"csrf_token": used_token},
+            form={"csrf_token": token},
         )[0]
         assert reused_status == HTTPStatus.FORBIDDEN
 
