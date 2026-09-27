@@ -10,6 +10,7 @@ from news_bulletin_playlist.engine import EngineCycleResult, SourceCycleOutcome
 from news_bulletin_playlist.managed_admin import ManagedAdminSnapshot
 from news_bulletin_playlist.managed_state import ManagedSource, ManagedState, effective_sources
 from news_bulletin_playlist.models import EditorialScope, SourceId, SourceOriginKind
+from news_bulletin_playlist.source_admin import MAX_SOURCE_AUDIT_BATCH_SOURCES
 from news_bulletin_playlist.web_ui import status_badge
 
 
@@ -24,7 +25,7 @@ def render_sources_page(
     notice: str | None = None,
 ) -> bytes:
     """Render effective sources, with lifecycle actions only for custom definitions."""
-
+    safe_csrf = html.escape(csrf_token, quote=True)
     body = "".join(
         (
             render_lan_warning() if lan_mode else "",
@@ -39,6 +40,13 @@ def render_sources_page(
     <p class="section-note">{len(catalog.sources)} built-in, {len(state.sources)} custom sources</p>
   </div>
   <p><a class="button button-primary" href="/admin/sources/new">Add source</a></p>
+  <form method="post" action="/admin/sources/audits/export">
+    <input type="hidden" name="csrf_token" value="{safe_csrf}">
+    <button class="button" type="submit">Export all audits</button>
+  </form>
+  <p class="muted">Runs the existing read-only Source Audit sequentially for the current
+     effective source snapshot, up to {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources, and downloads a
+     sanitized ZIP.</p>
   <p class="muted">Provider origin, editorial scope and language are separate; an institutional
      origin need not be a country.</p>
   {_sources_table(snapshot, catalog, state, last_cycle, csrf_token)}
