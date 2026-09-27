@@ -194,15 +194,58 @@ def test_formaction_cannot_escape_login_csrf_exemption() -> None:
 
 
 def test_formmethod_cannot_create_unchecked_post() -> None:
-    document = _document_with_form(action="/admin/arbitrary").replace(
-        'method="post"',
-        'method="get"',
-    ).replace(
-        "</form>",
-        '<button type="submit" formmethod="post">Submit</button></form>',
+    document = (
+        _document_with_form(action="/admin/arbitrary")
+        .replace('method="post"', 'method="get"')
+        .replace(
+            "</form>",
+            '<button type="submit" formmethod="post">Submit</button></form>',
+        )
     )
 
     with pytest.raises(AssertionError, match="formmethod is not allowed"):
+        assert_valid_document_html(document)
+
+
+@pytest.mark.parametrize(
+    "csrf_input",
+    [
+        '<input name="csrf_token" value="token">',
+        '<input type="hidden" name="csrf_token" value="">',
+        '<input type="hidden" name="csrf_token" value="token" disabled>',
+        '<input type="hidden" name="csrf_token" value="token" form="other-form">',
+    ],
+)
+def test_ineffective_csrf_controls_are_rejected(csrf_input: str) -> None:
+    document = _document_with_form(action="/admin/mutate").replace(
+        "</form>",
+        f"{csrf_input}</form>",
+    )
+
+    with pytest.raises(
+        AssertionError,
+        match="csrf_token must be a non-empty enabled hidden input",
+    ):
+        assert_valid_document_html(document)
+
+
+def test_duplicate_csrf_controls_are_rejected() -> None:
+    document = _document_with_form(action="/admin/mutate", csrf=True).replace(
+        "</form>",
+        '<input type="hidden" name="csrf_token" value="second-token"></form>',
+    )
+
+    with pytest.raises(AssertionError, match="multiple csrf_token inputs"):
+        assert_valid_document_html(document)
+
+
+def test_disabled_fieldset_cannot_hide_ineffective_csrf_control() -> None:
+    document = _document_with_form(action="/admin/mutate").replace(
+        "</form>",
+        '<fieldset disabled><input type="hidden" name="csrf_token" value="token"></fieldset></form>',
+    )
+
+    with pytest.raises(AssertionError, match=r"disabled <fieldset> is not allowed"):
         assert_valid_document_html(document)
 
 
