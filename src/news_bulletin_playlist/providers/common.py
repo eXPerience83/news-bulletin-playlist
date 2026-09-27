@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Collection
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -216,7 +216,7 @@ def parse_24h_clock_value(
     return hour, minute
 
 
-def aware_datetime(
+def unique_aware_datetime(
     year: int,
     month: int,
     day: int,
@@ -224,8 +224,20 @@ def aware_datetime(
     minute: int,
     *,
     tz: ZoneInfo,
-) -> datetime:
-    return datetime(year, month, day, hour, minute, tzinfo=tz)
+) -> datetime | None:
+    """Resolve a local wall time only when it proves one unique physical instant."""
+    try:
+        wall_time = datetime(year, month, day, hour, minute)
+        instants: set[datetime] = set()
+        for fold in (0, 1):
+            candidate = wall_time.replace(tzinfo=tz, fold=fold).astimezone(UTC)
+            if candidate.astimezone(tz).replace(tzinfo=None) == wall_time:
+                instants.add(candidate)
+    except ValueError, OverflowError:
+        return None
+    if len(instants) != 1:
+        return None
+    return next(iter(instants)).astimezone(tz)
 
 
 def datetime_from_match(
@@ -271,10 +283,7 @@ def datetime_from_match(
     if not 0 <= minute <= 59:
         return None
 
-    try:
-        return aware_datetime(year, month, int(day_value), hour, minute, tz=tz)
-    except ValueError:
-        return None
+    return unique_aware_datetime(year, month, int(day_value), hour, minute, tz=tz)
 
 
 def spanish_month(value: str) -> int | None:

@@ -184,11 +184,13 @@ def test_cnn_historical_short_year_pivot_remains_unchanged(year: str, expected_y
     assert parsed.edition_at.tzinfo == NEW_YORK
 
 
-def test_recovery_preserves_dst_interpretation_of_exact_parser() -> None:
-    exact = SerParser().parse("Las noticias de la SER, 02:30 (25/10/2026)")
-    recovered = SerParser().parse_with_recovery("Las noticias de la SER - 2.30 25-10-26")
+@pytest.mark.parametrize("day", ["25/10/2026", "29/03/2026"])
+def test_recovery_cannot_resurrect_unproven_dst_wall_time(day: str) -> None:
+    # Issue #433 replaces the historical fold=0 policy preserved by #236.
+    exact = SerParser().parse(f"Las noticias de la SER, 02:30 ({day})")
+    short_day = day.replace("/", "-")[:-4] + "26"
+    recovered = SerParser().parse_with_recovery(f"Las noticias de la SER - 2.30 {short_day}")
 
-    assert exact is not None
-    assert recovered.parsed is not None
-    assert recovered.parsed.edition_at == exact.edition_at
-    assert recovered.parsed.edition_at.fold == exact.edition_at.fold
+    assert exact is None
+    assert recovered.parsed is None
+    assert recovered.mode == "rejected"

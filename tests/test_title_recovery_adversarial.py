@@ -399,7 +399,7 @@ def test_four_digit_only_providers_reject_short_years(
         ),
     ],
 )
-def test_recovery_preserves_provider_timezone_and_ambiguous_wall_clock_policy(
+def test_recovery_rejects_ambiguous_local_time_but_preserves_gmt(
     parser: RecoveryTitleParser,
     exact_title: str,
     recovered_title: str,
@@ -408,8 +408,14 @@ def test_recovery_preserves_provider_timezone_and_ambiguous_wall_clock_policy(
     exact = parser.parse_with_recovery(exact_title)
     recovered = parser.parse_with_recovery(recovered_title)
 
+    # Issue #433 supersedes the implicit fold=0 policy documented under #236.
+    if expected_tz != UTC:
+        assert exact.parsed is None
+        assert recovered.parsed is None
+        assert exact.mode == recovered.mode == "rejected"
+        return
+
     assert exact.parsed is not None
     assert recovered.parsed is not None
     assert recovered.parsed.edition_at == exact.parsed.edition_at
-    assert recovered.parsed.edition_at.fold == exact.parsed.edition_at.fold
     assert recovered.parsed.edition_at.tzinfo == expected_tz
