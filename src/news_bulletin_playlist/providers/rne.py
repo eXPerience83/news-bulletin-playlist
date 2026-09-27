@@ -6,9 +6,9 @@ from news_bulletin_playlist.models import ParsedEdition
 from news_bulletin_playlist.providers.base import RecoveringTitleParserBase
 from news_bulletin_playlist.providers.common import (
     MADRID,
-    aware_datetime,
     parse_24h_clock_value,
     parse_numeric_date_value,
+    unique_aware_datetime,
 )
 
 _PATTERN = re.compile(
@@ -43,7 +43,7 @@ class RneParser(RecoveringTitleParserBase):
         if parsed_date is None or parsed_time is None:
             return None
         hour, minute = parsed_time
-        edition_at = aware_datetime(
+        edition_at = unique_aware_datetime(
             parsed_date.year,
             parsed_date.month,
             parsed_date.day,
@@ -51,4 +51,6 @@ class RneParser(RecoveringTitleParserBase):
             minute,
             tz=MADRID,
         )
+        if edition_at is None:
+            return None
         return ParsedEdition(self.provider_id, title, edition_at)

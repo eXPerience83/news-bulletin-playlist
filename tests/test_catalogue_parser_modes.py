@@ -128,3 +128,24 @@ def test_catalogue_evidence_reports_actual_parser_path(
     assert snapshot.evidence[0].parser_outcome == outcome
     assert snapshot.episodes[0].timestamp_source is timestamp_source
     assert snapshot.parser_fallback_count == (1 if outcome == "fallback" else 0)
+
+
+@pytest.mark.parametrize("date", ["25/10/2026", "29/03/2026"])
+def test_unproven_dst_title_remains_in_catalogue_with_first_seen_fallback(date: str) -> None:
+    source = next(item for item in BUILTIN_CATALOG.sources if item.id == SourceId("ser"))
+    title = f"Las noticias de la SER, 02:30 ({date})"
+    snapshot = fetch_source_catalogue(
+        _CatalogueClient(spotify_show_id(source), title),
+        source,
+        now=NOW,
+        cutoff=NOW - timedelta(days=2),
+        collect_evidence=True,
+    )
+
+    assert len(snapshot.episodes) == 1
+    episode = snapshot.episodes[0]
+    assert episode.title == title
+    assert episode.edition_at is None
+    assert episode.timestamp_source is TimestampSource.FIRST_SEEN
+    assert snapshot.parser_fallback_count == 1
+    assert snapshot.evidence[0].parser_outcome == "fallback"
