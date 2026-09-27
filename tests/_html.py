@@ -3,6 +3,10 @@ from __future__ import annotations
 from collections.abc import Collection
 from html.parser import HTMLParser
 
+_SUBMITTER_FORM_OVERRIDE_ATTRS = frozenset(
+    {"formaction", "formmethod", "formenctype", "formtarget", "formnovalidate"}
+)
+
 
 def _is_same_origin_form_action(action: str) -> bool:
     return (
@@ -75,8 +79,10 @@ class _AdminHTMLAudit(HTMLParser):
                 and value.lstrip().casefold().startswith("javascript:")
             ):
                 self.errors.append(f"javascript: URL is not allowed in {name}")
-            if name == "formaction" and value and not _is_same_origin_form_action(value):
-                self.errors.append(f"formaction must remain same-origin: {value}")
+            if name in _SUBMITTER_FORM_OVERRIDE_ATTRS:
+                self.errors.append(
+                    f"{name} is not allowed in first-party rendered HTML"
+                )
 
         if tag == "a" and attributes.get("target") == "_blank":
             rel = set((attributes.get("rel") or "").split())
