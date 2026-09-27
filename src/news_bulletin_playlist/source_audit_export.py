@@ -23,7 +23,7 @@ _SAFE_ARCHIVE_SOURCE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 def build_source_audit_bundle(batch: SourceAuditBatch, *, build_revision: str) -> bytes:
     """Serialize one bounded batch result without raw provider responses or credentials."""
     reports: list[tuple[str, bytes]] = []
-    source_documents = []
+    source_documents: list[dict[str, object]] = []
     succeeded = failed = not_attempted = 0
 
     for item in batch.items:
