@@ -43,6 +43,8 @@ from news_bulletin_playlist.spotify.client import SpotifyApiError
 from news_bulletin_playlist.spotify.public_detector import (
     PublicEpisodeObservation,
     PublicShowDetectorError,
+    PublicShowHttpError,
+    PublicShowTransportError,
 )
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 
@@ -118,15 +120,16 @@ class _Client:
 class _PublicAudit:
     def __init__(self) -> None:
         self.calls: list[str] = []
-        self.fail_once = False
+        self.error_once: Exception | None = None
 
     def observe_episode(
         self, source_id: SourceId, spotify_show_id: str, *, observed_at: datetime
     ) -> PublicEpisodeObservation:
         self.calls.append(spotify_show_id)
-        if self.fail_once:
-            self.fail_once = False
-            raise PublicShowDetectorError("secret-public-body")
+        error = self.error_once
+        self.error_once = None
+        if error is not None:
+            raise error
         return PublicEpisodeObservation(
             source_id=source_id,
             spotify_show_id=spotify_show_id,
@@ -332,6 +335,7 @@ def test_batch_export_uses_one_snapshot_and_includes_disabled_custom(tmp_path: P
         for source in sources:
             report = json.loads(archive.read(f"sources/{source.id}.json"))
             assert report["source_id"] == str(source.id)
+            assert report["inspected_at"] == manifest["generated_at"]
         archive.close()
         assert b"secret-access-token" not in payload
         assert b"secret-refresh-token" not in payload
@@ -412,9 +416,20 @@ def test_batch_export_global_provider_failure_stops_remaining_work(
         archive.close()
 
 
-def test_batch_export_suppresses_later_public_observations_after_failure(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "public_error",
+    [
+        PublicShowTransportError("secret-public-body"),
+        PublicShowHttpError(429),
+        PublicShowHttpError(503),
+    ],
+)
+def test_batch_export_suppresses_public_after_global_public_failure(
+    tmp_path: Path,
+    public_error: Exception,
+) -> None:
     with _server(tmp_path) as (server, _client, public, _store):
-        public.fail_once = True
+        public.error_once = public_error
         cookie = _login(server)
 
         status, _, payload, _ = _export(server, cookie)
@@ -425,6 +440,24 @@ def test_batch_export_suppresses_later_public_observations_after_failure(tmp_pat
         assert manifest["public_observation_suppressed_after_source"] == str(first.id)
         assert manifest["sources"][0]["public_status"] == "unavailable"
         assert all(entry["public_status"] == "not_requested" for entry in manifest["sources"][1:])
+        assert b"secret-public-body" not in payload
+        archive.close()
+
+
+def test_batch_export_keeps_public_observations_after_source_local_public_failure(
+    tmp_path: Path,
+) -> None:
+    with _server(tmp_path) as (server, _client, public, _store):
+        public.error_once = PublicShowDetectorError("secret-public-body")
+        cookie = _login(server)
+
+        status, _, payload, _ = _export(server, cookie)
+        assert status == HTTPStatus.OK
+        manifest, archive = _archive(payload)
+        assert len(public.calls) == len(BUILTIN_CATALOG.sources)
+        assert manifest["public_observation_suppressed_after_source"] is None
+        assert manifest["sources"][0]["public_status"] == "unavailable"
+        assert all(entry["public_status"] == "available" for entry in manifest["sources"][1:])
         assert b"secret-public-body" not in payload
         archive.close()
 
