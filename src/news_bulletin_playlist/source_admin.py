@@ -7,7 +7,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
@@ -45,7 +45,14 @@ from news_bulletin_playlist.source_intake import (
     normalize_spotify_show_locator,
 )
 from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
-from news_bulletin_playlist.spotify.public_detector import PublicDetectorJournal, spotify_show_id
+from news_bulletin_playlist.spotify.public_detector import (
+    PublicDetectorJournal,
+    PublicEpisodeObservation,
+    PublicShowClient,
+    PublicShowHttpError,
+    PublicShowTransportError,
+    spotify_show_id,
+)
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 
@@ -66,6 +73,38 @@ class _Synchronization(Protocol):
 
 class _Auth(Protocol):
     def get_access_token(self, *, now: datetime | None = None) -> str: ...
+
+
+class _BatchPublicClient:
+    """Remember only public failures that justify suppressing later batch observations."""
+
+    def __init__(self, client: Any) -> None:
+        self.client = client
+        self.global_failure = False
+
+    def observe_episode(
+        self,
+        source_id: SourceId,
+        spotify_show_id: str,
+        *,
+        observed_at: datetime,
+    ) -> PublicEpisodeObservation:
+        try:
+            return cast(
+                PublicEpisodeObservation,
+                self.client.observe_episode(
+                    source_id,
+                    spotify_show_id,
+                    observed_at=observed_at,
+                ),
+            )
+        except PublicShowTransportError:
+            self.global_failure = True
+            raise
+        except PublicShowHttpError as exc:
+            if exc.status == 429 or exc.status >= 500:
+                self.global_failure = True
+            raise
 
 
 class SourceMutationError(ValueError):
@@ -176,6 +215,7 @@ class SourceAdminService:
             SourceId(source_id),
             now=datetime.now(UTC),
             observe_public=True,
+            public_client=self.public_client,
         )
 
     def audit_all(self) -> SourceAuditBatch:
@@ -203,6 +243,11 @@ class SourceAdminService:
         stop_failure: InspectionFailure | None = None
         public_observation_enabled = True
         public_suppressed_after: SourceId | None = None
+        public_client = _BatchPublicClient(
+            self.public_client
+            if self.public_client is not None
+            else PublicShowClient(metrics=self.metrics)
+        )
 
         for source in sources:
             ownership = "built_in" if source.id in built_in_ids else "custom"
@@ -224,6 +269,7 @@ class SourceAdminService:
                     source.id,
                     now=generated_at,
                     observe_public=public_observation_enabled,
+                    public_client=public_client,
                 )
             except SourceInspectionError as exc:
                 items.append(
@@ -251,7 +297,7 @@ class SourceAdminService:
                     report=report,
                 )
             )
-            if public_observation_enabled and report.public_status == "unavailable":
+            if public_observation_enabled and public_client.global_failure:
                 public_observation_enabled = False
                 public_suppressed_after = source.id
 
@@ -268,6 +314,7 @@ class SourceAdminService:
         *,
         now: datetime,
         observe_public: bool,
+        public_client: Any | None,
     ) -> SourceInspection:
         return inspect_configured_source(
             source_id,
@@ -277,7 +324,7 @@ class SourceAdminService:
             rate_limit=self.rate_limit,
             now=now,
             client_factory=self.client_factory,
-            public_client=self.public_client,
+            public_client=public_client,
             observe_public=observe_public,
             metrics=self.metrics,
         )
