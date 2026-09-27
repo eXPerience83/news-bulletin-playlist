@@ -222,7 +222,7 @@ class SourceAdminService:
                 report = self._audit_from_snapshot(
                     state,
                     source.id,
-                    now=datetime.now(UTC),
+                    now=generated_at,
                     observe_public=public_observation_enabled,
                 )
             except SourceInspectionError as exc:
