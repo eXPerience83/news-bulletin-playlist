@@ -51,6 +51,8 @@ class _AdminHTMLAudit(HTMLParser):
         elif tag == "meta" and attributes.get("name") == "viewport":
             if attributes.get("content") == "width=device-width, initial-scale=1":
                 self.viewport = True
+        elif tag == "base":
+            self.errors.append("<base> is not allowed in first-party rendered HTML")
         elif tag == "h1":
             self.h1_count += 1
         elif tag == "script":
@@ -73,6 +75,8 @@ class _AdminHTMLAudit(HTMLParser):
                 and value.lstrip().casefold().startswith("javascript:")
             ):
                 self.errors.append(f"javascript: URL is not allowed in {name}")
+            if name == "formaction" and value and not _is_same_origin_form_action(value):
+                self.errors.append(f"formaction must remain same-origin: {value}")
 
         if tag == "a" and attributes.get("target") == "_blank":
             rel = set((attributes.get("rel") or "").split())
