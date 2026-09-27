@@ -4,6 +4,15 @@ from collections.abc import Collection
 from html.parser import HTMLParser
 
 
+def _is_same_origin_form_action(action: str) -> bool:
+    return (
+        action.startswith("/")
+        and not action.startswith("//")
+        and "\\" not in action
+        and all(ord(character) >= 0x20 and ord(character) != 0x7F for character in action)
+    )
+
+
 class _AdminHTMLAudit(HTMLParser):
     def __init__(
         self,
@@ -94,7 +103,7 @@ class _AdminHTMLAudit(HTMLParser):
         action = form["action"]
         if not isinstance(method, str) or not isinstance(action, str):
             raise AssertionError("invalid internal HTML audit state")
-        if action and (not action.startswith("/") or action.startswith("//")):
+        if action and not _is_same_origin_form_action(action):
             self.errors.append(f"form action must remain same-origin: {action}")
         if (
             method == "post"

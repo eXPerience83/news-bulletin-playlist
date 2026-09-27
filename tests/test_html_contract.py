@@ -135,6 +135,20 @@ def test_protocol_relative_form_action_is_rejected() -> None:
         assert_valid_document_html(document)
 
 
+@pytest.mark.parametrize(
+    "action",
+    [
+        r"/\attacker.example/collect",
+        "/\t/attacker.example/collect",
+    ],
+)
+def test_browser_normalized_external_form_actions_are_rejected(action: str) -> None:
+    document = _document_with_form(action=action, csrf=True)
+
+    with pytest.raises(AssertionError, match="form action must remain same-origin"):
+        assert_valid_document_html(document)
+
+
 def test_post_with_csrf_remains_valid_by_default() -> None:
     assert_valid_document_html(
         _document_with_form(action="/admin/mutate", csrf=True),
