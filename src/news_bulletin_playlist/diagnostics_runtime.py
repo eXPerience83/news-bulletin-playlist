@@ -178,7 +178,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except SourceMutationError:
             self._source_error(HTTPStatus.NOT_FOUND, "Custom source not found")
             return
-        except (ManagedStateError, OSError):
+        except ManagedStateError, OSError:
             self._source_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR, "Managed source state is unavailable"
             )
@@ -214,7 +214,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except SourceMutationError:
             self._source_error(HTTPStatus.NOT_FOUND, "Custom source not found")
             return
-        except (ManagedStateError, ProvisioningJournalError, OSError):
+        except ManagedStateError, ProvisioningJournalError, OSError:
             self._source_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Source state is unavailable")
             return
         self._reply(
@@ -259,7 +259,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except SourceMutationError:
             self._source_error(HTTPStatus.CONFLICT, "Custom source is unavailable")
             return
-        except (ManagedStateError, ProvisioningJournalError, PersistenceError, OSError, RuntimeError):
+        except ManagedStateError, ProvisioningJournalError, PersistenceError, OSError, RuntimeError:
             self._source_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Source deletion is unavailable")
             return
         except ValueError:
@@ -346,7 +346,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except SourceMutationError:
             self._source_error(HTTPStatus.CONFLICT, "Custom source is unavailable or not editable")
             return
-        except (ManagedStateError, OSError):
+        except ManagedStateError, OSError:
             self._source_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR, "Managed source state is unavailable"
             )
@@ -423,7 +423,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 f"Source audit export supports at most {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources",
             )
             return
-        except (SourceAuditBatchStateError, ManagedStateError, OSError, ValueError):
+        except SourceAuditBatchStateError, ManagedStateError, OSError, ValueError:
             self._source_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "Source audit export could not be built safely",
@@ -488,7 +488,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 else HTTPStatus.SERVICE_UNAVAILABLE
             )
             self._source_error(status, str(exc))
-        except (ManagedStateError, OSError):
+        except ManagedStateError, OSError:
             self._source_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Source state is unavailable")
         except ValueError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source form")
@@ -607,7 +607,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 else HTTPStatus.SERVICE_UNAVAILABLE
             )
             self._source_error(status, str(exc))
-        except (ManagedStateError, OSError):
+        except ManagedStateError, OSError:
             self._source_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR, "Managed source state is unavailable"
             )
@@ -698,7 +698,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     snapshot = service.snapshot()
                     state = service.store.load()
             effective_sources(service.catalog, state)
-        except (ManagedStateError, OSError):
+        except ManagedStateError, OSError:
             self._reply(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 b"Managed playlist state could not be loaded safely",
@@ -767,7 +767,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except ValueError:
             self._invalid_diagnostic_filters()
             return
-        except (RuntimeError, PersistenceError):
+        except RuntimeError, PersistenceError:
             self._diagnostic_history_unavailable()
             return
 
@@ -903,7 +903,7 @@ def _diagnostic_display_timezone(
         return UTC, "UTC"
     try:
         return ZoneInfo(timezone_name), timezone_name
-    except (ZoneInfoNotFoundError, ValueError):
+    except ZoneInfoNotFoundError, ValueError:
         return UTC, "UTC"
 
 
