@@ -112,9 +112,7 @@ def _source_document(
         "report_path": report_path,
         "public_status": public_status,
         "failure": None if item.failure is None else item.failure.value,
-        "response_reason": (
-            None if item.response_reason is None else item.response_reason.value
-        ),
+        "response_reason": (None if item.response_reason is None else item.response_reason.value),
         "not_attempted_reason": item.not_attempted_reason,
     }
 

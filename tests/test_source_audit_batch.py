@@ -10,7 +10,7 @@ import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import HTTPServer
 from pathlib import Path
@@ -94,9 +94,7 @@ class _Client:
             "secret": "secret-provider-body",
         }
 
-    def show_episodes(
-        self, show_id: str, *, limit: int = 50, offset: int = 0
-    ) -> dict[str, Any]:
+    def show_episodes(self, show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         self.calls.append(("episodes", show_id))
         return {
             "items": [
@@ -280,6 +278,11 @@ def _archive(payload: bytes) -> tuple[dict[str, Any], zipfile.ZipFile]:
     return manifest, archive
 
 
+def _decompressed_archive(payload: bytes) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        return b"\n".join(archive.read(name) for name in archive.namelist())
+
+
 def test_batch_export_uses_one_snapshot_and_includes_disabled_custom(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, public, store):
         service = _Handler.source_admin_service
@@ -335,11 +338,16 @@ def test_batch_export_uses_one_snapshot_and_includes_disabled_custom(tmp_path: P
         for source in sources:
             report = json.loads(archive.read(f"sources/{source.id}.json"))
             assert report["source_id"] == str(source.id)
-            assert report["inspected_at"] == manifest["generated_at"]
+            assert datetime.fromisoformat(report["inspected_at"]) == datetime.fromisoformat(
+                manifest["generated_at"]
+            )
+            assert datetime.fromisoformat(report["cutoff_at"]) == datetime.fromisoformat(
+                manifest["generated_at"]
+            ) - timedelta(hours=48)
         archive.close()
-        assert b"secret-access-token" not in payload
-        assert b"secret-refresh-token" not in payload
-        assert b"secret-provider-body" not in payload
+        assert b"secret-access-token" not in _decompressed_archive(payload)
+        assert b"secret-refresh-token" not in _decompressed_archive(payload)
+        assert b"secret-provider-body" not in _decompressed_archive(payload)
         assert store.load() == before
 
         reused_status = _request(
@@ -370,7 +378,7 @@ def test_batch_export_continues_after_source_local_failure(tmp_path: Path) -> No
         assert manifest["counts"]["failed"] == 1
         assert manifest["counts"]["succeeded"] == len(BUILTIN_CATALOG.sources) - 1
         assert len(client.calls) == 1 + 2 * (len(BUILTIN_CATALOG.sources) - 1)
-        assert b"secret-provider-body" not in payload
+        assert b"secret-provider-body" not in _decompressed_archive(payload)
         assert f"sources/{first.id}.json" not in archive.namelist()
         archive.close()
 
@@ -411,7 +419,7 @@ def test_batch_export_global_provider_failure_stops_remaining_work(
             "not_attempted": len(BUILTIN_CATALOG.sources) - 1,
         }
         assert client.calls == [("details", _show_id(first))]
-        assert b"secret-provider-body" not in payload
+        assert b"secret-provider-body" not in _decompressed_archive(payload)
         assert archive.namelist() == ["manifest.json"]
         archive.close()
 
@@ -440,7 +448,7 @@ def test_batch_export_suppresses_public_after_global_public_failure(
         assert manifest["public_observation_suppressed_after_source"] == str(first.id)
         assert manifest["sources"][0]["public_status"] == "unavailable"
         assert all(entry["public_status"] == "not_requested" for entry in manifest["sources"][1:])
-        assert b"secret-public-body" not in payload
+        assert b"secret-public-body" not in _decompressed_archive(payload)
         archive.close()
 
 
@@ -458,7 +466,7 @@ def test_batch_export_keeps_public_observations_after_source_local_public_failur
         assert manifest["public_observation_suppressed_after_source"] is None
         assert manifest["sources"][0]["public_status"] == "unavailable"
         assert all(entry["public_status"] == "available" for entry in manifest["sources"][1:])
-        assert b"secret-public-body" not in payload
+        assert b"secret-public-body" not in _decompressed_archive(payload)
         archive.close()
 
 
