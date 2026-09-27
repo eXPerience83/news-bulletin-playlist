@@ -371,13 +371,21 @@ def test_batch_export_continues_after_source_local_failure(tmp_path: Path) -> No
         archive.close()
 
 
-def test_batch_export_rate_limit_stops_remaining_provider_work(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("status_code", "expected_failure"),
+    [(401, "authorization"), (429, "rate_limited"), (503, "unavailable")],
+)
+def test_batch_export_global_provider_failure_stops_remaining_work(
+    tmp_path: Path,
+    status_code: int,
+    expected_failure: str,
+) -> None:
     with _server(tmp_path) as (server, client, _public, _store):
         first = BUILTIN_CATALOG.sources[0]
         client.errors[_show_id(first)] = SpotifyApiError(
-            429,
+            status_code,
             "secret-provider-body",
-            retry_after=60,
+            retry_after=60 if status_code == 429 else None,
         )
         cookie = _login(server)
 
@@ -385,10 +393,10 @@ def test_batch_export_rate_limit_stops_remaining_provider_work(tmp_path: Path) -
         assert status == HTTPStatus.OK
         manifest, archive = _archive(payload)
         assert manifest["sources"][0]["status"] == "failed"
-        assert manifest["sources"][0]["failure"] == "rate_limited"
+        assert manifest["sources"][0]["failure"] == expected_failure
         assert all(
             entry["status"] == "not_attempted"
-            and entry["not_attempted_reason"] == "batch_stopped_rate_limited"
+            and entry["not_attempted_reason"] == f"batch_stopped_{expected_failure}"
             for entry in manifest["sources"][1:]
         )
         assert manifest["counts"] == {
