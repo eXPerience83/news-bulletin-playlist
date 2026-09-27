@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from html.parser import HTMLParser
 
 
 class _AdminHTMLAudit(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        csrf_exempt_post_actions: Collection[str] = (),
+    ) -> None:
         super().__init__(convert_charrefs=True)
+        self.csrf_exempt_post_actions = frozenset(csrf_exempt_post_actions)
         self.errors: list[str] = []
         self.ids: set[str] = set()
         self.references: list[tuple[str, str]] = []
@@ -90,14 +96,22 @@ class _AdminHTMLAudit(HTMLParser):
             raise AssertionError("invalid internal HTML audit state")
         if action and not action.startswith("/"):
             self.errors.append(f"form action must remain same-origin: {action}")
-        if method == "post" and form["csrf"] is not True:
+        if (
+            method == "post"
+            and form["csrf"] is not True
+            and action not in self.csrf_exempt_post_actions
+        ):
             self.errors.append(f"POST form is missing csrf_token: {action}")
 
 
-def assert_valid_admin_html(document: str) -> None:
-    """Enforce structural/security invariants on fully rendered admin HTML."""
+def assert_valid_document_html(
+    document: str,
+    *,
+    csrf_exempt_post_actions: Collection[str] = (),
+) -> None:
+    """Enforce structural/security invariants on a fully rendered first-party page."""
 
-    audit = _AdminHTMLAudit()
+    audit = _AdminHTMLAudit(csrf_exempt_post_actions=csrf_exempt_post_actions)
     audit.feed(document)
     audit.close()
 
@@ -117,4 +131,10 @@ def assert_valid_admin_html(document: str) -> None:
             audit.errors.append(f'{kind} references missing id="{target}"')
 
     if audit.errors:
-        raise AssertionError("Invalid admin HTML:\n- " + "\n- ".join(audit.errors))
+        raise AssertionError("Invalid rendered HTML:\n- " + "\n- ".join(audit.errors))
+
+
+def assert_valid_admin_html(document: str) -> None:
+    """Enforce the strict rendered-document contract for authenticated admin pages."""
+
+    assert_valid_document_html(document)
