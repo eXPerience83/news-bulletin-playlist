@@ -242,7 +242,10 @@ def test_duplicate_csrf_controls_are_rejected() -> None:
 def test_disabled_fieldset_cannot_hide_ineffective_csrf_control() -> None:
     document = _document_with_form(action="/admin/mutate").replace(
         "</form>",
-        '<fieldset disabled><input type="hidden" name="csrf_token" value="token"></fieldset></form>',
+        (
+            '<fieldset disabled><input type="hidden" name="csrf_token" value="token">'
+            "</fieldset></form>"
+        ),
     )
 
     with pytest.raises(AssertionError, match=r"disabled <fieldset> is not allowed"):
