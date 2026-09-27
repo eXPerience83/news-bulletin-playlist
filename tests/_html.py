@@ -17,6 +17,15 @@ def _is_same_origin_form_action(action: str) -> bool:
     )
 
 
+def _is_effective_csrf_input(attributes: dict[str, str | None]) -> bool:
+    return (
+        (attributes.get("type") or "text").casefold() == "hidden"
+        and bool(attributes.get("value"))
+        and "disabled" not in attributes
+        and "form" not in attributes
+    )
+
+
 class _AdminHTMLAudit(HTMLParser):
     def __init__(
         self,
@@ -57,6 +66,8 @@ class _AdminHTMLAudit(HTMLParser):
                 self.viewport = True
         elif tag == "base":
             self.errors.append("<base> is not allowed in first-party rendered HTML")
+        elif tag == "fieldset" and "disabled" in attributes:
+            self.errors.append("disabled <fieldset> is not allowed in first-party rendered HTML")
         elif tag == "h1":
             self.h1_count += 1
         elif tag == "script":
@@ -80,9 +91,7 @@ class _AdminHTMLAudit(HTMLParser):
             ):
                 self.errors.append(f"javascript: URL is not allowed in {name}")
             if name in _SUBMITTER_FORM_OVERRIDE_ATTRS:
-                self.errors.append(
-                    f"{name} is not allowed in first-party rendered HTML"
-                )
+                self.errors.append(f"{name} is not allowed in first-party rendered HTML")
 
         if tag == "a" and attributes.get("target") == "_blank":
             rel = set((attributes.get("rel") or "").split())
@@ -100,7 +109,14 @@ class _AdminHTMLAudit(HTMLParser):
                 }
             )
         elif tag == "input" and self.form_stack and attributes.get("name") == "csrf_token":
-            self.form_stack[-1]["csrf"] = True
+            if not _is_effective_csrf_input(attributes):
+                self.errors.append(
+                    "csrf_token must be a non-empty enabled hidden input for its containing form"
+                )
+            elif self.form_stack[-1]["csrf"] is True:
+                self.errors.append("form contains multiple csrf_token inputs")
+            else:
+                self.form_stack[-1]["csrf"] = True
 
     def handle_endtag(self, tag: str) -> None:
         if tag != "form":
