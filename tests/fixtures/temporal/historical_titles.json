@@ -1,0 +1,1298 @@
+[
+  {
+    "parser": "cope",
+    "title": "2:00H | 30 ABR 2026 | BOLETÍN VALENCIA",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "2:00H | 30 ABR 2026 | BOLETÍN ANDALUCÍA",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "2:00H | 30 XYZ 2026 | BOLETÍN",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 23:03 (26/08/2026)",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-08-26",
+    "expected": "2026-08-26T21:03:00+00:00"
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 19:22 (25/08/2026)",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-08-25",
+    "expected": "2026-08-25T17:22:00+00:00"
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER 07:00 (1/8/2026)",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-08-01",
+    "expected": "2026-08-01T05:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 25.08.2026 - 18.30 H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-08-25",
+    "expected": "2026-08-25T16:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 23.08.2026- 19H",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-08-23",
+    "expected": "2026-08-23T17:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE -20.06.2026- 18,30H",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-06-20",
+    "expected": "2026-06-20T16:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17.04.2026 - 1930H",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-04-17",
+    "expected": "2026-04-17T17:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 24.08.2026 - 12.00H",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-08-24",
+    "expected": "2026-08-24T10:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 010926 - 15.00H",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-01",
+    "expected": "2026-09-01T13:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 01092026 - 1400H",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-01",
+    "expected": "2026-09-01T12:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 01.09.2026 - 1230H",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-01",
+    "expected": "2026-09-01T10:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 25.08.2026 - 25.30 H",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 321326 - 15.00H",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 4:00h (25/8/2026)",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-08-25",
+    "expected": "2026-08-25T02:00:00+00:00"
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 19:00h (25/8/2026)",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-08-25",
+    "expected": "2026-08-25T17:00:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 06/25/2026 6 pm",
+    "origin": "tests/test_providers.py",
+    "zone": "America/New_York",
+    "day": "2026-06-25",
+    "expected": "2026-06-25T22:00:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 07/29/26 6pm",
+    "origin": "tests/test_providers.py",
+    "zone": "America/New_York",
+    "day": "2026-07-29",
+    "expected": "2026-07-29T22:00:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 06/22/2026 6 am",
+    "origin": "tests/test_providers.py",
+    "zone": "America/New_York",
+    "day": "2026-06-22",
+    "expected": "2026-06-22T10:00:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 06/22/2026 12 am",
+    "origin": "tests/test_providers.py",
+    "zone": "America/New_York",
+    "day": "2026-06-22",
+    "expected": "2026-06-22T04:00:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 06/22/2026 12 pm",
+    "origin": "tests/test_providers.py",
+    "zone": "America/New_York",
+    "day": "2026-06-22",
+    "expected": "2026-06-22T16:00:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 06/25/2026 18 pm",
+    "origin": "tests/test_providers.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "2:00H | 30 ABR 2026 | BOLETÍN",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-04-30",
+    "expected": "2026-04-30T00:00:00+00:00"
+  },
+  {
+    "parser": "cope",
+    "title": "14:30H | 1 SEP 2026 | BOLETIN",
+    "origin": "tests/test_providers.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-01",
+    "expected": "2026-09-01T12:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "RNE NOTICIAS - 12.09.2026 - 16.00H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-12",
+    "expected": "2026-09-12T14:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "RNE NOTICIAS - 12.09.2026 - 15.00H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-12",
+    "expected": "2026-09-12T13:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "RNE NOTICIAS - 12.09.2026 - 13.00H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-12",
+    "expected": "2026-09-12T11:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17.09.2026. - 00.00H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-16T22:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 16.09.2026 - 21.00H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-16",
+    "expected": "2026-09-16T19:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 16.09.26 - 19.00H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-16",
+    "expected": "2026-09-16T17:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "RNE DEPORTES - 12.09.2026 - 16.00H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 16.09.026 - 19.00H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 31.02.26 - 19.00H",
+    "origin": "tests/test_rne_current_title_format.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal Afrique 25/08/2026 18h00 GMT",
+    "origin": "tests/test_rfi_provider.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 31/02/2026 18h00 GMT",
+    "origin": "tests/test_rfi_provider.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 25/08/2026 25h00 GMT",
+    "origin": "tests/test_rfi_provider.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 02/09/2026 03h00 GMT",
+    "origin": "tests/test_rfi_provider.py",
+    "zone": "UTC",
+    "day": "2026-09-02",
+    "expected": "2026-09-02T03:00:00+00:00"
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 05/07/2026 18h00 GMT",
+    "origin": "tests/test_rfi_provider.py",
+    "zone": "UTC",
+    "day": "2026-07-05",
+    "expected": "2026-07-05T18:00:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE – 17.09.2026 – 09.30H",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17.09.2026 - ",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17.09.2026 - 0015H.",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-16T22:15:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17.09.2026 - 00.15H",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-16T22:15:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17/09/2026¹",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17/09/202609",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17.09.2026 - 09.30H",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 09:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 09:30h (17/09/2026)",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 9/17/26 5:00 am",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "America/New_York",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T09:00:00+00:00"
+  },
+  {
+    "parser": "cope",
+    "title": "09:30H​ | ​17 SEP 2026​ | ​BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal​ 17/09/2026​ 09h30​ GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T09:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE | 17/09/26 : 09:30 H.",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17/09/2026 09:30",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17/09/2026. - 09:30",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 9.30 17-09-26",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 9.30 H 17-09-26.",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17/09/20",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "RNE DEPORTES - 17.09.2026 - 09.30H",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "SER DEPORTES - 09:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Onda Cero Deportes 09:30h (17/09/2026)",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE | 31/02/26 : 09:30 H.",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 25.30 17-09-26",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 9.75 H 17-09-26.",
+    "origin": "tests/test_title_recovery.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "̇cias de la SER, 09:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 09:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 09:30h (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 09/17/26 5:00 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T09:00:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 09/17/26 5:00 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T09:00:00+00:00"
+  },
+  {
+    "parser": "cope",
+    "title": "09:30H | 17 SEP 2026 | BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 17/09/2026 09h30 GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T09:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE | 17/09/２０２６ : 09:30 H.",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Onda Cero Deportes de las 09:30h (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 10 cosas 09/17/26 5:00 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "09:30H | 17 SEP 2026 | BOLETÍN VALENCIA",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Laſ noticias de la SER, 09:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las notİcias de la SER, 09:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las notıcias de la SER, 09:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las notİcias de la SER, 09:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las notİcias de Onda Cero de las 09:30h (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 9.30 １７-09-26",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las ９.30 H 17-09-26.",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas ０9/17/26 5:00 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "０9:30H | 17 SEP 2026 | BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 17/09/2026 ０9h30 GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE | 17/09/26 : 24:00 H.",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 9.30 31-02-26",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 24.00 17-09-26",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 9.30 H 31-02-26.",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 24.00 H 17-09-26.",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 02/31/26 5:00 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 09/17/26 13:00 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "09:30H | 31 FEB 2026 | BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "24:00H | 17 SEP 2026 | BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 31/02/2026 09h30 GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 17/09/2026 24h00 GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17.09.2026",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 09.30H",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 09:30",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 09:30h",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 09/17/26",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 5:00 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "09:30H | BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "17 SEP 2026 | BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 17/09/2026 GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 09h30 GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE | 17/09/26 : 09:30 H 10:30",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 09:30 10:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 09:30h 10:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 09/17/26 09/18/26 5:00 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "09:30H | 17 SEP 2026 | BOLETÍN | 10:30H",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 17/09/2026 09h30 10h30 GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 9.3017-09-26",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 9.30 (17-09-26]",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 9.30 [17-09-26)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 9.30H17-09-26.",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 9.30 H (17-09-26].",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS­ RNE - 17.09.2026 - 09.30H",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER⁠, 09:30 (17/09/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 09:30h (17∕09∕2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "09:30H | 17 SEP 26 | BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 17/09/26 09h30 GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 25.10.2026 - 02.30H",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE | 25/10/26 : 02:30 H.",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 02:30 (25/10/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 2.30 25-10-26",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 02:30h (25/10/2026)",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 2.30 H 25-10-26.",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 11/01/26 1:30 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 11/01/26 1:30 am",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "02:30H | 25 OCT 2026 | BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": "02:30H​ | ​25 OCT 2026​ | ​BOLETÍN",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal 25/10/2026 02h30 GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-10-25",
+    "expected": "2026-10-25T02:30:00+00:00"
+  },
+  {
+    "parser": "rfi_journal_monde",
+    "title": "Journal​ 25/10/2026​ 02h30​ GMT",
+    "origin": "tests/test_title_recovery_adversarial.py",
+    "zone": "UTC",
+    "day": "2026-10-25",
+    "expected": "2026-10-25T02:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 170926.",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 170926 - 09.30H. - EXTRA.",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "RNE DEPORTES - 170926 - 09.30H.",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 17.09.2026 - 0930H.",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE - 170926 - 09.30H.",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-17",
+    "expected": "2026-09-17T07:30:00+00:00"
+  },
+  {
+    "parser": "rne",
+    "title": "RNE DEPORTES | 17/09/26 : 09:30 H.",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "SER DEPORTES - 9.30 17-09-26",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Onda Cero Deportes de las 9.30 H 17-09-26.",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "PROMO NOTICIAS RNE | 17/09/26 : 09:30 H.",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 9.30 17-09-26 - ESPECIAL",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 9.30 H 17-09-26. DEPORTES",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 09/17/",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 02:30 (",
+    "origin": "tests/test_provider_dst.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 2.30 ",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rne",
+    "title": "NOTICIAS RNE | 17/09/",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER - 9.30 17-09-",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 9.30 H 17-09-",
+    "origin": "tests/test_title_recovery_followups.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rmf_fakty",
+    "title": "6.30 Fakty sportowe",
+    "origin": "tests/test_rmf_provider.py",
+    "zone": "Europe/Warsaw",
+    "day": "2026-09-28",
+    "expected": "2026-09-28T04:30:00+00:00"
+  },
+  {
+    "parser": "rmf_fakty",
+    "title": "16:00 Faktycznie",
+    "origin": "tests/test_rmf_provider.py",
+    "zone": "Europe/Warsaw",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "rmf_fakty",
+    "title": "08:30 Fakty sportowe",
+    "origin": "tests/test_rmf_provider.py",
+    "zone": "Europe/Warsaw",
+    "day": "2026-09-28",
+    "expected": "2026-09-28T06:30:00+00:00"
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 11/01/2026 1:30 am",
+    "origin": "tests/test_provider_dst.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cnn",
+    "title": "CNN 5 cosas 03/08/2026 2:30 am",
+    "origin": "tests/test_provider_dst.py",
+    "zone": "America/New_York",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 02:30h (",
+    "origin": "tests/test_provider_dst.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "cope",
+    "title": " 2026 | BOLETÍN",
+    "origin": "tests/test_provider_dst.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 03:30 (",
+    "origin": "tests/test_provider_dst.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  },
+  {
+    "parser": "ondacero",
+    "title": "Las noticias de Onda Cero de las 03:30h (",
+    "origin": "tests/test_provider_dst.py",
+    "zone": "Europe/Madrid",
+    "day": "2026-09-28",
+    "expected": null
+  }
+]

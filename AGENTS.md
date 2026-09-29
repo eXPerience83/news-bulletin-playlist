@@ -110,8 +110,13 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - Deterministic stale/unavailable desired-item evidence may escalate to refreshing the other
   catalogues for the affected playlist. Ambiguous mutating transport/5xx outcomes still require
   existing readback/snapshot confirmation before retry; 429 still uses the global cooldown.
-- Title parsing remains preferred for exact editorial time. On failure, preserve bounded original
-  title evidence and explicit timestamp provenance; never invent minute precision.
+- Universal semantic title detection is runtime temporal authority, independent of source/parser
+  identity. Use source IANA timezone, official catalogue date compatibility and unique DST wall-time
+  resolution. Unreviewed structures require bounded corroborating catalogue evidence; token discovery
+  alone is not proof. Preserve explicit parsing provenance and retain episodes through the existing
+  catalogue/FIRST_SEEN fallback when evidence is insufficient. Never invent minute precision.
+- Historical parser IDs/layout adapters remain compatibility contracts, not per-source runtime
+  dispatch. Temporal evidence and collection filtering must remain independent.
 - Do not download or store audio.
 - Persisted Spotify episode URIs must satisfy the shared episode-URI invariant before reuse.
 - A failed source or destination must not unnecessarily block independent sources/playlists.

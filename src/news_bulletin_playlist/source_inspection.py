@@ -22,6 +22,7 @@ from news_bulletin_playlist.duration_profile import (
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateError, effective_sources
 from news_bulletin_playlist.models import ParserId, SourceId
 from news_bulletin_playlist.persistence import PersistenceError
+from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
 from news_bulletin_playlist.registry import has_collection_filter, has_title_parser
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
 from news_bulletin_playlist.spotify.client import (
@@ -137,6 +138,8 @@ class EpisodeInspectionEvidence:
     timestamp_source: TimestampSource | None
     ordering_evidence: str
     warnings: tuple[str, ...]
+    temporal_evidence: TemporalEvidenceKind | None = None
+    temporal_supporting_rows: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +326,8 @@ def _episode_evidence(
                 item.timestamp_source,
                 ordering,
                 ("same_day_order_ambiguous",) if ambiguous else (),
+                item.temporal_evidence,
+                item.temporal_supporting_rows,
             )
         )
     return tuple(result)
@@ -572,6 +577,8 @@ def serialize_source_inspection(report: SourceInspection) -> bytes:
             "duration_seconds": item.duration_seconds,
             "collection_filter_outcome": item.collection_filter_outcome,
             "parser_outcome": item.parser_outcome,
+            "temporal_evidence": item.temporal_evidence,
+            "temporal_supporting_rows": item.temporal_supporting_rows,
             "edition_at": iso(item.edition_at),
             "timestamp_source": (
                 None if item.timestamp_source is None else item.timestamp_source.value

@@ -497,3 +497,54 @@ def test_invalid_configured_strategy_fails_without_transport(tmp_path: Path) -> 
         _configured(tmp_path, broken.id, ManagedState(sources=(broken,)), client)
     assert raised.value.failure is InspectionFailure.CONFIGURATION
     assert client.calls == []
+
+
+def test_source_audit_explains_universal_and_fallback_paths(tmp_path: Path) -> None:
+    client = _Client()
+    client.pages = [
+        catalogue_page(
+            [
+                _episode("A" * 22, title="Die Nachrichten vom 24.09.2026, 21:00 Uhr"),
+                _episode("B" * 22, title="21:00 Fakty"),
+                _episode("C" * 22, title="Las noticias de la SER - 21.00 24-09-26"),
+                _episode("D" * 22, title="UN News Today 24 September 2026"),
+                _episode("E" * 22, title="Die Nachrichten vom 25.09.2026, 21:00 Uhr"),
+            ]
+        )
+    ]
+    report = _configured(tmp_path, _custom().id, ManagedState(sources=(_custom(),)), client)
+    rows = json.loads(serialize_source_inspection(report))["episodes"]
+    assert [row["parser_outcome"] for row in rows] == [
+        "exact",
+        "catalogue_context",
+        "provider_compat",
+        "fallback",
+        "fallback",
+    ]
+    assert [row["temporal_evidence"] for row in rows] == [
+        "reviewed_layout",
+        "reviewed_layout",
+        "reviewed_layout",
+        "unproven_structure",
+        "catalogue_date_conflict",
+    ]
+    assert report.accepted_episodes == 5
+    assert report.first_seen_timestamp_count == 2
+    assert all(row["edition_at"] is None for row in rows[3:])
+
+
+def test_source_audit_exports_structural_support_without_raw_responses(tmp_path: Path) -> None:
+    client = _Client()
+    items = [
+        _episode(
+            str(index).zfill(22), title=f"Bulletin {day}/09/2026 - {hour}:30", day=f"2026-09-{day}"
+        )
+        for index, (day, hour) in enumerate([(22, 17), (22, 18), (23, 17), (23, 19), (24, 17)])
+    ]
+    client.pages = [catalogue_page(items)]
+    report = _configured(tmp_path, _custom().id, ManagedState(sources=(_custom(),)), client)
+    payload = serialize_source_inspection(report)
+    rows = json.loads(payload)["episodes"]
+    assert all(row["temporal_evidence"] == "catalogue_structure" for row in rows)
+    assert all(row["temporal_supporting_rows"] == 5 for row in rows)
+    assert b"secret-episode-body" not in payload

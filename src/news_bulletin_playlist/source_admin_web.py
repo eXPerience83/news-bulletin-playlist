@@ -49,7 +49,14 @@ def render_source_review_page(
         f"<td>{esc(item.release_date)} ({esc(item.release_date_precision)})</td>"
         f"<td>{'Unknown' if item.duration_seconds is None else item.duration_seconds}</td>"
         f"<td>{esc(item.collection_filter_outcome)}</td>"
-        f"<td>{esc(item.parser_outcome)}</td>"
+        f"<td>{esc(item.parser_outcome)}"
+        f" <small>{esc(item.temporal_evidence or '')}"
+        + (
+            f" ({item.temporal_supporting_rows} supporting titles)"
+            if item.temporal_supporting_rows
+            else ""
+        )
+        + "</small></td>"
         f"<td>{esc(item.edition_at) if item.edition_at else 'Unset'}</td>"
         f"<td>{esc(item.timestamp_source.value) if item.timestamp_source else 'Unset'}</td>"
         f"<td>{esc(item.ordering_evidence)}</td>"

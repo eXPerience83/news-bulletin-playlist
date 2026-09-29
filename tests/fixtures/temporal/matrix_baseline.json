@@ -1,0 +1,19 @@
+{
+  "revision": "67498dde01468457f62fadff6931bf4925efdd42",
+  "count": 6960,
+  "sha256": "fd68bc5c83513b791c05c0f622e293490f5c3d13344bcd0a26e17eba7c83fb1d",
+  "counts": {
+    "ser_accepted": 685,
+    "rne_accepted": 1693,
+    "ondacero_accepted": 685,
+    "cnn_rejected": 616,
+    "cope_accepted": 685,
+    "rfi_journal_monde_accepted": 688,
+    "cnn_accepted": 344,
+    "ser_rejected": 275,
+    "rne_rejected": 467,
+    "ondacero_rejected": 275,
+    "cope_rejected": 275,
+    "rfi_journal_monde_rejected": 272
+  }
+}

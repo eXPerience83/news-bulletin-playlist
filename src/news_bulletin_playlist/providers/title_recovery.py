@@ -16,6 +16,15 @@ type TitleParseMode = Literal[
     "catalogue_context",
     "rejected",
 ]
+type TemporalEvidenceKind = Literal[
+    "reviewed_layout",
+    "catalogue_structure",
+    "unproven_structure",
+    "invalid_context_or_syntax",
+    "multiple_temporal_candidates",
+    "catalogue_date_conflict",
+    "timezone_conflict",
+]
 type StrictTitleParser = Callable[[str], ParsedEdition | None]
 type CompatCanonicalizer = Callable[[str], str | None]
 
@@ -71,6 +80,8 @@ class TitleParseAttempt:
     parsed: ParsedEdition | None
     mode: TitleParseMode
     recovery_kind: str | None = None
+    temporal_evidence: TemporalEvidenceKind | None = None
+    supporting_rows: int = 0
 
 
 @dataclass(frozen=True, slots=True)

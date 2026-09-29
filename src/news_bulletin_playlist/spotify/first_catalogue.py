@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import ParserId
-from news_bulletin_playlist.providers.base import CatalogueParseContext, parse_title
-from news_bulletin_playlist.registry import get_collection_filter, get_title_parser
+from news_bulletin_playlist.providers.base import CatalogueParseContext
+from news_bulletin_playlist.providers.temporal_detector import TemporalSample
+from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
+from news_bulletin_playlist.registry import get_collection_filter, get_temporal_detector
 from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
     TimestampSource,
@@ -73,6 +75,8 @@ class CatalogueEpisodeEvidence:
     parser_outcome: str
     edition_at: datetime | None
     timestamp_source: TimestampSource | None
+    temporal_evidence: TemporalEvidenceKind | None = None
+    temporal_supporting_rows: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +115,6 @@ def fetch_source_catalogue(
         if source.collection_filter_id is None
         else get_collection_filter(source.collection_filter_id)
     )
-    parser = get_title_parser(str(source.parser_id))
     episodes: list[SpotifyFirstEpisode] = []
     periods: list[tuple[date, date]] = []
     api_ids: list[str] = []
@@ -121,6 +124,18 @@ def fetch_source_catalogue(
 
     source_timezone = getattr(source, "timezone", None)
     catalogue_timezone = source_timezone if isinstance(source_timezone, ZoneInfo) else None
+
+    detector = get_temporal_detector(
+        tuple(
+            TemporalSample(
+                candidate.title,
+                CatalogueParseContext(
+                    candidate.release_date, candidate.release_date_precision, catalogue_timezone
+                ),
+            )
+            for candidate in candidates
+        )
+    )
 
     for position, candidate in enumerate(candidates, start=1):
         api_ids.append(candidate.episode_id)
@@ -145,8 +160,7 @@ def fetch_source_catalogue(
                 )
             continue
 
-        attempt = parse_title(
-            parser,
+        attempt = detector.parse(
             candidate.title,
             context=CatalogueParseContext(
                 release_date=candidate.release_date,
@@ -193,6 +207,8 @@ def fetch_source_catalogue(
                     parser_outcome,
                     episodes[-1].edition_at,
                     episodes[-1].timestamp_source,
+                    attempt.temporal_evidence,
+                    attempt.supporting_rows,
                 )
             )
 
@@ -202,7 +218,7 @@ def fetch_source_catalogue(
         complete=complete,
         coverage_proven=complete or _boundary_covers(periods, retention_cutoff),
         api_ids=tuple(api_ids),
-        api_latest_id=_provable_latest_id(episodes),
+        api_latest_id=_provable_latest_id(episodes, catalogue_timezone),
         parser_fallback_count=parser_fallbacks,
         filter_rejected_count=filter_rejected,
         evidence=tuple(evidence),
@@ -331,28 +347,46 @@ def _candidate_from_item(item: object) -> _EpisodeCandidate:
     )
 
 
-def _provable_latest_id(episodes: list[SpotifyFirstEpisode]) -> str | None:
+def _provable_latest_id(
+    episodes: list[SpotifyFirstEpisode], timezone: ZoneInfo | None
+) -> str | None:
     """Return an ID only when available timestamp evidence proves one episode is newest."""
     if not episodes:
         return None
     for candidate in episodes:
-        candidate_start, _ = _evidence_period(candidate)
+        candidate_start, _ = _evidence_period(candidate, timezone)
         if all(
-            other is candidate or candidate_start > _evidence_period(other)[1] for other in episodes
+            other is candidate or candidate_start > _evidence_period(other, timezone)[1]
+            for other in episodes
         ):
             return candidate.spotify_episode_id
     return None
 
 
-def _evidence_period(episode: SpotifyFirstEpisode) -> tuple[datetime, datetime]:
+def _evidence_period(
+    episode: SpotifyFirstEpisode, timezone: ZoneInfo | None
+) -> tuple[datetime, datetime]:
     if episode.edition_at is not None:
         return episode.edition_at, episode.edition_at
     start, end = release_period(episode.release_date_raw, episode.release_date_precision)
-    timezone = episode.first_seen_at.tzinfo
-    return (
-        datetime.combine(start, datetime.min.time(), tzinfo=timezone),
-        datetime.combine(end, datetime.max.time(), tzinfo=timezone),
-    )
+    zone = timezone or ZoneInfo("UTC")
+    # A catalogue day is the source's local calendar evidence, not an exact UTC day.
+    # Bound both folds at midnight transitions; even an imaginary boundary must only
+    # widen the interval, never make a coarse episode look provably older.
+    try:
+        starts = [
+            as_utc(datetime.combine(start, datetime.min.time(), tzinfo=zone).replace(fold=fold))
+            for fold in (0, 1)
+        ]
+        ends = [
+            as_utc(datetime.combine(end, datetime.max.time(), tzinfo=zone).replace(fold=fold))
+            for fold in (0, 1)
+        ]
+    except OverflowError:
+        # Extreme catalogue years may extend beyond datetime's UTC range. Widen to
+        # the entire representable interval instead of asserting chronology or failing.
+        return datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
+    return min(starts), max(ends)
 
 
 def _boundary_covers(periods: list[tuple[date, date]], cutoff: datetime) -> bool:
