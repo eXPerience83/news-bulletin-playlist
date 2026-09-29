@@ -91,7 +91,7 @@ def test_contextual_parser_can_fall_back_to_its_exact_title_path() -> None:
         (
             "ser",
             "Las noticias de la SER - 9.30 25-09-26",
-            "provider_compat",
+            "exact",
             TimestampSource.TITLE,
         ),
         (

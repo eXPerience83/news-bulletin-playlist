@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from news_bulletin_playlist.models import TemporalStrategy
 from news_bulletin_playlist.providers.base import TitleParser
 from news_bulletin_playlist.providers.cnn import CnnParser
 from news_bulletin_playlist.providers.collection_filters import (
@@ -60,8 +61,9 @@ def get_collection_filter(filter_id: str) -> CollectionFilter:
         raise KeyError(f"unknown collection filter: {filter_id}") from exc
 
 
-def get_temporal_detector(samples: Sequence[TemporalSample]) -> TemporalDetector:
-    """All sources share reviewed evidence families and bounded structural inference."""
-    return TemporalDetector(
-        samples, tuple(RECOVERY_TITLE_PARSERS.values()), (RmfFaktyParser.profile,)
-    )
+def get_temporal_detector(
+    samples: Sequence[TemporalSample],
+    strategy: TemporalStrategy = TemporalStrategy.AUTO,
+) -> TemporalDetector:
+    """Infer only from this source; optional capabilities never import product contracts."""
+    return TemporalDetector(samples, strategy)

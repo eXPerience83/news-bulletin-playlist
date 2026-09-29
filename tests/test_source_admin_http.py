@@ -33,7 +33,7 @@ from news_bulletin_playlist.managed_state import (
     activate_template,
     compile_engine_config,
 )
-from news_bulletin_playlist.models import SourceId, SourceOrigin
+from news_bulletin_playlist.models import SourceId, SourceOrigin, TemporalStrategy
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.source_admin import SourceAdminService
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
@@ -321,6 +321,59 @@ def _update_form(token: str) -> dict[str, str]:
         "language": "es-419",
         "editorial_scope": "INT",
     }
+
+
+@pytest.mark.parametrize("strategy", list(TemporalStrategy))
+def test_create_and_edit_temporal_strategy_over_real_http(tmp_path, strategy):
+    with _server(tmp_path) as (server, client, store):
+        cookie = _login(server)
+        status, review = _inspect(server, cookie)
+        assert status == 200
+        assert b'<option value="auto" selected>Auto (recommended)</option>' in review
+        assert b'<select name="parser_id">' not in review
+        for option in TemporalStrategy:
+            assert f'<option value="{option.value}"'.encode() in review
+        form = {**_create_form(review), "temporal_strategy": strategy.value}
+        assert _request(server, "POST", "/admin/sources/create", cookie=cookie, form=form)[0] == 303
+        assert store.load().sources[0].temporal_strategy is strategy
+        path = f"/admin/sources/edit?source_id=custom_{SHOW}"
+        status, _, edit = _request(server, "GET", path, cookie=cookie)
+        assert status == 200
+        assert f'<option value="{strategy.value}" selected>'.encode() in edit
+        calls = list(client.calls)
+        changed = (
+            TemporalStrategy.DISABLED
+            if strategy is not TemporalStrategy.DISABLED
+            else TemporalStrategy.AUTO
+        )
+        update = {**_update_form(_csrf(edit)), "temporal_strategy": changed.value}
+        assert (
+            _request(server, "POST", "/admin/sources/update", cookie=cookie, form=update)[0] == 303
+        )
+        assert store.load().sources[0].temporal_strategy is changed
+        assert client.calls == calls
+
+
+@pytest.mark.parametrize("action", ["create", "update"])
+def test_temporal_strategy_unknown_value_is_rejected_without_provider_io(tmp_path, action):
+    with _server(tmp_path) as (server, client, store):
+        cookie = _login(server)
+        if action == "create":
+            _, review = _inspect(server, cookie)
+            form = _create_form(review)
+        else:
+            _configured_source(store)
+            _, _, edit = _request(
+                server, "GET", f"/admin/sources/edit?source_id=custom_{SHOW}", cookie=cookie
+            )
+            form = _update_form(_csrf(edit))
+        previous = store.load()
+        calls = list(client.calls)
+        form["temporal_strategy"] = "arbitrary-regex-or-provider"
+        assert (
+            _request(server, "POST", f"/admin/sources/{action}", cookie=cookie, form=form)[0] == 400
+        )
+        assert store.load() == previous and client.calls == calls
 
 
 def _lifecycle_form(token: str, *, enabled: str) -> dict[str, str]:

@@ -117,6 +117,9 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   catalogue/FIRST_SEEN fallback when evidence is insufficient. Never invent minute precision.
 - Historical parser IDs/layout adapters remain compatibility contracts, not per-source runtime
   dispatch. Temporal evidence and collection filtering must remain independent.
+- Temporal detection defaults to AUTO inferred exclusively from the current source catalogue.
+  Never inject historical broadcaster layouts globally. Optional temporal_strategy capabilities
+  apply after AUTO and must be reusable, bounded and product-independent; disabled preserves fallback.
 - Do not download or store audio.
 - Persisted Spotify episode URIs must satisfy the shared episode-URI invariant before reuse.
 - A failed source or destination must not unnecessarily block independent sources/playlists.

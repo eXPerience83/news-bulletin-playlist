@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from news_bulletin_playlist.models import ParserId
+from news_bulletin_playlist.models import ParserId, TemporalStrategy
 from news_bulletin_playlist.providers.base import CatalogueParseContext
 from news_bulletin_playlist.providers.temporal_detector import TemporalSample
 from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
@@ -60,6 +60,9 @@ class CatalogueSnapshot:
     parser_fallback_count: int
     filter_rejected_count: int
     evidence: tuple[CatalogueEpisodeEvidence, ...] = ()
+    temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
+    temporal_supporting_rows: int = 0
+    temporal_conflicts: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +137,8 @@ def fetch_source_catalogue(
                 ),
             )
             for candidate in candidates
-        )
+        ),
+        strategy=getattr(source, "temporal_strategy", TemporalStrategy.AUTO),
     )
 
     for position, candidate in enumerate(candidates, start=1):
@@ -222,6 +226,9 @@ def fetch_source_catalogue(
         parser_fallback_count=parser_fallbacks,
         filter_rejected_count=filter_rejected,
         evidence=tuple(evidence),
+        temporal_strategy=detector.strategy,
+        temporal_supporting_rows=detector.supporting_rows,
+        temporal_conflicts=detector.conflicts,
     )
 
 

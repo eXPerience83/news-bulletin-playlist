@@ -11,6 +11,10 @@ from news_bulletin_playlist.managed_admin import ManagedAdminSnapshot
 from news_bulletin_playlist.managed_state import ManagedSource, ManagedState, effective_sources
 from news_bulletin_playlist.models import EditorialScope, SourceId, SourceOriginKind
 from news_bulletin_playlist.source_admin import MAX_SOURCE_AUDIT_BATCH_SOURCES
+from news_bulletin_playlist.temporal_strategy_web import (
+    TEMPORAL_STRATEGY_LABELS,
+    temporal_strategy_selector,
+)
 from news_bulletin_playlist.web_ui import status_badge
 
 
@@ -140,7 +144,7 @@ def _sources_table(
             f"<td><code>{html.escape(source.editorial_scope.value)}</code></td>"
             f"<td>{html.escape(', '.join(str(value) for value in source.languages))}</td>"
             f"<td>{health}</td>"
-            f"<td>{html.escape(state_label)}</td>"
+            f"<td>{html.escape(state_label)}<br>{TEMPORAL_STRATEGY_LABELS[source.temporal_strategy]}</td>"
             f"<td>{html.escape(playlists)}</td>"
             f"<td>{status_badge(ownership, tone='muted')}</td>"
             f"<td>{controls}</td>"
@@ -191,7 +195,7 @@ def render_edit_source_page(
      filter: {esc(source.collection_filter_id or "none")};
      state: {"Enabled" if source.enabled else "Disabled"}.</p>
   <p>Used by: {esc(", ".join(used_by) or "Not used")}</p>
-  <p class="muted">Show identity, timezone and parsing strategy cannot be changed here.</p>
+  <p class="muted">Show identity and timezone cannot be changed here.</p>
   <form method="post" action="/admin/sources/update">
     <input type="hidden" name="csrf_token" value="{esc(csrf_token)}">
     <input type="hidden" name="source_id" value="{esc(source.id)}">
@@ -202,6 +206,9 @@ def render_edit_source_page(
            value="{esc(source.origin.code)}"></label>
     <label>Language <input name="language" required value="{esc(source.language)}"></label>
     <label>Editorial scope <select name="editorial_scope">{scopes}</select></label>
+    {temporal_strategy_selector(source.temporal_strategy)}
+    <p class="muted">Temporal changes apply at the next normal catalogue refresh.
+       Saving does not force a Spotify request.</p>
     <button class="button button-primary" type="submit">Save source</button>
   </form>
 </section>

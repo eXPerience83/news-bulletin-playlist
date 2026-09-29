@@ -50,7 +50,7 @@
     "day": "2026-09-28",
     "zone": "Europe/Berlin",
     "expected": "2026-09-28T19:00:00+00:00",
-    "classification": "improvement: reusable German edition layout",
+    "classification": "improvement: AUTO proves same-source catalogue structure",
     "before": null
   },
   {
@@ -58,8 +58,9 @@
     "title": "Las noticias de la SER, 21:00 (28/09/2026)",
     "day": "2026-09-28",
     "zone": "Europe/Madrid",
-    "expected": "2026-09-28T19:00:00+00:00",
-    "classification": "improvement: source-independent reviewed evidence",
+    "expected": null,
+    "previous_441": "2026-09-28T19:00:00+00:00",
+    "classification": "correction: isolated foreign contract must fall back in AUTO",
     "before": null
   },
   {

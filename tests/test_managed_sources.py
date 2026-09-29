@@ -35,6 +35,7 @@ from news_bulletin_playlist.models import (
     ParserId,
     SourceId,
     SourceOrigin,
+    TemporalStrategy,
 )
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
@@ -85,6 +86,26 @@ def _state(source: ManagedSource | None = None) -> ManagedState:
 
 def _payload() -> dict[str, object]:
     return serialize_managed_state(_state())
+
+
+@pytest.mark.parametrize("strategy", list(TemporalStrategy))
+def test_temporal_strategy_round_trip_without_a_schema_migration(strategy):
+    state = _state(replace(_source(), temporal_strategy=strategy))
+    encoded = serialize_managed_state(state)
+    assert encoded["schema_version"] == 3
+    parsed = parse_managed_state(encoded)
+    assert parsed.sources[0].temporal_strategy is strategy
+    assert effective_sources(BUILTIN_CATALOG, parsed)[-1].temporal_strategy is strategy
+
+
+def test_absent_temporal_strategy_is_auto_and_unknown_values_are_rejected():
+    encoded = _payload()
+    encoded["sources"][0].pop("temporal_strategy")
+    assert parse_managed_state(encoded).sources[0].temporal_strategy is TemporalStrategy.AUTO
+    for value in ("rne", "unknown", None, 42, [], {}):
+        encoded["sources"][0]["temporal_strategy"] = value
+        with pytest.raises(ManagedStateError, match="temporal_strategy"):
+            parse_managed_state(encoded)
 
 
 def test_v3_round_trip_compiles_custom_without_changing_builtins(tmp_path: Path) -> None:
@@ -673,7 +694,11 @@ def test_source_semantics_change_write_contract_but_classification_does_not() ->
     playlist_id = base.playlists[0].id
     contract = _playlist_write_contract(compile_engine_config(BUILTIN_CATALOG, base), playlist_id)
     source = base.sources[0]
-    for changed in (replace(source, enabled=False), replace(source, timezone="UTC")):
+    for changed in (
+        replace(source, enabled=False),
+        replace(source, timezone="UTC"),
+        replace(source, temporal_strategy=TemporalStrategy.DISABLED),
+    ):
         assert (
             _playlist_write_contract(
                 compile_engine_config(BUILTIN_CATALOG, replace(base, sources=(changed,))),

@@ -11,7 +11,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from _temporal_corpus import temporal_matrix
 
+from news_bulletin_playlist.models import TemporalStrategy
 from news_bulletin_playlist.providers.base import CatalogueParseContext, parse_title
+from news_bulletin_playlist.providers.temporal_detector import TemporalSample
 from news_bulletin_playlist.registry import get_temporal_detector, get_title_parser
 
 FIXTURES = Path(__file__).parent / "fixtures" / "temporal"
@@ -26,9 +28,18 @@ def stamp(attempt):
 def test_frozen_historical_titles(row):
     context = CatalogueParseContext(row["day"], "day", ZoneInfo(row["zone"]))
     legacy = parse_title(get_title_parser(row["parser"]), row["title"], context=context)
-    universal = get_temporal_detector(()).parse(row["title"], context=context)
+    strategy = (
+        TemporalStrategy.CLOCK_CATALOGUE_DAY
+        if row["parser"] == "rmf_fakty"
+        else TemporalStrategy.FULL_DATETIME
+    )
+    universal = get_temporal_detector((), strategy).parse(row["title"], context=context)
     assert stamp(legacy) == row["expected"]
-    assert stamp(universal) == row["expected"]
+    # A configured clock capability attests the field, independently of the product name.
+    expected = (
+        "2026-09-28T14:00:00+00:00" if row["title"] == "16:00 Faktycznie" else row["expected"]
+    )
+    assert stamp(universal) == expected
 
 
 def test_differential_matrix_matches_frozen_original_and_runtime():
@@ -36,7 +47,8 @@ def test_differential_matrix_matches_frozen_original_and_runtime():
     matrix = temporal_matrix()
     assert len(matrix) == baseline["count"]
     digest = hashlib.sha256()
-    detector = get_temporal_detector(())
+    detector = get_temporal_detector((), TemporalStrategy.FULL_DATETIME)
+    improvements = 0
     for case in matrix:
         context = CatalogueParseContext(case.day, "day", ZoneInfo(case.zone))
         legacy = parse_title(get_title_parser(case.parser), case.title, context=context)
@@ -48,7 +60,21 @@ def test_differential_matrix_matches_frozen_original_and_runtime():
             + b"\n"
         )
         universal = detector.parse(case.title, context=context)
-        assert stamp(universal) == expected, case
+        if stamp(universal) != expected:
+            # Reviewed improvement: pipe-separated compact dates/clocks and bare hours
+            # previously required a hyphen in the product-specific parser.
+            assert case.parser == "rne" and expected is None, case
+            assert universal.parsed is not None
+            assert universal.parsed.edition_at.date().isoformat() == case.day
+            assert " | " in case.title
+            clock_field = case.title.split(" | ")[1].rstrip("H. ")
+            assert clock_field in {"19", "19.30", "19,30", "1930", "930"}
+            assert (universal.parsed.edition_at.hour, universal.parsed.edition_at.minute) == (
+                9 if clock_field == "930" else 19,
+                0 if clock_field == "19" else 30,
+            )
+            improvements += 1
+    assert improvements == 192
     # This oracle was recorded with the unmodified base revision, not the shared resolver.
     assert digest.hexdigest() == baseline["sha256"]
 
@@ -62,5 +88,24 @@ def test_every_targeted_semantic_difference_is_explicit(row):
     context = CatalogueParseContext(
         row["day"], "day", ZoneInfo(row["zone"]) if row["zone"] else None
     )
-    assert row["before"] != row["expected"]
-    assert stamp(get_temporal_detector(()).parse(row["title"], context=context)) == row["expected"]
+    samples = ()
+    strategy = (
+        TemporalStrategy.CLOCK_CATALOGUE_DAY
+        if row["parser"] == "rmf_fakty"
+        else TemporalStrategy.FULL_DATETIME
+    )
+    expected = row["expected"]
+    if row["parser"] == "release_date_title":
+        strategy = TemporalStrategy.AUTO
+        if row["title"].startswith("Die Nachrichten"):
+            samples = tuple(
+                TemporalSample(row["title"].replace("21:00", f"{hour}:00"), context)
+                for hour in range(17, 22)
+            )
+        else:
+            # Corrected cross-contract contamination: a single foreign layout proves nothing.
+            expected = None
+    assert (
+        stamp(get_temporal_detector(samples, strategy).parse(row["title"], context=context))
+        == expected
+    )

@@ -514,23 +514,19 @@ def test_source_audit_explains_universal_and_fallback_paths(tmp_path: Path) -> N
     ]
     report = _configured(tmp_path, _custom().id, ManagedState(sources=(_custom(),)), client)
     rows = json.loads(serialize_source_inspection(report))["episodes"]
-    assert [row["parser_outcome"] for row in rows] == [
-        "exact",
-        "catalogue_context",
-        "provider_compat",
-        "fallback",
-        "fallback",
-    ]
+    assert [row["parser_outcome"] for row in rows] == ["fallback"] * 5
     assert [row["temporal_evidence"] for row in rows] == [
-        "reviewed_layout",
-        "reviewed_layout",
-        "reviewed_layout",
+        "catalogue_date_conflict",
+        "unproven_structure",
+        "unproven_structure",
         "unproven_structure",
         "catalogue_date_conflict",
     ]
+    assert report.temporal_strategy == "auto"
+    assert report.temporal_supporting_rows == 0
     assert report.accepted_episodes == 5
-    assert report.first_seen_timestamp_count == 2
-    assert all(row["edition_at"] is None for row in rows[3:])
+    assert report.first_seen_timestamp_count == 5
+    assert all(row["edition_at"] is None for row in rows)
 
 
 def test_source_audit_exports_structural_support_without_raw_responses(tmp_path: Path) -> None:
@@ -547,4 +543,10 @@ def test_source_audit_exports_structural_support_without_raw_responses(tmp_path:
     rows = json.loads(payload)["episodes"]
     assert all(row["temporal_evidence"] == "catalogue_structure" for row in rows)
     assert all(row["temporal_supporting_rows"] == 5 for row in rows)
+    summary = json.loads(payload)
+    assert summary["temporal_strategy"] == "auto"
+    assert summary["temporal_structure_detected"] is True
+    assert summary["temporal_supporting_rows"] == 5
+    assert summary["temporal_coverage"] == 1
+    assert summary["temporal_conflicts"] == 0
     assert b"secret-episode-body" not in payload

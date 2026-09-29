@@ -1,6 +1,6 @@
 """Bounded semantic temporal evidence, independent of source identity.
 
-Reviewed layouts and corroborated catalogue structures establish edition semantics.
+Configured capabilities and corroborated catalogue structures establish edition semantics.
 Token discovery alone never authorizes a timestamp. All routes validate the official
 release period and resolve local wall time through the common DST-safe primitive.
 """
@@ -10,16 +10,15 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from news_bulletin_playlist.models import ParsedEdition
+from news_bulletin_playlist.models import ParsedEdition, TemporalStrategy
 from news_bulletin_playlist.providers.base import CatalogueParseContext
 from news_bulletin_playlist.providers.common import (
     SPANISH_MONTH_NAMES,
     clock_12h_pattern,
-    clock_24h_pattern,
     datetime_from_match,
     named_month_date_pattern,
     numeric_date_pattern,
@@ -27,11 +26,6 @@ from news_bulletin_playlist.providers.common import (
     parse_numeric_date_value,
     spanish_month,
     unique_aware_datetime,
-)
-from news_bulletin_playlist.providers.temporal_profile import (
-    CatalogueClockProfile,
-    ProfileTitleParser,
-    TemporalProfile,
 )
 from news_bulletin_playlist.providers.title_recovery import (
     MAX_TITLE_PARSE_CHARS,
@@ -45,20 +39,10 @@ from news_bulletin_playlist.spotify.first_models import release_period
 MAX_CATALOGUE_SAMPLE = 200
 MIN_STRUCTURE_ROWS = 5
 
-# This is a reusable German bulletin-edition phrase, not a source identifier.
-_GERMAN_EDITION = TemporalProfile(
-    re.compile(
-        r"(?:Die )?Nachrichten vom "
-        + numeric_date_pattern(order="dmy", separators=".", year_digits=(4,))
-        + rf", {clock_24h_pattern(separators=':')} Uhr",
-        re.IGNORECASE | re.ASCII,
-    )
-)
-
 # These patterns discover *possible* tokens, including invalid values. Keeping invalid
 # and duplicate tokens prevents a valid substring from hiding conflicting evidence.
 _NUMERIC_DATE = re.compile(
-    r"(?<![\w./-])(?:[0-9]{1,4}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{6,8})(?![\w/-])"
+    r"(?<![\w./])(?:[0-9]{1,4}[./-][0-9]{1,2}[./-][0-9]{2,4}|[0-9]{6,8})(?![\w/])"
 )
 _ENGLISH_MONTHS = (
     "January",
@@ -114,16 +98,26 @@ class _Tokens:
             key=lambda item: item[0].start(),
         )
         first, last = tokens[0][0], tokens[1][0]
-        # Only an isolated terminal edition block can establish a new structure.
-        # Narrative words between temporal fields, or following them, disqualify it.
+        # Edition fields must be adjacent, without narrative between them. A leading
+        # block may have a pipe-delimited label instead of a prefix.
         between = self.title[first.end() : last.start()]
         suffix = self.title[last.end() :]
-        if re.fullmatch(r"[\s,|;()\[\].-]+", between) is None:
+        if re.fullmatch(r"[\s,:|;()\[\].-]+", between) is None:
             return None
-        if re.fullmatch(r"(?:\s*Uhr)?[\s).\]]*", suffix, re.ASCII) is None:
+        trailing_label = not self.title[: first.start()].strip() and re.fullmatch(
+            r"\s*\|\s*[^\W\d_][^\d|:;()\[\]]{0,60}", suffix
+        )
+        if not trailing_label and (
+            re.fullmatch(r"(?:\s*(?:Uhr|GMT|UTC))?[\s).\]]*", suffix, re.ASCII | re.IGNORECASE)
+            is None
+        ):
             return None
         prefix = self.title[: first.start()]
-        if not prefix.strip() or len(prefix.split()) > 12 or any(c.isnumeric() for c in prefix):
+        if (
+            (not prefix.strip() and not trailing_label)
+            or len(prefix.split()) > 12
+            or re.search(r"[0-9]{2,}", prefix)
+        ):
             return None
         brackets = "".join(character for character in self.title if character in "()[]")
         if brackets not in {"", "()", "[]"}:
@@ -181,7 +175,7 @@ def _clock(token: str) -> tuple[int, int] | None:
         token.rstrip("hH "),
         separators=":.,hH",
         compact=True,
-        minute_optional=token.lower().endswith("h"),
+        minute_optional=token.lower().endswith("h") or token.isascii() and token.isdigit(),
     )
 
 
@@ -259,7 +253,98 @@ def _resolve(
         day = period[0]
     else:
         return None
-    return unique_aware_datetime(day.year, day.month, day.day, *clock, tz=context.timezone)
+    value = unique_aware_datetime(day.year, day.month, day.day, *clock, tz=context.timezone)
+    return value if value is not None and _zone_agrees(tokens.title, value) else None
+
+
+def _zone_agrees(title: str, value: datetime) -> bool:
+    return not re.search(r"\b(?:GMT|UTC)\b", title, re.IGNORECASE) or not value.utcoffset()
+
+
+def _override(
+    tokens: _Tokens,
+    context: CatalogueParseContext,
+    strategy: TemporalStrategy,
+) -> tuple[datetime | None, bool]:
+    """A configured capability attests edition semantics, never calendar validity.
+
+    These bounded field layouts contain no product names. A clock contract cannot
+    consume a full date, and a datetime contract cannot manufacture a missing date.
+    """
+    if strategy in {TemporalStrategy.AUTO, TemporalStrategy.DISABLED}:
+        return None, False
+    period = _period(context)
+    if period is None or context.timezone is None:
+        return None, False
+    if not tokens.clocks and len(tokens.dates) == 1 and strategy is TemporalStrategy.FULL_DATETIME:
+        # An explicit full-datetime contract may use a terminal bare hour/HHMM field.
+        # AUTO never discovers these unmarked numbers as clocks.
+        bare = re.search(r"(?<=[ -])[0-9]{1,4}$", tokens.title)
+        if bare is not None and bare.start() > tokens.dates[0].end():
+            tokens = _Tokens(tokens.title, tokens.dates, (bare,))
+    if len(tokens.clocks) != 1:
+        return None, False
+    if strategy in {TemporalStrategy.FULL_DATETIME, TemporalStrategy.EXPLICIT_UTC} or (
+        strategy is TemporalStrategy.PARTIAL_DATE_CATALOGUE_DAY and tokens.dates
+    ):
+        if strategy is TemporalStrategy.EXPLICIT_UTC and not re.search(
+            r"\b(?:GMT|UTC)$", tokens.title, re.IGNORECASE
+        ):
+            return None, False
+        if tokens.signature is None:
+            return None, False
+        return _resolve(tokens, context, recover_date=False), False
+    if context.release_date_precision != "day":
+        return None, True
+    clock_token = tokens.clocks[0]
+    clock = _clock(clock_token.group())
+    if clock is None:
+        return None, True
+    day = period[0]
+    if strategy is TemporalStrategy.CLOCK_CATALOGUE_DAY:
+        if tokens.dates:
+            # A malformed compact date is never parsed. Only its isolated slot and
+            # the explicitly configured clock contract authorize catalogue recovery.
+            if (
+                len(tokens.dates) != 1
+                or re.fullmatch(r"[0-9]{7}", tokens.dates[0].group()) is None
+                or tokens.signature is None
+            ):
+                return None, True
+        else:
+            # Only a leading clock followed by a short nonnumeric product label.
+            label = tokens.title[clock_token.end() :].strip()
+            if clock_token.start() != 0 or not label or len(label.split()) > 8:
+                return None, True
+            if any(c.isnumeric() for c in label) or re.search(r"[^\w\s'-]", label):
+                return None, True
+    elif strategy is TemporalStrategy.PARTIAL_DATE_CATALOGUE_DAY:
+        partial = re.search(r"(?<![\w/])[0-9]{1,2}/[0-9]{1,2}(?![\w/])", tokens.title)
+        if partial is None or partial.end() >= clock_token.start():
+            return None, True
+        prefix = tokens.title[: partial.start()].strip()
+        between = tokens.title[partial.end() : clock_token.start()]
+        suffix = tokens.title[clock_token.end() :]
+        if (
+            not prefix
+            or any(c.isnumeric() for c in prefix)
+            or not re.fullmatch(r"[\s,|;-]+", between)
+            or not re.fullmatch(r"\s*(?:GMT|UTC)?\s*", suffix, re.IGNORECASE)
+        ):
+            return None, True
+        possible = {
+            parsed
+            for order in ("dmy", "mdy")
+            if (
+                parsed := parse_numeric_date_value(
+                    f"{partial.group()}/{day.year}", order=order, separators="/", year_digits=(4,)
+                )
+            )
+            is not None
+        }
+        if day not in possible:
+            return None, True
+    return unique_aware_datetime(day.year, day.month, day.day, *clock, tz=context.timezone), True
 
 
 class TemporalDetector:
@@ -268,13 +353,18 @@ class TemporalDetector:
     def __init__(
         self,
         samples: Sequence[TemporalSample],
-        profiles: Sequence[ProfileTitleParser],
-        clock_profiles: Sequence[CatalogueClockProfile] = (),
+        strategy: TemporalStrategy = TemporalStrategy.AUTO,
     ) -> None:
-        self._profiles = tuple(profiles)
-        self._clock_profiles = tuple(clock_profiles)
+        self.strategy = TemporalStrategy(strategy)
+        self.sample_count = len(samples)
+        self.conflicts = 0
         self._structures: dict[str, tuple[frozenset[str], int]] = {}
-        if not samples or len(samples) > MAX_CATALOGUE_SAMPLE:
+        self._conflicted_signatures: set[str] = set()
+        if (
+            self.strategy is TemporalStrategy.DISABLED
+            or not samples
+            or len(samples) > MAX_CATALOGUE_SAMPLE
+        ):
             return
         groups: dict[str, list[tuple[_Tokens, CatalogueParseContext]]] = {}
         for sample in samples:
@@ -308,18 +398,26 @@ class TemporalDetector:
                     for order, days in _date_options(tokens.dates[0].group()).items()
                     if value.date() in days
                 )
+            if contradiction or valid and not orders:
+                self._conflicted_signatures.add(signature)
+                self.conflicts += max(1, sum(value is None for _, _, value in proven))
             if (
                 orders
                 and not contradiction
                 and len({(tokens.title, context.release_date) for tokens, context, _ in valid})
                 >= MIN_STRUCTURE_ROWS
                 and len(valid) * 5 >= len(samples) * 4
-                and len({context.release_date for _, context, _ in valid}) >= 2
                 and len({_clock(tokens.clocks[0].group()) for tokens, _, _ in valid}) >= 3
             ):
                 self._structures[signature] = (frozenset(orders), len(valid))
 
+    @property
+    def supporting_rows(self) -> int:
+        return max((count for _, count in self._structures.values()), default=0)
+
     def parse(self, title: str, *, context: CatalogueParseContext) -> TitleParseAttempt:
+        if self.strategy is TemporalStrategy.DISABLED:
+            return TitleParseAttempt(None, "rejected", temporal_evidence="disabled")
         normalized = _safe_title(title)
         period = _period(context)
         if normalized is None or period is None:
@@ -338,45 +436,15 @@ class TemporalDetector:
                 None, "rejected", temporal_evidence="multiple_temporal_candidates"
             )
 
-        # Reviewed layouts prove edition semantics without requiring catalogue diversity.
-        # Their default timezones are deliberately ignored by runtime.
-        for profile in self._profiles:
-            attempt = profile.parse_in_timezone(title, context.timezone)
-            if attempt.parsed is not None:
-                if not period[0] <= attempt.parsed.edition_at.date() <= period[1]:
-                    return TitleParseAttempt(
-                        None, "rejected", temporal_evidence="catalogue_date_conflict"
-                    )
-                # Explicit GMT is a contract, never silently reinterpreted as local time.
-                if normalized.upper().endswith(" GMT") and attempt.parsed.edition_at.utcoffset():
-                    return TitleParseAttempt(
-                        None, "rejected", temporal_evidence="timezone_conflict"
-                    )
-                return replace(attempt, temporal_evidence="reviewed_layout")
-
-        value = _GERMAN_EDITION.resolve(normalized, context.timezone)
-        if value is not None:
-            if not period[0] <= value.date() <= period[1]:
-                return TitleParseAttempt(
-                    None, "rejected", temporal_evidence="catalogue_date_conflict"
-                )
-            return self._attempt(
-                title, value, "normalized" if normalized != title.strip() else "exact"
-            )
-
-        if not tokens.dates and len(tokens.clocks) == 1 and context.release_date_precision == "day":
-            for clock_profile in self._clock_profiles:
-                value = clock_profile.resolve(normalized, period[0], context.timezone)
-                if value is not None:
-                    return self._attempt(title, value, "catalogue_context")
-
         # A learned structure is restricted to the exact surrounding text/positions.
         # A damaged date is recoverable only after other rows prove that same structure.
         signature = tokens.signature
+        if signature in self._conflicted_signatures:
+            return TitleParseAttempt(None, "rejected", temporal_evidence="catalogue_date_conflict")
         if signature is not None and signature in self._structures:
             orders, count = self._structures[signature]
             value = _resolve(tokens, context, recover_date=True, orders=orders)
-            if value is not None:
+            if value is not None and _zone_agrees(normalized, value):
                 return self._attempt(
                     title,
                     value,
@@ -388,6 +456,19 @@ class TemporalDetector:
                     evidence="catalogue_structure",
                     supporting_rows=count,
                 )
+            return TitleParseAttempt(None, "rejected", temporal_evidence="catalogue_date_conflict")
+        value, catalogue_day = _override(tokens, context, self.strategy)
+        if value is not None and _zone_agrees(normalized, value):
+            return self._attempt(
+                title,
+                value,
+                "catalogue_context"
+                if catalogue_day
+                else "normalized"
+                if normalized != title.strip()
+                else "exact",
+                evidence="configured_capability",
+            )
         return TitleParseAttempt(None, "rejected", temporal_evidence="unproven_structure")
 
     @staticmethod
@@ -396,7 +477,7 @@ class TemporalDetector:
         value: datetime,
         mode: TitleParseMode,
         *,
-        evidence: TemporalEvidenceKind = "reviewed_layout",
+        evidence: TemporalEvidenceKind,
         supporting_rows: int = 0,
     ) -> TitleParseAttempt:
         return TitleParseAttempt(

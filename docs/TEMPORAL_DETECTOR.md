@@ -1,177 +1,207 @@
-# Universal conservative temporal detector (#441)
+# Universal conservative temporal detection (#441 / PR #443)
 
-The official catalogue ingestion uses one source-independent temporal detector. It no
-longer selects runtime timestamp authority by `parser_id`. The persisted parser IDs
-and context-free parser APIs remain compatible; no database migration is required.
-All runtime local times use the source's `ZoneInfo`, including historical layouts.
+## Authority and configuration
 
-## Evidence and fallback
+Every ordinary new source defaults to `temporal_strategy = auto`. Adding one needs
+the existing source identity/classification and an IANA timezone, not Python, a
+broadcaster parser, a layout profile, regex, separators, or a date-order setting.
 
-1. A reviewed complete edition layout or a corroborated catalogue structure proves a
-   title calendar date and clock. The date must belong to the official release period.
-2. A reviewed edition-clock layout can use a canonical official day. A corroborated
-   structure can also recover an unusable date field using that day, provided the
-   clock is independently valid. A valid date contradicting the catalogue never takes
-   this route.
-3. Failure leaves `edition_at` unset and retains the episode with the existing
-   catalogue precision / `FIRST_SEEN` behavior. Date-only titles never invent midnight.
+The runtime hierarchy is:
 
-Both exact routes require a unique physical instant through `unique_aware_datetime`.
-DST gaps and folds are rejected. Explicit GMT cannot be interpreted as a nonzero
-local offset. No fixed seasonal offsets, network requests, audio, public timestamp
-semantics, or product filters are introduced. The future #439 evidence layer belongs
-between a failed semantic decision and the existing fallback; it is not implemented.
+1. AUTO inference using only this source's already fetched official catalogue.
+2. Its optional, explicitly configured reusable capability, if AUTO cannot prove
+   the row. A demonstrated contradiction cannot be overridden.
+3. Existing catalogue precision / `FIRST_SEEN` fallback, keeping the episode.
 
-`TITLE` still means proven semantic time, including a title clock plus an official
-day. Parser outcomes remain `exact`, `normalized`, `provider_compat`,
-`catalogue_context`, and `fallback`. Source Audit additionally reports a typed,
-bounded `temporal_evidence` reason and `temporal_supporting_rows` in the UI/JSON/ZIP.
-These additions do not change persisted timestamp provenance.
+`disabled` bypasses both semantic routes. #439 public `releaseDate` semantics are
+not implemented. The future public evidence layer fits between semantic failure
+and fallback. Collection filtering remains independent.
 
-## Reviewed layouts and compatibility
+| Value | Optional capability after AUTO |
+|---|---|
+| `auto` | None; insufficient evidence is a normal fallback. |
+| `full_datetime` | One complete calendar field and one editorial clock in a bounded edition block. Includes explicitly marked clocks and terminal bare hour/HHMM fields under this operator contract. |
+| `clock_catalogue_day` | Leading editorial clock with a short nonnumeric label, or a terminal clock beside an unusable seven-digit compact date slot; requires official day precision. Cannot consume a valid full date. |
+| `partial_date_catalogue_day` | Full or partial date plus clock. Partial D/M or M/D requires official day precision and must match that day; the year comes exclusively from that day. A complete date can also validate against month/year precision. |
+| `explicit_utc` | Complete date and clock with explicit UTC/GMT; the source timezone must yield zero offset at that instant. |
+| `disabled` | No semantic timestamps, even with a proven structure. |
 
-SER, RNE, Onda Cero, CNN, COPE and RFI are reduced to declarative profiles, sharing
-`TemporalProfile` / `ProfileTitleParser`. Their old independent datetime-building
-methods and the obsolete recovery base class are removed. The layouts retain the
-reviewed boundaries and syntax recovery, including the historical two-digit-year
-policies. COPE's national label and RFI's explicit GMT layout remain compatibility
-evidence, not new collection filters. Generic structural inference may prove other
-products; timestamp parsing never removes them from the catalogue.
+An override is an operator assertion that the bounded field denotes an editorial
+clock. It does not waive calendar, Unicode, competing-token, timezone or DST checks.
+For example, the clock capability accepts `16:00 Invented edition` as well as
+`16:00 Fakty`; AUTO accepts neither in isolation. A source that merely discusses
+scheduled events must not be assigned this capability without reviewing that claim.
 
-RMF delegates clock/day resolution to reusable `CatalogueClockProfile`; its reviewed
-`Fakty` prefix still supplies edition semantics for sparse samples. The universal
-runtime checks competing temporal candidates before using any reviewed clock prefix.
-A numeric suffix after the reviewed clock prefix also fails closed: it may contain
-a malformed clock/date that token discovery cannot recognize.
-The context-free RMF adapter remains for registry/API compatibility and differential
-validation, not runtime dispatch.
+Unknown sources use AUTO. They may independently infer a structure equivalent to
+one previously seen elsewhere, but do not inherit another source's reviewed product
+contract. There is no global broadcaster-profile injection or German-phrase bypass.
+`Uhr`, AM/PM and UTC/GMT are clock syntax, not broadcaster identities.
 
-A reusable German bulletin phrase (`[Die] Nachrichten vom DATE, CLOCK Uhr`) supplies
-reviewed evidence without source identity. Deutschlandfunk's example resolves to
-`2026-09-28T19:00:00Z` in `Europe/Berlin` even with one catalogue row. Another source
-with that phrase uses its own timezone. Unknown sources can reuse every profile;
-there is no source-name branch in catalogue ingestion or the detector.
+## Deterministic inference policy
 
-The `release_date_title` marker remains a compatibility configuration value. It no
-longer disables proven semantic evidence. Sources without such evidence still fall
-back automatically.
+Inference is recreated for each catalogue, capped at 200 rows. No learning is shared
+between sources, persisted between refreshes, or fetched with additional requests.
+A structure requires:
 
-## Catalogue inference policy
+- Exactly one date-shaped field and one clock-shaped field. No narrative words
+  between them. They form a terminal edition block, or a leading block followed by
+  a pipe-delimited short label. Brackets must be balanced in the supported forms.
+- Identical normalized literal surroundings, field ordering and separator/clock
+  families. The clock format can be 12h/24h; dates can be DMY/MDY/YMD, compact or
+  supported named months. A fixed single-digit label such as `5 cosas` is allowed;
+  a multi-digit narrative number in the prefix is not.
+- At least five distinct corroborated title/day pairs and three distinct clocks.
+  Multiple days are not mandatory: DLF's ten same-day editions provide sufficient
+  structural evidence. Five copies of one title or five identical clocks do not.
+- At least 80% of the whole fetched sample corroborates that exact structure.
+  Independent collection filtering does not shrink this denominator.
+- Training uses canonical official day precision. Each title calendar/clock must
+  resolve uniquely, agree with that day and survive DST validation.
+- Compatible date orders must have a nonempty intersection across supporting rows.
+  Contradictory calendars/clocks or inconsistent orders block that structure, also
+  for configured overrides. A learned order cannot change to make a later row fit.
 
-Inference runs only over the already-fetched source catalogue (maximum 200 rows).
-A larger caller-requested catalogue disables inference, leaving reviewed layouts
-available. No state is persisted or shared between sources or refreshes.
+The result is a deterministic structural contract, not a probability score or a
+linguistic proof that a title describes an edition. A source consistently formatted
+like an edition but actually describing event schedules is a residual limitation
+of title/catalogue evidence. AUTO does not infer isolated clock-only or partial-date
+families; those use explicit capabilities. A changed/sparse/mixed catalogue loses
+AUTO authority and falls back unless its configured capability independently fits.
 
-Discovery finds bounded possible date/clock tokens, including invalid values. It
-is not itself evidence of an edition. An unreviewed structure must satisfy all of:
+No valid date may disagree with the official release period. Coarse month/year
+precision can validate a complete title date after a structure is learned or under
+the full-date capability; it cannot supply a missing day. No midnight is invented.
+IANA `ZoneInfo` and the shared `unique_aware_datetime` reject gaps and repeated times.
+There are no seasonal fixed offsets. Safe syntax normalization is reused; numeric
+confusables, full-width digits and unsupported compatibility transformations fail.
 
-- Exactly one date-shaped field and one clock-shaped field in a terminal edition
-  block, with punctuation/whitespace rather than narrative words between the fields.
-- Identical normalized surrounding text and token positions, date separator family
-  and clock format. No number-bearing prefix, trailing narrative, or unsafe Unicode
-  normalization is used to establish a structure.
-- At least five distinct corroborated title/day pairs, at least two official days,
-  and at least three distinct clocks.
-- Corroborated rows cover at least 80% of the complete bounded sample, including
-  titles later rejected by an independent collection filter in the denominator.
-- Corroboration requires official day precision. Compatible month/year precision
-  can subsequently validate a full title timestamp but cannot train the structure.
-- Date orders compatible with all corroborating rows have a nonempty intersection.
-  Each accepted row must still resolve to exactly one date within its official period.
-- No row of that structure with a usable calendar may contradict its catalogue or
-  fail clock/DST validation. Rows with unusable dates do not count as support.
+### Damaged compact date
 
-The thresholds are deliberately conservative policy, not a probability estimate.
-Five repetitions alone do not activate arbitrary clocks inside headlines. New
-clock-only structures without corroborated date evidence are not inferred; they
-need a reviewed edition-clock layout. This is a deliberate coverage limitation.
+`NOTICIAS - RNE 2809206 - 1730H` is not a valid date. It falls back in AUTO without
+support. Five valid compact-date/clock rows of that same source/layout, still meeting
+80% coverage, establish the terminal clock slot and allow the official day to replace
+the damaged field. The explicitly selected clock capability also supports that slot.
+All six supplied damaged examples are tested; they resolve to 15:30, 14:30, 14:00,
+13:30, 13:00 and 12:00 UTC on 2026-09-28 in Europe/Madrid. Provenance is
+`catalogue_context`, never an accepted seven-digit calendar date.
 
-For example, `NOTICIAS - RNE 2809206 - 1730H` alone falls back. With five qualifying
-compact-date/compact-clock rows of the same structure covering at least 80% of the
-sample, it resolves to 17:30 on the official day. `2809206` is never accepted as a
-calendar date. A valid but different title date, insufficient support, a changed
-layout or a DST ambiguity still falls back. This mechanism also works with an
-unrelated stable product label; it does not inspect `source_id` or RNE identity.
+## Built-ins and compatibility
 
-Inference intentionally loses authority if a later refresh no longer supplies its
-required evidence. In that case the existing catalogue fallback applies; no learned
-profile silently survives a contradictory or sparse refresh.
+AUTO always runs first (except disabled). The configured values below preserve
+sparse historical catalogues without importing broadcaster grammars into the engine.
+
+| Source | Configured strategy | Why |
+|---|---|---|
+| SER | `full_datetime` | AUTO learns a rich stable catalogue; capability preserves sparse editions/recovery syntax. |
+| RNE | `full_datetime` | AUTO learns marked-clock layouts; capability also covers sparse compact and bare-hour history. Damaged-only catalogues need clock override or qualifying AUTO support. |
+| Onda Cero | `full_datetime` | AUTO sufficient with support; sparse editions retain exact times. |
+| CNN | `full_datetime` | AUTO learns MDY/12h; official calendar disambiguates supported full dates. |
+| RFI | `partial_date_catalogue_day` | AUTO handles rich full-date families; capability also validates partial dates against the day. Explicit GMT remains checked. |
+| RMF | `clock_catalogue_day` | Clock-only AUTO deliberately lacks calendar corroboration. |
+| Deutschlandfunk | `auto` | Ten provided same-day titles independently prove the structure. 21:00 Berlin = 19:00Z. |
+| ABC, DW, N+ Univision, Reuters, UN News (English and Spanish) | `auto` | No clock evidence means fallback; date-only titles remain fallback. |
+
+COPE is an existing compatibility parser/test family, not a current built-in source.
+Expansión is a supplied fallback example, also not a current built-in definition.
+Its leading clock/date/label family is supported by AUTO and `full_datetime`.
+No parser ID is selected by runtime temporal detection. Legacy adapters remain for
+their existing public APIs, registry validation and independent differential tests.
+They are not injected into the detector. Some old `provider_compat` inputs now use
+generic `exact` parsing; UTC timestamps are unchanged and this provenance change is
+explicitly tested. `normalized` and `catalogue_context` remain distinct.
+
+The optional managed JSON field defaults to AUTO when absent; schema version 3 and
+SQLite format remain unchanged. Older binaries do not understand the new JSON key;
+rollback requires restoring their configuration backup. Create/Edit use the shared
+server-rendered selector; unknown values fail validation. Existing auth/CSRF checks
+are unchanged. Built-ins show their capability in the source list. Temporal changes
+participate in the guarded playlist-write contract.
+
+Saved strategy changes apply when the source catalogue is next normally refreshed.
+Editing does not rewrite accepted episode history or force Spotify requests. Existing
+accepted catalogue state remains last-known-good until that refresh, including its
+previous timestamp provenance. No detector/catalogue cadence is changed.
+
+## Observability and ordering
+
+Source Audit adds configured strategy, detected-structure flag, supporting rows,
+coverage and conflicts to its JSON and UI. Per-episode typed evidence distinguishes
+`catalogue_structure`, `configured_capability`, `disabled`, conflict and unproven
+fallback. Parser outcome distinguishes full-title, normalized and catalogue-day
+routes. JSON/ZIP exports retain their existing schema and keys with additive metadata;
+persisted `TITLE` and `FIRST_SEEN` values do not change meaning.
+
+New exact timestamps use existing ordering/48-hour retention. A same-day fallback
+blocks `_provable_latest_id` because its local-day interval can extend beyond the
+latest known clock. Tests cover unordered catalogue rows, mixed exact/fallback,
+cutoff crossing, fallback preservation and New York UTC-day boundaries. A parsing
+failure never removes an episode from catalogue ingestion.
 
 ## Differential evidence
 
-Base revision: `67498dde01468457f62fadff6931bf4925efdd42`.
+Original oracle revision: `67498dde01468457f62fadff6931bf4925efdd42`.
+Correction starts at `13942a98021003e3fcc4e6dad6a73e9fa2ba4071`.
+The frozen 162 literal historical/test titles plus 6,960 generated boundary cases
+remain reproducible. Their dates are synthesized from historical local dates, not
+a newly downloaded production catalogue. The original 2,224-title #428 artifact
+was unavailable; this matrix does not claim to reproduce it.
 
-`tests/fixtures/temporal/historical_titles.json` freezes 162 literal title cases from
-existing parser/recovery/DST tests, with their original test-file provenance. These
-include real historical examples and deliberately malformed/adversarial mutations.
-They are not a newly downloaded production catalogue. Catalogue days for accepted
-cases are synthesized from their historical local edition date; rejected cases use
-a fixed day. Thus this corpus proves title compatibility, not real catalogue-date
-agreement.
+The test verifies the original baseline fingerprint using unchanged legacy API
+results before comparing configured generic capabilities. This table measures
+sparse-capability compatibility; separate tests prove AUTO for each rich historical
+family and the two invented families. “Identical” below counts identical exact UTC
+instants, not unchanged fallback rows.
 
-`tests/_temporal_corpus.py` generates 6,960 additional cases across six historical
-families, four years, twelve months, day boundaries, invalid dates/clocks and DST,
-including 1,200 combinations of historical compact/hour-only RNE field boundaries.
-The baseline produced 4,780 accepted and 2,180 rejected results. Its SHA-256 and per-
-parser counts were recorded by running the **unmodified base source** in a separate
-`git archive` directory using CPython 3.14.7. The differential test verifies that
-frozen fingerprint before comparing every universal result. This avoids using a
-shared implementation as the only oracle.
+| Provider | Corpus | Old exact | New exact | Identical exact | Improvements | Regressions |
+|---|---:|---:|---:|---:|---:|---:|
+| SER | 991 | 691 | 691 | 691 | 0 | 0 |
+| RNE | 2208 | 1716 | 1908 | 1716 | 192 | 0 |
+| Onda Cero | 985 | 690 | 690 | 690 | 0 | 0 |
+| CNN | 981 | 352 | 352 | 352 | 0 | 0 |
+| COPE | 978 | 689 | 689 | 689 | 0 | 0 |
+| RFI | 976 | 694 | 694 | 694 | 0 | 0 |
+| RMF | 3 | 2 | 3 | 2 | 1 | 0 |
+| Historical total | 7122 | 4834 | 5027 | 4834 | 193 | 0 |
+| DLF supplied catalogue, AUTO | 10 | 0 | 10 | 0 | 10 | 0 |
 
-All 7,122 comparisons preserve acceptance/rejection and exact UTC instants
-(4,834 accepted, 2,288 rejected). Ten additional frozen before/after cases explicitly
-classify intentional changes in `intentional_changes.json`. The
-original 2,224-case script/data from #428 was not present in the repository or
-available local artifacts; this larger deterministic matrix replaces that missing
-artifact rather than claiming to reproduce an unavailable live sample.
+The 192 RNE expansions are exhaustively checked pipe-separated compact-date/clock
+or bare-hour combinations, with independent expected clocks 19:00, 19:30 or 09:30.
+The one RMF expansion is `16:00 Faktycznie`: a configured generic clock capability
+does not require the old product spelling. This is capability expansion, not evidence
+that an arbitrary real podcast's clock is editorial. AUTO still rejects it alone.
+Additional targeted tests cover the actual RMF clocks, six damaged RNE dates and RFI
+partial dates. No new editorial inclusion/exclusion rule is introduced.
 
-Intentional runtime changes, separately tested:
+| Configured | Observed family | AUTO proven? | Override matched? | Final source |
+|---|---|---|---|---|
+| auto | Single SER/CNN/RNE/RMF/COPE title with 0/1/4 unrelated rows | No | None | FIRST_SEEN |
+| auto | DLF 10 rows | Yes | None | TITLE |
+| auto | New Spanish / US synthetic family, 5 rows | Yes | None | TITLE |
+| clock_catalogue_day | Single SER full date/time | No | No | FIRST_SEEN |
+| full_datetime | Single unrelated clock-only title | No | No | FIRST_SEEN |
+| clock_catalogue_day | Reviewed leading clock + label | No | Yes | TITLE |
+| clock_catalogue_day | Proven DLF catalogue | Yes | Not needed | TITLE |
+| disabled | Proven DLF catalogue | Bypassed | Bypassed | FIRST_SEEN |
 
-- German bulletin timestamps and source-independent reviewed layouts become exact.
-- Sufficiently corroborated new date/clock structures become exact.
-- Damaged calendar fields can recover through the official day with explicit
-  `catalogue_context` provenance, never by accepting the damaged date.
-- Title/catalogue contradictions, absent timezone and competing clocks fail closed.
-- Runtime uses the configured timezone rather than a parser's historical default.
+## Adversarial review
 
-No unexplained differential regression is accepted. New exact timestamps naturally
-participate in existing retention/order; their existing rules are unchanged. The
-latest-episode proof now bounds coarse catalogue periods in the source timezone.
-Using UTC days could incorrectly declare a 22:00 New York edition newest while a
-same-local-day fallback might still be later. The new interval includes both folds
-at midnight transitions. A same-day fallback blocks an unproven latest-episode claim.
-No episode is removed merely because this detector fails.
+The correction removes the reproduced P1 global-contract contamination. A second
+review also blocks overrides from bypassing a learned date order or a catalogue
+contradiction and checks explicit GMT/UTC even with trailing punctuation. Matrix
+tests caught adjacent RNE separators/bare-hour discovery gaps;
+generic token boundaries now preserve every original accepted timestamp.
 
-## Adversarial review findings
+Focused tests cover multiple clocks/dates, arbitrary narrative clocks, anniversary
+numbers, date-only titles, unsupported Unicode, full-width digits, safe normalization,
+missing timezone, invalid canonical catalogue dates, day/month/year precision,
+Madrid/Berlin/Warsaw/New York DST, duplicate samples, insufficient coverage, changed
+formats and per-source isolation. Overrides are checked against the same adversarial
+headlines. Statistical consistency cannot establish editorial intent for every
+possible natural-language title; use Disabled when a source's apparent edition
+structure actually encodes other events.
 
-After the initial full suite passed, a second review reproduced and fixed:
-
-- P2: a reviewed clock prefix could hide malformed additional temporal fields such
-  as `21:00 Fakty 18:00:30`, `100:00`, `18:999`, a partial date or a nine-digit date.
-  All five now fall back; valid nonnumeric product suffixes remain supported.
-- P2: exact timestamps crossing the UTC date boundary could incorrectly outrank an
-  unproven same-local-day episode. Coarse intervals now use the source timezone;
-  focused New York/Berlin catalogue tests prove the fallback blocks that claim.
-  Extreme calendar years widen the interval safely if UTC conversion overflows.
-
-Other focused cases cover catalogue contradictions, changing date order, ambiguous
-coarse dates, numeric confusables, Unicode normalization, missing timezone, multiple
-candidates, date-only and unreviewed clock-only titles, malformed brackets, DST in
-Madrid/Berlin/Warsaw/New York, catalogue reordering, sparse/oversized samples and
-retention of episodes whose timestamps remain unproven.
-
-- P2 regression found before commit: an early token-discovery rejection skipped a
-  reviewed RNE layout with an adjacent date separator and an unsuffixed hour, such
-  as `NOTICIAS RNE -20.06.2026- 19`. Reviewed layouts now run even when discovery
-  yields no tokens. The expanded 1,200-case boundary matrix preserves the original
-  accepted/rejected behavior and checks this fix against the frozen base oracle.
-
-- P2 hardening: Python's ISO parser also accepts week-date strings such as
-  `2026-W40-1`. Exact evidence now requires canonical `YYYY-MM-DD`, `YYYY-MM`, or
-  `YYYY` catalogue text; week dates and signed/space-padded numeric components fail
-  soft. This preserves the old RMF canonical-day guard in the universal route.
-
-Final local validation uses CPython 3.14.7, Ruff 0.16.5, mypy 2.3.1 and pytest 9.1.1.
-The full suite passes 1,455 tests. Hosted CI is separate evidence: recent runs did
-not start, reporting an account billing/spending-limit block. Local validation is
-not presented as a hosted CI or container result.
+Local validation uses CPython 3.14.7: Ruff fix/check/format, mypy (72 source files),
+the complete suite (1,595 tests), the focused temporal/catalogue/audit suite (484
+tests), and `git diff --check` pass. Hosted Actions remains independent evidence;
+the previous CI/Container runs failed before jobs started because of billing/spending
+limits. Local validation is not a hosted CI or container result.

@@ -8,7 +8,7 @@ import pytest
 from _spotify_catalogue import catalogue_page
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.models import ParserId, SourceId
+from news_bulletin_playlist.models import ParserId, SourceId, TemporalStrategy
 from news_bulletin_playlist.providers.base import CatalogueParseContext
 from news_bulletin_playlist.providers.temporal_detector import TemporalSample
 from news_bulletin_playlist.registry import get_temporal_detector
@@ -20,8 +20,8 @@ def context(day="2026-09-28", zone="Europe/Madrid", precision="day"):
     return CatalogueParseContext(day, precision, ZoneInfo(zone) if zone else None)
 
 
-def parse(title, ctx=None, samples=()):
-    return get_temporal_detector(samples).parse(title, context=ctx or context())
+def parse(title, ctx=None, samples=(), strategy=TemporalStrategy.AUTO):
+    return get_temporal_detector(samples, strategy).parse(title, context=ctx or context())
 
 
 @pytest.mark.parametrize(
@@ -36,12 +36,17 @@ def parse(title, ctx=None, samples=()):
         ("Journal 28/09/2026 21h00 GMT", "UTC", "21:00", "exact"),
         ("NOTICIAS RNE - 280926 - 1730H", "Europe/Madrid", "15:30", "exact"),
         ("21:00H | 28 SEP 2026 | BOLETÍN", "Europe/Madrid", "19:00", "exact"),
-        ("Las noticias de la SER - 21.00 28-09-26", "Europe/Madrid", "19:00", "provider_compat"),
+        ("Las noticias de la SER - 21.00 28-09-26", "Europe/Madrid", "19:00", "exact"),
         ("NOTICIAS\u00a0RNE – 28.09.2026 – 17.30H", "Europe/Madrid", "15:30", "normalized"),
     ],
 )
 def test_reviewed_temporal_evidence(title, zone, expected, mode):
-    attempt = parse(title, context(zone=zone))
+    strategy = (
+        TemporalStrategy.CLOCK_CATALOGUE_DAY
+        if mode == "catalogue_context"
+        else TemporalStrategy.FULL_DATETIME
+    )
+    attempt = parse(title, context(zone=zone), strategy=strategy)
     assert attempt.parsed is not None
     assert (
         attempt.parsed.edition_at.astimezone(UTC).isoformat() == f"2026-09-28T{expected}:00+00:00"
@@ -109,7 +114,9 @@ def test_american_dst_rejected(day, clock):
 def test_title_date_must_agree_with_official_period(precision, release):
     assert (
         parse(
-            "Die Nachrichten vom 28.09.2026, 21:00 Uhr", context(release, precision=precision)
+            "Die Nachrichten vom 28.09.2026, 21:00 Uhr",
+            context(release, precision=precision),
+            strategy=TemporalStrategy.FULL_DATETIME,
         ).parsed
         is None
     )
@@ -121,7 +128,9 @@ def test_title_date_must_agree_with_official_period(precision, release):
 def test_full_title_can_prove_time_with_coarse_catalogue(precision, release):
     assert (
         parse(
-            "Die Nachrichten vom 28.09.2026, 21:00 Uhr", context(release, precision=precision)
+            "Die Nachrichten vom 28.09.2026, 21:00 Uhr",
+            context(release, precision=precision),
+            strategy=TemporalStrategy.FULL_DATETIME,
         ).parsed
         is not None
     )
@@ -138,7 +147,9 @@ def test_clock_only_requires_canonical_exact_day(precision, release):
 def test_timezone_required_and_overrides_legacy_defaults():
     title = "Las noticias de la SER, 21:00 (28/09/2026)"
     assert parse(title, context(zone=None)).parsed is None
-    attempt = parse(title, context(zone="America/New_York"))
+    attempt = parse(
+        title, context(zone="America/New_York"), strategy=TemporalStrategy.FULL_DATETIME
+    )
     assert attempt.parsed.edition_at.astimezone(UTC) == datetime(2026, 9, 29, 1, tzinfo=UTC)
     assert parse("Journal 28/09/2026 21h00 gmt", context()).parsed is None
 
@@ -248,12 +259,13 @@ class Client:
         return catalogue_page(self.items)
 
 
-def catalogue(titles, zone="Europe/Berlin"):
+def catalogue(titles, zone="Europe/Berlin", strategy=TemporalStrategy.FULL_DATETIME):
     source = replace(
         BUILTIN_CATALOG.sources[0],
         id=SourceId("unknown_source"),
         parser_id=ParserId("release_date_title"),
         timezone=ZoneInfo(zone),
+        temporal_strategy=strategy,
     )
     client = Client(titles)
     now = datetime(2026, 9, 28, 22, tzinfo=UTC)
@@ -332,7 +344,12 @@ def test_inference_preserves_date_order_with_coarse_precision():
 @pytest.mark.parametrize("year,expected", [("00", 2000), ("68", 2068), ("69", 2069), ("99", 2099)])
 def test_universal_keeps_reviewed_short_year_policy(year, expected):
     title = f"NOTICIAS RNE - 28.09.{year} - 17.30H"
-    assert parse(title, context(f"{expected}-09-28")).parsed.edition_at.year == expected
+    assert (
+        parse(
+            title, context(f"{expected}-09-28"), strategy=TemporalStrategy.FULL_DATETIME
+        ).parsed.edition_at.year
+        == expected
+    )
 
 
 def test_repetition_does_not_authorize_unreviewed_clock_only_headlines():

@@ -17,6 +17,8 @@ type TitleParseMode = Literal[
     "rejected",
 ]
 type TemporalEvidenceKind = Literal[
+    "disabled",
+    "configured_capability",
     "reviewed_layout",
     "catalogue_structure",
     "unproven_structure",

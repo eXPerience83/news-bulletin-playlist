@@ -20,7 +20,7 @@ from news_bulletin_playlist.duration_profile import (
     profile_as_dict,
 )
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateError, effective_sources
-from news_bulletin_playlist.models import ParserId, SourceId
+from news_bulletin_playlist.models import ParserId, SourceId, TemporalStrategy
 from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
 from news_bulletin_playlist.registry import has_collection_filter, has_title_parser
@@ -198,6 +198,9 @@ class SourceInspection:
     episodes: tuple[EpisodeInspectionEvidence, ...]
     public_status: str
     public_observation: PublicInspectionEvidence | None
+    temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
+    temporal_supporting_rows: int = 0
+    temporal_conflicts: int = 0
 
 
 def _bounded(value: str) -> tuple[str, bool]:
@@ -518,6 +521,9 @@ def inspect_source(
         episodes=evidence,
         public_status=public_status,
         public_observation=public_observation,
+        temporal_strategy=snapshot.temporal_strategy,
+        temporal_supporting_rows=snapshot.temporal_supporting_rows,
+        temporal_conflicts=snapshot.temporal_conflicts,
     )
 
 
@@ -604,6 +610,13 @@ def serialize_source_inspection(report: SourceInspection) -> bytes:
         "publisher_hint": report.publisher_hint,
         "total_episodes_hint": report.total_episodes_hint,
         "parser_id": report.parser_id,
+        "temporal_strategy": report.temporal_strategy,
+        "temporal_supporting_rows": report.temporal_supporting_rows,
+        "temporal_conflicts": report.temporal_conflicts,
+        "temporal_structure_detected": bool(report.temporal_supporting_rows),
+        "temporal_coverage": report.temporal_supporting_rows / report.observed_episodes
+        if report.observed_episodes
+        else 0,
         "collection_filter_id": report.collection_filter_id,
         "timezone": report.timezone,
         "retention_hours": report.retention_hours,
