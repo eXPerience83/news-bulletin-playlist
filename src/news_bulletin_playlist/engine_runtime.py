@@ -96,17 +96,23 @@ _SPOTIFY_INACTIVITY_HOURS_ENV = "NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS"
 _MIN_RUNTIME_INTERVAL = timedelta(minutes=1)
 _SCHEDULER_SHUTDOWN_WAIT_SECONDS = 10.0
 _BUNDLED_COVER_DIR = Path("/opt/news-bulletin-playlist/covers")
-_MANAGED_POST_PATHS = {
-    "/admin/playlists/activate",
-    "/admin/playlists/update",
-    "/admin/playlists/sync",
-    "/admin/playlists/stop",
-    "/admin/provisioning/adopt",
-    "/admin/provisioning/clear",
-}
 _ADMIN_NOTICE_MESSAGES = {
+    "playlist-activated": "Playlist activated successfully.",
+    "playlist-settings-saved": "Playlist settings saved successfully.",
     "spotify-sync-applied": "Spotify metadata and cover applied successfully.",
+    "playlist-stopped": "Playlist is no longer managed.",
+    "playlist-provisioning-adopted": "Existing Spotify playlist adopted successfully.",
+    "playlist-provisioning-cleared": "Uncertain playlist creation state cleared successfully.",
 }
+_ADMIN_POST_NOTICE_KEYS = {
+    "/admin/playlists/activate": "playlist-activated",
+    "/admin/playlists/update": "playlist-settings-saved",
+    "/admin/playlists/sync": "spotify-sync-applied",
+    "/admin/playlists/stop": "playlist-stopped",
+    "/admin/provisioning/adopt": "playlist-provisioning-adopted",
+    "/admin/provisioning/clear": "playlist-provisioning-cleared",
+}
+_MANAGED_POST_PATHS = frozenset(_ADMIN_POST_NOTICE_KEYS)
 
 
 class AuthSynchronization:
@@ -847,9 +853,8 @@ class OperationalHealthHandler(LanAdminHandler):
             )
             return
 
-        location = (
-            "/admin/?notice=spotify-sync-applied" if path == "/admin/playlists/sync" else "/admin/"
-        )
+        notice_key = _ADMIN_POST_NOTICE_KEYS[path]
+        location = f"/admin/?notice={notice_key}"
         self._reply(
             HTTPStatus.SEE_OTHER,
             b"",
