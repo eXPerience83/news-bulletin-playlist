@@ -470,6 +470,9 @@ def test_engine_refresh_passes_existing_public_evidence_without_requests(
     assert client.calls == outcome.api_request_count == 1
     expected = TimestampSource.FIRST_SEEN if degraded else TimestampSource.SPOTIFY_PUBLIC_RELEASE
     assert journal.list_episodes()[0].timestamp_source is expected
+    assert outcome.temporal_metrics is not None
+    assert outcome.temporal_metrics.timestamp_public_count == int(not degraded)
+    assert outcome.temporal_metrics.timestamp_first_seen_count == int(degraded)
 
 
 @pytest.mark.parametrize(

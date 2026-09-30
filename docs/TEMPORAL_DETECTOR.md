@@ -1,5 +1,40 @@
 # Universal conservative temporal detection (#441 / PR #443)
 
+## Runtime aggregate diagnostics
+
+On successful catalogue construction and journal replacement, source outcomes carry
+the configured `temporal_strategy`, detector `temporal_supporting_rows` and
+`temporal_conflicts`, plus final refresh snapshot provenance counts:
+`timestamp_title_count`, `timestamp_public_count`, `timestamp_first_seen_count`.
+Their sum equals the accepted episode count in that bounded snapshot, before playlist
+filtering/retention and before journal reuse of previously validated public history.
+An episode whose older public evidence is reused by the journal may therefore be
+counted as FIRST_SEEN in this refresh snapshot while remaining PUBLIC in persisted
+state. These are current-refresh evidence metrics, not a persisted inventory census.
+No database read is added to obtain a different denominator.
+
+The same block includes six public outcome counts: accepted, rejected_future,
+catalogue_conflict, invalid, identity_mismatch and shadowed. Counts apply only to
+collection-accepted rows evaluated in that refresh. Identity mismatch includes the
+other catalogue episodes that do not match the single public observation, so a large
+value alone does not indicate detector corruption. TITLE means proven semantic time;
+PUBLIC means validated lower-priority publication time; FIRST_SEEN means that refresh
+could not establish either exact path. `parser_fallback_count` remains the semantic
+parser count and must not substitute for final provenance counts.
+
+`source_cycle_completed`, `source_state_preserved` and
+`source_detector_false_negative` include these fields only when that outcome has a
+newly constructed and applied refresh snapshot. A failed refresh, unchanged source
+or other `refreshed=false` cycle omits the entire block, rather than emitting invented
+zeros or stale metrics. A refreshed but incompletely covered catalogue can include
+its actual snapshot metrics even if the existing event is source_state_preserved.
+All available counts include zeros consistently. Normal diagnostics ZIP exports
+contain bounded aggregates; Source Audit retains detailed per-episode evidence.
+
+Repeated `public_release_rejected_future_count` can support future wall-time research.
+Public wall-time reinterpretation remains future work under #439; no public mode or
+new selector is introduced here. No requests or SQLite reads are made solely for logs.
+
 ## Authority and configuration
 
 Every ordinary new source defaults to `temporal_strategy = auto`. Adding one needs

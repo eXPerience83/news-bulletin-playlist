@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any, Protocol
@@ -69,6 +70,7 @@ class CatalogueSnapshot:
     temporal_supporting_rows: int = 0
 
     temporal_conflicts: int = 0
+    public_release_counts: tuple[tuple[PublicReleaseOutcome, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +134,7 @@ def fetch_source_catalogue(
     parser_fallbacks = 0
     filter_rejected = 0
     evidence: list[CatalogueEpisodeEvidence] = []
+    public_release_counts: Counter[PublicReleaseOutcome] = Counter()
 
     source_timezone = getattr(source, "timezone", None)
     catalogue_timezone = source_timezone if isinstance(source_timezone, ZoneInfo) else None
@@ -202,6 +205,7 @@ def fetch_source_catalogue(
         if public_at is not None:
             edition_at = public_at
             timestamp_source = TimestampSource.SPOTIFY_PUBLIC_RELEASE
+        public_release_counts[public_outcome] += 1
 
         episodes.append(
             SpotifyFirstEpisode(
@@ -252,6 +256,7 @@ def fetch_source_catalogue(
         temporal_strategy=detector.strategy,
         temporal_supporting_rows=detector.supporting_rows,
         temporal_conflicts=detector.conflicts,
+        public_release_counts=tuple(sorted(public_release_counts.items())),
     )
 
 

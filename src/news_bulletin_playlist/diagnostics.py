@@ -46,6 +46,18 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "failure_reason",
         "http_status",
         "parser_fallback_count",
+        "temporal_strategy",
+        "temporal_supporting_rows",
+        "temporal_conflicts",
+        "timestamp_title_count",
+        "timestamp_public_count",
+        "timestamp_first_seen_count",
+        "public_release_accepted_count",
+        "public_release_rejected_future_count",
+        "public_release_catalogue_conflict_count",
+        "public_release_invalid_count",
+        "public_release_identity_mismatch_count",
+        "public_release_shadowed_count",
         "pending_snapshot_created",
         "pending_snapshot_resolution",
         "provider",
@@ -117,6 +129,16 @@ _ALLOWED_DETAIL_KEYS = frozenset(
     }
 )
 _ALLOWED_DETAIL_STRING_VALUES = {
+    "temporal_strategy": frozenset(
+        {
+            "auto",
+            "full_datetime",
+            "clock_catalogue_day",
+            "partial_date_catalogue_day",
+            "explicit_utc",
+            "disabled",
+        }
+    ),
     "backoff_source": frozenset({"fallback", "spotify_header"}),
     "backoff_state": frozenset({"activated", "active", "expired"}),
     "exception_class": frozenset(
