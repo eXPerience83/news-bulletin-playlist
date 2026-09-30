@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
-from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.models import PublicReleaseMode, SourceId
+from news_bulletin_playlist.providers.common import unique_aware_datetime
 from news_bulletin_playlist.spotify.first_models import as_utc, release_period
 from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorState,
@@ -29,6 +30,7 @@ class PublicReleaseOutcome(StrEnum):
     CATALOGUE_CONFLICT = "catalogue_conflict"
     FUTURE = "rejected_future"
     SHADOWED = "shadowed_by_title"
+    DISABLED = "disabled_by_policy"
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +82,7 @@ def validate_public_release(
     precision: str,
     timezone: ZoneInfo | None,
     semantic_exact: bool,
+    mode: PublicReleaseMode,
 ) -> tuple[datetime | None, PublicReleaseOutcome]:
     if evidence is None:
         return None, PublicReleaseOutcome.NO_EVIDENCE
@@ -91,6 +94,10 @@ def validate_public_release(
         return None, PublicReleaseOutcome.IDENTITY_MISMATCH
     if semantic_exact:
         return None, PublicReleaseOutcome.SHADOWED
+    if mode is PublicReleaseMode.DISABLED:
+        return None, PublicReleaseOutcome.DISABLED
+    if not isinstance(mode, PublicReleaseMode):
+        return None, PublicReleaseOutcome.INVALID
     # Only the observed exact object shape is enabled. STRING also includes dates
     # and arbitrary metadata in the detector contract, so it is not promoted here.
     raw = evidence.release_date_raw
@@ -102,7 +109,23 @@ def validate_public_release(
     ):
         return None, PublicReleaseOutcome.INVALID
     try:
-        instant = as_utc(datetime.fromisoformat(raw))
+        parsed = datetime.fromisoformat(raw)
+        if mode is PublicReleaseMode.WALL_TIME:
+            resolved = unique_aware_datetime(
+                parsed.year,
+                parsed.month,
+                parsed.day,
+                parsed.hour,
+                parsed.minute,
+                tz=timezone,
+                second=parsed.second,
+                microsecond=parsed.microsecond,
+            )
+            if resolved is None:
+                return None, PublicReleaseOutcome.INVALID
+            instant = as_utc(resolved)
+        else:
+            instant = as_utc(parsed)
         observed = as_utc(evidence.observed_at)
         start, end = release_period(release_date, precision)
         local_day = instant.astimezone(timezone).date()

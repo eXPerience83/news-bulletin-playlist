@@ -66,6 +66,7 @@ from news_bulletin_playlist.source_inspection import (
 )
 from news_bulletin_playlist.source_intake import SourceIntakeError, SourceIntakeFailure
 from news_bulletin_playlist.sources_admin_web import (
+    render_builtin_public_release_page,
     render_delete_source_page,
     render_edit_source_page,
     render_sources_page,
@@ -135,7 +136,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if path == "/admin/sources/audits/export":
             self._handle_source_audit_export()
             return
-        if path in {"/admin/sources/update", "/admin/sources/set-enabled"}:
+        if path in {
+            "/admin/sources/update",
+            "/admin/sources/set-enabled",
+            "/admin/sources/public-release-mode",
+        }:
             self._handle_source_mutation(path)
             return
         if path == "/admin/sources/delete":
@@ -173,7 +178,19 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source ID")
             return
         try:
-            source = service.get_custom_source(values["source_id"][0])
+            source_id = values["source_id"][0]
+            if source_id in {item.id for item in service.catalog.sources}:
+                builtin = service.get_builtin_source(source_id)
+                self._reply(
+                    HTTPStatus.OK,
+                    render_builtin_public_release_page(
+                        builtin,
+                        csrf_token=security.issue_csrf_token(),
+                        lan_mode=self._is_lan_admin_mode(),
+                    ),
+                )
+                return
+            source = service.get_custom_source(source_id)
             state = service.snapshot()
         except SourceMutationError:
             self._source_error(HTTPStatus.NOT_FOUND, "Custom source not found")
@@ -317,14 +334,24 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     "editorial_scope",
                 }
                 if path == "/admin/sources/update"
+                else {"csrf_token", "source_id", "public_release_mode"}
+                if path == "/admin/sources/public-release-mode"
                 else {"csrf_token", "source_id", "enabled"}
             )
-            if path == "/admin/sources/update" and "temporal_strategy" in form:
-                allowed.add("temporal_strategy")
+            if path == "/admin/sources/update":
+                allowed.update(
+                    name for name in ("temporal_strategy", "public_release_mode") if name in form
+                )
             if set(form) != allowed:
                 raise ValueError("Invalid source form")
             values = {name: single_form_value(form, name) for name in allowed - {"csrf_token"}}
-            if path == "/admin/sources/update":
+            if path == "/admin/sources/public-release-mode":
+                builtin_updated, configured = service.update_builtin_public_release_mode(
+                    values["source_id"], values["public_release_mode"]
+                )
+                updated_id = builtin_updated.id
+                event_name, next_state, notice = "admin_source_updated", "updated", "source-updated"
+            elif path == "/admin/sources/update":
                 updated, configured = service.update_metadata(
                     values["source_id"],
                     display_name=values["display_name"],
@@ -333,6 +360,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     language=values["language"],
                     editorial_scope=values["editorial_scope"],
                     temporal_strategy=values.get("temporal_strategy"),
+                    public_release_mode=values.get("public_release_mode"),
                 )
                 event_name, next_state, notice = (
                     "admin_source_updated",
@@ -357,6 +385,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except ValueError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source metadata or form")
             return
+        if path != "/admin/sources/public-release-mode":
+            updated_id = updated.id
         lifecycle = self.engine_lifecycle
         if lifecycle is not None:
             lifecycle.reconcile(configured=configured)
@@ -365,7 +395,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             severity=DiagnosticSeverity.INFO,
             component="admin",
             event_name=event_name,
-            source_id=str(updated.id),
+            source_id=str(updated_id),
             details={
                 "operation": "source_configuration",
                 "outcome": "applied",
@@ -534,8 +564,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     "collection_filter_id",
                 }
             )
-            if path != "/admin/sources/inspect" and "temporal_strategy" in form:
-                allowed.add("temporal_strategy")
+            if path != "/admin/sources/inspect":
+                allowed.update(
+                    name for name in ("temporal_strategy", "public_release_mode") if name in form
+                )
             if set(form) != allowed:
                 raise ValueError("Invalid source form fields")
             if path == "/admin/sources/inspect":
@@ -581,6 +613,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 parser_id=values["parser_id"],
                 collection_filter_id=filter_id,
                 temporal_strategy=values.get("temporal_strategy", "auto"),
+                public_release_mode=values.get("public_release_mode", "instant"),
             )
             service.create(source)
             security.set_source_inspection(None)

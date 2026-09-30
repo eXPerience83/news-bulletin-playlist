@@ -25,8 +25,9 @@ Keep three concerns separate:
 1. **Research catalog (this document / #53):** candidates, evidence, blockers and promotion state.
 2. **Built-in runtime catalog (`catalog.py`):** implemented sources with deterministic provider and
    Spotify contracts plus automated tests.
-3. **Installation state (`/data/managed-state.json`):** explicit playlist selections and, since
-   schema v4, canonical installation-owned Spotify-first source definitions. This is a persistence
+3. **Installation state (`/data/managed-state.json`):** explicit playlist selections, canonical
+   installation-owned Spotify-first source definitions and schema v5 bounded built-in public
+   release mode overrides. This is a persistence
    foundation with authenticated Add Source, safe custom-source lifecycle, assignment, and
    reference-aware deletion UI.
 

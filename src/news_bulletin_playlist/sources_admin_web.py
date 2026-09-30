@@ -9,7 +9,13 @@ from news_bulletin_playlist.catalog import BuiltInCatalog
 from news_bulletin_playlist.engine import EngineCycleResult, SourceCycleOutcome
 from news_bulletin_playlist.managed_admin import ManagedAdminSnapshot
 from news_bulletin_playlist.managed_state import ManagedSource, ManagedState, effective_sources
-from news_bulletin_playlist.models import EditorialScope, SourceId, SourceOriginKind
+from news_bulletin_playlist.models import (
+    EditorialScope,
+    SourceDefinition,
+    SourceId,
+    SourceOriginKind,
+)
+from news_bulletin_playlist.public_release_web import public_release_selector
 from news_bulletin_playlist.source_admin import MAX_SOURCE_AUDIT_BATCH_SOURCES
 from news_bulletin_playlist.temporal_strategy_web import (
     TEMPORAL_STRATEGY_LABELS,
@@ -110,6 +116,10 @@ def _sources_table(
             f'<input type="hidden" name="source_id" value="{safe_id}">'
             '<button class="button" type="submit">Audit</button></form>'
         )
+        if source.id in built_in_ids:
+            controls += (
+                f'<a href="/admin/sources/edit?source_id={safe_id}">Edit public release time</a>'
+            )
         if source.id not in built_in_ids:
             next_enabled = not source.enabled
             verb = "Enable" if next_enabled else "Disable"
@@ -144,7 +154,8 @@ def _sources_table(
             f"<td><code>{html.escape(source.editorial_scope.value)}</code></td>"
             f"<td>{html.escape(', '.join(str(value) for value in source.languages))}</td>"
             f"<td>{health}</td>"
-            f"<td>{html.escape(state_label)}<br>{TEMPORAL_STRATEGY_LABELS[source.temporal_strategy]}</td>"
+            f"<td>{html.escape(state_label)}<br>{TEMPORAL_STRATEGY_LABELS[source.temporal_strategy]}"
+            f"<br>Public release: {source.public_release_mode.value}</td>"
             f"<td>{html.escape(playlists)}</td>"
             f"<td>{status_badge(ownership, tone='muted')}</td>"
             f"<td>{controls}</td>"
@@ -207,6 +218,7 @@ def render_edit_source_page(
     <label>Language <input name="language" required value="{esc(source.language)}"></label>
     <label>Editorial scope <select name="editorial_scope">{scopes}</select></label>
     {temporal_strategy_selector(source.temporal_strategy)}
+    {public_release_selector(source.public_release_mode)}
     <p class="muted">Temporal changes apply at the next normal catalogue refresh.
        Saving does not force a Spotify request.</p>
     <button class="button button-primary" type="submit">Save source</button>
@@ -280,3 +292,34 @@ def _source_health_badge(outcome: SourceCycleOutcome | None, *, enabled: bool = 
     if outcome.ok:
         return status_badge("Healthy", tone="success")
     return status_badge("Failed", tone="danger")
+
+
+def render_builtin_public_release_page(
+    source: SourceDefinition, *, csrf_token: str, lan_mode: bool
+) -> bytes:
+    """Edit only the installation-owned public policy overlay of an image-owned source."""
+    esc = html.escape
+    body = (
+        (render_lan_warning() if lan_mode else "")
+        + f"""
+<section class="section admin-section">
+  <h2>Spotify public release time</h2>
+  <p>{esc(source.display_name)}; timezone: {esc(str(source.timezone))}.</p>
+  <p>Title time detection (read-only): {TEMPORAL_STRATEGY_LABELS[source.temporal_strategy]}.</p>
+  <form method="post" action="/admin/sources/public-release-mode">
+    <input type="hidden" name="csrf_token" value="{esc(csrf_token, quote=True)}">
+    <input type="hidden" name="source_id" value="{esc(str(source.id), quote=True)}">
+    {public_release_selector(source.public_release_mode)}
+    <p>Changes apply at the next normal catalogue refresh. Saving makes no Spotify requests.
+       Already accepted public instants are retained in history; Disabled suspends their use.</p>
+    <button class="button button-primary" type="submit">Save source</button>
+  </form>
+</section>
+"""
+    )
+    return render_admin_shell(
+        title="Edit source",
+        active_tab="sources",
+        intro="Configure public release interpretation for this built-in source.",
+        body_html=body,
+    )

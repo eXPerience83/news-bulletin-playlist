@@ -20,6 +20,14 @@ class OrderingPolicy(StrEnum):
     EDITION_AT_DESC = "edition_at_desc"
 
 
+class PublicReleaseMode(StrEnum):
+    """Interpretation of public Spotify metadata, independent of title detection."""
+
+    INSTANT = "instant"
+    WALL_TIME = "wall_time"
+    DISABLED = "disabled"
+
+
 class TemporalStrategy(StrEnum):
     """Optional editorial evidence contract, applied only after source-local inference."""
 
@@ -109,6 +117,7 @@ class SourceDefinition:
     enabled: bool
     parser_id: ParserId
     temporal_strategy: TemporalStrategy = field(default=TemporalStrategy.AUTO, kw_only=True)
+    public_release_mode: PublicReleaseMode = field(default=PublicReleaseMode.INSTANT, kw_only=True)
     collection_filter_id: str | None = None
     editorial_scope: EditorialScope = EditorialScope.MIXED
     external_references: tuple[ExternalReference, ...] = ()
@@ -117,6 +126,8 @@ class SourceDefinition:
     def __post_init__(self) -> None:
         if not isinstance(self.origin, SourceOrigin):
             raise ValueError("source origin must be a SourceOrigin")
+        if not isinstance(self.public_release_mode, PublicReleaseMode):
+            raise ValueError("unknown public release mode")
         if not isinstance(self.temporal_strategy, TemporalStrategy):
             raise ValueError("unknown temporal strategy")
         if self.collection_filter_id is not None and not self.collection_filter_id.strip():

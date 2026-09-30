@@ -877,7 +877,7 @@ def test_real_http_custom_lifecycle_is_local_and_preserves_references(tmp_path: 
         assert b"Edit" in sources and b"Disable" in sources
         for row in re.findall(rb"<tr>.*?</tr>", sources, flags=re.DOTALL):
             if b"Built-in" in row:
-                assert b"/admin/sources/edit" not in row
+                assert b"Edit public release time" in row
                 assert b"/admin/sources/set-enabled" not in row
         edit_path = f"/admin/sources/edit?source_id=custom_{SHOW}"
         status, _, edit = _request(server, "GET", edit_path, cookie=cookie)
@@ -1049,7 +1049,7 @@ def test_builtin_lifecycle_rejected_and_invalid_csrf_has_no_effect(tmp_path: Pat
         builtin = str(BUILTIN_CATALOG.sources[0].id)
         assert (
             _request(server, "GET", f"/admin/sources/edit?source_id={builtin}", cookie=cookie)[0]
-            == 404
+            == 200
         )
         _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
         token = _csrf(page)

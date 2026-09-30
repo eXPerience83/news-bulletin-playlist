@@ -20,7 +20,7 @@ from news_bulletin_playlist.duration_profile import (
     profile_as_dict,
 )
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateError, effective_sources
-from news_bulletin_playlist.models import ParserId, SourceId, TemporalStrategy
+from news_bulletin_playlist.models import ParserId, PublicReleaseMode, SourceId, TemporalStrategy
 from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
 from news_bulletin_playlist.registry import has_collection_filter, has_title_parser
@@ -204,6 +204,7 @@ class SourceInspection:
     episodes: tuple[EpisodeInspectionEvidence, ...]
     public_status: str
     public_observation: PublicInspectionEvidence | None
+    public_release_mode: PublicReleaseMode = PublicReleaseMode.INSTANT
     temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
     temporal_supporting_rows: int = 0
     temporal_conflicts: int = 0
@@ -534,6 +535,7 @@ def inspect_source(
         episodes=evidence,
         public_status=public_status,
         public_observation=public_observation,
+        public_release_mode=snapshot.public_release_mode,
         temporal_strategy=snapshot.temporal_strategy,
         temporal_supporting_rows=snapshot.temporal_supporting_rows,
         temporal_conflicts=snapshot.temporal_conflicts,
@@ -624,6 +626,7 @@ def serialize_source_inspection(report: SourceInspection) -> bytes:
         "publisher_hint": report.publisher_hint,
         "total_episodes_hint": report.total_episodes_hint,
         "parser_id": report.parser_id,
+        "public_release_mode": report.public_release_mode.value,
         "temporal_strategy": report.temporal_strategy,
         "temporal_supporting_rows": report.temporal_supporting_rows,
         "temporal_conflicts": report.temporal_conflicts,

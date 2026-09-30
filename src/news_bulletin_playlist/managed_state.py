@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.custom_source_policy import custom_strategy_allowed
 from news_bulletin_playlist.file_durability import fsync_directory
 from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
@@ -28,6 +28,7 @@ from news_bulletin_playlist.models import (
     ParserId,
     PlaylistDefinition,
     PlaylistId,
+    PublicReleaseMode,
     SourceDefinition,
     SourceId,
     SourceOrigin,
@@ -38,7 +39,7 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 MANAGED_STATE_FILENAME = "managed-state.json"
-_MANAGED_STATE_SCHEMA_VERSION = 4
+_MANAGED_STATE_SCHEMA_VERSION = 5
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
 _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
@@ -88,6 +89,37 @@ class ManagedSource:
     collection_filter_id: str | None
     enabled: bool
     temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
+    public_release_mode: PublicReleaseMode = PublicReleaseMode.INSTANT
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedSourceOverride:
+    source_id: SourceId
+    public_release_mode: PublicReleaseMode
+
+
+def _public_release_mode(value: object) -> PublicReleaseMode:
+    if not isinstance(value, str):
+        raise ManagedStateError("unknown public_release_mode")
+    try:
+        return PublicReleaseMode(value)
+    except ValueError:
+        raise ManagedStateError("unknown public_release_mode") from None
+
+
+def _validate_overrides(
+    overrides: tuple[ManagedSourceOverride, ...], catalog: BuiltInCatalog
+) -> None:
+    known = {source.id for source in catalog.sources}
+    seen: set[SourceId] = set()
+    for override in overrides:
+        if override.source_id not in known:
+            raise ManagedStateError("unknown built-in source override")
+        if override.source_id in seen:
+            raise ManagedStateError("duplicate built-in source override")
+        if not isinstance(override.public_release_mode, PublicReleaseMode):
+            raise ManagedStateError("unknown public_release_mode")
+        seen.add(override.source_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +127,7 @@ class ManagedState:
     schema_version: int = _MANAGED_STATE_SCHEMA_VERSION
     sources: tuple[ManagedSource, ...] = ()
     playlists: tuple[ManagedPlaylist, ...] = ()
+    source_overrides: tuple[ManagedSourceOverride, ...] = ()
 
 
 class ManagedStateStore:
@@ -255,6 +288,14 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
 
 def effective_sources(catalog: BuiltInCatalog, state: ManagedState) -> tuple[SourceDefinition, ...]:
     """Compile a deterministic, immutable built-in plus installation-owned source set."""
+    _validate_overrides(state.source_overrides, catalog)
+    overrides = {item.source_id: item.public_release_mode for item in state.source_overrides}
+    built_ins = tuple(
+        replace(source, public_release_mode=overrides[source.id])
+        if source.id in overrides
+        else source
+        for source in catalog.sources
+    )
     built_in_ids = {source.id for source in catalog.sources}
     built_in_shows = {
         reference.external_id.strip()
@@ -291,6 +332,7 @@ def effective_sources(catalog: BuiltInCatalog, state: ManagedState) -> tuple[Sou
                 enabled=managed.enabled,
                 parser_id=managed.parser_id,
                 temporal_strategy=managed.temporal_strategy,
+                public_release_mode=managed.public_release_mode,
                 collection_filter_id=managed.collection_filter_id,
                 editorial_scope=managed.editorial_scope,
                 external_references=(
@@ -298,7 +340,7 @@ def effective_sources(catalog: BuiltInCatalog, state: ManagedState) -> tuple[Sou
                 ),
             )
         )
-    return catalog.sources + tuple(sorted(custom, key=lambda source: str(source.id)))
+    return built_ins + tuple(sorted(custom, key=lambda source: str(source.id)))
 
 
 def parse_managed_state(payload: object) -> ManagedState:
@@ -316,6 +358,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         _LEGACY_MANAGED_STATE_SCHEMA_VERSION,
         _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION,
         3,
+        4,
         _MANAGED_STATE_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
@@ -323,14 +366,16 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         )
     _known_keys(
         root,
-        {"schema_version", "playlists", "sources"}
+        {"schema_version", "playlists", "sources", "source_overrides"}
+        if source_schema_version >= 5
+        else {"schema_version", "playlists", "sources"}
         if source_schema_version >= 3
         else {"schema_version", "playlists"},
         "managed state",
     )
     sources = (
         tuple(
-            _parse_source(item, f"sources[{index}]")
+            _parse_source(item, f"sources[{index}]", source_schema_version=source_schema_version)
             for index, item in enumerate(
                 _sequence(_required(root, "sources", "managed state"), "sources")
             )
@@ -338,6 +383,22 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         if source_schema_version >= 3
         else ()
     )
+    overrides = []
+    if source_schema_version >= 5:
+        for index, value in enumerate(
+            _sequence(_required(root, "source_overrides", "managed state"), "source_overrides")
+        ):
+            path = f"source_overrides[{index}]"
+            data = _mapping(value, path)
+            _known_keys(data, {"source_id", "public_release_mode"}, path)
+            overrides.append(
+                ManagedSourceOverride(
+                    SourceId(_string(_required(data, "source_id", path), f"{path}.source_id")),
+                    _public_release_mode(_required(data, "public_release_mode", path)),
+                )
+            )
+    sorted_overrides = tuple(sorted(overrides, key=lambda item: str(item.source_id)))
+    _validate_overrides(sorted_overrides, BUILTIN_CATALOG)
     seen_source_ids: set[SourceId] = set()
     seen_show_ids: set[str] = set()
     for index, source in enumerate(sources):
@@ -386,6 +447,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
             schema_version=_MANAGED_STATE_SCHEMA_VERSION,
             sources=sources,
             playlists=playlists,
+            source_overrides=sorted_overrides,
         ),
         migrated_from,
     )
@@ -394,6 +456,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
 def serialize_managed_state(state: ManagedState) -> dict[str, object]:
     if state.schema_version != _MANAGED_STATE_SCHEMA_VERSION:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
+    _validate_overrides(state.source_overrides, BUILTIN_CATALOG)
     for index, source in enumerate(state.sources):
         _validate_source(source, f"sources[{index}]")
     serialized_playlists: list[dict[str, object]] = []
@@ -419,10 +482,23 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": state.schema_version,
         "sources": [_serialize_source(source) for source in sorted_sources],
+        "source_overrides": [
+            {
+                "source_id": str(item.source_id),
+                "public_release_mode": item.public_release_mode.value,
+            }
+            for item in sorted(state.source_overrides, key=lambda item: str(item.source_id))
+        ],
         "playlists": serialized_playlists,
     }
     canonical = parse_managed_state(payload)
-    if canonical != replace(state, sources=sorted_sources):
+    if canonical != replace(
+        state,
+        sources=sorted_sources,
+        source_overrides=tuple(
+            sorted(state.source_overrides, key=lambda item: str(item.source_id))
+        ),
+    ):
         raise ManagedStateError("managed state contains non-canonical values")
     return payload
 
@@ -438,12 +514,13 @@ def _serialize_source(source: ManagedSource) -> dict[str, object]:
         "timezone": source.timezone,
         "parser_id": str(source.parser_id),
         "temporal_strategy": source.temporal_strategy.value,
+        "public_release_mode": source.public_release_mode.value,
         "collection_filter_id": source.collection_filter_id,
         "enabled": source.enabled,
     }
 
 
-def _parse_source(value: object, path: str) -> ManagedSource:
+def _parse_source(value: object, path: str, *, source_schema_version: int) -> ManagedSource:
     data = _mapping(value, path)
     _known_keys(
         data,
@@ -457,11 +534,14 @@ def _parse_source(value: object, path: str) -> ManagedSource:
             "timezone",
             "parser_id",
             "temporal_strategy",
+            "public_release_mode",
             "collection_filter_id",
             "enabled",
         },
         path,
     )
+    if source_schema_version < 5 and "public_release_mode" in data:
+        raise ManagedStateError(f"{path}.public_release_mode: requires schema v5")
     origin_data = _mapping(_required(data, "origin", path), f"{path}.origin")
     _known_keys(origin_data, {"kind", "code"}, f"{path}.origin")
     try:
@@ -493,6 +573,7 @@ def _parse_source(value: object, path: str) -> ManagedSource:
         timezone=_string(_required(data, "timezone", path), f"{path}.timezone"),
         parser_id=ParserId(_string(_required(data, "parser_id", path), f"{path}.parser_id")),
         temporal_strategy=_temporal_strategy(data.get("temporal_strategy", "auto")),
+        public_release_mode=_public_release_mode(data.get("public_release_mode", "instant")),
         collection_filter_id=(
             None
             if data.get("collection_filter_id") is None
@@ -532,6 +613,8 @@ def _validate_source(source: ManagedSource, path: str) -> None:
         ZoneInfo(source.timezone)
     except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
         raise ManagedStateError(f"{path}.timezone: unknown IANA timezone") from exc
+    if not isinstance(source.public_release_mode, PublicReleaseMode):
+        raise ManagedStateError(f"{path}.public_release_mode: unknown mode")
     if not isinstance(source.temporal_strategy, TemporalStrategy):
         raise ManagedStateError(f"{path}.temporal_strategy: unknown strategy")
     if not custom_strategy_allowed(str(source.parser_id), None):

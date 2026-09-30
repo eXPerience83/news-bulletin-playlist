@@ -17,6 +17,7 @@ from news_bulletin_playlist.managed_provisioning import (
 )
 from news_bulletin_playlist.managed_state import (
     ManagedSource,
+    ManagedSourceOverride,
     ManagedState,
     ManagedStateStore,
     compile_engine_config,
@@ -27,6 +28,8 @@ from news_bulletin_playlist.models import (
     EditorialScope,
     LanguageTag,
     ParserId,
+    PublicReleaseMode,
+    SourceDefinition,
     SourceId,
     SourceOrigin,
     SourceOriginKind,
@@ -343,6 +346,7 @@ class SourceAdminService:
         parser_id: str,
         collection_filter_id: str | None,
         temporal_strategy: str = "auto",
+        public_release_mode: str = "instant",
     ) -> ManagedSource:
         canonical = normalize_spotify_show_locator(show_id)
         if canonical != show_id:
@@ -360,6 +364,7 @@ class SourceAdminService:
                 collection_filter_id=collection_filter_id,
                 enabled=True,
                 temporal_strategy=TemporalStrategy(temporal_strategy),
+                public_release_mode=PublicReleaseMode(public_release_mode),
             )
             serialize_managed_state(ManagedState(sources=(source,)))
         except ValueError as exc:
@@ -379,6 +384,36 @@ class SourceAdminService:
             self._check_duplicate(latest, source)
             self.store.save(replace(latest, sources=(*latest.sources, source)))
 
+    def get_builtin_source(self, source_id: str) -> SourceDefinition:
+        state = self.snapshot()
+        if source_id not in {source.id for source in self.catalog.sources}:
+            raise SourceMutationError("Built-in source not found")
+        return next(
+            source for source in effective_sources(self.catalog, state) if source.id == source_id
+        )
+
+    def update_builtin_public_release_mode(
+        self, source_id: str, mode: str
+    ) -> tuple[SourceDefinition, bool]:
+        selected = PublicReleaseMode(mode)
+        with self.synchronization.hold():
+            state = self.store.load()
+            base = next((source for source in self.catalog.sources if source.id == source_id), None)
+            if base is None:
+                raise SourceMutationError("Built-in source not found")
+            overrides = tuple(
+                item for item in state.source_overrides if item.source_id != source_id
+            )
+            # Choosing the image default removes the override, restoring image ownership.
+            if selected is not base.public_release_mode:
+                overrides += (ManagedSourceOverride(base.id, selected),)
+            updated = replace(state, source_overrides=overrides)
+            compile_engine_config(self.catalog, updated)
+            self.store.save(updated)
+            return replace(base, public_release_mode=selected), any(
+                p.enabled for p in state.playlists
+            )
+
     def get_custom_source(self, source_id: str) -> ManagedSource:
         state = self.snapshot()
         return self._custom_source(state, source_id)
@@ -393,6 +428,7 @@ class SourceAdminService:
         language: str,
         editorial_scope: str,
         temporal_strategy: str | None = None,
+        public_release_mode: str | None = None,
     ) -> tuple[ManagedSource, bool]:
         with self.synchronization.hold():
             state = self.store.load()
@@ -407,6 +443,9 @@ class SourceAdminService:
                     temporal_strategy=current.temporal_strategy
                     if temporal_strategy is None
                     else TemporalStrategy(temporal_strategy),
+                    public_release_mode=current.public_release_mode
+                    if public_release_mode is None
+                    else PublicReleaseMode(public_release_mode),
                 )
                 serialize_managed_state(ManagedState(sources=(updated,)))
             except ValueError as exc:

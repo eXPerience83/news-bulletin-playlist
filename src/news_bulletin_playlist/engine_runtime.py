@@ -477,6 +477,7 @@ def _playlist_write_contract(
                 str(source.timezone),
                 str(source.parser_id),
                 source.temporal_strategy.value,
+                source.public_release_mode.value,
                 source.collection_filter_id,
                 tuple(
                     sorted(

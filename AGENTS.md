@@ -121,13 +121,19 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - Temporal detection defaults to AUTO inferred exclusively from the current source catalogue.
   Never inject historical broadcaster layouts globally. Optional temporal_strategy capabilities
   apply after AUTO and must be reusable, bounded and product-independent; disabled preserves fallback.
+- PublicReleaseMode (instant/wall_time/disabled) is independent of TemporalStrategy.
+  Wall time uses source IANA timezone and shared DST-safe unique resolution, preserving seconds
+  and microseconds. Accepted PUBLIC history is forward-only; disabled prevents current reuse at
+  the next natural refresh without deleting history. Re-enable may reuse the original instant.
 - Do not download or store audio.
 - Persisted Spotify episode URIs must satisfy the shared episode-URI invariant before reuse.
 - A failed source or destination must not unnecessarily block independent sources/playlists.
 - Database format 1 is the supported Spotify-first persistence baseline; format 2 adds separate
   accepted-episode history; current format 3 widens episode/history provenance to validated public
-  release timestamps through a transactional forward migration. Managed-state JSON uses schema v4
-  with atomic v1/v2/v3 upgrades and absent temporal_strategy defaulting to AUTO. The database filename remains
+  release timestamps through a transactional forward migration. Managed-state JSON uses schema v5
+  with atomic v1/v2/v3/v4 upgrades, absent temporal_strategy defaulting to AUTO and absent
+  public_release_mode defaulting to instant. Built-in overrides persist only source ID and
+  public mode; built-in definitions remain image-owned. The database filename remains
   `/data/news-bulletin-playlist-v1.sqlite3`. Pre-0.1 private-development SQLite tables/migrations
   are not runtime compatibility targets; future persistence changes need reviewed forward migrations.
 

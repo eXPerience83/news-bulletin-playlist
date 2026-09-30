@@ -7,6 +7,7 @@ import html
 from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warning
 from news_bulletin_playlist.duration_profile import profile_as_dict
 from news_bulletin_playlist.models import EditorialScope, SourceOriginKind
+from news_bulletin_playlist.public_release_web import public_release_selector
 from news_bulletin_playlist.source_inspection import SourceInspection
 from news_bulletin_playlist.temporal_strategy_web import temporal_strategy_selector
 
@@ -95,6 +96,7 @@ def render_source_review_page(
     <label>Editorial scope <select name="editorial_scope">{scopes}</select></label>
     <label>IANA timezone <input name="timezone" required></label>
     {temporal_strategy_selector()}
+    {public_release_selector()}
     <input type="hidden" name="parser_id" value="{esc(report.parser_id)}">
     <input type="hidden" name="collection_filter_id"
            value="{esc(report.collection_filter_id or "")}">
@@ -111,6 +113,7 @@ def render_source_review_page(
         "or its playlists.</p>"
         f"<p>Evaluated timezone: {esc(report.timezone)}; parser: {esc(report.parser_id)}; "
         f"filter: {esc(report.collection_filter_id or 'none')}.</p>"
+        f"<p>Spotify public release mode: {esc(report.public_release_mode.value)}.</p>"
         f"<p>Temporal strategy: {esc(report.temporal_strategy)}; "
         f"structure detected: {'yes' if report.temporal_supporting_rows else 'no'}; "
         f"supporting rows: {report.temporal_supporting_rows}; "

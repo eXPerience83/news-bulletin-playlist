@@ -19,7 +19,7 @@ def temporal_strategy_selector(selected: TemporalStrategy = TemporalStrategy.AUT
         for strategy, label in TEMPORAL_STRATEGY_LABELS.items()
     )
     return (
-        f'<label>Temporal detection <select name="temporal_strategy">{options}</select></label>'
-        "<p>Spotify public exact release time, when available and validated, is used automatically "
-        "after semantic title detection and before first-seen fallback.</p>"
+        f'<label>Title time detection <select name="temporal_strategy">{options}</select></label>'
+        "<p>Title time detection and Spotify public release time are independent policies. "
+        "Proven title time always takes priority.</p>"
     )

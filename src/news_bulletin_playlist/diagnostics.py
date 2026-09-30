@@ -47,6 +47,8 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "http_status",
         "parser_fallback_count",
         "temporal_strategy",
+        "public_release_mode",
+        "public_release_disabled_count",
         "temporal_supporting_rows",
         "temporal_conflicts",
         "timestamp_title_count",
@@ -129,6 +131,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
     }
 )
 _ALLOWED_DETAIL_STRING_VALUES = {
+    "public_release_mode": frozenset({"instant", "wall_time", "disabled"}),
     "temporal_strategy": frozenset(
         {
             "auto",

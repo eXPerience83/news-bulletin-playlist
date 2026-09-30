@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from news_bulletin_playlist.models import ParserId, TemporalStrategy
+from news_bulletin_playlist.models import ParserId, PublicReleaseMode, TemporalStrategy
 from news_bulletin_playlist.providers.base import CatalogueParseContext
 from news_bulletin_playlist.providers.temporal_detector import TemporalSample
 from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
@@ -45,6 +45,9 @@ class SpotifyCatalogueClient(Protocol):
 
 class CatalogueSource(SpotifyShowSource, Protocol):
     @property
+    def public_release_mode(self) -> PublicReleaseMode: ...
+
+    @property
     def parser_id(self) -> ParserId: ...
 
     @property
@@ -66,6 +69,7 @@ class CatalogueSnapshot:
     parser_fallback_count: int
     filter_rejected_count: int
     evidence: tuple[CatalogueEpisodeEvidence, ...] = ()
+    public_release_mode: PublicReleaseMode = PublicReleaseMode.INSTANT
     temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
     temporal_supporting_rows: int = 0
 
@@ -201,6 +205,7 @@ def fetch_source_catalogue(
             precision=candidate.release_date_precision,
             timezone=catalogue_timezone,
             semantic_exact=parsed is not None,
+            mode=source.public_release_mode,
         )
         if public_at is not None:
             edition_at = public_at
@@ -253,6 +258,7 @@ def fetch_source_catalogue(
         parser_fallback_count=parser_fallbacks,
         filter_rejected_count=filter_rejected,
         evidence=tuple(evidence),
+        public_release_mode=source.public_release_mode,
         temporal_strategy=detector.strategy,
         temporal_supporting_rows=detector.supporting_rows,
         temporal_conflicts=detector.conflicts,
@@ -278,6 +284,7 @@ def apply_public_release_evidence(
             precision=episode.release_date_precision,
             timezone=zone,
             semantic_exact=episode.timestamp_source is TimestampSource.TITLE,
+            mode=source.public_release_mode,
         )
         outcomes[episode.spotify_episode_id] = outcome
         episodes.append(
@@ -304,6 +311,7 @@ def apply_public_release_evidence(
         episodes=tuple(episodes),
         evidence=rows,
         api_latest_id=_provable_latest_id(episodes, zone),
+        public_release_counts=tuple(sorted(Counter(outcomes.values()).items())),
     )
 
 
