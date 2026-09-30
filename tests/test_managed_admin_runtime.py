@@ -291,6 +291,55 @@ def test_dashboard_requires_auth_and_exposes_available_template(tmp_path: Path) 
     assert "/admin/covers/spain_spanish_news.jpg" in body
 
 
+@pytest.mark.parametrize(
+    ("notice_key", "message"),
+    [
+        ("playlist-activated", "Playlist activated successfully."),
+        ("playlist-settings-saved", "Playlist settings saved successfully."),
+        ("spotify-sync-applied", "Spotify metadata and cover applied successfully."),
+        ("playlist-stopped", "Playlist is no longer managed."),
+        ("playlist-provisioning-adopted", "Existing Spotify playlist adopted successfully."),
+        (
+            "playlist-provisioning-cleared",
+            "Uncertain playlist creation state cleared successfully.",
+        ),
+    ],
+)
+def test_admin_success_notices_are_allow_listed_and_rendered(
+    tmp_path: Path, notice_key: str, message: str
+) -> None:
+    service, _ = _service(tmp_path)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=_FakeLifecycle(),
+        path=f"/admin/?notice={notice_key}",
+    )
+
+    handler.do_GET()
+
+    response = _response(handler)
+    assert response.status == HTTPStatus.OK
+    assert message in response.payload.decode()
+
+
+def test_admin_notice_query_does_not_echo_unknown_values(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    sentinel = "notice-user-controlled-sentinel"
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=_FakeLifecycle(),
+        path=f"/admin/?notice={sentinel}",
+    )
+
+    handler.do_GET()
+
+    response = _response(handler)
+    assert response.status == HTTPStatus.OK
+    assert sentinel not in response.payload.decode()
+
+
 def test_activation_is_csrf_protected_persists_once_and_requests_scheduler_start(
     tmp_path: Path,
 ) -> None:
@@ -314,7 +363,7 @@ def test_activation_is_csrf_protected_persists_once_and_requests_scheduler_start
 
     response = _response(handler)
     assert response.status == HTTPStatus.SEE_OTHER
-    assert response.extra_headers["Location"] == "/admin/"
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-activated"
     assert provider.calls == 1
     assert factory.tokens == ["access-token-sentinel"]
     assert len(factory.client.create_calls) == 1
@@ -335,6 +384,7 @@ def test_activation_is_csrf_protected_persists_once_and_requests_scheduler_start
     )
     replay.do_POST()
     assert _response(replay).status == HTTPStatus.FORBIDDEN
+    assert "Location" not in _response(replay).extra_headers
     assert provider.calls == 1
     assert len(factory.client.create_calls) == 1
 
@@ -370,7 +420,9 @@ def test_clear_uncertain_provisioning_route_is_csrf_protected_and_local_only(
     )
     handler.do_POST()
 
-    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    response = _response(handler)
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-provisioning-cleared"
     assert journal.load() is None
     assert factory.client.create_calls == []
     assert lifecycle.reconcile_calls == [False]
@@ -441,7 +493,9 @@ def test_adopt_uncertain_provisioning_route_verifies_owner_and_starts_scheduler(
     )
     handler.do_POST()
 
-    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    response = _response(handler)
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-provisioning-adopted"
     assert service.snapshot().managed[0].destination.external_id == "A" * 22
     assert factory.client.create_calls == []
     assert lifecycle.reconcile_calls == [True]
@@ -465,7 +519,9 @@ def test_activation_route_persists_requested_duration_without_metadata_io(tmp_pa
     )
     handler.do_POST()
     managed = service.snapshot().managed[0]
-    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    response = _response(handler)
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-activated"
     assert managed.max_duration_seconds == 900
     assert factory.client.update_calls == []
     assert (
@@ -501,7 +557,9 @@ def test_update_route_persists_exact_duration_without_metadata_io(tmp_path: Path
         security=security,
     )
     handler.do_POST()
-    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    response = _response(handler)
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-settings-saved"
     assert service.snapshot().managed[0].max_duration_seconds == 720
     assert factory.client.update_calls == []
 
@@ -577,7 +635,9 @@ def test_playlist_save_preserves_visible_custom_source(tmp_path: Path, disabled:
         security=security,
     )
     post_handler.do_POST()
-    assert _response(post_handler).status == HTTPStatus.SEE_OTHER
+    post_response = _response(post_handler)
+    assert post_response.status == HTTPStatus.SEE_OTHER
+    assert post_response.extra_headers["Location"] == "/admin/?notice=playlist-settings-saved"
     persisted = service.store.load()
     assert persisted.sources == (custom,)
     assert persisted.playlists[0].source_ids == (SourceId("ser"), custom.id)
@@ -641,7 +701,9 @@ def test_duration_route_rejects_invalid_values_without_state_change(
         security=security,
     )
     handler.do_POST()
-    assert _response(handler).status == expected_status
+    response = _response(handler)
+    assert response.status == expected_status
+    assert "Location" not in response.extra_headers
     assert service.snapshot().managed[0] == current
 
 
@@ -674,7 +736,9 @@ def test_source_only_edit_works_offline_and_does_not_write_spotify_metadata(
     )
     handler.do_POST()
 
-    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    response = _response(handler)
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-settings-saved"
     assert service.snapshot().managed[0].source_ids == (SourceId("rne"),)
     assert factory.client.update_calls == []
     assert lifecycle.reconcile_calls == [True]
@@ -711,6 +775,7 @@ def test_metadata_edit_works_offline_and_does_not_write_spotify_metadata(
 
     response = _response(handler)
     assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-settings-saved"
     updated = service.snapshot().managed[0]
     assert updated.display_name == "Nuevo nombre"
     assert updated.description == current.description
@@ -755,6 +820,7 @@ def test_metadata_save_does_not_call_spotify_even_if_remote_metadata_would_fail(
 
     response = _response(handler)
     assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-settings-saved"
     updated = service.snapshot().managed[0]
     assert updated.display_name == "Nuevo nombre"
     assert client.update_calls == []
@@ -793,6 +859,7 @@ def test_managed_state_error_is_500_and_does_not_expose_storage_path(tmp_path: P
 
     response = _response(handler)
     assert response.status == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert "Location" not in response.extra_headers
     body = response.payload.decode()
     assert "Managed playlist state could not be changed safely" in body
     assert str(state_path) not in body
@@ -821,7 +888,9 @@ def test_stop_managing_keeps_spotify_destination_and_requests_scheduler_stop(
     )
     handler.do_POST()
 
-    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    response = _response(handler)
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-stopped"
     assert service.snapshot().managed == ()
     assert lifecycle.reconcile_calls == [False]
     assert factory.client.create_calls
@@ -1014,6 +1083,8 @@ def test_lifecycle_reconcile_runs_after_configuration_lock_is_released(tmp_path:
 
     handler.do_POST()
 
-    assert _response(handler).status == HTTPStatus.SEE_OTHER
+    response = _response(handler)
+    assert response.status == HTTPStatus.SEE_OTHER
+    assert response.extra_headers["Location"] == "/admin/?notice=playlist-stopped"
     assert synchronization.depth == 0
     assert lifecycle.reconcile_calls == [False]
