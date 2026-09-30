@@ -209,6 +209,7 @@ class InstrumentedEngineCycleRunner:
         if source.refreshed and source.temporal_metrics is not None:
             details.update(asdict(source.temporal_metrics))
             details["temporal_strategy"] = source.temporal_metrics.temporal_strategy.value
+            details["public_release_mode"] = source.temporal_metrics.public_release_mode.value
 
         self.diagnostics.emit(
             occurred_at=occurred_at,

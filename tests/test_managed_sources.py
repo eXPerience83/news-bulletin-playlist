@@ -92,7 +92,7 @@ def _payload() -> dict[str, object]:
 def test_temporal_strategy_round_trip_without_a_schema_migration(strategy):
     state = _state(replace(_source(), temporal_strategy=strategy))
     encoded = serialize_managed_state(state)
-    assert encoded["schema_version"] == 4
+    assert encoded["schema_version"] == 5
     parsed = parse_managed_state(encoded)
     assert parsed.sources[0].temporal_strategy is strategy
     assert effective_sources(BUILTIN_CATALOG, parsed)[-1].temporal_strategy is strategy
@@ -108,7 +108,7 @@ def test_absent_temporal_strategy_is_auto_and_unknown_values_are_rejected():
             parse_managed_state(encoded)
 
 
-def test_v4_round_trip_compiles_custom_without_changing_builtins(tmp_path: Path) -> None:
+def test_current_round_trip_compiles_custom_without_changing_builtins(tmp_path: Path) -> None:
     path = tmp_path / "managed-state.json"
     store = ManagedStateStore(path)
     state = _state()
@@ -132,11 +132,14 @@ def test_v4_round_trip_compiles_custom_without_changing_builtins(tmp_path: Path)
 
 
 @pytest.mark.parametrize("has_strategy", [False, True])
-def test_v3_to_v4_preserves_custom_metadata_and_migrates_atomically(
+def test_v3_to_current_preserves_custom_metadata_and_migrates_atomically(
     tmp_path: Path, has_strategy: bool
 ) -> None:
     payload = _payload()
     payload["schema_version"] = 3
+    payload.pop("source_overrides", None)
+    for item in payload.get("sources", []):
+        item.pop("public_release_mode", None)
     if has_strategy:
         payload["sources"][0]["temporal_strategy"] = "disabled"
     else:
@@ -145,10 +148,10 @@ def test_v3_to_v4_preserves_custom_metadata_and_migrates_atomically(
     path.write_text(json.dumps(payload))
     state = ManagedStateStore(path).load()
     expected = TemporalStrategy.DISABLED if has_strategy else TemporalStrategy.AUTO
-    assert state.schema_version == 4
+    assert state.schema_version == 5
     assert state.sources[0].temporal_strategy is expected
     migrated = json.loads(path.read_text())
-    assert migrated["schema_version"] == 4
+    assert migrated["schema_version"] == 5
     assert migrated["playlists"] == payload["playlists"]
     for key, value in payload["sources"][0].items():
         assert migrated["sources"][0][key] == value
@@ -210,7 +213,7 @@ def test_legacy_schema_migrates_atomically_with_empty_sources(tmp_path: Path, ve
     state = ManagedStateStore(path).load()
 
     persisted = json.loads(path.read_text())
-    assert state.schema_version == persisted["schema_version"] == 4
+    assert state.schema_version == persisted["schema_version"] == 5
     assert state.sources == ()
     assert persisted["sources"] == []
     assert persisted["playlists"][0]["source_ids"] == ["ser"]
@@ -221,6 +224,7 @@ def test_legacy_schema_migrates_atomically_with_empty_sources(tmp_path: Path, ve
 def test_legacy_schema_rejects_v3_sources_key(version: int) -> None:
     payload = _payload()
     payload["schema_version"] = version
+    payload.pop("source_overrides", None)
     with pytest.raises(ManagedStateError, match="unknown key 'sources'"):
         parse_managed_state(payload)
 

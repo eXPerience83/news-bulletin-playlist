@@ -14,6 +14,7 @@ from news_bulletin_playlist.models import (
     OrderingPolicy,
     ParserId,
     PlaylistId,
+    PublicReleaseMode,
     SourceDefinition,
     SourceId,
     SourceOrigin,
@@ -125,6 +126,8 @@ BUILTIN_SOURCES: tuple[SourceDefinition, ...] = (
         timezone=ZoneInfo("Europe/Madrid"),
         enabled=True,
         parser_id=ParserId("rne"),
+        # Provisional pending post-#443 Audit All verification (#439).
+        public_release_mode=PublicReleaseMode.WALL_TIME,
         temporal_strategy=TemporalStrategy.FULL_DATETIME,
         editorial_scope=EditorialScope.NATIONAL,
         external_references=(ExternalReference("spotify", "show", "0UgidTKsoaHiHDARuPQNW1"),),

@@ -64,9 +64,11 @@ invent provider work.
 ## Configuration model
 
 Application-owned built-in source/catalog knowledge is separate from installation-owned playlist and
-custom Spotify-first source choices. Managed-state schema v4 persists only canonical custom source
-configuration; v1/v2 migrate atomically with no custom sources. Authenticated Add Source
-inspection and creation are available. Custom sources also support safe metadata editing,
+custom Spotify-first source choices and bounded built-in public release mode overrides.
+Managed-state schema v5 persists canonical custom source configuration plus only the public
+release mode override for built-ins; v1/v2 migrate atomically with no custom sources. v3/v4
+upgrades preserve existing choices and initialize the new public policy defaults.
+Authenticated Add Source inspection and creation are available. Custom sources also support safe metadata editing,
 enable/disable, playlist assignment and guarded deletion when unreferenced.
 
 The built-in source catalog defines, for each supported source:

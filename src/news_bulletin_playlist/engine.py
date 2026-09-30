@@ -21,6 +21,7 @@ from news_bulletin_playlist.models import (
     EngineConfig,
     PlaylistDefinition,
     PlaylistId,
+    PublicReleaseMode,
     SourceDefinition,
     SourceId,
     TemporalStrategy,
@@ -139,6 +140,8 @@ class TemporalRefreshMetrics:
     public_release_invalid_count: int
     public_release_identity_mismatch_count: int
     public_release_shadowed_count: int
+    public_release_mode: PublicReleaseMode = PublicReleaseMode.INSTANT
+    public_release_disabled_count: int = 0
 
     @classmethod
     def from_snapshot(cls, snapshot: CatalogueSnapshot) -> TemporalRefreshMetrics:
@@ -159,6 +162,8 @@ class TemporalRefreshMetrics:
             counts.get(PublicReleaseOutcome.INVALID, 0),
             counts.get(PublicReleaseOutcome.IDENTITY_MISMATCH, 0),
             counts.get(PublicReleaseOutcome.SHADOWED, 0),
+            snapshot.public_release_mode,
+            counts.get(PublicReleaseOutcome.DISABLED, 0),
         )
 
 
@@ -584,6 +589,8 @@ class EngineRunner:
                 source.id,
                 snapshot.episodes,
                 coverage_proven=snapshot.coverage_proven,
+                reuse_public_release_history=source.public_release_mode
+                is not PublicReleaseMode.DISABLED,
             )
             self.first_journal.record_refresh(
                 source,
@@ -945,6 +952,8 @@ class EngineRunner:
                     source.id,
                     snapshot.episodes,
                     coverage_proven=True,
+                    reuse_public_release_history=source.public_release_mode
+                    is not PublicReleaseMode.DISABLED,
                 )
                 public = self.detector_journal.get(source.id, spotify_show_id(source))
                 self.first_journal.record_refresh(

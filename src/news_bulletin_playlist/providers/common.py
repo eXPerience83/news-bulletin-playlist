@@ -224,10 +224,12 @@ def unique_aware_datetime(
     minute: int,
     *,
     tz: ZoneInfo,
+    second: int = 0,
+    microsecond: int = 0,
 ) -> datetime | None:
     """Resolve a local wall time only when it proves one unique physical instant."""
     try:
-        wall_time = datetime(year, month, day, hour, minute)
+        wall_time = datetime(year, month, day, hour, minute, second, microsecond)
         instants: set[datetime] = set()
         for fold in (0, 1):
             candidate = wall_time.replace(tzinfo=tz, fold=fold).astimezone(UTC)

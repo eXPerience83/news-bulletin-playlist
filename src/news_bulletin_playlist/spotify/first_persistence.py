@@ -234,6 +234,7 @@ class SpotifyFirstJournal:
         episodes: Iterable[SpotifyFirstEpisode],
         *,
         coverage_proven: bool,
+        reuse_public_release_history: bool = True,
     ) -> UpsertCounts:
         values = tuple(episodes)
         if any(episode.source_id != source_id for episode in values):
@@ -244,7 +245,17 @@ class SpotifyFirstJournal:
         removed = 0
         with self._connection("replace Spotify-first source catalogue") as connection:
             self._ensure_tables(connection)
+            if not reuse_public_release_history:
+                # Apply disabled policy at refresh, including retained rows of a partial prefix.
+                # The separate history table remains evidence, never current chronology.
+                connection.execute(
+                    "UPDATE spotify_first_episode_state SET edition_at = NULL, "
+                    "timestamp_source = 'first_seen' WHERE source_id = ? "
+                    "AND timestamp_source = 'spotify_public_release'",
+                    (str(source_id),),
+                )
             for episode in values:
+                history_episode = episode
                 if episode.timestamp_source is TimestampSource.FIRST_SEEN:
                     row = connection.execute(
                         "SELECT * FROM spotify_first_episode_history WHERE source_id = ? "
@@ -259,14 +270,17 @@ class SpotifyFirstJournal:
                             episode.release_date_raw,
                             episode.release_date_precision,
                         ):
-                            episode = replace(
+                            history_episode = replace(
                                 episode,
                                 edition_at=previous.edition_at,
                                 timestamp_source=previous.timestamp_source,
                             )
+                            if reuse_public_release_history:
+                                # Reuse history only when no new exact evidence exists.
+                                episode = history_episode
                 episode_values = _episode_values(episode)
                 connection.execute(_UPSERT_EPISODE, episode_values)
-                connection.execute(_UPSERT_HISTORY, episode_values)
+                connection.execute(_UPSERT_HISTORY, _episode_values(history_episode))
 
             if coverage_proven:
                 keep_ids = tuple(episode.spotify_episode_id for episode in values)

@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 from news_bulletin_playlist.catalog import BuiltInCatalog
 from news_bulletin_playlist.custom_source_policy import custom_strategy_allowed
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateError, effective_sources
-from news_bulletin_playlist.models import ExternalReference, ParserId, SourceId
+from news_bulletin_playlist.models import ExternalReference, ParserId, PublicReleaseMode, SourceId
 from news_bulletin_playlist.source_inspection import (
     InspectionFailure,
     SourceInspection,
@@ -84,6 +84,7 @@ class _CandidateCatalogueSource:
     external_references: tuple[ExternalReference, ...]
     parser_id: ParserId
     collection_filter_id: str | None
+    public_release_mode: PublicReleaseMode = PublicReleaseMode.INSTANT
 
 
 class _Auth(Protocol):

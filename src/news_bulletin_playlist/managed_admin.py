@@ -289,6 +289,7 @@ class ManagedAdminService:
             ManagedState(
                 schema_version=state.schema_version,
                 sources=state.sources,
+                source_overrides=state.source_overrides,
                 playlists=state.playlists + (managed,),
             )
         )
@@ -436,6 +437,7 @@ class ManagedAdminService:
             ManagedState(
                 schema_version=state.schema_version,
                 sources=state.sources,
+                source_overrides=state.source_overrides,
                 playlists=remaining,
             )
         )
@@ -491,15 +493,17 @@ class ManagedAdminService:
             updated if playlist.id == updated.id else playlist for playlist in state.playlists
         )
         return ManagedState(
-            schema_version=state.schema_version, sources=state.sources, playlists=playlists
+            schema_version=state.schema_version,
+            sources=state.sources,
+            source_overrides=state.source_overrides,
+            playlists=playlists,
         )
 
     def _validate_state(self, state: ManagedState) -> None:
         compile_engine_config(self.catalog, state)
 
     def _save_validated(self, state: ManagedState) -> None:
-        # Cross-check catalog references before replacing durable state. The state-store parser
-        # intentionally does not know the image-shipped catalog.
+        # Cross-check current source/playlist references before replacing durable state.
         self._validate_state(state)
         self.store.save(state)
 

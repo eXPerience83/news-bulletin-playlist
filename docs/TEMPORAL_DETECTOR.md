@@ -1,9 +1,10 @@
-# Universal conservative temporal detection (#441 / PR #443)
+# Conservative temporal detection and public release policy (#441 / #439)
 
 ## Runtime aggregate diagnostics
 
 On successful catalogue construction and journal replacement, source outcomes carry
-the configured `temporal_strategy`, detector `temporal_supporting_rows` and
+the independent configured `temporal_strategy` and `public_release_mode`, detector
+`temporal_supporting_rows` and
 `temporal_conflicts`, plus final refresh snapshot provenance counts:
 `timestamp_title_count`, `timestamp_public_count`, `timestamp_first_seen_count`.
 Their sum equals the accepted episode count in that bounded snapshot, before playlist
@@ -13,8 +14,9 @@ counted as FIRST_SEEN in this refresh snapshot while remaining PUBLIC in persist
 state. These are current-refresh evidence metrics, not a persisted inventory census.
 No database read is added to obtain a different denominator.
 
-The same block includes six public outcome counts: accepted, rejected_future,
-catalogue_conflict, invalid, identity_mismatch and shadowed. Counts apply only to
+The same block includes seven public outcome counts: accepted, rejected_future,
+catalogue_conflict, invalid, identity_mismatch, shadowed and disabled_by_policy
+(`public_release_disabled_count`). Counts apply only to
 collection-accepted rows evaluated in that refresh. Identity mismatch includes the
 other catalogue episodes that do not match the single public observation, so a large
 value alone does not indicate detector corruption. TITLE means proven semantic time;
@@ -31,9 +33,8 @@ its actual snapshot metrics even if the existing event is source_state_preserved
 All available counts include zeros consistently. Normal diagnostics ZIP exports
 contain bounded aggregates; Source Audit retains detailed per-episode evidence.
 
-Repeated `public_release_rejected_future_count` can support future wall-time research.
-Public wall-time reinterpretation remains future work under #439; no public mode or
-new selector is introduced here. No requests or SQLite reads are made solely for logs.
+Repeated `public_release_rejected_future_count` can support review of public interpretation
+policies. No requests or SQLite reads are made solely for logs.
 
 ## Authority and configuration
 
@@ -46,13 +47,14 @@ The runtime hierarchy is:
 1. AUTO inference using only this source's already fetched official catalogue.
 2. Its optional, explicitly configured reusable capability, if AUTO cannot prove
    the row. A demonstrated contradiction cannot be overridden.
-3. Validated exact public Spotify release timestamp from the already observed current episode.
+3. Validated exact public Spotify release timestamp, interpreted with `PublicReleaseMode`,
+   from the already observed current episode.
 4. Existing catalogue precision / `FIRST_SEEN` fallback, keeping the episode.
 
-`disabled` bypasses both semantic routes, but still permits validated public release
-evidence. This PR integrates the conservative literal-instant path investigated in
-#439; wall-time reinterpretation remains unimplemented and #439 remains open.
-Collection filtering remains independent.
+`TemporalStrategy.disabled` bypasses both semantic routes, but still permits validated
+public evidence under the separately configured `PublicReleaseMode`. Conversely,
+`PublicReleaseMode.disabled` leaves title detection enabled. Collection filtering
+remains independent. The precedence is **TITLE → PUBLIC(mode) → FIRST_SEEN**.
 
 | Value | Optional capability after AUTO |
 |---|---|
@@ -73,6 +75,84 @@ Unknown sources use AUTO. They may independently infer a structure equivalent to
 one previously seen elsewhere, but do not inherit another source's reviewed product
 contract. There is no global broadcaster-profile injection or German-phrase bypass.
 `Uhr`, AM/PM and UTC/GMT are clock syntax, not broadcaster identities.
+
+## Independent public release interpretation
+
+`TemporalStrategy` answers how semantic evidence in a title is interpreted.
+`PublicReleaseMode` answers how Spotify's public `releaseDate` is interpreted.
+They have independent typed enums and Admin selectors: **Title time detection** and
+**Spotify public release time**. Neither disabled policy disables the other.
+
+| Mode | Interpretation |
+|---|---|
+| `instant` (general default) | Use the physical instant encoded by Spotify's Z/offset, exactly as #443. |
+| `wall_time` | Interpret the written calendar and clock as civil time in the source IANA timezone. Ignore the encoded offset only at this interpretation step. |
+| `disabled` | Do not establish public exact chronology; preserve the episode with TITLE or catalogue/FIRST_SEEN. |
+
+Validation order is absence → exact source/show/episode identity → TITLE precedence
+→ disabled policy → supported public shape/strict aware ISO → mode interpretation
+→ official catalogue-period compatibility → bounded future check → accepted.
+Disabled returns `disabled_by_policy` only for matching evidence without stronger
+TITLE. Absent/mismatched evidence and TITLE keep their existing outcomes.
+
+Wall time uses the shared `unique_aware_datetime` primitive, extended with optional
+seconds/microseconds while keeping its minute-based callers compatible. Both folds
+round-trip through UTC. A gap has no physical instant; a fold has two: both reject
+as `invalid_or_unsupported`. Only a unique instant is accepted. Full dates, seconds
+and supported microseconds survive interpretation. Madrid, Berlin, Warsaw and
+New York transition tests cover this contract. The serialized offset must still be
+syntactically supported: wall time does not admit naive ISO or unsupported shapes.
+Catalogue and future checks operate on the resulting physical instant.
+
+Built-in bases remain image-owned. Managed-state v5 stores only `source_id` and
+`public_release_mode` in `source_overrides`; effective compilation uses `replace`
+on the base. Missing override uses the image default. Selecting that default in
+Admin removes the override. Unknown/duplicate built-in overrides fail closed.
+Custom sources keep one mode in their own `ManagedSource`, with no custom overrides.
+v4 migration initializes every custom mode to instant and no built-in overrides;
+playlists and other metadata are preserved. v1/v2/v3 also upgrade atomically to v5.
+New fields are not accepted as an alternative v4 format.
+
+RNE's declarative built-in default is provisionally wall_time, based on repeated
+#439 observations of impossible literal instants and plausible local clocks.
+For example, `2026-09-26T21:13:00Z` becomes 19:13Z in Madrid, preceding observation
+at 19:31Z. **Provisional pending post-#443 Audit All verification**: fresh evidence
+may require adjusting this default before merge. TITLE still wins for proven editions.
+An independent Source Audit on 2026-09-30 (0.1.3, build c20ba00529bd, before #443)
+reinforces this choice: RNE's midnight edition is TITLE 2026-09-29T22:00Z;
+public 2026-09-30T00:13Z becomes 22:13Z on the previous UTC day under wall_time
+(13 minutes after TITLE), versus 133 minutes under instant. That audit's observed_at
+is the current audit observation, not the first runtime sighting: it does not prove
+a first-sighting future rejection. SER and Onda public 08:00Z match their 10:00
+Madrid editions, and RMF public 08:00Z matches 10:00 Warsaw; their defaults remain
+instant. Expansión's untimed title retains precise public 05:22Z under instant.
+RNE's seven title fallbacks among nineteen audited episodes motivate this fallback
+without authorizing repairs to malformed title dates. Post-#443 Audit All is the
+separate remaining operational verification.
+No runtime knows broadcaster IDs and no fixed offset is configured.
+
+### Forward-only historical semantics
+
+Saving either policy makes no Spotify request and performs no SQLite rewrite.
+Existing cached chronology remains until the next normal refresh. The newly selected
+mode always validates newly observed evidence. Changing instant ↔ wall_time alone
+never reinterprets existing history. When an incoming episode has only FIRST_SEEN,
+compatible PUBLIC history for the same source/show/episode and unchanged official
+release calendar may supply its original instant. A later refresh with newly
+validated PUBLIC evidence uses that new instant under the current mode, even for
+that same identity/calendar, and updates current chronology and history. Newly
+proven TITLE still supersedes PUBLIC. Changed identity/calendar cannot inherit
+an older public timestamp.
+
+At a natural refresh with public disabled, the journal does not reattach PUBLIC
+history and demotes any retained current PUBLIC rows (also with incomplete catalogue
+coverage) to FIRST_SEEN. The separate bounded history retains the accepted public
+instant and updated observation metadata; it is not consumed as current chronology.
+Re-enabling either instant or wall_time makes compatible historical PUBLIC eligible
+again at the next normal refresh when no new exact evidence exists, retaining its
+original instant. If that refresh validates new PUBLIC evidence, the new instant
+wins instead. Existing 30-day history retention still applies. No history backfill,
+extra provider requests or SQLite schema migration are introduced.
 
 ## Deterministic inference policy
 
@@ -147,12 +227,12 @@ They are not injected into the detector. Some old `provider_compat` inputs now u
 generic `exact` parsing; UTC timestamps are unchanged and this provenance change is
 explicitly tested. `normalized` and `catalogue_context` remain distinct.
 
-Managed JSON schema v4 defaults the optional temporal field to AUTO when absent.
-v1/v2/v3 documents migrate through the existing atomic save. SQLite format 3
+Managed JSON schema v5 defaults absent title strategy to AUTO and absent public mode
+to instant. v1/v2/v3/v4 documents migrate through the existing atomic save. SQLite format 3
 transactionally widens both episode provenance checks; rollback to an older binary
 requires pre-upgrade database and managed-state backups. Create/Edit use the shared
 server-rendered selector; unknown values fail validation. Existing auth/CSRF checks
-are unchanged. Built-ins show their capability in the source list. Temporal changes
+are unchanged. Built-ins show their capability and effective public mode in the source list. Temporal changes
 participate in the guarded playlist-write contract.
 
 Saved strategy changes apply when the source catalogue is next normally refreshed.
@@ -169,7 +249,7 @@ fallback. Parser outcome distinguishes full-title, normalized and catalogue-day
 routes. JSON/ZIP exports retain their existing schema and keys with additive metadata;
 persisted `TITLE` and `FIRST_SEEN` values do not change meaning. The additive
 `public_release_outcome` reports no evidence, accepted, identity mismatch, invalid/
-unsupported, catalogue conflict, rejected future or shadowed by TITLE.
+unsupported, catalogue conflict, rejected future, shadowed by TITLE or disabled_by_policy.
 `SPOTIFY_PUBLIC_RELEASE` (`spotify_public_release`) is a distinct exact provenance.
 
 New exact timestamps use existing ordering/48-hour retention. A same-day fallback
@@ -257,7 +337,8 @@ similarity is irrelevant. The instant's date in source ZoneInfo must lie within 
 official `release_period`. Missing timezone, invalid ISO/period, unsupported shape,
 overflow, identity mismatch and more than five minutes beyond observation fail
 closed. Five minutes tolerates minor clock skew, never provider timezone mistakes.
-No lower age limit is imposed. No wall_time, seasonal offsets or source-name fixes.
+No lower age limit is imposed. Both enabled modes keep these guards; there are no
+seasonal offsets or source-name fixes.
 
 Semantic TITLE always wins. Public evidence applies to at most one unique catalogue
 ID; remaining rows keep their own existing fallback. Public timestamps previously
@@ -274,13 +355,14 @@ existing timestamps, source state and old provenance are retained. Format 1 firs
 uses the existing history migration, then upgrades to 3 in the same transaction.
 Incompatible schemas or invalid rows roll back. New databases use format 3. There is
 no public backfill or history conversion. Old binaries cannot read format 3: rollback
-requires a pre-upgrade backup. Managed JSON v4 is an independent atomic migration.
+requires a pre-upgrade backup. Managed JSON v5 is an independent atomic migration; #439 does not change SQLite format 3.
 
 Real recorded fixtures (no live provider access): Expansión live 05:21Z is accepted;
 its old 2026-09-25 05:27Z bootstrap is accepted despite age and excluded at 48h.
 Reuters 13:58Z and ABC 00:45Z are accepted. SER/RMF retain TITLE; Onda's title 23:00
 Madrid remains 21:00Z despite public 21:02Z. RNE public 21:13Z observed at 19:31Z
-fails closed when semantic evidence is absent, and never overrides semantic 19:00Z.
+fails closed under instant when semantic evidence is absent, and never overrides
+semantic 19:00Z. Under wall_time it resolves to 19:13Z and passes the same guards.
 
 Validation is performed locally with CPython 3.14.7. Hosted Actions/container checks
 are independent; previous jobs could not start because of billing/spending limits.
