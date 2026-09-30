@@ -9,6 +9,7 @@ on:
       - "tests/**"
       - "scripts/**/*.py"
       - "pyproject.toml"
+      - "assets/covers/spotify/spain_spanish_news.jpg"
       - ".github/workflows/ci.yml"
       - ".github/workflows/publish-pr-candidate-amd64.yml"
       - ".github/workflows/publish-pr-candidate-worker-amd64.yml"

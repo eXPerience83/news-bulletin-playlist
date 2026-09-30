@@ -2,56 +2,44 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 CI_PATH = ROOT / ".github/workflows/ci.yml"
 
-
-def _read() -> str:
-    return CI_PATH.read_text(encoding="utf-8")
-
-
-def _between(text: str, start: str, end: str | None) -> str:
-    _, separator, remainder = text.partition(start)
-    assert separator, f"missing workflow anchor: {start!r}"
-    if end is None:
-        return remainder
-    block, separator, _ = remainder.partition(end)
-    assert separator, f"missing workflow anchor: {end!r}"
-    return block
+EXPECTED_PR_PATHS = {
+    "src/**",
+    "tests/**",
+    "scripts/**/*.py",
+    "pyproject.toml",
+    "assets/covers/spotify/spain_spanish_news.jpg",
+    ".github/workflows/ci.yml",
+    ".github/workflows/publish-pr-candidate-amd64.yml",
+    ".github/workflows/publish-pr-candidate-worker-amd64.yml",
+}
 
 
-def _active(block: str) -> str:
-    return "\n".join(line for line in block.splitlines() if not line.lstrip().startswith("#"))
+def _workflow() -> dict[object, object]:
+    payload = yaml.load(CI_PATH.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    assert isinstance(payload, dict), "CI workflow must parse to a mapping"
+    return payload
 
 
 def test_pull_request_ci_paths_cover_tested_contract_inputs() -> None:
-    trigger = _active(_between(_read(), "on:\n", "\npermissions:"))
-    push = _between(trigger, "  push:\n", "  pull_request:\n")
-    pull_request = _between(trigger, "  pull_request:\n", None)
+    workflow = _workflow()
+    trigger = workflow.get("on")
+    assert isinstance(trigger, dict), "workflow on trigger must be a mapping"
 
-    assert "branches: [main]" in push
-    assert "paths:" not in push
+    push = trigger.get("push")
+    assert isinstance(push, dict), "push trigger must be a mapping"
+    assert push == {"branches": ["main"]}
 
-    required = (
-        '      - "src/**"',
-        '      - "tests/**"',
-        '      - "scripts/**/*.py"',
-        '      - "pyproject.toml"',
-        '      - ".github/workflows/ci.yml"',
-        '      - ".github/workflows/publish-pr-candidate-amd64.yml"',
-        '      - ".github/workflows/publish-pr-candidate-worker-amd64.yml"',
-    )
-    for path in required:
-        assert path in pull_request, f"missing CI path dependency: {path}"
+    pull_request = trigger.get("pull_request")
+    assert isinstance(pull_request, dict), "pull_request trigger must be a mapping"
+    assert set(pull_request) == {"paths"}
 
-    unrelated = (
-        '      - "README.md"',
-        '      - "docs/**"',
-        '      - "Dockerfile"',
-        '      - ".dockerignore"',
-        '      - "compose.yaml"',
-        '      - "deploy/**"',
-        '      - "assets/covers/**"',
-    )
-    for path in unrelated:
-        assert path not in pull_request, f"unrelated path should not allocate Python CI: {path}"
+    paths = pull_request.get("paths")
+    assert isinstance(paths, list), "pull_request paths must be a list"
+    assert all(isinstance(path, str) for path in paths)
+    assert len(paths) == len(set(paths)), "pull_request paths must not contain duplicates"
+    assert set(paths) == EXPECTED_PR_PATHS
