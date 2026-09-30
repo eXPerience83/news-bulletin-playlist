@@ -38,9 +38,6 @@ after the latest release stay under **Unreleased** until the next stable release
   through reviewed forward migrations from the 0.1.0 baseline.
 - Source origin models countries and institutional providers independently from editorial scope and
   language; United Nations sources no longer require an invented country.
-- Playlist activation provisions only the durable Spotify destination identity. Public name,
-  description and bundled cover are applied only through the explicit **Apply Spotify metadata &
-  cover** action, keeping activation independent from metadata/provider behavior.
 - Spotify playlist attribution now points to the public author profile instead of the private
   repository: `News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83`.
   Historical private-repository footers remain recognized only for idempotent cleanup.
