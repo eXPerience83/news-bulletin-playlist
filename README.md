@@ -9,8 +9,9 @@ Version **0.1.0** establishes the first supported persistence compatibility base
 format 1 in `/data/news-bulletin-playlist-v1.sqlite3`. The private-development database at
 `/data/news-bulletin-playlist.sqlite3` is not migrated into this baseline. From 0.1.0 forward,
 persistence changes require explicit reviewed forward migrations from database format 1.
-The current format is 2: startup migrates format 1 in place, backfilling existing accepted
-Spotify-first episode rows into a separate exact-duration research history. The filename is unchanged.
+The current database format is **3**: format 2 adds separate accepted-episode research history and
+format 3 widens episode/history provenance for validated public release timestamps. Startup applies
+those reviewed forward migrations in place; the filename is unchanged.
 
 ## Goal
 
@@ -25,6 +26,24 @@ Core architectural invariant:
 A source is independent from a playlist and may feed several playlists. Public Spotify observation is used only to decide whether a source catalogue needs refreshing. The official Spotify Web API show catalogue supplies episode IDs, URIs and metadata; unchanged sources reuse durable local state, then every configured destination playlist is evaluated and reconciled independently.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contract and invariants. Notable product/runtime changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
+
+## Playlists
+
+The currently public production playlists are:
+
+### Spain
+
+- [**Noticias España**](https://open.spotify.com/playlist/5wmefECbXP18I6o4DCur2w) — selected Spanish news bulletins, automatically updated and ordered newest first.
+
+### International
+
+- [**International News · EN**](https://open.spotify.com/playlist/0lmtVEWVIgA8C0iobnohBh) — concise international news bulletins in English.
+- [**Wiadomości międzynarodowe · PL**](https://open.spotify.com/playlist/4ctM8CugEdvNVXjrDwNcDX) — international and Poland/world news bulletins in Polish.
+
+Only confirmed public production destinations belong in this index. Built-in templates, private
+playlists and test destinations are not listed merely because they exist. Whenever a public playlist
+is added, removed, renamed or replaced, update this section in the same change so the README remains
+the stable public discovery point.
 
 Initial product defaults:
 
@@ -103,7 +122,7 @@ docker compose ps
 
 The local status page is available only on `http://127.0.0.1:8788/`.
 
-The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in playlist templates, edit metadata/cover/source selection and maximum episode duration if needed, and activate the desired playlists. The application creates each Spotify destination with the current public product semantics, persists installation-owned choices in `/data/managed-state.json`, and wakes the scheduler immediately. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the current trusted-LAN TrueNAS first-run flow and the separately supported hardened HTTPS/reverse-proxy mode.
+The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in playlist templates, edit metadata/cover/source selection and maximum episode duration if needed, and activate the desired playlists. Activation provisions and persists the durable Spotify destination identity; use the separate **Apply Spotify metadata & cover** action when the public name, description or bundled cover should be synchronized. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the current trusted-LAN TrueNAS first-run flow and the separately supported hardened HTTPS/reverse-proxy mode.
 
 For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and contains no Spotify credentials.
 
@@ -149,7 +168,7 @@ Spotify episode ID/URI is the canonical runtime episode identity. Titles, releas
 
 A cycle builds desired playlists from durable Spotify-first episode state. Therefore a detector/catalogue failure does not erase still-valid recent episodes; they age out naturally at the playlist retention boundary. Normal detector changes refresh only the changed source. Inactivity audits are configurable and exceptional stale/unavailable-item evidence may refresh other relevant catalogues. Destination failures are isolated so one Spotify playlist cannot block another, and unsafe/ambiguous outcomes preserve the existing destination rather than treating missing evidence as authoritative emptiness.
 
-Spotify playlist descriptions are plain text from the Web API contract. Managed descriptions stay attribution-free locally; when metadata is created or explicitly synchronized, the runtime appends one bounded project line containing `https://github.com/eXPerience83/news-bulletin-playlist`. Whether a Spotify client renders that URL as clickable is client behavior and is not assumed by the application.
+Spotify playlist descriptions are plain text from the Web API contract. Managed descriptions stay attribution-free locally; when metadata is explicitly synchronized, the runtime appends one bounded public attribution line: `News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83`. Whether a Spotify client renders that URL as clickable is client behavior and is not assumed by the application.
 
 ## Copyright
 
@@ -168,9 +187,9 @@ The current TrueNAS production choice is explicit trusted-LAN administration: se
 
 ## Roadmap
 
-Version **0.1.0** is the current persistence/runtime baseline. `1.0.0` remains a later product
-milestone for a sufficiently mature administration experience rather than a persistence-format
-milestone.
+Version **0.1.0** remains the first supported persistence compatibility baseline. The current
+pre-release line is **0.2.x**; `1.0.0` remains a later product milestone for a sufficiently mature
+administration experience rather than a persistence-format milestone.
 
 ### Current work
 
