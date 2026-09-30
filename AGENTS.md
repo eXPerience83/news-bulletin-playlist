@@ -124,7 +124,8 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - PublicReleaseMode (instant/wall_time/disabled) is independent of TemporalStrategy.
   Wall time uses source IANA timezone and shared DST-safe unique resolution, preserving seconds
   and microseconds. Accepted PUBLIC history is forward-only; disabled prevents current reuse at
-  the next natural refresh without deleting history. Re-enable may reuse the original instant.
+  the next natural refresh without deleting history. Re-enable may reuse the original instant
+  only for incoming FIRST_SEEN; newly validated PUBLIC replaces older PUBLIC history.
 - Do not download or store audio.
 - Persisted Spotify episode URIs must satisfy the shared episode-URI invariant before reuse.
 - A failed source or destination must not unnecessarily block independent sources/playlists.

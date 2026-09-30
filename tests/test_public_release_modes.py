@@ -358,36 +358,102 @@ def test_disabled_preserves_history_and_reenable_restores_original_instant(tmp_p
 @pytest.mark.parametrize(
     "initial,next_mode", [(Mode.INSTANT, Mode.WALL_TIME), (Mode.WALL_TIME, Mode.INSTANT)]
 )
-def test_mode_changes_are_forward_only_for_history_but_new_identity_uses_new_mode(
-    tmp_path, initial, next_mode
+@pytest.mark.parametrize("coverage", [False, True])
+@pytest.mark.parametrize("reenable", [False, True])
+def test_mode_changes_reuse_history_only_without_new_public_evidence(
+    tmp_path, initial, next_mode, coverage, reenable
 ):
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.initialize()
     journal = SpotifyFirstJournal(store)
     journal.initialize()
-    public = evidence("2026-09-28T05:21:17.123456Z")
-    first = fetch(public, source=replace(SOURCE, public_release_mode=initial)).episodes[0]
-    journal.replace_source_episodes(SOURCE.id, [first], coverage_proven=True)
-    interpreted = fetch(public, source=replace(SOURCE, public_release_mode=next_mode)).episodes[0]
-    assert interpreted.edition_at != first.edition_at
-    journal.replace_source_episodes(SOURCE.id, [interpreted], coverage_proven=True)
-    assert journal.list_episodes()[0].edition_at == first.edition_at
-    # An actually new observed identity uses the newly selected mode.
-    new = fetch(
-        replace(public, spotify_episode_id=OLD),
-        episode=OLD,
-        source=replace(SOURCE, public_release_mode=next_mode),
+    first = fetch(
+        evidence("2026-09-28T05:21:17.123456Z"),
+        source=replace(SOURCE, public_release_mode=initial),
     ).episodes[0]
-    journal.replace_source_episodes(SOURCE.id, [new], coverage_proven=True)
-    assert journal.list_episodes()[0].edition_at == interpreted.edition_at
-    assert (
-        len(
-            journal.list_episode_history(
+    retained = replace(first, spotify_episode_id=OLD, spotify_episode_uri=f"spotify:episode:{OLD}")
+    journal.replace_source_episodes(SOURCE.id, [first, retained], coverage_proven=True)
+    fallback = fetch(source=replace(SOURCE, public_release_mode=next_mode)).episodes[0]
+    assert fallback.timestamp_source is TimestampSource.FIRST_SEEN
+    if reenable:
+        journal.replace_source_episodes(
+            SOURCE.id, [fallback], coverage_proven=False, reuse_public_release_history=False
+        )
+        assert all(
+            e.timestamp_source is TimestampSource.FIRST_SEEN for e in journal.list_episodes()
+        )
+        assert all(
+            e.timestamp_source is TimestampSource.SPOTIFY_PUBLIC_RELEASE
+            for e in journal.list_episode_history(
                 observed_since=NOW - timedelta(days=1), observed_until=NOW + timedelta(days=1)
             )
         )
-        == 2
+    # A setting change alone does not reinterpret persisted timestamps. Without new
+    # exact evidence, compatible PUBLIC remains eligible (also after re-enable).
+    assert journal.list_episodes()[0].edition_at == (None if reenable else first.edition_at)
+    journal.replace_source_episodes(SOURCE.id, [fallback], coverage_proven=False)
+    current = {e.spotify_episode_id: e for e in journal.list_episodes()}
+    assert current[EPISODE].edition_at == first.edition_at
+    assert current[EPISODE].timestamp_source is TimestampSource.SPOTIFY_PUBLIC_RELEASE
+    if reenable:
+        # Disable again to exercise re-enable directly WITH new public evidence.
+        journal.replace_source_episodes(
+            SOURCE.id, [fallback], coverage_proven=False, reuse_public_release_history=False
+        )
+    # A later observation of the SAME identity/calendar is validated under the new
+    # mode; both directions must replace the old interpretation in current/history.
+    public = evidence("2026-09-28T05:22:18.654321Z", observed=NOW + timedelta(hours=1))
+    interpreted = replace(
+        fetch(public, source=replace(SOURCE, public_release_mode=next_mode)).episodes[0],
+        last_seen_at=NOW + timedelta(hours=1),
     )
+    assert interpreted.timestamp_source is TimestampSource.SPOTIFY_PUBLIC_RELEASE
+    assert interpreted.edition_at != first.edition_at
+    journal.replace_source_episodes(SOURCE.id, [interpreted], coverage_proven=coverage)
+    current = {e.spotify_episode_id: e for e in journal.list_episodes()}
+    assert current[EPISODE].edition_at == interpreted.edition_at
+    assert current[EPISODE].timestamp_source is TimestampSource.SPOTIFY_PUBLIC_RELEASE
+    history = {
+        e.spotify_episode_id: e
+        for e in journal.list_episode_history(
+            observed_since=NOW - timedelta(days=1), observed_until=NOW + timedelta(days=1)
+        )
+    }
+    assert history[EPISODE].edition_at == interpreted.edition_at
+    assert history[OLD].edition_at == first.edition_at
+    if coverage:
+        assert OLD not in current
+    else:
+        assert current[OLD].edition_at == (None if reenable else first.edition_at)
+        assert current[OLD].timestamp_source is (
+            TimestampSource.FIRST_SEEN if reenable else TimestampSource.SPOTIFY_PUBLIC_RELEASE
+        )
+    # The latest validated public instant is subsequently reusable without evidence.
+    fallback = replace(fallback, last_seen_at=NOW + timedelta(hours=2))
+    journal.replace_source_episodes(SOURCE.id, [fallback], coverage_proven=coverage)
+    assert journal.list_episodes()[0].edition_at == interpreted.edition_at
+    # Fresh semantic TITLE still wins over both the public observation and history.
+    semantic = replace(
+        fetch(
+            public,
+            title="Las noticias de la SER, 07:00 (28/09/2026)",
+            source=replace(
+                SOURCE,
+                public_release_mode=next_mode,
+                temporal_strategy=TemporalStrategy.FULL_DATETIME,
+            ),
+        ).episodes[0],
+        last_seen_at=NOW + timedelta(hours=3),
+    )
+    assert semantic.timestamp_source is TimestampSource.TITLE
+    journal.replace_source_episodes(SOURCE.id, [semantic], coverage_proven=coverage)
+    assert journal.list_episodes()[0].edition_at == semantic.edition_at
+    assert journal.list_episodes()[0].timestamp_source is TimestampSource.TITLE
+    history = journal.list_episode_history(
+        observed_since=NOW - timedelta(days=1), observed_until=NOW + timedelta(days=1)
+    )
+    assert history[0].timestamp_source is TimestampSource.TITLE
+    assert store.format_version() == 3
 
 
 def test_disabled_demotes_retained_public_current_rows_without_deleting_history(tmp_path):

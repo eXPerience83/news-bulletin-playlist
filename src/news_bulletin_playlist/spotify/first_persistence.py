@@ -256,7 +256,7 @@ class SpotifyFirstJournal:
                 )
             for episode in values:
                 history_episode = episode
-                if episode.timestamp_source is not TimestampSource.TITLE:
+                if episode.timestamp_source is TimestampSource.FIRST_SEEN:
                     row = connection.execute(
                         "SELECT * FROM spotify_first_episode_history WHERE source_id = ? "
                         "AND spotify_episode_id = ? AND spotify_show_id = ? "
@@ -276,7 +276,7 @@ class SpotifyFirstJournal:
                                 timestamp_source=previous.timestamp_source,
                             )
                             if reuse_public_release_history:
-                                # Forward-only: never reinterpret already accepted PUBLIC.
+                                # Reuse history only when no new exact evidence exists.
                                 episode = history_episode
                 episode_values = _episode_values(episode)
                 connection.execute(_UPSERT_EPISODE, episode_values)

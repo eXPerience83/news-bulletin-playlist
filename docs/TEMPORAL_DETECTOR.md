@@ -135,11 +135,13 @@ No runtime knows broadcaster IDs and no fixed offset is configured.
 
 Saving either policy makes no Spotify request and performs no SQLite rewrite.
 Existing cached chronology remains until the next normal refresh. The newly selected
-mode always validates newly observed evidence. Already accepted PUBLIC instants for
-the same source/show/episode and unchanged official release calendar are immutable:
-instant ↔ wall_time does not reinterpret history, including a later observation of
-that same episode. A new episode identity can receive a newly interpreted instant.
-Newly proven TITLE still supersedes PUBLIC. Changed identity/calendar cannot inherit
+mode always validates newly observed evidence. Changing instant ↔ wall_time alone
+never reinterprets existing history. When an incoming episode has only FIRST_SEEN,
+compatible PUBLIC history for the same source/show/episode and unchanged official
+release calendar may supply its original instant. A later refresh with newly
+validated PUBLIC evidence uses that new instant under the current mode, even for
+that same identity/calendar, and updates current chronology and history. Newly
+proven TITLE still supersedes PUBLIC. Changed identity/calendar cannot inherit
 an older public timestamp.
 
 At a natural refresh with public disabled, the journal does not reattach PUBLIC
@@ -147,9 +149,10 @@ history and demotes any retained current PUBLIC rows (also with incomplete catal
 coverage) to FIRST_SEEN. The separate bounded history retains the accepted public
 instant and updated observation metadata; it is not consumed as current chronology.
 Re-enabling either instant or wall_time makes compatible historical PUBLIC eligible
-again at the next normal refresh, retaining its original instant. Existing 30-day
-history retention still applies. No history backfill, extra provider requests or
-SQLite schema migration are introduced.
+again at the next normal refresh when no new exact evidence exists, retaining its
+original instant. If that refresh validates new PUBLIC evidence, the new instant
+wins instead. Existing 30-day history retention still applies. No history backfill,
+extra provider requests or SQLite schema migration are introduced.
 
 ## Deterministic inference policy
 
