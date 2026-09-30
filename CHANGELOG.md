@@ -5,27 +5,72 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-30
+
+### Added
+
+- Added a responsive public status surface and a unified first-party Admin shell for Playlists,
+  Sources and Diagnostics, with server-side login sessions, session-scoped CSRF protection and
+  explicit logout.
+- Added durable installation-owned custom Spotify-first sources. Admin can inspect a Spotify show,
+  validate and create a source, edit safe metadata, enable/disable it, assign/unassign it from
+  playlists and delete it when no playlist still references it.
+- Added reusable per-source inspection reports plus bounded authenticated batch Source Audit ZIP
+  exports, keeping detailed evidence out of ordinary diagnostics while preserving sanitized
+  operational review data.
+- Added separate accepted-episode research history and duration-profile diagnostics so production
+  evidence can inform the eventual hard-duration policy without changing playlist behavior.
+- Added universal source-local temporal detection with conservative catalogue corroboration and safe
+  fallback, plus independently configurable Spotify public-release interpretation
+  (`instant`, `wall_time`, `disabled`).
+- Added explicit managed-action success notices so activation, settings saves, Spotify metadata/cover
+  sync, stop and provisioning recovery actions no longer return silently on success.
+- Added a README index for the confirmed public production playlists: **Noticias España**,
+  **International News · EN** and **Wiadomości międzynarodowe · PL**.
+
 ### Changed
 
-- Admin Playlists can assign enabled custom sources, visibly preserve or explicitly unassign
-  selected disabled sources, and safely delete unreferenced custom definitions after source-local
-  operational cleanup. Accepted-episode research history and Spotify destinations are preserved.
-- Admin Sources now permits safe custom-source metadata edits and reversible enable/disable without
-  changing source identity, parser, filter or timezone. Selected disabled sources keep playlist
-  assignments and preserve existing Spotify destinations.
-- Admin Sources now supports authenticated, CSRF-protected inspection and creation of validated
-  custom Spotify shows. Review reports stay in the Admin session; Create validates with Spotify
-  again before saving.
-- Added a bounded Spotify show intake service: canonical raw IDs, show URIs and Spotify show URLs
-  are normalized locally; duplicate identities are rejected before provider calls, and official show
-  metadata plus catalogue coverage are inspected without persisting candidate/source state.
-- Managed state now uses schema v3 with durable, strictly validated installation-owned Spotify-first
-  source definitions. v1/v2 files migrate atomically with an empty `sources` collection; built-in
-  definitions remain image-owned. Disabled selected sources preserve the current destination. Add
-  Source creation and safe lifecycle controls are available in Admin.
-- Source origin now distinguishes country and institutional providers. United Nations sources display
-  `UN · INT · en` and `UN · INT · es` without an invented country; origin classification does not
-  change runtime selection.
+- Managed-state JSON now uses schema **v5**. It stores custom source configuration, temporal strategy,
+  public-release mode and bounded built-in release-mode overrides while keeping built-in definitions
+  image-owned; v1/v2/v3/v4 upgrade atomically.
+- SQLite now uses database format **3**. Format 2 introduced separate accepted-episode history;
+  format 3 extends current/history timestamp provenance to validated Spotify public-release evidence
+  through reviewed forward migrations from the 0.1.0 baseline.
+- Source origin models countries and institutional providers independently from editorial scope and
+  language; United Nations sources no longer require an invented country.
+- Playlist activation provisions only the durable Spotify destination identity. Public name,
+  description and bundled cover are applied only through the explicit **Apply Spotify metadata &
+  cover** action, keeping activation independent from metadata/provider behavior.
+- Spotify playlist attribution now points to the public author profile instead of the private
+  repository: `News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83`.
+  Historical private-repository footers remain recognized only for idempotent cleanup.
+- Episode state is reloaded only when reconciliation/stale-item evidence requires it, avoiding
+  redundant Spotify-first persistence reads while preserving retry safety.
+- CI path filtering avoids spending the Python PR job on unrelated changes while retaining all
+  tested Python/contract inputs as triggers.
+
+### Fixed
+
+- Source inspection tolerates Spotify's current show-metadata response while retaining bounded
+  validation and fail-closed identity checks.
+- Runtime startup waits for HTTP/runtime readiness before starting the scheduler, avoiding startup
+  races observed around production deployment.
+- Sanitized diagnostics preserve meaningful engine failure classification instead of collapsing safe
+  failures into less useful generic state.
+- Shared temporal parsing rejects unprovable DST wall times, including gaps and ambiguous folds,
+  rather than manufacturing an instant.
+- Catalogue reload still occurs after failed reconciliation or stale escalation where fresh evidence
+  is required, despite the new conditional-reload optimization.
+
+### Compatibility / operations
+
+- Version 0.1.0 remains the first supported persistence compatibility baseline. Upgrades from its
+  database format 1 and managed-state generations continue through explicit forward migrations;
+  pre-0.1 private-development databases remain outside the supported migration contract.
+- The supported interpreter remains CPython **3.14.x** and the runtime remains Spotify-first with no
+  audio download/storage.
+- Public playlist lifecycle changes must update the README playlist index in the same change; private,
+  test and merely built-in-but-unpublished destinations are intentionally excluded.
 
 ## [0.1.3] - 2026-09-22
 
