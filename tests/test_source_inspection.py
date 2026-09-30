@@ -419,6 +419,14 @@ def test_public_observation_uses_detector_parser_and_safe_serialization(
     assert report.public_observation.release_date_shape == shape
     assert report.public_observation.detector_schema_version == DETECTOR_SCHEMA_VERSION
     encoded = serialize_source_inspection(report)
+    first = json.loads(encoded)["episodes"][0]
+    assert first["parser_outcome"] == "fallback"
+    if shape == "object_iso_string":
+        assert first["public_release_outcome"] == "accepted"
+        assert first["timestamp_source"] == "spotify_public_release"
+    else:
+        assert first["public_release_outcome"] == "invalid_or_unsupported"
+        assert first["timestamp_source"] == "first_seen"
     assert encoded == serialize_source_inspection(report)
     assert json.loads(encoded)["schema_version"] == 1
     for secret in (

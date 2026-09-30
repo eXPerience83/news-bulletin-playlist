@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
@@ -21,6 +21,11 @@ from news_bulletin_playlist.spotify.first_models import (
 )
 from news_bulletin_playlist.spotify.identifiers import SpotifyShowSource
 from news_bulletin_playlist.spotify.public_detector import spotify_show_id
+from news_bulletin_playlist.spotify.public_release import (
+    PublicReleaseEvidence,
+    PublicReleaseOutcome,
+    validate_public_release,
+)
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 
 DEFAULT_PAGE_SIZE = 50
@@ -62,6 +67,7 @@ class CatalogueSnapshot:
     evidence: tuple[CatalogueEpisodeEvidence, ...] = ()
     temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
     temporal_supporting_rows: int = 0
+
     temporal_conflicts: int = 0
 
 
@@ -80,6 +86,7 @@ class CatalogueEpisodeEvidence:
     timestamp_source: TimestampSource | None
     temporal_evidence: TemporalEvidenceKind | None = None
     temporal_supporting_rows: int = 0
+    public_release_outcome: PublicReleaseOutcome = PublicReleaseOutcome.NO_EVIDENCE
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +107,7 @@ def fetch_source_catalogue(
     cutoff: datetime,
     max_pages: int = DEFAULT_MAX_PAGES,
     collect_evidence: bool = False,
+    public_release_evidence: PublicReleaseEvidence | None = None,
 ) -> CatalogueSnapshot:
     """Read a bounded official catalogue and normalize it directly to Spotify identity."""
     if max_pages <= 0:
@@ -181,6 +189,20 @@ def fetch_source_catalogue(
             parser_fallbacks += 1
             parser_outcome = "fallback"
 
+        public_at, public_outcome = validate_public_release(
+            public_release_evidence,
+            source_id=source.id,
+            show_id=show_id,
+            episode_id=candidate.episode_id,
+            release_date=candidate.release_date,
+            precision=candidate.release_date_precision,
+            timezone=catalogue_timezone,
+            semantic_exact=parsed is not None,
+        )
+        if public_at is not None:
+            edition_at = public_at
+            timestamp_source = TimestampSource.SPOTIFY_PUBLIC_RELEASE
+
         episodes.append(
             SpotifyFirstEpisode(
                 source_id=source.id,
@@ -213,6 +235,7 @@ def fetch_source_catalogue(
                     episodes[-1].timestamp_source,
                     attempt.temporal_evidence,
                     attempt.supporting_rows,
+                    public_outcome,
                 )
             )
 
@@ -229,6 +252,53 @@ def fetch_source_catalogue(
         temporal_strategy=detector.strategy,
         temporal_supporting_rows=detector.supporting_rows,
         temporal_conflicts=detector.conflicts,
+    )
+
+
+def apply_public_release_evidence(
+    snapshot: CatalogueSnapshot, source: CatalogueSource, evidence: PublicReleaseEvidence
+) -> CatalogueSnapshot:
+    """Enrich an already fetched audit snapshot without repeating any request."""
+    timezone = getattr(source, "timezone", None)
+    zone = timezone if isinstance(timezone, ZoneInfo) else None
+    episodes = []
+    outcomes = {}
+    for episode in snapshot.episodes:
+        instant, outcome = validate_public_release(
+            evidence,
+            source_id=episode.source_id,
+            show_id=episode.spotify_show_id,
+            episode_id=episode.spotify_episode_id,
+            release_date=episode.release_date_raw,
+            precision=episode.release_date_precision,
+            timezone=zone,
+            semantic_exact=episode.timestamp_source is TimestampSource.TITLE,
+        )
+        outcomes[episode.spotify_episode_id] = outcome
+        episodes.append(
+            episode
+            if instant is None
+            else replace(
+                episode, edition_at=instant, timestamp_source=TimestampSource.SPOTIFY_PUBLIC_RELEASE
+            )
+        )
+    by_id = {episode.spotify_episode_id: episode for episode in episodes}
+    rows = tuple(
+        row
+        if row.spotify_episode_id not in by_id
+        else replace(
+            row,
+            edition_at=by_id[row.spotify_episode_id].edition_at,
+            timestamp_source=by_id[row.spotify_episode_id].timestamp_source,
+            public_release_outcome=outcomes[row.spotify_episode_id],
+        )
+        for row in snapshot.evidence
+    )
+    return replace(
+        snapshot,
+        episodes=tuple(episodes),
+        evidence=rows,
+        api_latest_id=_provable_latest_id(episodes, zone),
     )
 
 

@@ -50,6 +50,7 @@ def render_source_review_page(
         f"<td>{'Unknown' if item.duration_seconds is None else item.duration_seconds}</td>"
         f"<td>{esc(item.collection_filter_outcome)}</td>"
         f"<td>{esc(item.parser_outcome)}"
+        f" <small>Public release: {esc(item.public_release_outcome.value)}</small>"
         f" <small>{esc(item.temporal_evidence or '')}"
         + (
             f" ({item.temporal_supporting_rows} supporting titles)"

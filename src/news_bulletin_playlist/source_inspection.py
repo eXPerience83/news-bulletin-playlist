@@ -36,6 +36,7 @@ from news_bulletin_playlist.spotify.first_catalogue import (
     CatalogueEpisodeEvidence,
     CatalogueResponseError,
     CatalogueSource,
+    apply_public_release_evidence,
     fetch_source_catalogue,
 )
 from news_bulletin_playlist.spotify.first_models import TimestampSource, as_utc
@@ -45,6 +46,10 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicShowConfigurationError,
     PublicShowDetectorError,
     spotify_show_id,
+)
+from news_bulletin_playlist.spotify.public_release import (
+    PublicReleaseEvidence,
+    PublicReleaseOutcome,
 )
 from news_bulletin_playlist.spotify_backoff import (
     SpotifyRateLimitBackoffActive,
@@ -140,6 +145,7 @@ class EpisodeInspectionEvidence:
     warnings: tuple[str, ...]
     temporal_evidence: TemporalEvidenceKind | None = None
     temporal_supporting_rows: int = 0
+    public_release_outcome: PublicReleaseOutcome = PublicReleaseOutcome.NO_EVIDENCE
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +337,7 @@ def _episode_evidence(
                 ("same_day_order_ambiguous",) if ambiguous else (),
                 item.temporal_evidence,
                 item.temporal_supporting_rows,
+                item.public_release_outcome,
             )
         )
     return tuple(result)
@@ -367,6 +374,7 @@ def inspect_source(
     client_factory: Callable[[str], Any] | None = None,
     public_client: _PublicClient | None = None,
     observe_public: bool = True,
+    public_release_evidence: PublicReleaseEvidence | None = None,
     metrics: SpotifyRequestMetrics | None = None,
     clock: Callable[[], datetime] = _utc_now,
 ) -> SourceInspection:
@@ -387,6 +395,8 @@ def inspect_source(
     observed = as_utc(now)
     guarded_auth = SpotifyRateLimitGuardAuth(auth, rate_limit, clock=clock)
     factory = client_factory or (lambda token: SpotifyClient(token, metrics=metrics))
+    public_status = "not_requested" if not observe_public else "available"
+    public_observation = None
     try:
         token = guarded_auth.get_access_token()
         client = SpotifyRateLimitGuardClient(factory(token), rate_limit, clock=clock)
@@ -397,7 +407,20 @@ def inspect_source(
             now=observed,
             cutoff=observed - INSPECTION_RETENTION,
             collect_evidence=True,
+            public_release_evidence=public_release_evidence,
         )
+        if observe_public:
+            public_client = public_client or PublicShowClient(metrics=metrics)
+            try:
+                observation = public_client.observe_episode(
+                    source.id, show_id, observed_at=observed
+                )
+                public_observation = _public_evidence(observation)
+                snapshot = apply_public_release_evidence(
+                    snapshot, source, PublicReleaseEvidence.from_observation(observation)
+                )
+            except PublicShowDetectorError, ValueError:
+                public_status = "unavailable"
     except SourceInspectionError as exc:
         if exc.failure is InspectionFailure.MALFORMED_RESPONSE and exc.response_reason is not None:
             _emit_response_failure(
@@ -467,18 +490,8 @@ def inspect_source(
         warnings.append("duration_missing")
     if any(item.ordering_evidence == "ambiguous" for item in evidence):
         warnings.append("same_day_order_ambiguous")
-    if observe_public and public_client is None:
-        public_client = PublicShowClient(metrics=metrics)
-    public_status = "not_requested" if not observe_public else "available"
-    public_observation = None
-    if observe_public and public_client is not None:
-        try:
-            public_observation = _public_evidence(
-                public_client.observe_episode(source.id, show_id, observed_at=observed)
-            )
-        except PublicShowDetectorError, ValueError:
-            public_status = "unavailable"
-            warnings.append("public_observation_unavailable")
+    if public_status == "unavailable":
+        warnings.append("public_observation_unavailable")
 
     return SourceInspection(
         schema_version=REPORT_SCHEMA_VERSION,
@@ -583,6 +596,7 @@ def serialize_source_inspection(report: SourceInspection) -> bytes:
             "duration_seconds": item.duration_seconds,
             "collection_filter_outcome": item.collection_filter_outcome,
             "parser_outcome": item.parser_outcome,
+            "public_release_outcome": item.public_release_outcome.value,
             "temporal_evidence": item.temporal_evidence,
             "temporal_supporting_rows": item.temporal_supporting_rows,
             "edition_at": iso(item.edition_at),

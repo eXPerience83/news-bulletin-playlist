@@ -59,6 +59,7 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorState,
     spotify_show_id,
 )
+from news_bulletin_playlist.spotify.public_release import PublicReleaseEvidence
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 from news_bulletin_playlist.spotify_backoff import (
     ProviderAuthorizationSession,
@@ -532,6 +533,7 @@ class EngineRunner:
                 now=now,
                 cutoff=cutoff,
                 max_pages=self.max_catalogue_pages,
+                public_release_evidence=PublicReleaseEvidence.from_state(public),
             )
             counts = self.first_journal.replace_source_episodes(
                 source.id,
@@ -882,12 +884,14 @@ class EngineRunner:
 
         try:
             for source in sources.values():
+                public = self.detector_journal.get(source.id, spotify_show_id(source))
                 snapshot = fetch_source_catalogue(
                     client,
                     source,
                     now=now,
                     cutoff=cutoff,
                     max_pages=self.max_catalogue_pages,
+                    public_release_evidence=PublicReleaseEvidence.from_state(public),
                 )
                 if not snapshot.coverage_proven:
                     return None

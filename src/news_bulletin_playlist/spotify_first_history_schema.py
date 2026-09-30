@@ -8,7 +8,8 @@ CREATE TABLE spotify_first_episode_history (
     spotify_episode_uri TEXT NOT NULL,
     title TEXT NOT NULL,
     edition_at TEXT,
-    timestamp_source TEXT NOT NULL CHECK (timestamp_source IN ('title', 'first_seen')),
+    timestamp_source TEXT NOT NULL
+        CHECK (timestamp_source IN ('title', 'spotify_public_release', 'first_seen')),
     release_date_raw TEXT NOT NULL,
     release_date_precision TEXT NOT NULL
         CHECK (release_date_precision IN ('day', 'month', 'year')),

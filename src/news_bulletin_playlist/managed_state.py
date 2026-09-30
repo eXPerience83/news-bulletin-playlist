@@ -38,7 +38,7 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 MANAGED_STATE_FILENAME = "managed-state.json"
-_MANAGED_STATE_SCHEMA_VERSION = 3
+_MANAGED_STATE_SCHEMA_VERSION = 4
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
 _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
@@ -315,6 +315,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     if source_schema_version not in {
         _LEGACY_MANAGED_STATE_SCHEMA_VERSION,
         _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION,
+        3,
         _MANAGED_STATE_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
@@ -323,7 +324,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     _known_keys(
         root,
         {"schema_version", "playlists", "sources"}
-        if source_schema_version == _MANAGED_STATE_SCHEMA_VERSION
+        if source_schema_version >= 3
         else {"schema_version", "playlists"},
         "managed state",
     )
@@ -334,7 +335,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
                 _sequence(_required(root, "sources", "managed state"), "sources")
             )
         )
-        if source_schema_version == _MANAGED_STATE_SCHEMA_VERSION
+        if source_schema_version >= 3
         else ()
     )
     seen_source_ids: set[SourceId] = set()

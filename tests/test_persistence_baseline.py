@@ -65,7 +65,7 @@ def test_clean_baseline_initializes_only_current_spotify_first_schema(
     PendingSnapshotJournal(store).get(PlaylistId("playlist"))
     SpotifyRateLimitJournal(store).get()
 
-    assert store.format_version() == DATABASE_FORMAT_VERSION == 2
+    assert store.format_version() == DATABASE_FORMAT_VERSION == 3
     assert _tables(store.path) == EXPECTED_CLEAN_TABLES
 
 
@@ -184,7 +184,7 @@ def test_format_one_migrates_atomically_and_backfills_existing_accepted_rows(
         observed_since=datetime(2026, 9, 1, tzinfo=UTC),
         observed_until=datetime(2026, 10, 1, tzinfo=UTC),
     )
-    assert store.format_version() == 2
+    assert store.format_version() == 3
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("SELECT playlist_id FROM playlist_state").fetchone() == (
             "existing",

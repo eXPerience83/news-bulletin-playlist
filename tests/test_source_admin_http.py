@@ -329,7 +329,7 @@ def test_create_and_edit_temporal_strategy_over_real_http(tmp_path, strategy):
         cookie = _login(server)
         status, review = _inspect(server, cookie)
         assert status == 200
-        assert b'<option value="auto" selected>Auto (recommended)</option>' in review
+        assert b'<option value="auto" selected>Auto only (recommended)</option>' in review
         assert b'<select name="parser_id">' not in review
         for option in TemporalStrategy:
             assert f'<option value="{option.value}"'.encode() in review

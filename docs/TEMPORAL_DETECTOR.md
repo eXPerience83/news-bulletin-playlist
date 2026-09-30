@@ -11,11 +11,13 @@ The runtime hierarchy is:
 1. AUTO inference using only this source's already fetched official catalogue.
 2. Its optional, explicitly configured reusable capability, if AUTO cannot prove
    the row. A demonstrated contradiction cannot be overridden.
-3. Existing catalogue precision / `FIRST_SEEN` fallback, keeping the episode.
+3. Validated exact public Spotify release timestamp from the already observed current episode.
+4. Existing catalogue precision / `FIRST_SEEN` fallback, keeping the episode.
 
-`disabled` bypasses both semantic routes. #439 public `releaseDate` semantics are
-not implemented. The future public evidence layer fits between semantic failure
-and fallback. Collection filtering remains independent.
+`disabled` bypasses both semantic routes, but still permits validated public release
+evidence. This PR integrates the conservative literal-instant path investigated in
+#439; wall-time reinterpretation remains unimplemented and #439 remains open.
+Collection filtering remains independent.
 
 | Value | Optional capability after AUTO |
 |---|---|
@@ -110,9 +112,10 @@ They are not injected into the detector. Some old `provider_compat` inputs now u
 generic `exact` parsing; UTC timestamps are unchanged and this provenance change is
 explicitly tested. `normalized` and `catalogue_context` remain distinct.
 
-The optional managed JSON field defaults to AUTO when absent; schema version 3 and
-SQLite format remain unchanged. Older binaries do not understand the new JSON key;
-rollback requires restoring their configuration backup. Create/Edit use the shared
+Managed JSON schema v4 defaults the optional temporal field to AUTO when absent.
+v1/v2/v3 documents migrate through the existing atomic save. SQLite format 3
+transactionally widens both episode provenance checks; rollback to an older binary
+requires pre-upgrade database and managed-state backups. Create/Edit use the shared
 server-rendered selector; unknown values fail validation. Existing auth/CSRF checks
 are unchanged. Built-ins show their capability in the source list. Temporal changes
 participate in the guarded playlist-write contract.
@@ -129,7 +132,10 @@ coverage and conflicts to its JSON and UI. Per-episode typed evidence distinguis
 `catalogue_structure`, `configured_capability`, `disabled`, conflict and unproven
 fallback. Parser outcome distinguishes full-title, normalized and catalogue-day
 routes. JSON/ZIP exports retain their existing schema and keys with additive metadata;
-persisted `TITLE` and `FIRST_SEEN` values do not change meaning.
+persisted `TITLE` and `FIRST_SEEN` values do not change meaning. The additive
+`public_release_outcome` reports no evidence, accepted, identity mismatch, invalid/
+unsupported, catalogue conflict, rejected future or shadowed by TITLE.
+`SPOTIFY_PUBLIC_RELEASE` (`spotify_public_release`) is a distinct exact provenance.
 
 New exact timestamps use existing ordering/48-hour retention. A same-day fallback
 blocks `_provable_latest_id` because its local-day interval can extend beyond the
@@ -200,8 +206,50 @@ headlines. Statistical consistency cannot establish editorial intent for every
 possible natural-language title; use Disabled when a source's apparent edition
 structure actually encodes other events.
 
-Local validation uses CPython 3.14.7: Ruff fix/check/format, mypy (72 source files),
-the complete suite (1,595 tests), the focused temporal/catalogue/audit suite (484
-tests), and `git diff --check` pass. Hosted Actions remains independent evidence;
-the previous CI/Container runs failed before jobs started because of billing/spending
-limits. Local validation is not a hosted CI or container result.
+## Validated public fallback (#439 conservative integration)
+
+The engine passes a typed `PublicReleaseEvidence` from its existing detector journal
+into both normal and stale-escalation catalogue refreshes. Catalogue ingestion never
+reads that journal itself and performs no new request. Absent/degraded observations
+supply no new public evidence. A Source Audit reuses its existing optional public
+observation; disabling that observation leaves catalogue-only behavior.
+
+Only `object_iso_string` is enabled. A bounded ASCII ISO timestamp with seconds,
+optional microseconds and literal Z/offset must be aware and normalize to UTC.
+STRING remains disabled because its detector contract also includes date-only or
+arbitrary strings. Source, show and episode identity must all match exactly; title
+similarity is irrelevant. The instant's date in source ZoneInfo must lie within the
+official `release_period`. Missing timezone, invalid ISO/period, unsupported shape,
+overflow, identity mismatch and more than five minutes beyond observation fail
+closed. Five minutes tolerates minor clock skew, never provider timezone mistakes.
+No lower age limit is imposed. No wall_time, seasonal offsets or source-name fixes.
+
+Semantic TITLE always wins. Public evidence applies to at most one unique catalogue
+ID; remaining rows keep their own existing fallback. Public timestamps previously
+persisted in history survive later refreshes with the same identity and unchanged
+catalogue date/precision even when the public detector advances or degrades. A new
+semantic timestamp supersedes the public value. A changed catalogue period does not
+blindly inherit older public chronology. Accepted public values use the existing
+exact ordering and exclusive 48-hour cutoff; a tolerated future instant is ineligible
+until its encoded release time, under the unchanged future-item rule.
+
+SQLite format 2 -> 3 rebuilds only episode state/history tables transactionally,
+copying all columns and recreating explicit indexes from sqlite_master. Primary keys,
+existing timestamps, source state and old provenance are retained. Format 1 first
+uses the existing history migration, then upgrades to 3 in the same transaction.
+Incompatible schemas or invalid rows roll back. New databases use format 3. There is
+no public backfill or history conversion. Old binaries cannot read format 3: rollback
+requires a pre-upgrade backup. Managed JSON v4 is an independent atomic migration.
+
+Real recorded fixtures (no live provider access): Expansión live 05:21Z is accepted;
+its old 2026-09-25 05:27Z bootstrap is accepted despite age and excluded at 48h.
+Reuters 13:58Z and ABC 00:45Z are accepted. SER/RMF retain TITLE; Onda's title 23:00
+Madrid remains 21:00Z despite public 21:02Z. RNE public 21:13Z observed at 19:31Z
+fails closed when semantic evidence is absent, and never overrides semantic 19:00Z.
+
+Validation is performed locally with CPython 3.14.7. Hosted Actions/container checks
+are independent; previous jobs could not start because of billing/spending limits.
+
+Local validation for the public integration: Ruff fix/check/format and mypy (73 source
+files) pass; complete pytest: 1,650 tests; focused temporal/public/catalogue/migration/
+audit/engine suites: 634 tests. `git diff --check` passes.

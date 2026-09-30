@@ -64,7 +64,7 @@ invent provider work.
 ## Configuration model
 
 Application-owned built-in source/catalog knowledge is separate from installation-owned playlist and
-custom Spotify-first source choices. Managed-state schema v3 persists only canonical custom source
+custom Spotify-first source choices. Managed-state schema v4 persists only canonical custom source
 configuration; v1/v2 migrate atomically with no custom sources. Authenticated Add Source
 inspection and creation are available. Custom sources also support safe metadata editing,
 enable/disable, playlist assignment and guarded deletion when unreferenced.
@@ -195,7 +195,8 @@ Persisted episode URI and ID must agree with the shared Spotify episode-URI inva
 
 ## Timestamp policy
 
-Title parsing is preferred when a source parser can recover an exact editorial date/time.
+Source-local AUTO, followed by an optional reusable temporal capability, proves semantic
+title time before considering lower-priority validated public release evidence.
 
 When exact title parsing succeeds:
 
@@ -210,7 +211,11 @@ When exact parsing is unavailable:
 - record explicit fallback provenance;
 - never invent minute precision.
 
-Public Embed/oEmbed release dates are not treated as a universal publication timestamp.
+Already observed public release evidence supplies `spotify_public_release` only when source/show/
+episode identity matches, the literal aware ISO has supported shape, its source-local date agrees
+with the official catalogue period, and it is at most five minutes after observation. TITLE always
+wins. No extra request, historical scraping or wall-time reinterpretation is performed. Disabled
+semantic detection still permits this independent evidence; failures preserve FIRST_SEEN.
 
 The only supported playlist ordering contract is semantic newest-first
 (`edition_at_desc`). Episodes with exact `edition_at` use it; fallback episodes use the
@@ -284,8 +289,10 @@ Compatibility fields that existed only to render pre-Spotify-first diagnostic ro
 with this baseline. From database format 1 forward, persistence compatibility is explicit: every
 format change requires a reviewed forward migration from a supported format rather than legacy
 schema replay.
-Current format 2 adds a separate 30-day accepted-episode history. Covered catalogue replacement
-still removes absent episodes from operational state; historical rows never feed playlist decisions.
+Format 2 adds a separate 30-day accepted-episode history. Current format 3 transactionally widens
+episode state/history provenance for validated public release timestamps. Covered catalogue replacement
+still removes absent episodes from operational state. History is not an episode selection source;
+previously validated public chronology may be reattached only to the same authoritative catalogue ID.
 
 ## Desired playlist state
 
