@@ -32,20 +32,21 @@ The normal playlist scopes remain the required runtime scopes. `ugc-image-upload
 an optional capability so an installation authorized before cover support can continue collecting
 and reconciling bulletins without interruption.
 
-For an existing installation, use **Apply Spotify metadata & cover** to reapply the managed
-playlist name/base description and bundled cover. Do **not** reconnect Spotify merely because cover
-support exists or because the application was upgraded. Reconnect only after an actual Spotify
-authorization/permission failure indicates that the current grant is insufficient.
+For an activated managed playlist, use **Apply Spotify metadata & cover** to apply or reapply the
+managed playlist name/base description and bundled cover. Do **not** reconnect Spotify merely
+because cover support exists or because the application was upgraded. Reconnect only after an
+actual Spotify authorization/permission failure indicates that the current grant is insufficient.
 
 The explicit action is separate from **Save playlist**, so changing source membership or pause
-state does not depend on Spotify metadata availability.
+state does not depend on Spotify metadata availability. Activation itself provisions only the
+durable Spotify destination identity; it does not automatically push metadata or a cover.
 
 ### Playlist description behavior
 
 Managed state stores only the editable, provider-agnostic base description. On explicit Spotify
-metadata synchronization, the application first renders one bounded project-attribution line:
+metadata synchronization, the application first renders one bounded public attribution line:
 
-`Proyecto / Project: https://github.com/eXPerience83/news-bulletin-playlist`
+`News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83`
 
 Live differential validation found that the attributed description can return Spotify HTTP 400 even
 when name-only/base-description updates and cover uploads succeed. The runtime therefore retries
@@ -58,15 +59,14 @@ the sanitized metadata outcome explicitly as either `applied_with_attribution` o
 `applied_without_attribution`. No rejected description text or provider response body is retained.
 
 Historical managed state that already contains a terminal `Proyecto: <repository URL>` or
-`Proyecto / Project: <repository URL>` footer is stripped back to the base description when
-validated/edited so repeated synchronization cannot duplicate attribution.
+`Proyecto / Project: <repository URL>` footer, as well as the current public attribution footer, is
+stripped back to the base description when validated/edited so repeated synchronization cannot
+duplicate attribution.
 
 ## When covers are uploaded
 
-A bundled cover is attempted:
-
-- once after a newly created Spotify playlist has been persisted safely in managed state;
-- when an operator explicitly chooses **Apply Spotify metadata & cover** for an existing playlist.
+A bundled cover is attempted only when an operator explicitly chooses **Apply Spotify metadata &
+cover** for an activated playlist. It is not uploaded automatically during activation.
 
 Covers are not uploaded during normal bulletin reconciliation and therefore do not add API calls to
 each engine cycle.
