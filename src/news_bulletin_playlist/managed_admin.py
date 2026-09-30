@@ -40,9 +40,13 @@ from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitSuppressed
 
 MAX_PLAYLIST_NAME_LENGTH = 100
 SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT = 300
-PROJECT_REPOSITORY_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
-LEGACY_PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {PROJECT_REPOSITORY_URL}"
-PROJECT_DESCRIPTION_FOOTER = f"Proyecto / Project: {PROJECT_REPOSITORY_URL}"
+PROJECT_PROFILE_URL = "https://github.com/eXPerience83"
+LEGACY_PROJECT_REPOSITORY_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
+LEGACY_PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {LEGACY_PROJECT_REPOSITORY_URL}"
+LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER = (
+    f"Proyecto / Project: {LEGACY_PROJECT_REPOSITORY_URL}"
+)
+PROJECT_DESCRIPTION_FOOTER = f"News Bulletin Playlist · by eXPerience83 · {PROJECT_PROFILE_URL}"
 PROJECT_DESCRIPTION_SEPARATOR = "\n\n"
 MAX_PLAYLIST_DESCRIPTION_LENGTH = (
     SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
@@ -404,7 +408,7 @@ class ManagedAdminService:
             )
         except (SpotifyApiError, SpotifyTransportError) as exc:
             cover_error = _safe_spotify_operation_error(exc)
-        except OSError, ValueError:
+        except (OSError, ValueError):
             cover_error = "local cover error"
 
         if metadata_error is not None or cover_error is not None:
@@ -570,7 +574,7 @@ def _safe_spotify_operation_error(
 
 
 def render_spotify_description(base_description: str) -> str:
-    """Append a plain-text project URL while keeping managed state footer-free."""
+    """Append public generator attribution while keeping managed state footer-free."""
     base = _playlist_description(base_description)
     if not base:
         return PROJECT_DESCRIPTION_FOOTER
@@ -595,7 +599,7 @@ def _playlist_name(value: str) -> str:
 
 def _playlist_description(value: str) -> str:
     # Keep attribution out of editable managed state. It is appended only when metadata is
-    # rendered for Spotify so repeated edits/syncs cannot duplicate the project URL.
+    # rendered for Spotify so repeated edits/syncs cannot duplicate the generated footer.
     result = _strip_terminal_project_footer(value)
     if len(result) > MAX_PLAYLIST_DESCRIPTION_LENGTH:
         raise ManagedAdminError(
@@ -620,7 +624,11 @@ def _updated_duration_max_seconds(value: int, *, current_seconds: int) -> int:
 
 def _strip_terminal_project_footer(value: str) -> str:
     result = value
-    footers = (PROJECT_DESCRIPTION_FOOTER, LEGACY_PROJECT_DESCRIPTION_FOOTER)
+    footers = (
+        PROJECT_DESCRIPTION_FOOTER,
+        LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER,
+        LEGACY_PROJECT_DESCRIPTION_FOOTER,
+    )
     while True:
         candidate = result.rstrip()
         matched_footer = next(
