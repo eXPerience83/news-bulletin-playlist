@@ -8,11 +8,13 @@ import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_admin import (
+    LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER,
     LEGACY_PROJECT_DESCRIPTION_FOOTER,
+    LEGACY_PROJECT_REPOSITORY_URL,
     MAX_PLAYLIST_DESCRIPTION_LENGTH,
     PROJECT_DESCRIPTION_FOOTER,
     PROJECT_DESCRIPTION_SEPARATOR,
-    PROJECT_REPOSITORY_URL,
+    PROJECT_PROFILE_URL,
     ManagedAdminError,
     ManagedAdminService,
     render_spotify_description,
@@ -56,11 +58,14 @@ def _service(tmp_path: Path, spotify: _Spotify) -> ManagedAdminService:
     )
 
 
-def test_renderer_appends_plain_text_repository_footer() -> None:
+def test_renderer_appends_public_profile_attribution_footer() -> None:
     rendered = render_spotify_description("Descripción")
 
     assert rendered == (f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}")
-    assert PROJECT_REPOSITORY_URL in rendered
+    assert "News Bulletin Playlist" in rendered
+    assert "eXPerience83" in rendered
+    assert rendered.count(PROJECT_PROFILE_URL) == 1
+    assert LEGACY_PROJECT_REPOSITORY_URL not in rendered
 
 
 @pytest.mark.parametrize(
@@ -68,15 +73,22 @@ def test_renderer_appends_plain_text_repository_footer() -> None:
     [
         f"Descripción\n\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}",
         f"Descripción\r\n\r\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}\r\n",
+        f"Descripción\n\n{LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER}",
         f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}",
         (f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}\n\n{PROJECT_DESCRIPTION_FOOTER}"),
+        (
+            f"Descripción\n\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}"
+            f"\n\n{LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER}"
+            f"\n\n{PROJECT_DESCRIPTION_FOOTER}"
+        ),
     ],
 )
 def test_renderer_strips_existing_terminal_footer_before_readding_one(contaminated: str) -> None:
     rendered = render_spotify_description(contaminated)
 
     assert rendered == (f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}")
-    assert rendered.count(PROJECT_REPOSITORY_URL) == 1
+    assert rendered.count(PROJECT_PROFILE_URL) == 1
+    assert LEGACY_PROJECT_REPOSITORY_URL not in rendered
 
 
 def test_managed_state_keeps_only_editable_base_description(tmp_path: Path) -> None:
@@ -141,7 +153,8 @@ def test_repeated_metadata_edits_sync_only_latest_value_with_one_project_footer(
     assert playlist_id == "destination"
     assert name == "Noticias España 2"
     assert description == render_spotify_description("Segunda")
-    assert description.count(PROJECT_REPOSITORY_URL) == 1
+    assert description.count(PROJECT_PROFILE_URL) == 1
+    assert LEGACY_PROJECT_REPOSITORY_URL not in description
 
 
 def test_metadata_update_strips_terminal_footer_from_editable_state(tmp_path: Path) -> None:
@@ -175,8 +188,17 @@ def test_metadata_update_strips_terminal_footer_from_editable_state(tmp_path: Pa
     assert spotify.update_calls[-1][2] == render_spotify_description("Editada")
 
 
-def test_source_only_update_cleans_legacy_footer_without_spotify_metadata_write(
+@pytest.mark.parametrize(
+    "contaminating_footer",
+    [
+        LEGACY_PROJECT_DESCRIPTION_FOOTER,
+        LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER,
+        PROJECT_DESCRIPTION_FOOTER,
+    ],
+)
+def test_source_only_update_cleans_known_footer_without_spotify_metadata_write(
     tmp_path: Path,
+    contaminating_footer: str,
 ) -> None:
     spotify = _Spotify()
     store = ManagedStateStore(tmp_path / "managed-state.json")
@@ -197,7 +219,7 @@ def test_source_only_update_cleans_legacy_footer_without_spotify_metadata_write(
     state = store.load()
     contaminated = replace(
         managed,
-        description=f"Base editable\n\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}",
+        description=f"Base editable\n\n{contaminating_footer}",
     )
     store.save(replace(state, playlists=(contaminated,)))
 
@@ -237,6 +259,8 @@ def test_maximum_editable_description_fits_spotify_limit_with_footer(tmp_path: P
     rendered = render_spotify_description(maximum)
     assert len(rendered) == 300
     assert rendered.endswith(PROJECT_DESCRIPTION_FOOTER)
+    assert rendered.count(PROJECT_PROFILE_URL) == 1
+    assert LEGACY_PROJECT_REPOSITORY_URL not in rendered
 
 
 def test_description_cannot_exceed_space_reserved_for_project_footer(tmp_path: Path) -> None:
