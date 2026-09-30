@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import UTC, datetime
 
 from news_bulletin_playlist.desired_state import (
@@ -205,6 +206,9 @@ class InstrumentedEngineCycleRunner:
         }
         if source.refresh_reason is not None:
             details["refresh_reason"] = source.refresh_reason
+        if source.refreshed and source.temporal_metrics is not None:
+            details.update(asdict(source.temporal_metrics))
+            details["temporal_strategy"] = source.temporal_metrics.temporal_strategy.value
 
         self.diagnostics.emit(
             occurred_at=occurred_at,

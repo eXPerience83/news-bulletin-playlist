@@ -319,6 +319,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 if path == "/admin/sources/update"
                 else {"csrf_token", "source_id", "enabled"}
             )
+            if path == "/admin/sources/update" and "temporal_strategy" in form:
+                allowed.add("temporal_strategy")
             if set(form) != allowed:
                 raise ValueError("Invalid source form")
             values = {name: single_form_value(form, name) for name in allowed - {"csrf_token"}}
@@ -330,6 +332,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     origin_code=values["origin_code"],
                     language=values["language"],
                     editorial_scope=values["editorial_scope"],
+                    temporal_strategy=values.get("temporal_strategy"),
                 )
                 event_name, next_state, notice = (
                     "admin_source_updated",
@@ -531,6 +534,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     "collection_filter_id",
                 }
             )
+            if path != "/admin/sources/inspect" and "temporal_strategy" in form:
+                allowed.add("temporal_strategy")
             if set(form) != allowed:
                 raise ValueError("Invalid source form fields")
             if path == "/admin/sources/inspect":
@@ -575,6 +580,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 timezone=values["timezone"],
                 parser_id=values["parser_id"],
                 collection_filter_id=filter_id,
+                temporal_strategy=values.get("temporal_strategy", "auto"),
             )
             service.create(source)
             security.set_source_inspection(None)

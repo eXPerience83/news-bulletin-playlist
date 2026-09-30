@@ -5,7 +5,8 @@ from datetime import UTC, date
 
 from news_bulletin_playlist.models import ParsedEdition
 from news_bulletin_playlist.providers.base import CatalogueParseContext
-from news_bulletin_playlist.providers.common import clock_24h_pattern, unique_aware_datetime
+from news_bulletin_playlist.providers.common import clock_24h_pattern
+from news_bulletin_playlist.providers.temporal_profile import CatalogueClockProfile
 
 RMF_FAKTY_PARSER_ID = "rmf_fakty"
 
@@ -19,6 +20,7 @@ class RmfFaktyParser:
     """Parse RMF Fakty catalogue titles using Spotify's day-level release date."""
 
     provider_id = RMF_FAKTY_PARSER_ID
+    profile = CatalogueClockProfile(_TIME_PREFIX)
 
     def parse(self, title: str) -> ParsedEdition | None:
         """Fail soft when trusted catalogue context is unavailable."""
@@ -35,10 +37,6 @@ class RmfFaktyParser:
         if context.release_date_precision != "day" or context.timezone is None:
             return None
 
-        match = _TIME_PREFIX.match(title.strip())
-        if match is None:
-            return None
-
         try:
             release_day = date.fromisoformat(context.release_date)
         except ValueError:
@@ -46,14 +44,7 @@ class RmfFaktyParser:
         if release_day.isoformat() != context.release_date:
             return None
 
-        local_edition = unique_aware_datetime(
-            release_day.year,
-            release_day.month,
-            release_day.day,
-            int(match.group("hour")),
-            int(match.group("minute")),
-            tz=context.timezone,
-        )
+        local_edition = self.profile.resolve(title, release_day, context.timezone)
         if local_edition is None:
             return None
         return ParsedEdition(self.provider_id, title, local_edition.astimezone(UTC))

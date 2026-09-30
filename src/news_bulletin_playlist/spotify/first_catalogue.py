@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
+from collections import Counter
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from news_bulletin_playlist.models import ParserId
-from news_bulletin_playlist.providers.base import CatalogueParseContext, parse_title
-from news_bulletin_playlist.registry import get_collection_filter, get_title_parser
+from news_bulletin_playlist.models import ParserId, TemporalStrategy
+from news_bulletin_playlist.providers.base import CatalogueParseContext
+from news_bulletin_playlist.providers.temporal_detector import TemporalSample
+from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
+from news_bulletin_playlist.registry import get_collection_filter, get_temporal_detector
 from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
     TimestampSource,
@@ -19,6 +22,11 @@ from news_bulletin_playlist.spotify.first_models import (
 )
 from news_bulletin_playlist.spotify.identifiers import SpotifyShowSource
 from news_bulletin_playlist.spotify.public_detector import spotify_show_id
+from news_bulletin_playlist.spotify.public_release import (
+    PublicReleaseEvidence,
+    PublicReleaseOutcome,
+    validate_public_release,
+)
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 
 DEFAULT_PAGE_SIZE = 50
@@ -58,6 +66,11 @@ class CatalogueSnapshot:
     parser_fallback_count: int
     filter_rejected_count: int
     evidence: tuple[CatalogueEpisodeEvidence, ...] = ()
+    temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
+    temporal_supporting_rows: int = 0
+
+    temporal_conflicts: int = 0
+    public_release_counts: tuple[tuple[PublicReleaseOutcome, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +86,9 @@ class CatalogueEpisodeEvidence:
     parser_outcome: str
     edition_at: datetime | None
     timestamp_source: TimestampSource | None
+    temporal_evidence: TemporalEvidenceKind | None = None
+    temporal_supporting_rows: int = 0
+    public_release_outcome: PublicReleaseOutcome = PublicReleaseOutcome.NO_EVIDENCE
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +109,7 @@ def fetch_source_catalogue(
     cutoff: datetime,
     max_pages: int = DEFAULT_MAX_PAGES,
     collect_evidence: bool = False,
+    public_release_evidence: PublicReleaseEvidence | None = None,
 ) -> CatalogueSnapshot:
     """Read a bounded official catalogue and normalize it directly to Spotify identity."""
     if max_pages <= 0:
@@ -111,16 +128,29 @@ def fetch_source_catalogue(
         if source.collection_filter_id is None
         else get_collection_filter(source.collection_filter_id)
     )
-    parser = get_title_parser(str(source.parser_id))
     episodes: list[SpotifyFirstEpisode] = []
     periods: list[tuple[date, date]] = []
     api_ids: list[str] = []
     parser_fallbacks = 0
     filter_rejected = 0
     evidence: list[CatalogueEpisodeEvidence] = []
+    public_release_counts: Counter[PublicReleaseOutcome] = Counter()
 
     source_timezone = getattr(source, "timezone", None)
     catalogue_timezone = source_timezone if isinstance(source_timezone, ZoneInfo) else None
+
+    detector = get_temporal_detector(
+        tuple(
+            TemporalSample(
+                candidate.title,
+                CatalogueParseContext(
+                    candidate.release_date, candidate.release_date_precision, catalogue_timezone
+                ),
+            )
+            for candidate in candidates
+        ),
+        strategy=getattr(source, "temporal_strategy", TemporalStrategy.AUTO),
+    )
 
     for position, candidate in enumerate(candidates, start=1):
         api_ids.append(candidate.episode_id)
@@ -145,8 +175,7 @@ def fetch_source_catalogue(
                 )
             continue
 
-        attempt = parse_title(
-            parser,
+        attempt = detector.parse(
             candidate.title,
             context=CatalogueParseContext(
                 release_date=candidate.release_date,
@@ -162,6 +191,21 @@ def fetch_source_catalogue(
             timestamp_source = TimestampSource.FIRST_SEEN
             parser_fallbacks += 1
             parser_outcome = "fallback"
+
+        public_at, public_outcome = validate_public_release(
+            public_release_evidence,
+            source_id=source.id,
+            show_id=show_id,
+            episode_id=candidate.episode_id,
+            release_date=candidate.release_date,
+            precision=candidate.release_date_precision,
+            timezone=catalogue_timezone,
+            semantic_exact=parsed is not None,
+        )
+        if public_at is not None:
+            edition_at = public_at
+            timestamp_source = TimestampSource.SPOTIFY_PUBLIC_RELEASE
+        public_release_counts[public_outcome] += 1
 
         episodes.append(
             SpotifyFirstEpisode(
@@ -193,6 +237,9 @@ def fetch_source_catalogue(
                     parser_outcome,
                     episodes[-1].edition_at,
                     episodes[-1].timestamp_source,
+                    attempt.temporal_evidence,
+                    attempt.supporting_rows,
+                    public_outcome,
                 )
             )
 
@@ -202,10 +249,61 @@ def fetch_source_catalogue(
         complete=complete,
         coverage_proven=complete or _boundary_covers(periods, retention_cutoff),
         api_ids=tuple(api_ids),
-        api_latest_id=_provable_latest_id(episodes),
+        api_latest_id=_provable_latest_id(episodes, catalogue_timezone),
         parser_fallback_count=parser_fallbacks,
         filter_rejected_count=filter_rejected,
         evidence=tuple(evidence),
+        temporal_strategy=detector.strategy,
+        temporal_supporting_rows=detector.supporting_rows,
+        temporal_conflicts=detector.conflicts,
+        public_release_counts=tuple(sorted(public_release_counts.items())),
+    )
+
+
+def apply_public_release_evidence(
+    snapshot: CatalogueSnapshot, source: CatalogueSource, evidence: PublicReleaseEvidence
+) -> CatalogueSnapshot:
+    """Enrich an already fetched audit snapshot without repeating any request."""
+    timezone = getattr(source, "timezone", None)
+    zone = timezone if isinstance(timezone, ZoneInfo) else None
+    episodes = []
+    outcomes = {}
+    for episode in snapshot.episodes:
+        instant, outcome = validate_public_release(
+            evidence,
+            source_id=episode.source_id,
+            show_id=episode.spotify_show_id,
+            episode_id=episode.spotify_episode_id,
+            release_date=episode.release_date_raw,
+            precision=episode.release_date_precision,
+            timezone=zone,
+            semantic_exact=episode.timestamp_source is TimestampSource.TITLE,
+        )
+        outcomes[episode.spotify_episode_id] = outcome
+        episodes.append(
+            episode
+            if instant is None
+            else replace(
+                episode, edition_at=instant, timestamp_source=TimestampSource.SPOTIFY_PUBLIC_RELEASE
+            )
+        )
+    by_id = {episode.spotify_episode_id: episode for episode in episodes}
+    rows = tuple(
+        row
+        if row.spotify_episode_id not in by_id
+        else replace(
+            row,
+            edition_at=by_id[row.spotify_episode_id].edition_at,
+            timestamp_source=by_id[row.spotify_episode_id].timestamp_source,
+            public_release_outcome=outcomes[row.spotify_episode_id],
+        )
+        for row in snapshot.evidence
+    )
+    return replace(
+        snapshot,
+        episodes=tuple(episodes),
+        evidence=rows,
+        api_latest_id=_provable_latest_id(episodes, zone),
     )
 
 
@@ -331,28 +429,46 @@ def _candidate_from_item(item: object) -> _EpisodeCandidate:
     )
 
 
-def _provable_latest_id(episodes: list[SpotifyFirstEpisode]) -> str | None:
+def _provable_latest_id(
+    episodes: list[SpotifyFirstEpisode], timezone: ZoneInfo | None
+) -> str | None:
     """Return an ID only when available timestamp evidence proves one episode is newest."""
     if not episodes:
         return None
     for candidate in episodes:
-        candidate_start, _ = _evidence_period(candidate)
+        candidate_start, _ = _evidence_period(candidate, timezone)
         if all(
-            other is candidate or candidate_start > _evidence_period(other)[1] for other in episodes
+            other is candidate or candidate_start > _evidence_period(other, timezone)[1]
+            for other in episodes
         ):
             return candidate.spotify_episode_id
     return None
 
 
-def _evidence_period(episode: SpotifyFirstEpisode) -> tuple[datetime, datetime]:
+def _evidence_period(
+    episode: SpotifyFirstEpisode, timezone: ZoneInfo | None
+) -> tuple[datetime, datetime]:
     if episode.edition_at is not None:
         return episode.edition_at, episode.edition_at
     start, end = release_period(episode.release_date_raw, episode.release_date_precision)
-    timezone = episode.first_seen_at.tzinfo
-    return (
-        datetime.combine(start, datetime.min.time(), tzinfo=timezone),
-        datetime.combine(end, datetime.max.time(), tzinfo=timezone),
-    )
+    zone = timezone or ZoneInfo("UTC")
+    # A catalogue day is the source's local calendar evidence, not an exact UTC day.
+    # Bound both folds at midnight transitions; even an imaginary boundary must only
+    # widen the interval, never make a coarse episode look provably older.
+    try:
+        starts = [
+            as_utc(datetime.combine(start, datetime.min.time(), tzinfo=zone).replace(fold=fold))
+            for fold in (0, 1)
+        ]
+        ends = [
+            as_utc(datetime.combine(end, datetime.max.time(), tzinfo=zone).replace(fold=fold))
+            for fold in (0, 1)
+        ]
+    except OverflowError:
+        # Extreme catalogue years may extend beyond datetime's UTC range. Widen to
+        # the entire representable interval instead of asserting chronology or failing.
+        return datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
+    return min(starts), max(ends)
 
 
 def _boundary_covers(periods: list[tuple[date, date]], cutoff: datetime) -> bool:

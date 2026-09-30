@@ -419,6 +419,14 @@ def test_public_observation_uses_detector_parser_and_safe_serialization(
     assert report.public_observation.release_date_shape == shape
     assert report.public_observation.detector_schema_version == DETECTOR_SCHEMA_VERSION
     encoded = serialize_source_inspection(report)
+    first = json.loads(encoded)["episodes"][0]
+    assert first["parser_outcome"] == "fallback"
+    if shape == "object_iso_string":
+        assert first["public_release_outcome"] == "accepted"
+        assert first["timestamp_source"] == "spotify_public_release"
+    else:
+        assert first["public_release_outcome"] == "invalid_or_unsupported"
+        assert first["timestamp_source"] == "first_seen"
     assert encoded == serialize_source_inspection(report)
     assert json.loads(encoded)["schema_version"] == 1
     for secret in (
@@ -497,3 +505,56 @@ def test_invalid_configured_strategy_fails_without_transport(tmp_path: Path) -> 
         _configured(tmp_path, broken.id, ManagedState(sources=(broken,)), client)
     assert raised.value.failure is InspectionFailure.CONFIGURATION
     assert client.calls == []
+
+
+def test_source_audit_explains_universal_and_fallback_paths(tmp_path: Path) -> None:
+    client = _Client()
+    client.pages = [
+        catalogue_page(
+            [
+                _episode("A" * 22, title="Die Nachrichten vom 24.09.2026, 21:00 Uhr"),
+                _episode("B" * 22, title="21:00 Fakty"),
+                _episode("C" * 22, title="Las noticias de la SER - 21.00 24-09-26"),
+                _episode("D" * 22, title="UN News Today 24 September 2026"),
+                _episode("E" * 22, title="Die Nachrichten vom 25.09.2026, 21:00 Uhr"),
+            ]
+        )
+    ]
+    report = _configured(tmp_path, _custom().id, ManagedState(sources=(_custom(),)), client)
+    rows = json.loads(serialize_source_inspection(report))["episodes"]
+    assert [row["parser_outcome"] for row in rows] == ["fallback"] * 5
+    assert [row["temporal_evidence"] for row in rows] == [
+        "catalogue_date_conflict",
+        "unproven_structure",
+        "unproven_structure",
+        "unproven_structure",
+        "catalogue_date_conflict",
+    ]
+    assert report.temporal_strategy == "auto"
+    assert report.temporal_supporting_rows == 0
+    assert report.accepted_episodes == 5
+    assert report.first_seen_timestamp_count == 5
+    assert all(row["edition_at"] is None for row in rows)
+
+
+def test_source_audit_exports_structural_support_without_raw_responses(tmp_path: Path) -> None:
+    client = _Client()
+    items = [
+        _episode(
+            str(index).zfill(22), title=f"Bulletin {day}/09/2026 - {hour}:30", day=f"2026-09-{day}"
+        )
+        for index, (day, hour) in enumerate([(22, 17), (22, 18), (23, 17), (23, 19), (24, 17)])
+    ]
+    client.pages = [catalogue_page(items)]
+    report = _configured(tmp_path, _custom().id, ManagedState(sources=(_custom(),)), client)
+    payload = serialize_source_inspection(report)
+    rows = json.loads(payload)["episodes"]
+    assert all(row["temporal_evidence"] == "catalogue_structure" for row in rows)
+    assert all(row["temporal_supporting_rows"] == 5 for row in rows)
+    summary = json.loads(payload)
+    assert summary["temporal_strategy"] == "auto"
+    assert summary["temporal_structure_detected"] is True
+    assert summary["temporal_supporting_rows"] == 5
+    assert summary["temporal_coverage"] == 1
+    assert summary["temporal_conflicts"] == 0
+    assert b"secret-episode-body" not in payload

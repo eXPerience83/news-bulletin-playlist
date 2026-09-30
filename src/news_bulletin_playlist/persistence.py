@@ -16,7 +16,7 @@ from news_bulletin_playlist.spotify_first_history_schema import (
 
 DEFAULT_DB_FILENAME = "news-bulletin-playlist-v1.sqlite3"
 DEFAULT_DB_PATH = Path("/data") / DEFAULT_DB_FILENAME
-DATABASE_FORMAT_VERSION = 2
+DATABASE_FORMAT_VERSION = 3
 
 
 class PersistenceError(RuntimeError):
@@ -143,6 +143,12 @@ class SQLiteStore:
                 )
             if current == 1:
                 self._migrate_format_1_to_2(connection, tables)
+                current = 2
+                tables = self._application_tables(connection)
+            if current == 2:
+                if not connection.in_transaction:
+                    connection.execute("BEGIN IMMEDIATE")
+                self._migrate_format_2_to_3(connection, tables)
             elif current != DATABASE_FORMAT_VERSION:
                 raise PersistenceError(f"database format {current} has no supported migration")
             elif "spotify_first_episode_history" not in tables:
@@ -219,6 +225,44 @@ class SQLiteStore:
                 f"SELECT {columns} FROM spotify_first_episode_state"
             )
         connection.execute("UPDATE database_format SET format_version = 2 WHERE singleton = 1")
+
+    @staticmethod
+    def _migrate_format_2_to_3(connection: sqlite3.Connection, tables: frozenset[str]) -> None:
+        """Rebuild only episode tables to widen provenance, retaining rows and indexes."""
+        if "spotify_first_episode_history" not in tables:
+            raise PersistenceError("database format is missing required episode history")
+        old_check = "timestamp_source IN ('title', 'first_seen')"
+        new_check = "timestamp_source IN ('title', 'spotify_public_release', 'first_seen')"
+        for table in ("spotify_first_episode_state", "spotify_first_episode_history"):
+            if table not in tables:
+                continue  # The current catalogue table is created lazily by its journal.
+            row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()
+            sql = row["sql"]
+            columns = tuple(
+                item["name"] for item in connection.execute(f"PRAGMA table_info({table})")
+            )
+            if columns != EPISODE_HISTORY_COLUMNS or (
+                old_check not in sql and new_check not in sql
+            ):
+                raise PersistenceError("incompatible episode schema for provenance migration")
+            if new_check in sql:
+                continue  # History created by the preceding format-1 migration.
+            indexes = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                "AND tbl_name = ? AND sql IS NOT NULL",
+                (table,),
+            ).fetchall()
+            replacement = table + "_provenance_migration"
+            connection.execute(sql.replace(table, replacement, 1).replace(old_check, new_check))
+            names = ", ".join(EPISODE_HISTORY_COLUMNS)
+            connection.execute(f"INSERT INTO {replacement} ({names}) SELECT {names} FROM {table}")
+            connection.execute(f"DROP TABLE {table}")
+            connection.execute(f"ALTER TABLE {replacement} RENAME TO {table}")
+            for index in indexes:
+                connection.execute(index["sql"])
+        connection.execute("UPDATE database_format SET format_version = 3 WHERE singleton = 1")
 
     def record_playlist_state(
         self,

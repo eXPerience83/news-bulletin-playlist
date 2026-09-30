@@ -1,0 +1,93 @@
+[
+  {
+    "parser": "rmf_fakty",
+    "title": "21:00 Fakty 18:00:30",
+    "day": "2026-09-28",
+    "zone": "Europe/Warsaw",
+    "expected": null,
+    "classification": "hardening: competing numeric evidence after edition-clock prefix",
+    "before": "2026-09-28T19:00:00+00:00"
+  },
+  {
+    "parser": "rmf_fakty",
+    "title": "21:00 Fakty 100:00",
+    "day": "2026-09-28",
+    "zone": "Europe/Warsaw",
+    "expected": null,
+    "classification": "hardening: competing numeric evidence after edition-clock prefix",
+    "before": "2026-09-28T19:00:00+00:00"
+  },
+  {
+    "parser": "rmf_fakty",
+    "title": "21:00 Fakty 18:999",
+    "day": "2026-09-28",
+    "zone": "Europe/Warsaw",
+    "expected": null,
+    "classification": "hardening: competing numeric evidence after edition-clock prefix",
+    "before": "2026-09-28T19:00:00+00:00"
+  },
+  {
+    "parser": "rmf_fakty",
+    "title": "21:00 Fakty 28/09",
+    "day": "2026-09-28",
+    "zone": "Europe/Warsaw",
+    "expected": null,
+    "classification": "hardening: competing numeric evidence after edition-clock prefix",
+    "before": "2026-09-28T19:00:00+00:00"
+  },
+  {
+    "parser": "rmf_fakty",
+    "title": "21:00 Fakty 202609280",
+    "day": "2026-09-28",
+    "zone": "Europe/Warsaw",
+    "expected": null,
+    "classification": "hardening: competing numeric evidence after edition-clock prefix",
+    "before": "2026-09-28T19:00:00+00:00"
+  },
+  {
+    "parser": "release_date_title",
+    "title": "Die Nachrichten vom 28.09.2026, 21:00 Uhr",
+    "day": "2026-09-28",
+    "zone": "Europe/Berlin",
+    "expected": "2026-09-28T19:00:00+00:00",
+    "classification": "improvement: AUTO proves same-source catalogue structure",
+    "before": null
+  },
+  {
+    "parser": "release_date_title",
+    "title": "Las noticias de la SER, 21:00 (28/09/2026)",
+    "day": "2026-09-28",
+    "zone": "Europe/Madrid",
+    "expected": null,
+    "previous_441": "2026-09-28T19:00:00+00:00",
+    "classification": "correction: isolated foreign contract must fall back in AUTO",
+    "before": null
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 21:00 (28/09/2026)",
+    "day": "2026-09-29",
+    "zone": "Europe/Madrid",
+    "expected": null,
+    "classification": "hardening: title/catalogue contradiction",
+    "before": "2026-09-28T19:00:00+00:00"
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 21:00 (28/09/2026)",
+    "day": "2026-09-28",
+    "zone": null,
+    "expected": null,
+    "classification": "hardening: missing source timezone",
+    "before": "2026-09-28T19:00:00+00:00"
+  },
+  {
+    "parser": "ser",
+    "title": "Las noticias de la SER, 21:00 (28/09/2026)",
+    "day": "2026-09-28",
+    "zone": "America/New_York",
+    "expected": "2026-09-29T01:00:00+00:00",
+    "classification": "policy: use configured source timezone",
+    "before": "2026-09-28T19:00:00+00:00"
+  }
+]

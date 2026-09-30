@@ -23,6 +23,7 @@ from news_bulletin_playlist.models import (
     PlaylistId,
     SourceDefinition,
     SourceId,
+    TemporalStrategy,
 )
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
@@ -42,6 +43,7 @@ from news_bulletin_playlist.spotify.client import (
 from news_bulletin_playlist.spotify.first_catalogue import (
     DEFAULT_MAX_PAGES,
     CatalogueResponseError,
+    CatalogueSnapshot,
     SpotifyCatalogueClient,
     fetch_source_catalogue,
 )
@@ -50,7 +52,7 @@ from news_bulletin_playlist.spotify.first_desired import (
     build_spotify_first_desired_state,
     desired_fingerprint,
 )
-from news_bulletin_playlist.spotify.first_models import RefreshReason, as_utc
+from news_bulletin_playlist.spotify.first_models import RefreshReason, TimestampSource, as_utc
 from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import (
     PublicDetector,
@@ -58,6 +60,10 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorJournal,
     PublicDetectorState,
     spotify_show_id,
+)
+from news_bulletin_playlist.spotify.public_release import (
+    PublicReleaseEvidence,
+    PublicReleaseOutcome,
 )
 from news_bulletin_playlist.spotify.uris import is_spotify_episode_uri
 from news_bulletin_playlist.spotify_backoff import (
@@ -118,6 +124,45 @@ class EngineCycleAlreadyRunning(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class TemporalRefreshMetrics:
+    """Final refresh snapshot counts, before journal reuse of older public evidence."""
+
+    temporal_strategy: TemporalStrategy
+    temporal_supporting_rows: int
+    temporal_conflicts: int
+    timestamp_title_count: int
+    timestamp_public_count: int
+    timestamp_first_seen_count: int
+    public_release_accepted_count: int
+    public_release_rejected_future_count: int
+    public_release_catalogue_conflict_count: int
+    public_release_invalid_count: int
+    public_release_identity_mismatch_count: int
+    public_release_shadowed_count: int
+
+    @classmethod
+    def from_snapshot(cls, snapshot: CatalogueSnapshot) -> TemporalRefreshMetrics:
+        counts = dict(snapshot.public_release_counts)
+        return cls(
+            snapshot.temporal_strategy,
+            snapshot.temporal_supporting_rows,
+            snapshot.temporal_conflicts,
+            sum(e.timestamp_source is TimestampSource.TITLE for e in snapshot.episodes),
+            sum(
+                e.timestamp_source is TimestampSource.SPOTIFY_PUBLIC_RELEASE
+                for e in snapshot.episodes
+            ),
+            sum(e.timestamp_source is TimestampSource.FIRST_SEEN for e in snapshot.episodes),
+            counts.get(PublicReleaseOutcome.ACCEPTED, 0),
+            counts.get(PublicReleaseOutcome.FUTURE, 0),
+            counts.get(PublicReleaseOutcome.CATALOGUE_CONFLICT, 0),
+            counts.get(PublicReleaseOutcome.INVALID, 0),
+            counts.get(PublicReleaseOutcome.IDENTITY_MISMATCH, 0),
+            counts.get(PublicReleaseOutcome.SHADOWED, 0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SourceCycleOutcome:
     source_id: SourceId
     ok: bool
@@ -134,6 +179,7 @@ class SourceCycleOutcome:
     filter_rejected_count: int = 0
     removed_count: int = 0
     error: str | None = None
+    temporal_metrics: TemporalRefreshMetrics | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -532,6 +578,7 @@ class EngineRunner:
                 now=now,
                 cutoff=cutoff,
                 max_pages=self.max_catalogue_pages,
+                public_release_evidence=PublicReleaseEvidence.from_state(public),
             )
             counts = self.first_journal.replace_source_episodes(
                 source.id,
@@ -576,6 +623,7 @@ class EngineRunner:
                 parser_fallback_count=snapshot.parser_fallback_count,
                 filter_rejected_count=snapshot.filter_rejected_count,
                 removed_count=counts.removed,
+                temporal_metrics=TemporalRefreshMetrics.from_snapshot(snapshot),
                 error=(
                     None
                     if snapshot.coverage_proven
@@ -882,12 +930,14 @@ class EngineRunner:
 
         try:
             for source in sources.values():
+                public = self.detector_journal.get(source.id, spotify_show_id(source))
                 snapshot = fetch_source_catalogue(
                     client,
                     source,
                     now=now,
                     cutoff=cutoff,
                     max_pages=self.max_catalogue_pages,
+                    public_release_evidence=PublicReleaseEvidence.from_state(public),
                 )
                 if not snapshot.coverage_proven:
                     return None

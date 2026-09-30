@@ -20,6 +20,17 @@ class OrderingPolicy(StrEnum):
     EDITION_AT_DESC = "edition_at_desc"
 
 
+class TemporalStrategy(StrEnum):
+    """Optional editorial evidence contract, applied only after source-local inference."""
+
+    AUTO = "auto"
+    FULL_DATETIME = "full_datetime"
+    CLOCK_CATALOGUE_DAY = "clock_catalogue_day"
+    PARTIAL_DATE_CATALOGUE_DAY = "partial_date_catalogue_day"
+    EXPLICIT_UTC = "explicit_utc"
+    DISABLED = "disabled"
+
+
 class EditorialScope(StrEnum):
     """Primary editorial/geographic coverage of one source product."""
 
@@ -97,6 +108,7 @@ class SourceDefinition:
     timezone: ZoneInfo
     enabled: bool
     parser_id: ParserId
+    temporal_strategy: TemporalStrategy = field(default=TemporalStrategy.AUTO, kw_only=True)
     collection_filter_id: str | None = None
     editorial_scope: EditorialScope = EditorialScope.MIXED
     external_references: tuple[ExternalReference, ...] = ()
@@ -105,6 +117,8 @@ class SourceDefinition:
     def __post_init__(self) -> None:
         if not isinstance(self.origin, SourceOrigin):
             raise ValueError("source origin must be a SourceOrigin")
+        if not isinstance(self.temporal_strategy, TemporalStrategy):
+            raise ValueError("unknown temporal strategy")
         if self.collection_filter_id is not None and not self.collection_filter_id.strip():
             raise ValueError("collection_filter_id must not be blank")
 

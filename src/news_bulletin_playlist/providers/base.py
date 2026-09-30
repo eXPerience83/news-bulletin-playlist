@@ -5,7 +5,7 @@ from typing import Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import ParsedEdition
-from news_bulletin_playlist.providers.title_recovery import TitleParseAttempt, parse_with_recovery
+from news_bulletin_playlist.providers.title_recovery import TitleParseAttempt
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,21 +40,6 @@ class CatalogueTitleParser(TitleParser, Protocol):
         *,
         context: CatalogueParseContext,
     ) -> ParsedEdition | None: ...
-
-
-class RecoveringTitleParserBase:
-    """Shared recovery plumbing; concrete parsers only implement strict provider grammar."""
-
-    provider_id: str
-
-    def parse(self, title: str) -> ParsedEdition | None:
-        return self.parse_with_recovery(title).parsed
-
-    def parse_with_recovery(self, title: str) -> TitleParseAttempt:
-        return parse_with_recovery(self.provider_id, title, self._parse_strict)
-
-    def _parse_strict(self, title: str) -> ParsedEdition | None:
-        raise NotImplementedError
 
 
 def parse_title(

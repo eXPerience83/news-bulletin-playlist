@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -9,7 +10,7 @@ import pytest
 from _spotify_catalogue import catalogue_page
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.models import SourceId, TemporalStrategy
 from news_bulletin_playlist.providers.base import CatalogueParseContext
 from news_bulletin_playlist.providers.common import clock_24h_pattern
 from news_bulletin_playlist.providers.rmf import RmfFaktyParser
@@ -123,6 +124,9 @@ def test_rmf_unproven_title_or_dst_clock_uses_first_seen(title: str, release_dat
     source = next(
         source for source in BUILTIN_CATALOG.sources if source.id == SourceId("rmf_fakty")
     )
+    if "unrelated" in title:
+        # AUTO does not inherit the explicitly configured leading-clock contract.
+        source = replace(source, temporal_strategy=TemporalStrategy.AUTO)
     item = _episode("Q", title)
     item["release_date"] = release_date
     snapshot = fetch_source_catalogue(

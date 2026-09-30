@@ -6,11 +6,11 @@ RELEASE_DATE_TITLE_PARSER_ID = "release_date_title"
 
 
 class ReleaseDateTitleParser:
-    """Parser marker for products without a trustworthy semantic title timestamp.
+    """Compatibility marker for sources without a historical reviewed parser.
 
-    The Spotify-first catalogue keeps ``edition_at`` unset for these titles. Episode identity
-    remains the Spotify episode ID/URI and ordering/retention use explicit release-date precision
-    plus local first-seen provenance rather than an RSS-to-Spotify match.
+    Universal runtime detection may now prove semantic evidence for these sources.
+    Context-free callers still fail soft; catalogue precision and first-seen remain
+    the fallback whenever runtime cannot prove an exact semantic timestamp.
     """
 
     provider_id = RELEASE_DATE_TITLE_PARSER_ID

@@ -16,6 +16,7 @@ _PRECISIONS = frozenset({"day", "month", "year"})
 
 class TimestampSource(StrEnum):
     TITLE = "title"
+    SPOTIFY_PUBLIC_RELEASE = "spotify_public_release"
     FIRST_SEEN = "first_seen"
 
 
@@ -60,7 +61,9 @@ class SpotifyFirstEpisode:
         object.__setattr__(self, "last_seen_at", last)
         if self.edition_at is not None:
             object.__setattr__(self, "edition_at", as_utc(self.edition_at))
-        if (self.timestamp_source is TimestampSource.TITLE) != (self.edition_at is not None):
+        if (
+            self.timestamp_source in {TimestampSource.TITLE, TimestampSource.SPOTIFY_PUBLIC_RELEASE}
+        ) != (self.edition_at is not None):
             raise ValueError("timestamp provenance disagrees with edition_at")
 
 

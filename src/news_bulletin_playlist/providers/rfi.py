@@ -3,13 +3,11 @@ from __future__ import annotations
 import re
 from zoneinfo import ZoneInfo
 
-from news_bulletin_playlist.models import ParsedEdition
-from news_bulletin_playlist.providers.base import RecoveringTitleParserBase
 from news_bulletin_playlist.providers.common import (
     clock_24h_pattern,
-    datetime_from_match,
     numeric_date_pattern,
 )
+from news_bulletin_playlist.providers.temporal_profile import ProfileTitleParser, TemporalProfile
 
 UTC = ZoneInfo("UTC")
 
@@ -21,16 +19,7 @@ _PATTERN = re.compile(
 )
 
 
-class RfiJournalMondeParser(RecoveringTitleParserBase):
-    """Accept only RFI Journal Monde bulletin titles with an explicit GMT edition time."""
-
+class RfiJournalMondeParser(ProfileTitleParser):
     provider_id = "rfi_journal_monde"
-
-    def _parse_strict(self, title: str) -> ParsedEdition | None:
-        match = _PATTERN.match(title.strip())
-        if match is None:
-            return None
-        edition_at = datetime_from_match(match, tz=UTC)
-        if edition_at is None:
-            return None
-        return ParsedEdition(self.provider_id, title, edition_at)
+    default_timezone = UTC
+    profile = TemporalProfile(_PATTERN)

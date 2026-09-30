@@ -30,6 +30,7 @@ from news_bulletin_playlist.models import (
     SourceId,
     SourceOrigin,
     SourceOriginKind,
+    TemporalStrategy,
 )
 from news_bulletin_playlist.source_inspection import (
     InspectionFailure,
@@ -341,6 +342,7 @@ class SourceAdminService:
         timezone: str,
         parser_id: str,
         collection_filter_id: str | None,
+        temporal_strategy: str = "auto",
     ) -> ManagedSource:
         canonical = normalize_spotify_show_locator(show_id)
         if canonical != show_id:
@@ -357,6 +359,7 @@ class SourceAdminService:
                 parser_id=ParserId(parser_id),
                 collection_filter_id=collection_filter_id,
                 enabled=True,
+                temporal_strategy=TemporalStrategy(temporal_strategy),
             )
             serialize_managed_state(ManagedState(sources=(source,)))
         except ValueError as exc:
@@ -389,6 +392,7 @@ class SourceAdminService:
         origin_code: str,
         language: str,
         editorial_scope: str,
+        temporal_strategy: str | None = None,
     ) -> tuple[ManagedSource, bool]:
         with self.synchronization.hold():
             state = self.store.load()
@@ -400,6 +404,9 @@ class SourceAdminService:
                     origin=SourceOrigin(SourceOriginKind(origin_kind), origin_code),
                     language=LanguageTag(language),
                     editorial_scope=EditorialScope(editorial_scope),
+                    temporal_strategy=current.temporal_strategy
+                    if temporal_strategy is None
+                    else TemporalStrategy(temporal_strategy),
                 )
                 serialize_managed_state(ManagedState(sources=(updated,)))
             except ValueError as exc:

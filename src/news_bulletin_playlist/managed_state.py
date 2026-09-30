@@ -33,11 +33,12 @@ from news_bulletin_playlist.models import (
     SourceOrigin,
     SourceOriginKind,
     SourceSelection,
+    TemporalStrategy,
 )
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 MANAGED_STATE_FILENAME = "managed-state.json"
-_MANAGED_STATE_SCHEMA_VERSION = 3
+_MANAGED_STATE_SCHEMA_VERSION = 4
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
 _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
@@ -48,6 +49,15 @@ _SOURCE_LANGUAGE_TAG = re.compile(r"[a-z]{2,3}(?:-(?:[A-Z]{2}|[0-9]{3}))?")
 
 class ManagedStateError(ValueError):
     """Actionable error for invalid or unsafe managed installation state."""
+
+
+def _temporal_strategy(value: object) -> TemporalStrategy:
+    if not isinstance(value, str):
+        raise ManagedStateError("unknown temporal_strategy")
+    try:
+        return TemporalStrategy(value)
+    except ValueError, TypeError:
+        raise ManagedStateError("unknown temporal_strategy") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +87,7 @@ class ManagedSource:
     parser_id: ParserId
     collection_filter_id: str | None
     enabled: bool
+    temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +290,7 @@ def effective_sources(catalog: BuiltInCatalog, state: ManagedState) -> tuple[Sou
                 timezone=ZoneInfo(managed.timezone),
                 enabled=managed.enabled,
                 parser_id=managed.parser_id,
+                temporal_strategy=managed.temporal_strategy,
                 collection_filter_id=managed.collection_filter_id,
                 editorial_scope=managed.editorial_scope,
                 external_references=(
@@ -303,6 +315,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     if source_schema_version not in {
         _LEGACY_MANAGED_STATE_SCHEMA_VERSION,
         _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION,
+        3,
         _MANAGED_STATE_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
@@ -311,7 +324,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     _known_keys(
         root,
         {"schema_version", "playlists", "sources"}
-        if source_schema_version == _MANAGED_STATE_SCHEMA_VERSION
+        if source_schema_version >= 3
         else {"schema_version", "playlists"},
         "managed state",
     )
@@ -322,7 +335,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
                 _sequence(_required(root, "sources", "managed state"), "sources")
             )
         )
-        if source_schema_version == _MANAGED_STATE_SCHEMA_VERSION
+        if source_schema_version >= 3
         else ()
     )
     seen_source_ids: set[SourceId] = set()
@@ -424,6 +437,7 @@ def _serialize_source(source: ManagedSource) -> dict[str, object]:
         "editorial_scope": source.editorial_scope.value,
         "timezone": source.timezone,
         "parser_id": str(source.parser_id),
+        "temporal_strategy": source.temporal_strategy.value,
         "collection_filter_id": source.collection_filter_id,
         "enabled": source.enabled,
     }
@@ -442,6 +456,7 @@ def _parse_source(value: object, path: str) -> ManagedSource:
             "editorial_scope",
             "timezone",
             "parser_id",
+            "temporal_strategy",
             "collection_filter_id",
             "enabled",
         },
@@ -477,6 +492,7 @@ def _parse_source(value: object, path: str) -> ManagedSource:
         editorial_scope=scope,
         timezone=_string(_required(data, "timezone", path), f"{path}.timezone"),
         parser_id=ParserId(_string(_required(data, "parser_id", path), f"{path}.parser_id")),
+        temporal_strategy=_temporal_strategy(data.get("temporal_strategy", "auto")),
         collection_filter_id=(
             None
             if data.get("collection_filter_id") is None
@@ -516,6 +532,8 @@ def _validate_source(source: ManagedSource, path: str) -> None:
         ZoneInfo(source.timezone)
     except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
         raise ManagedStateError(f"{path}.timezone: unknown IANA timezone") from exc
+    if not isinstance(source.temporal_strategy, TemporalStrategy):
+        raise ManagedStateError(f"{path}.temporal_strategy: unknown strategy")
     if not custom_strategy_allowed(str(source.parser_id), None):
         raise ManagedStateError(f"{path}.parser_id: not allowed for custom sources")
     if not custom_strategy_allowed(str(source.parser_id), source.collection_filter_id):

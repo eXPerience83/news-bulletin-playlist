@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from news_bulletin_playlist.providers.base import RecoveryTitleParser, TitleParser
+from collections.abc import Sequence
+
+from news_bulletin_playlist.models import TemporalStrategy
+from news_bulletin_playlist.providers.base import TitleParser
 from news_bulletin_playlist.providers.cnn import CnnParser
 from news_bulletin_playlist.providers.collection_filters import (
     CollectionFilter,
@@ -15,8 +18,10 @@ from news_bulletin_playlist.providers.rfi import RfiJournalMondeParser
 from news_bulletin_playlist.providers.rmf import RmfFaktyParser
 from news_bulletin_playlist.providers.rne import RneParser
 from news_bulletin_playlist.providers.ser import SerParser
+from news_bulletin_playlist.providers.temporal_detector import TemporalDetector, TemporalSample
+from news_bulletin_playlist.providers.temporal_profile import ProfileTitleParser
 
-RECOVERY_TITLE_PARSERS: dict[str, RecoveryTitleParser] = {
+RECOVERY_TITLE_PARSERS: dict[str, ProfileTitleParser] = {
     "ser": SerParser(),
     "rne": RneParser(),
     "ondacero": OndaCeroParser(),
@@ -54,3 +59,11 @@ def get_collection_filter(filter_id: str) -> CollectionFilter:
         return COLLECTION_FILTERS[filter_id]
     except KeyError as exc:
         raise KeyError(f"unknown collection filter: {filter_id}") from exc
+
+
+def get_temporal_detector(
+    samples: Sequence[TemporalSample],
+    strategy: TemporalStrategy = TemporalStrategy.AUTO,
+) -> TemporalDetector:
+    """Infer only from this source; optional capabilities never import product contracts."""
+    return TemporalDetector(samples, strategy)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Collection, Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS spotify_first_episode_state (
     title TEXT NOT NULL,
     edition_at TEXT,
     timestamp_source TEXT NOT NULL
-        CHECK (timestamp_source IN ('title', 'first_seen')),
+        CHECK (timestamp_source IN ('title', 'spotify_public_release', 'first_seen')),
     release_date_raw TEXT NOT NULL,
     release_date_precision TEXT NOT NULL
         CHECK (release_date_precision IN ('day', 'month', 'year')),
@@ -245,6 +245,25 @@ class SpotifyFirstJournal:
         with self._connection("replace Spotify-first source catalogue") as connection:
             self._ensure_tables(connection)
             for episode in values:
+                if episode.timestamp_source is TimestampSource.FIRST_SEEN:
+                    row = connection.execute(
+                        "SELECT * FROM spotify_first_episode_history WHERE source_id = ? "
+                        "AND spotify_episode_id = ? AND spotify_show_id = ? "
+                        "AND timestamp_source = 'spotify_public_release'",
+                        (str(source_id), episode.spotify_episode_id, episode.spotify_show_id),
+                    ).fetchone()
+                    if row is not None:
+                        previous = _episode_from_row(row)
+                        # Reuse only the same identity and still-compatible calendar.
+                        if (previous.release_date_raw, previous.release_date_precision) == (
+                            episode.release_date_raw,
+                            episode.release_date_precision,
+                        ):
+                            episode = replace(
+                                episode,
+                                edition_at=previous.edition_at,
+                                timestamp_source=previous.timestamp_source,
+                            )
                 episode_values = _episode_values(episode)
                 connection.execute(_UPSERT_EPISODE, episode_values)
                 connection.execute(_UPSERT_HISTORY, episode_values)

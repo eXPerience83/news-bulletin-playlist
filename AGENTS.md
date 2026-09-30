@@ -94,9 +94,10 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - The authoritative production architecture is Spotify-first. Runtime playlist decisions must not
   depend on RSS collection, RSS-native identities, RSS-to-Spotify matching or PENDING/AMBIGUOUS
   matching retries.
-- An unauthenticated public Spotify show observation is
-  used only as a **change signal**; when that episode identity changes, the official Spotify Web API
-  catalogue is the episode-data authority for the refreshed source.
+- An unauthenticated public Spotify show observation drives the change signal. Its already-observed
+  aware exact release timestamp may supply lower-priority chronology only after exact source/show/
+  episode identity, official catalogue period and bounded future validation. Semantic TITLE wins.
+  The official Spotify Web API catalogue remains the episode-data authority for the refreshed source.
 - The public Embed/oEmbed surfaces are never the episode catalogue/content source. Do not scrape a
   historical episode list from HTML; persist only the bounded latest-episode detector evidence
   required to decide whether an official catalogue refresh is needed.
@@ -110,13 +111,23 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - Deterministic stale/unavailable desired-item evidence may escalate to refreshing the other
   catalogues for the affected playlist. Ambiguous mutating transport/5xx outcomes still require
   existing readback/snapshot confirmation before retry; 429 still uses the global cooldown.
-- Title parsing remains preferred for exact editorial time. On failure, preserve bounded original
-  title evidence and explicit timestamp provenance; never invent minute precision.
+- Universal semantic title detection is runtime temporal authority, independent of source/parser
+  identity. Use source IANA timezone, official catalogue date compatibility and unique DST wall-time
+  resolution. Unreviewed structures require bounded corroborating catalogue evidence; token discovery
+  alone is not proof. Preserve explicit parsing provenance and retain episodes through the existing
+  catalogue/FIRST_SEEN fallback when evidence is insufficient. Never invent minute precision.
+- Historical parser IDs/layout adapters remain compatibility contracts, not per-source runtime
+  dispatch. Temporal evidence and collection filtering must remain independent.
+- Temporal detection defaults to AUTO inferred exclusively from the current source catalogue.
+  Never inject historical broadcaster layouts globally. Optional temporal_strategy capabilities
+  apply after AUTO and must be reusable, bounded and product-independent; disabled preserves fallback.
 - Do not download or store audio.
 - Persisted Spotify episode URIs must satisfy the shared episode-URI invariant before reuse.
 - A failed source or destination must not unnecessarily block independent sources/playlists.
-- Database format 1 is the supported Spotify-first persistence baseline; current format 2 adds
-  separate accepted-episode history via an explicit forward migration. The database filename remains
+- Database format 1 is the supported Spotify-first persistence baseline; format 2 adds separate
+  accepted-episode history; current format 3 widens episode/history provenance to validated public
+  release timestamps through a transactional forward migration. Managed-state JSON uses schema v4
+  with atomic v1/v2/v3 upgrades and absent temporal_strategy defaulting to AUTO. The database filename remains
   `/data/news-bulletin-playlist-v1.sqlite3`. Pre-0.1 private-development SQLite tables/migrations
   are not runtime compatibility targets; future persistence changes need reviewed forward migrations.
 
