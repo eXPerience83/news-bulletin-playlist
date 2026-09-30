@@ -144,4 +144,5 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - Treat database format 1 / 0.1.0 as the first supported persistence compatibility baseline. Pre-0.1 RSS/matcher/planner documents and schemas are historical provenance, not upgrade targets for the current database.
 - The current repository state is **All rights reserved**. Do not add or restore an open-source license, license file or package/image license metadata unless the owner explicitly changes that decision. Historical copies already distributed under MIT keep the rights granted to those copies.
 - Keep `pyproject.toml`, CI, Docker runtime and review-agent configuration consistent about the supported Python version.
+- Keep the README **Playlists** index synchronized in the same change whenever a public production playlist is added, removed, renamed or replaced. Never list private, test or merely built-in-but-unpublished destinations.
 - Root `AGENTS.md` applies repository-wide and should be updated when an invariant changes materially.
