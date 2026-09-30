@@ -408,7 +408,7 @@ class ManagedAdminService:
             )
         except (SpotifyApiError, SpotifyTransportError) as exc:
             cover_error = _safe_spotify_operation_error(exc)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             cover_error = "local cover error"
 
         if metadata_error is not None or cover_error is not None:
