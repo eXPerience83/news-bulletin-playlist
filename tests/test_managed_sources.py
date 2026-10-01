@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -39,8 +40,9 @@ from news_bulletin_playlist.models import (
 )
 from news_bulletin_playlist.persistence import SQLiteStore
 from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
-from news_bulletin_playlist.source_admin import SourceAdminService
+from news_bulletin_playlist.source_admin import SourceAdminService, SourceDisableError
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
+from news_bulletin_playlist.spotify.client import SpotifyTransportError
 from news_bulletin_playlist.spotify.first_desired import build_spotify_first_desired_state
 from news_bulletin_playlist.spotify.first_models import (
     RefreshReason,
@@ -52,7 +54,10 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicDetectorCycleSummary,
     PublicDetectorJournal,
 )
-from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
+from news_bulletin_playlist.spotify_backoff import (
+    ProviderAuthorizationSession,
+    SpotifyRateLimitJournal,
+)
 
 SHOW_A = "A" * 22
 SHOW_B = "B" * 22
@@ -361,39 +366,65 @@ def test_builtin_custom_id_and_show_collisions_fail_closed() -> None:
         effective_sources(future_id_catalog, ManagedState(sources=(_source(),)))
 
 
-def test_disabled_selected_source_never_authorizes_old_episode_state() -> None:
-    state = _state(_source(enabled=False))
+def _episode(source: ManagedSource, letter: str = "E") -> SpotifyFirstEpisode:
+    return SpotifyFirstEpisode(
+        source_id=source.id,
+        spotify_show_id=source.spotify_show_id,
+        spotify_episode_id=letter * 22,
+        spotify_episode_uri="spotify:episode:" + letter * 22,
+        title="Persisted bulletin",
+        edition_at=NOW,
+        timestamp_source=TimestampSource.TITLE,
+        release_date_raw=NOW.date().isoformat(),
+        release_date_precision="day",
+        duration_seconds=300,
+        first_seen_at=NOW,
+        last_seen_at=NOW,
+    )
+
+
+def test_dormant_assignment_never_authorizes_old_episode_state() -> None:
+    custom = _source(enabled=False)
+    state = _state(custom)
+    state = replace(
+        state,
+        playlists=(replace(state.playlists[0], source_ids=(SourceId("ser"), custom.id)),),
+    )
     config = compile_engine_config(BUILTIN_CATALOG, state)
-    assert config.playlists[0].source_selection.explicit == (state.sources[0].id,)
-    assert _required_sources(config) == ()
+    assert state.playlists[0].source_ids == (SourceId("ser"), custom.id)
+    assert config.playlists[0].source_selection.explicit == (SourceId("ser"),)
+    assert tuple(source.id for source in _required_sources(config)) == (SourceId("ser"),)
+    assert not config.sources[-1].enabled  # Known for administration/audit, not selected.
+    build = build_spotify_first_desired_state(
+        config.playlists[0],
+        (_episode(custom),),
+        sources={source.id: source for source in config.sources},
+        now=NOW,
+    )
+    assert build.desired.uris == ()
     runner = object.__new__(EngineRunner)
     runner.config = config
 
-    class OldCoverage:
-        def get_source_state(self, source_id: SourceId) -> object:
-            raise AssertionError(f"old SQLite source state must not authorize {source_id}")
-
-    runner.first_journal = OldCoverage()  # type: ignore[assignment]
-    assert not runner._playlist_sources_ready(config.playlists[0], now=NOW)
-
     class MissingCoverage:
         def get_source_state(self, source_id: SourceId) -> None:
-            assert source_id == state.sources[0].id
+            assert source_id == SourceId("ser")  # Dormant coverage must not be consulted.
             return None
 
-    runner.config = compile_engine_config(BUILTIN_CATALOG, _state())
     runner.first_journal = MissingCoverage()  # type: ignore[assignment]
-    assert not runner._playlist_sources_ready(runner.config.playlists[0], now=NOW)
-
-    with pytest.raises(ValueError, match="missing or disabled"):
-        build_spotify_first_desired_state(
-            config.playlists[0],
-            (),
-            sources={source.id: source for source in config.sources},
-            now=NOW,
-        )
+    assert not runner._playlist_sources_ready(config.playlists[0], now=NOW)
     with pytest.raises(ValueError, match="missing or disabled"):
         build_spotify_first_desired_state(config.playlists[0], (), sources={}, now=NOW)
+
+
+def test_compilation_rejects_active_playlist_with_only_dormant_assignments() -> None:
+    state = _state(_source(enabled=False))
+    with pytest.raises(ManagedStateError, match="at least one enabled source"):
+        compile_engine_config(BUILTIN_CATALOG, state)
+    paused = replace(state, playlists=(replace(state.playlists[0], enabled=False),))
+    assert (
+        compile_engine_config(BUILTIN_CATALOG, paused).playlists[0].source_selection.explicit == ()
+    )
+    assert parse_managed_state(serialize_managed_state(paused)) == paused
 
 
 def test_shared_custom_source_is_observed_and_planned_only_once_per_cycle(tmp_path: Path) -> None:
@@ -487,8 +518,11 @@ def test_pending_custom_assignment_round_trips_and_recovery_preserves_identity(
     assert service.provisioning_journal.load() == intent
 
 
-def test_disabled_selected_source_preserves_destination_in_real_cycle(tmp_path: Path) -> None:
+def test_paused_playlist_with_only_dormant_assignments_performs_no_provider_io(
+    tmp_path: Path,
+) -> None:
     state = _state(_source(enabled=False))
+    state = replace(state, playlists=(replace(state.playlists[0], enabled=False),))
     config = compile_engine_config(BUILTIN_CATALOG, state)
     store = SQLiteStore(tmp_path / "state.sqlite3")
     store.initialize()
@@ -556,17 +590,16 @@ def test_disabled_selected_source_preserves_destination_in_real_cycle(tmp_path: 
     )  # type: ignore[arg-type]
     result = runner.run_cycle()
     assert result.sources == ()
-    assert len(result.playlists) == 1
-    assert result.playlists[0].wrote is None
-    assert result.playlists[0].write_outcome == "not_attempted"
-    assert "destination preserved" in (result.playlists[0].error or "")
+    assert result.playlists == ()
     assert first.list_episodes(source_ids=(state.sources[0].id,))
 
 
-def test_enabled_builtin_plus_disabled_custom_never_writes_reduced_destination(
+@pytest.mark.parametrize("disabled", [True, False])
+def test_dormant_source_allows_reduced_destination_but_provider_failure_remains_fail_closed(
     tmp_path: Path,
+    disabled: bool,
 ) -> None:
-    custom = _source(enabled=False)
+    custom = _source(enabled=not disabled)
     state = _state(custom)
     state = replace(
         state,
@@ -580,6 +613,13 @@ def test_enabled_builtin_plus_disabled_custom_never_writes_reduced_destination(
     detector_journal = PublicDetectorJournal(sqlite_store)
     detector_journal.initialize()
     ser = next(source for source in config.sources if source.id == SourceId("ser"))
+    ser_episode = replace(
+        _episode(custom, "F"),
+        source_id=ser.id,
+        spotify_show_id=ser.external_references[0].external_id,
+    )
+    first.replace_source_episodes(ser.id, (ser_episode,), coverage_proven=True)
+    first.replace_source_episodes(custom.id, (_episode(custom),), coverage_proven=False)
     first.record_refresh(
         ser,
         refreshed_at=NOW,
@@ -592,45 +632,91 @@ def test_enabled_builtin_plus_disabled_custom_never_writes_reduced_destination(
         coverage_cutoff_at=NOW - timedelta(hours=48),
     )
 
-    class NoAuth:
-        def acquire_provider_session(self, *, now: datetime) -> None:
-            raise AssertionError(f"no catalogue refresh expected at {now}")
+    class Auth:
+        def authorization_context(self) -> str:
+            return "context"
+
+        def acquire_provider_session(self, *, now: datetime) -> ProviderAuthorizationSession:
+            assert now == NOW
+            return ProviderAuthorizationSession("token", "context")
 
     class Detector:
         def observe_sources(
             self, sources: object, *, observed_at: datetime
         ) -> PublicDetectorCycleSummary:
-            assert tuple(source.id for source in sources) == (SourceId("ser"),)  # type: ignore[attr-defined]
+            expected = (SourceId("ser"),) if disabled else (SourceId("ser"), custom.id)
+            assert tuple(source.id for source in sources) == expected  # type: ignore[attr-defined]
             assert observed_at == NOW
             return PublicDetectorCycleSummary(0, 0, 0, 0)
 
-    writes: list[str] = []
+    class Client:
+        def __init__(self) -> None:
+            self.current = (ser_episode.spotify_episode_uri, _episode(custom).spotify_episode_uri)
+            self.writes: list[tuple[str, ...]] = []
+            self.catalogue_reads: list[str] = []
 
-    def client_factory(token: str) -> None:
-        writes.append(token)
-        raise AssertionError("destination must not be mutated")
+        def show_episodes(self, show_id: str, **kwargs: Any) -> dict[str, Any]:
+            assert not disabled and show_id == custom.spotify_show_id
+            self.catalogue_reads.append(show_id)
+            raise SpotifyTransportError("temporary provider failure")
 
+        def playlist_items(self, destination_id: str, **kwargs: Any) -> dict[str, Any]:
+            assert destination_id == "destination"
+            return {
+                "items": [{"item": {"type": "episode", "uri": uri}} for uri in self.current],
+                "next": None,
+                "total": len(self.current),
+            }
+
+        def playlist_snapshot(self, destination_id: str) -> dict[str, Any]:
+            assert destination_id == "destination"
+            return {"snapshot_id": "new" if self.writes else "old"}
+
+        def replace_playlist_items(self, destination_id: str, uris: list[str]) -> dict[str, Any]:
+            assert destination_id == "destination"
+            self.current = tuple(uris)
+            self.writes.append(self.current)
+            return {"snapshot_id": "new"}
+
+    client = Client()
     runner = EngineRunner(
         config,
         sqlite_store,
-        NoAuth(),
+        Auth(),
         Detector(),
         detector_journal,
         first,
-        client_factory=client_factory,
+        client_factory=lambda token: client,
         clock=lambda: NOW,
     )  # type: ignore[arg-type]
     result = runner.run_cycle()
-    assert result.playlists[0].ok is False
-    assert result.playlists[0].write_outcome == "not_attempted"
-    assert "destination preserved" in (result.playlists[0].error or "")
-    assert writes == []
+    if disabled:
+        assert result.playlists[0].ok is True
+        assert result.playlists[0].wrote is True
+        assert client.writes == [(ser_episode.spotify_episode_uri,)]
+        assert client.catalogue_reads == []
+        assert tuple(outcome.source_id for outcome in result.sources) == (SourceId("ser"),)
+    else:
+        assert result.playlists[0].ok is False
+        assert result.playlists[0].write_outcome == "not_attempted"
+        assert "destination preserved" in (result.playlists[0].error or "")
+        assert client.writes == []
+        assert client.catalogue_reads == [custom.spotify_show_id]
+        assert tuple(outcome.source_id for outcome in result.sources) == (
+            SourceId("ser"),
+            custom.id,
+        )
+    assert first.list_episodes(source_ids=(custom.id,)) == (_episode(custom),)
 
 
 def test_mid_cycle_disable_blocks_write_but_safe_metadata_change_does_not(
     tmp_path: Path,
 ) -> None:
     state = _state()
+    state = replace(
+        state,
+        playlists=(replace(state.playlists[0], source_ids=(SourceId("ser"), state.sources[0].id)),),
+    )
     original = compile_engine_config(BUILTIN_CATALOG, state)
     managed_store = ManagedStateStore(tmp_path / "managed-state.json")
     managed_store.save(state)
@@ -660,6 +746,13 @@ def test_mid_cycle_disable_blocks_write_but_safe_metadata_change_does_not(
     ):
         writes.append("spotify mutation")
     assert writes == []
+    updated = compile_engine_config(BUILTIN_CATALOG, managed_store.load())
+    assert managed_store.load().playlists[0].source_ids == state.playlists[0].source_ids
+    assert updated.playlists[0].source_selection.explicit == (SourceId("ser"),)
+    with runner._playlist_mutation_guard(updated, updated.playlists[0]):
+        writes.append("new membership")
+    assert writes == ["new membership"]
+    writes.clear()
 
     service.set_enabled(str(state.sources[0].id), True)
     service.update_metadata(
@@ -683,9 +776,9 @@ def test_reenabled_source_uses_normal_coverage_readiness(tmp_path: Path) -> None
     first.initialize()
     runner = object.__new__(EngineRunner)
     runner.first_journal = first
-    runner.config = compile_engine_config(BUILTIN_CATALOG, state)
-    playlist = runner.config.playlists[0]
-    assert not runner._playlist_sources_ready(playlist, now=NOW)
+    paused = replace(state, playlists=(replace(state.playlists[0], enabled=False),))
+    runner.config = compile_engine_config(BUILTIN_CATALOG, paused)
+    assert runner.config.playlists[0].source_selection.explicit == ()
 
     runner.config = compile_engine_config(
         BUILTIN_CATALOG, replace(state, sources=(replace(state.sources[0], enabled=True),))
@@ -721,6 +814,10 @@ def test_reenabled_source_uses_normal_coverage_readiness(tmp_path: Path) -> None
 
 def test_source_semantics_change_write_contract_but_classification_does_not() -> None:
     base = _state()
+    base = replace(
+        base,
+        playlists=(replace(base.playlists[0], source_ids=(SourceId("ser"), base.sources[0].id)),),
+    )
     playlist_id = base.playlists[0].id
     contract = _playlist_write_contract(compile_engine_config(BUILTIN_CATALOG, base), playlist_id)
     source = base.sources[0]
@@ -795,13 +892,14 @@ def test_admin_source_validation_uses_effective_set_and_preserves_custom_state(
             access_token=None,
         )
     assert store.load().playlists == (unassigned_playlist,)
-    store.save(replace(state, sources=(disabled,)))
+    dormant_playlist = replace(current, source_ids=(SourceId("ser"), disabled.id))
+    store.save(replace(state, sources=(disabled,), playlists=(dormant_playlist,)))
     service.update(
         current.id,
         display_name=current.display_name,
         description=current.description,
         cover_id=current.cover_id,
-        source_ids=(disabled.id,),
+        source_ids=dormant_playlist.source_ids,
         enabled=True,
         access_token=None,
     )
@@ -816,4 +914,203 @@ def test_admin_source_validation_uses_effective_set_and_preserves_custom_state(
             enabled=True,
             access_token=None,
         )
-    assert store.load().playlists[0].source_ids == (disabled.id,)
+    assert store.load().playlists[0].source_ids == dormant_playlist.source_ids
+
+
+def _source_admin(store: ManagedStateStore) -> SourceAdminService:
+    class NoAuth:
+        def get_access_token(self, *, now: datetime | None = None) -> str:
+            raise AssertionError(f"configuration must not call provider at {now}")
+
+    return SourceAdminService(
+        store,
+        ConfigurationSynchronization(),
+        NoAuth(),
+        SpotifyRateLimitJournal(SQLiteStore(store.path.with_name("rate-limit.sqlite3"))),
+        None,
+        client_factory=lambda token: pytest.fail("configuration must not create a provider client"),
+    )
+
+
+@pytest.mark.parametrize("unassign", [False, True])
+def test_disable_enable_restores_only_surviving_durable_assignments(
+    tmp_path: Path,
+    unassign: bool,
+) -> None:
+    a, b = _source(SHOW_A), _source(SHOW_B)
+    state = _state(a)
+    playlist = replace(state.playlists[0], source_ids=(a.id, b.id))
+    state = replace(state, sources=(a, b), playlists=(playlist,))
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    store.save(state)
+    service = _source_admin(store)
+    service.set_enabled(str(b.id), False)
+    dormant = store.load()
+    assert dormant.schema_version == state.schema_version == 5
+    assert dormant.playlists == (playlist,)
+    compiled = compile_engine_config(BUILTIN_CATALOG, dormant)
+    assert compiled.playlists[0].source_selection.explicit == (a.id,)
+    assert tuple(source.id for source in _required_sources(compiled)) == (a.id,)
+    if unassign:
+        ManagedAdminService(store).update(
+            playlist.id,
+            display_name=playlist.display_name,
+            description=playlist.description,
+            cover_id=playlist.cover_id,
+            source_ids=(a.id,),
+            enabled=True,
+            access_token=None,
+        )
+    service.set_enabled(str(b.id), True)
+    restored = store.load()
+    expected = (a.id,) if unassign else (a.id, b.id)
+    assert restored.playlists[0].source_ids == expected
+    assert (
+        compile_engine_config(BUILTIN_CATALOG, restored).playlists[0].source_selection.explicit
+        == expected
+    )
+    assert restored.sources == (a, b)
+
+
+@pytest.mark.parametrize("paused", [False, True])
+def test_disabling_last_effective_source_is_atomic_and_allowed_only_when_paused(
+    tmp_path: Path,
+    paused: bool,
+) -> None:
+    b = _source(SHOW_B, enabled=False)
+    state = _state()
+    playlist = replace(
+        state.playlists[0], enabled=not paused, source_ids=(state.sources[0].id, b.id)
+    )
+    # A nonempty durable selection containing another dormant source is still effectively empty.
+    other = replace(
+        playlist,
+        id="other-playlist",
+        display_name="Other playlist",
+        destination=replace(playlist.destination, external_id="destination-2"),
+    )
+    state = replace(state, sources=state.sources + (b,), playlists=(playlist, other))
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    store.save(state)
+    before = store.path.read_bytes()
+    service = _source_admin(store)
+    if paused:
+        service.set_enabled(str(state.sources[0].id), False)
+        assert store.load().playlists == state.playlists
+        assert all(not source.enabled for source in store.load().sources)
+        assert all(
+            not p.source_selection.explicit
+            for p in compile_engine_config(BUILTIN_CATALOG, store.load()).playlists
+        )
+    else:
+        with pytest.raises(SourceDisableError) as caught:
+            service.set_enabled(str(state.sources[0].id), False)
+        assert playlist.display_name in str(caught.value)
+        assert other.display_name in str(caught.value)
+        assert "pause" in str(caught.value)
+        assert store.path.read_bytes() == before
+        assert store.load() == state
+
+
+@pytest.mark.parametrize("operation", ["resume", "save"])
+def test_active_playlist_requires_enabled_assignment_as_operator_error(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    state = _state(_source(enabled=False))
+    playlist = replace(state.playlists[0], enabled=False)
+    state = replace(state, playlists=(playlist,))
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    store.save(state)
+    before = store.path.read_bytes()
+    service = ManagedAdminService(store)
+    with pytest.raises(ManagedAdminError, match="at least one enabled source"):
+        if operation == "resume":
+            service.set_enabled(playlist.id, True)
+        else:
+            service.update(
+                playlist.id,
+                display_name=playlist.display_name,
+                description=playlist.description,
+                cover_id=playlist.cover_id,
+                source_ids=playlist.source_ids,
+                enabled=True,
+                access_token=None,
+            )
+    assert store.path.read_bytes() == before
+    # Saving while paused may retain or explicitly remove the inactive assignment.
+    for selected in (playlist.source_ids, ()):
+        service.update(
+            playlist.id,
+            display_name=playlist.display_name,
+            description=playlist.description,
+            cover_id=playlist.cover_id,
+            source_ids=selected,
+            enabled=False,
+            access_token=None,
+        )
+        assert store.load().playlists[0].source_ids == selected
+
+
+@pytest.mark.parametrize("provisioning_state", list(ProvisioningState))
+def test_disable_cannot_remove_last_effective_source_of_pending_activation(
+    tmp_path: Path,
+    provisioning_state: ProvisioningState,
+) -> None:
+    a, b = _source(), _source(SHOW_B, enabled=False)
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    store.save(ManagedState(sources=(a, b)))
+    service = _source_admin(store)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    intent = ProvisioningIntent(
+        state=provisioning_state,
+        template_id=template.id,
+        display_name="Pending news",
+        description="",
+        cover_id=template.cover_id,
+        source_ids=(a.id, b.id),
+        retention_hours=template.retention_hours,
+        max_episodes=template.max_episodes,
+        max_duration_seconds=template.duration_policy.default_max_seconds,
+        destination_id="destination"
+        if provisioning_state is ProvisioningState.DESTINATION_KNOWN
+        else None,
+    )
+    service.provisioning_journal.save(intent)
+    before, pending_before = store.path.read_bytes(), service.provisioning_journal.path.read_bytes()
+    with pytest.raises(SourceDisableError, match="Pending activation: Pending news"):
+        service.set_enabled(str(a.id), False)
+    assert store.path.read_bytes() == before
+    assert service.provisioning_journal.path.read_bytes() == pending_before
+
+
+def test_pending_activation_with_disabled_assignment_keeps_existing_fail_closed_recovery(
+    tmp_path: Path,
+) -> None:
+    a, b = _source(), _source(SHOW_B)
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    store.save(ManagedState(sources=(a, b)))
+    service = _source_admin(store)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    intent = ProvisioningIntent(
+        state=ProvisioningState.DESTINATION_KNOWN,
+        template_id=template.id,
+        display_name="Pending news",
+        description="",
+        cover_id=template.cover_id,
+        source_ids=(a.id, b.id),
+        retention_hours=template.retention_hours,
+        max_episodes=template.max_episodes,
+        max_duration_seconds=template.duration_policy.default_max_seconds,
+        destination_id="destination",
+    )
+    service.provisioning_journal.save(intent)
+    service.set_enabled(str(b.id), False)
+    admin = ManagedAdminService(store)
+    with pytest.raises(ManagedAdminError, match="disabled source"):
+        admin.finalize_known_provisioning()
+    assert store.load().playlists == ()
+    assert service.provisioning_journal.load() == intent
+    service.set_enabled(str(b.id), True)
+    result = admin.finalize_known_provisioning()
+    assert result is not None and result.source_ids == (a.id, b.id)

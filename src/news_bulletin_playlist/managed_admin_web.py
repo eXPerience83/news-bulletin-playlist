@@ -226,14 +226,6 @@ def _managed_card(
         source_prefix=f"edit-{playlist.id}",
         enabled=playlist.enabled,
     )
-    disabled_warnings = "".join(
-        '<p class="warning">Custom source '
-        f'"{html.escape(source.display_name)}" is Disabled. This playlist preserves its '
-        "Spotify destination and will not update until the source is re-enabled or explicitly "
-        "unassigned.</p>"
-        for source in custom_sources
-        if source.id in playlist.source_ids and not source.enabled
-    )
     return f"""
 <article class="card playlist-card">
   <div class="card-head">
@@ -251,7 +243,6 @@ def _managed_card(
     {_hidden_input("playlist_id", str(playlist.id))}
     {_hidden_input("cover_id", playlist.cover_id)}
     {fields}
-    {disabled_warnings}
     <button class="button" type="submit">Save playlist</button>
   </form>
   <form method="post" action="/admin/playlists/sync">
@@ -328,11 +319,29 @@ def _playlist_policy_fields(
 
     duration_minutes, duration_remainder = divmod(duration_seconds, 60)
     source_controls = _source_checkboxes(
-        sources,
+        tuple(source for source in sources if source.enabled),
         custom_source_ids=custom_source_ids,
         selected=selected_source_ids,
         prefix=source_prefix,
     )
+    inactive_sources = tuple(
+        source for source in sources if not source.enabled and source.id in selected_source_ids
+    )
+    inactive_controls = ""
+    if inactive_sources:
+        inactive_controls = (
+            "<fieldset><legend>Inactive assignments</legend>"
+            '<p class="muted">Disabled sources contribute no episodes. They return automatically '
+            "when re-enabled. Keep checked to retain the assignment; uncheck to permanently "
+            "unassign.</p>"
+            + _source_checkboxes(
+                inactive_sources,
+                custom_source_ids=custom_source_ids,
+                selected=selected_source_ids,
+                prefix=source_prefix,
+            )
+            + "</fieldset>"
+        )
     enabled_control = ""
     if enabled is not None:
         checked = " checked" if enabled else ""
@@ -360,6 +369,7 @@ def _playlist_policy_fields(
     </div>
     <p class="muted">Episodes longer than this are omitted from this playlist only.</p>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
+    {inactive_controls}
     {enabled_control}
 """
 
@@ -373,8 +383,6 @@ def _source_checkboxes(
 ) -> str:
     rows = []
     for source in sources:
-        if not source.enabled and source.id not in selected:
-            continue
         checked = " checked" if source.id in selected else ""
         control_id = f"{prefix}-{source.id}"
         safe_control_id = html.escape(control_id, quote=True)
@@ -384,7 +392,7 @@ def _source_checkboxes(
             f'value="{html.escape(str(source.id), quote=True)}"{checked}> '
             f"{html.escape(_source_label(source))}"
             f"{' · Custom' if source.id in custom_source_ids else ''}"
-            f"{' — Disabled · currently selected' if not source.enabled else ''}"
+            f"{' — Disabled' if not source.enabled else ''}"
             "</label>"
         )
     return "".join(rows)

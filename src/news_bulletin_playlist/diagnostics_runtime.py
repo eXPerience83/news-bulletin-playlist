@@ -48,6 +48,7 @@ from news_bulletin_playlist.source_admin import (
     EngineCycleBusyError,
     SourceAuditBatchLimitError,
     SourceAuditBatchStateError,
+    SourceDisableError,
     SourceMutationError,
     SourceReferencedError,
 )
@@ -374,6 +375,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 updated, configured = service.set_enabled(values["source_id"], enabled)
                 next_state = "enabled" if enabled else "disabled"
                 event_name, notice = f"admin_source_{next_state}", f"source-{next_state}"
+        except SourceDisableError as exc:
+            self._source_error(HTTPStatus.CONFLICT, str(exc))
+            return
         except SourceMutationError:
             self._source_error(HTTPStatus.CONFLICT, "Custom source is unavailable or not editable")
             return

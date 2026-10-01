@@ -16,7 +16,10 @@ from news_bulletin_playlist.models import (
     SourceOriginKind,
 )
 from news_bulletin_playlist.public_release_web import public_release_selector
-from news_bulletin_playlist.source_admin import MAX_SOURCE_AUDIT_BATCH_SOURCES
+from news_bulletin_playlist.source_admin import (
+    MAX_SOURCE_AUDIT_BATCH_SOURCES,
+    source_disable_blockers,
+)
 from news_bulletin_playlist.temporal_strategy_web import (
     TEMPORAL_STRATEGY_LABELS,
     temporal_strategy_selector,
@@ -123,19 +126,39 @@ def _sources_table(
         if source.id not in built_in_ids:
             next_enabled = not source.enabled
             verb = "Enable" if next_enabled else "Disable"
-            controls += (
-                f'<a href="/admin/sources/edit?source_id={safe_id}">'
-                "Edit</a>"
-                '<form method="post" action="/admin/sources/set-enabled">'
-                f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
-                f'<input type="hidden" name="source_id" value="{safe_id}">'
-                f'<input type="hidden" name="enabled" value="{int(next_enabled)}">'
-                f'<button class="button" type="submit">{verb}</button></form>'
-            )
+            controls += f'<a href="/admin/sources/edit?source_id={safe_id}">Edit</a>'
             if not next_enabled and used_by.get(source.id):
                 controls += (
-                    '<p class="muted">Disabling keeps assignments and Spotify content, pauses '
-                    "affected destination updates, and is reversible.</p>"
+                    '<p class="warning">Disable affects: '
+                    f"{html.escape(', '.join(used_by[source.id]))}. This source stops contributing "
+                    "episodes at the next reconciliation; its episodes may be removed from "
+                    "Spotify. Playlists continue updating with their remaining enabled sources. "
+                    "Assignments are kept and return automatically on Enable.</p>"
+                )
+            blocked = (
+                source_disable_blockers(
+                    source.id,
+                    sources=sources,
+                    playlists=snapshot.managed,
+                    provisioning_intent=snapshot.provisioning_intent,
+                )
+                if source.enabled
+                else ()
+            )
+            if blocked:
+                controls += (
+                    '<p class="warning">Cannot disable: '
+                    f"{html.escape(', '.join(blocked))} would have no enabled sources. "
+                    "Add another enabled source or pause the active playlists first; "
+                    "resolve any pending activation.</p>"
+                )
+            else:
+                controls += (
+                    '<form method="post" action="/admin/sources/set-enabled">'
+                    f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
+                    f'<input type="hidden" name="source_id" value="{safe_id}">'
+                    f'<input type="hidden" name="enabled" value="{int(next_enabled)}">'
+                    f'<button class="button" type="submit">{verb}</button></form>'
                 )
             pending = (
                 snapshot.provisioning_intent is not None

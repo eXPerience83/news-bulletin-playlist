@@ -26,6 +26,7 @@ from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynch
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.lan_admin import LanAdminSecurity
 from news_bulletin_playlist.managed_admin import ManagedAdminService
+from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import (
     ManagedSource,
     ManagedState,
@@ -429,6 +430,17 @@ def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) ->
         assert client.calls == [] and service.auth.calls == 0  # type: ignore[attr-defined]
         _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
         assert b"Operator playlist" in sources and b"Unassign before deletion" in sources
+        custom_row = next(
+            row
+            for row in re.findall(rb"<tr>.*?</tr>", sources, flags=re.DOTALL)
+            if control.split(b'value="')[1].split(b'"')[0] in row
+        )
+        assert b"Disable affects: Operator playlist" in custom_row
+        assert b"next reconciliation" in custom_row
+        assert b"continue updating with their remaining enabled sources" in custom_row
+        assert b"return automatically on Enable" in custom_row
+        assert b"pauses affected destination updates" not in custom_row
+        assert custom_row.index(b"Disable affects:") < custom_row.index(b">Disable</button>")
         for row in re.findall(rb"<tr>.*?</tr>", sources, flags=re.DOTALL):
             if b"Built-in" in row:
                 assert b"/admin/sources/delete" not in row
@@ -444,8 +456,19 @@ def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) ->
         )
         _, _, playlists = _request(server, "GET", "/admin/", cookie=cookie)
         assert control + b" checked" in playlists
-        assert "Disabled · currently selected".encode() in playlists
-        assert b"preserves its Spotify destination" in playlists
+        assert b"Inactive assignments" in playlists
+        normal_sources = playlists.split(b"<legend>Sources</legend>", 1)[1].split(
+            b"</fieldset>", 1
+        )[0]
+        inactive = playlists.split(b"<legend>Inactive assignments</legend>", 1)[1].split(
+            b"</fieldset>", 1
+        )[0]
+        assert control not in normal_sources
+        assert b'value="ser" checked' in normal_sources
+        assert control + b" checked" in inactive
+        assert b"Disabled" in inactive
+        assert b"uncheck to permanently unassign" in inactive
+        assert b"return automatically" in playlists
         assert b'type="hidden" name="source_id" value="custom_' not in playlists
         delete_path = f"/admin/sources/delete?source_id={source.id}"
         assert b"Unassign this source" in _request(server, "GET", delete_path, cookie=cookie)[2]
@@ -867,6 +890,12 @@ def test_http_delete_then_fresh_create_same_show_cannot_reuse_old_runtime_state(
 def test_real_http_custom_lifecycle_is_local_and_preserves_references(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
         original = _configured_source(store)
+        current = store.load()
+        store.save(
+            replace(
+                current, playlists=(replace(current.playlists[0], source_ids=("ser", original.id)),)
+            )
+        )
         auth = _Handler.source_admin_service.auth  # type: ignore[union-attr]
         for path in ("/admin/sources/edit?source_id=custom_" + SHOW,):
             assert _request(server, "GET", path)[0] == 303
@@ -915,11 +944,11 @@ def test_real_http_custom_lifecycle_is_local_and_preserves_references(tmp_path: 
         assert status == 303 and headers["Location"] == "/admin/sources?notice=source-disabled"
         disabled_state = ManagedStateStore(store.path).load()
         assert disabled_state.sources == (replace(edited, enabled=False),)
-        assert disabled_state.playlists[0].source_ids == (original.id,)
+        assert disabled_state.playlists[0].source_ids == ("ser", original.id)
         _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
         assert b"Disabled" in sources and b"Enable" in sources
         _, _, playlists = _request(server, "GET", "/admin/", cookie=cookie)
-        assert b"Revised news" in playlists and b"preserves its Spotify destination" in playlists
+        assert b"Revised news" in playlists and b"Inactive assignments" in playlists
         assert f'name="source_id" value="custom_{SHOW}"'.encode() in playlists
         selected_control = f'type="checkbox" name="source_id" value="custom_{SHOW}" checked'
         assert selected_control.encode() in playlists
@@ -1092,6 +1121,12 @@ def test_lifecycle_reconciles_active_playlists_but_not_sources_alone(tmp_path: P
     lifecycle = _Lifecycle()
     with _server(tmp_path, lifecycle=lifecycle) as (server, client, store):
         source = _configured_source(store)
+        current = store.load()
+        store.save(
+            replace(
+                current, playlists=(replace(current.playlists[0], source_ids=("ser", source.id)),)
+            )
+        )
         cookie = _login(server)
         _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
         assert (
@@ -1128,6 +1163,12 @@ def test_invalid_metadata_and_failed_save_emit_no_success_event(
 ) -> None:
     with _server(tmp_path) as (server, client, store):
         source = _configured_source(store)
+        current = store.load()
+        store.save(
+            replace(
+                current, playlists=(replace(current.playlists[0], source_ids=("ser", source.id)),)
+            )
+        )
         cookie = _login(server)
         _, _, edit = _request(
             server, "GET", f"/admin/sources/edit?source_id={source.id}", cookie=cookie
@@ -1161,6 +1202,12 @@ def test_invalid_metadata_and_failed_save_emit_no_success_event(
 def test_source_csrf_cannot_cross_sessions_or_be_reused(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
         source = _configured_source(store)
+        current = store.load()
+        store.save(
+            replace(
+                current, playlists=(replace(current.playlists[0], source_ids=("ser", source.id)),)
+            )
+        )
         cookie_a = _login(server)
         cookie_b = _login(server)
         _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie_a)
@@ -1779,3 +1826,123 @@ def test_configured_audit_public_failure_is_optional(tmp_path: Path) -> None:
         assert json.loads(report)["public_status"] == "unavailable"
         assert b"secret-public-body" not in report + review
         assert client.calls == ["details", "episodes"]
+
+
+def test_last_effective_source_disable_is_blocked_in_ui_and_backend_even_for_stale_form(
+    tmp_path: Path,
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        sole = store.load()
+        store.save(
+            replace(sole, playlists=(replace(sole.playlists[0], source_ids=("ser", source.id)),))
+        )
+        cookie = _login(server)
+        _, _, old_page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert b">Disable</button>" in old_page
+        store.save(sole)  # Another configuration change removes the alternate enabled source.
+        before = store.path.read_bytes()
+        _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        row = next(
+            row
+            for row in re.findall(rb"<tr>.*?</tr>", page, flags=re.DOTALL)
+            if str(source.id).encode() in row
+        )
+        assert b"Cannot disable:" in row
+        assert sole.playlists[0].display_name.encode() in row
+        assert b"would have no enabled sources" in row
+        assert b"pause the active playlists" in row
+        assert b"/admin/sources/set-enabled" not in row
+        status, _, body = _request(
+            server,
+            "POST",
+            "/admin/sources/set-enabled",
+            cookie=cookie,
+            form=_lifecycle_form(_csrf(old_page), enabled="0"),
+        )
+        assert status == 409
+        assert sole.playlists[0].display_name.encode() in body
+        assert b"no enabled sources" in body
+        assert store.path.read_bytes() == before
+        assert _Handler.diagnostic_store.list_events() == ()
+        assert client.calls == [] and _Handler.source_admin_service.auth.calls == 0
+
+
+def test_paused_dormant_assignment_can_be_saved_but_cannot_be_resumed_over_http(
+    tmp_path: Path,
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        state = store.load()
+        store.save(replace(state, playlists=(replace(state.playlists[0], enabled=False),)))
+        cookie = _login(server)
+        _, _, sources = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert b">Disable</button>" in sources
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/set-enabled",
+                cookie=cookie,
+                form=_lifecycle_form(_csrf(sources), enabled="0"),
+            )[0]
+            == 303
+        )
+        assert store.load().playlists[0].source_ids == (source.id,)
+        _, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+        assert b"Inactive assignments" in page
+        before = store.path.read_bytes()
+        status, _, body = _request(
+            server,
+            "POST",
+            "/admin/playlists/update",
+            cookie=cookie,
+            form=_playlist_form(_csrf(page), [str(source.id)]),
+        )
+        assert status == 409 and b"at least one enabled source" in body
+        assert store.path.read_bytes() == before
+        _, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+        pause_form = _playlist_form(_csrf(page), [str(source.id)])
+        del pause_form["enabled"]
+        assert (
+            _request(server, "POST", "/admin/playlists/update", cookie=cookie, form=pause_form)[0]
+            == 303
+        )
+        assert store.load().playlists[0].source_ids == (source.id,)
+        assert client.calls == [] and _Handler.source_admin_service.auth.calls == 0
+
+
+def test_pending_activation_blocks_last_source_disable_in_ui_and_http(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        store.save(ManagedState(sources=(source,)))
+        template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+        service = _Handler.source_admin_service
+        intent = ProvisioningIntent(
+            state=ProvisioningState.REQUEST_STARTED,
+            template_id=template.id,
+            display_name="Pending operator playlist",
+            description="",
+            cover_id=template.cover_id,
+            source_ids=(source.id,),
+            retention_hours=template.retention_hours,
+            max_episodes=template.max_episodes,
+            max_duration_seconds=template.duration_policy.default_max_seconds,
+        )
+        service.provisioning_journal.save(intent)
+        before = store.path.read_bytes()
+        cookie = _login(server)
+        _, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert b"Cannot disable: Pending activation: Pending operator playlist" in page
+        assert b">Disable</button>" not in page
+        status, _, body = _request(
+            server,
+            "POST",
+            "/admin/sources/set-enabled",
+            cookie=cookie,
+            form=_lifecycle_form(_csrf(page), enabled="0"),
+        )
+        assert status == 409 and b"Pending activation: Pending operator playlist" in body
+        assert store.path.read_bytes() == before
+        assert service.provisioning_journal.load() == intent
+        assert client.calls == [] and service.auth.calls == 0
