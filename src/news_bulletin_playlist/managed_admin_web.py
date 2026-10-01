@@ -342,6 +342,14 @@ def _playlist_policy_fields(
             )
             + "</fieldset>"
         )
+        if enabled is False and not selected_source_ids.intersection(
+            source.id for source in sources if source.enabled
+        ):
+            inactive_controls += (
+                '<p class="warning">This playlist has no enabled sources and remains paused; '
+                "its Spotify destination is preserved. Enable an assigned source or select "
+                "another enabled source before activating it.</p>"
+            )
     enabled_control = ""
     if enabled is not None:
         checked = " checked" if enabled else ""

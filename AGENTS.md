@@ -135,6 +135,10 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   remains fail-closed. Active playlists require at least one enabled assigned source; disabling
   the last effective source is rejected atomically, including pending activation. A mid-cycle
   configuration change must still prevent writes under the old playlist contract.
+  Runtime loading atomically pauses previously valid active playlists whose known assignments
+  are all disabled, retaining source_ids and destinations without provider I/O. This durable
+  recovery keeps Admin available with schema v5 unchanged; activation after repair is explicit
+  and still requires an enabled assigned source. Compilation itself remains strict.
 - Database format 1 is the supported Spotify-first persistence baseline; format 2 adds separate
   accepted-episode history; current format 3 widens episode/history provenance to validated public
   release timestamps through a transactional forward migration. Managed-state JSON uses schema v5
