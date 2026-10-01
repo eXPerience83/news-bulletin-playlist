@@ -13,9 +13,11 @@ from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.managed_provisioning import (
     MANAGED_PROVISIONING_FILENAME,
+    ProvisioningIntent,
     ProvisioningJournal,
 )
 from news_bulletin_playlist.managed_state import (
+    ManagedPlaylist,
     ManagedSource,
     ManagedSourceOverride,
     ManagedState,
@@ -117,6 +119,35 @@ class SourceMutationError(ValueError):
 
 class SourceReferencedError(SourceMutationError):
     """A durable playlist or provisioning intent still owns this source."""
+
+
+class SourceDisableError(SourceMutationError):
+    """Disabling would leave an active or pending playlist without effective sources."""
+
+
+def source_disable_blockers(
+    source_id: SourceId,
+    *,
+    sources: tuple[SourceDefinition, ...],
+    playlists: tuple[ManagedPlaylist, ...],
+    provisioning_intent: ProvisioningIntent | None,
+) -> tuple[str, ...]:
+    """Use the same last-effective-source check for lifecycle writes and Admin controls."""
+    remaining = {source.id for source in sources if source.enabled and source.id != source_id}
+    blocked = tuple(
+        f"{playlist.display_name} ({playlist.id})"
+        for playlist in playlists
+        if playlist.enabled
+        and source_id in playlist.source_ids
+        and not remaining.intersection(playlist.source_ids)
+    )
+    if (
+        provisioning_intent is not None
+        and source_id in provisioning_intent.source_ids
+        and not remaining.intersection(provisioning_intent.source_ids)
+    ):
+        blocked += (f"Pending activation: {provisioning_intent.display_name}",)
+    return blocked
 
 
 class EngineCycleBusyError(SourceMutationError):
@@ -457,6 +488,20 @@ class SourceAdminService:
         with self.synchronization.hold():
             state = self.store.load()
             current = self._custom_source(state, source_id)
+            if not enabled:
+                blocked = source_disable_blockers(
+                    current.id,
+                    sources=effective_sources(self.catalog, state),
+                    playlists=state.playlists,
+                    provisioning_intent=self.provisioning_journal.load(),
+                )
+                if blocked:
+                    raise SourceDisableError(
+                        "Cannot disable source; these playlists would have no enabled sources: "
+                        + ", ".join(blocked)
+                        + ". Add another enabled source or pause the active playlists first; "
+                        "resolve any pending activation."
+                    )
             updated = replace(current, enabled=enabled)
             self._save_replacement(state, updated)
             return updated, any(playlist.enabled for playlist in state.playlists)

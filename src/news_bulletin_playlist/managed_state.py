@@ -213,6 +213,7 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
     """Compile immutable catalog knowledge plus local choices into the existing engine model."""
     sources = effective_sources(catalog, state)
     source_ids = {source.id for source in sources}
+    enabled_source_ids = {source.id for source in sources if source.enabled}
     templates = {template.id: template for template in catalog.playlists}
     playlists: list[PlaylistDefinition] = []
     seen_ids: set[PlaylistId] = set()
@@ -234,8 +235,13 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
             raise ManagedStateError(
                 f"managed playlist {managed.id} references unknown source {unknown_sources[0]}"
             )
-        if managed.enabled and not managed.source_ids:
-            raise ManagedStateError(f"enabled managed playlist {managed.id} must select a source")
+        selected_sources = tuple(
+            source_id for source_id in managed.source_ids if source_id in enabled_source_ids
+        )
+        if managed.enabled and not selected_sources:
+            raise ManagedStateError(
+                f"enabled managed playlist {managed.id} must select at least one enabled source"
+            )
         destination_key = (
             managed.destination.adapter_id,
             managed.destination.external_id,
@@ -271,7 +277,7 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
                 countries=template.countries,
                 languages=template.languages,
                 enabled=managed.enabled,
-                source_selection=SourceSelection(explicit=managed.source_ids),
+                source_selection=SourceSelection(explicit=selected_sources),
                 destination=managed.destination,
                 retention_hours=managed.retention_hours,
                 max_episodes=managed.max_episodes,

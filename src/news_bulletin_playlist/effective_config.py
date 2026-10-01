@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -11,6 +12,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     ManagedStateStore,
     compile_engine_config,
+    effective_sources,
 )
 from news_bulletin_playlist.models import EngineConfig
 
@@ -30,8 +32,33 @@ def load_effective_config(
         return None
 
     try:
-        state = ManagedStateStore(managed_path).load()
-        config = compile_engine_config(BUILTIN_CATALOG, state)
+        store = ManagedStateStore(managed_path)
+        state = store.load()
+        disabled = {
+            source.id for source in effective_sources(BUILTIN_CATALOG, state) if not source.enabled
+        }
+        # Before dormant membership, an active playlist with only disabled assignments was
+        # valid and preserved Spotify. Pause it durably so startup and Admin remain available
+        # without ever passing an active, empty selection to the engine. Keep every assignment.
+        recovered = replace(
+            state,
+            playlists=tuple(
+                replace(playlist, enabled=False)
+                if playlist.enabled
+                and playlist.source_ids
+                and disabled.issuperset(playlist.source_ids)
+                else playlist
+                for playlist in state.playlists
+            ),
+        )
+        config = compile_engine_config(BUILTIN_CATALOG, recovered)
+        if recovered != state:
+            try:
+                store.save(recovered)
+            except OSError as exc:
+                raise ManagedStateError(
+                    "dormant-assignment recovery could not be persisted safely"
+                ) from exc
     except ManagedStateError as exc:
         raise RuntimeError(f"invalid managed configuration: {exc}") from exc
     if not any(playlist.enabled for playlist in config.playlists):

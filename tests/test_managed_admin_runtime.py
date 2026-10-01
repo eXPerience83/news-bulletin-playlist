@@ -611,7 +611,8 @@ def test_playlist_save_preserves_visible_custom_source(tmp_path: Path, disabled:
     assert retained == []
     assert f'type="checkbox" name="source_id" value="{custom.id}" checked' in page
     if disabled:
-        assert "Disabled · currently selected" in page
+        assert "Inactive assignments" in page
+        assert "Disabled sources contribute no episodes" in page
     assert '<input type="hidden" name="source_id" value="ser">' not in form_html
     csrf_token = re.search(r'<input type="hidden" name="csrf_token" value="([^"]+)">', form_html)
     assert csrf_token is not None
@@ -663,7 +664,7 @@ def test_playlist_save_preserves_visible_custom_source(tmp_path: Path, disabled:
                 )
 
         runner.first_journal = ReadyBuiltInOnly()  # type: ignore[assignment]
-        assert not runner._playlist_sources_ready(config.playlists[0], now=NOW)
+        assert runner._playlist_sources_ready(config.playlists[0], now=NOW)
 
 
 @pytest.mark.parametrize(

@@ -426,7 +426,9 @@ class ManagedAdminService:
         state = self.store.load()
         current = self._managed(state, playlist_id)
         if enabled and not current.source_ids:
-            raise ManagedAdminError("a resumed playlist must select at least one source")
+            raise ManagedAdminError("a resumed playlist must select at least one enabled source")
+        if enabled:
+            self._require_enabled_source(current.source_ids, state=state)
         updated = replace(current, enabled=enabled)
         self._replace(state, updated)
         return updated
@@ -551,7 +553,21 @@ class ManagedAdminService:
         )
         if disabled is not None:
             raise ManagedAdminError(f"disabled source cannot be newly assigned: {disabled}")
+        if not allow_empty:
+            self._require_enabled_source(selected, state=state)
         return selected
+
+    def _require_enabled_source(
+        self, selected: tuple[SourceId, ...], *, state: ManagedState
+    ) -> None:
+        if not any(
+            source.enabled and source.id in selected
+            for source in effective_sources(self.catalog, state)
+        ):
+            raise ManagedAdminError(
+                "an active playlist must select at least one enabled source; "
+                "add an enabled source or keep the playlist paused"
+            )
 
     def _cover_id(self, value: str) -> str:
         cover_id = _required_text(value, "cover id")
