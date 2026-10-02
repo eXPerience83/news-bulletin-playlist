@@ -5,6 +5,43 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-02
+
+### Changed
+
+- Disabled source assignments now remain durable as dormant assignment intent instead of freezing the
+  whole playlist. Effective membership includes only assigned, enabled sources; re-enabling restores
+  surviving assignments, while explicit unassignment remains permanent. Runtime loading also pauses
+  previously valid active playlists whose known assignments are all disabled, preserving source IDs
+  and Spotify destinations without provider I/O.
+- Explicit Spotify metadata synchronization now renders one bounded inline attribution:
+  `<base> · by eXPerience83 · https://github.com/eXPerience83` (or the standalone product attribution
+  for an empty base). The editable base reserves the 52-character suffix so the final description
+  remains at or below 300 characters.
+
+### Fixed
+
+- Admin-triggered Enable/Disable/Save wakes no longer lose the immediate engine cycle to a stale WAL
+  diagnostics snapshot. Diagnostics initialization reserves its writer transaction before schema
+  checks, preventing the reproduced `SQLITE_BUSY_SNAPSHOT` race without adding retries, sleeps or
+  provider I/O to the Admin mutation path.
+- Spotify metadata HTTP 400/API/transport failures are no longer converted into success by retrying
+  with the attribution removed. Metadata uses one PUT and surfaces failure to the operator; cover
+  upload remains an independent operation and is still attempted after a metadata failure.
+- FIRST_SEEN/coarse fallback ordering now stays on one physical timeline. Exact TITLE/PUBLIC evidence
+  continues to use UTC `edition_at`; fallback rows order by the earlier of real `first_seen_at` and
+  the end of the source-local Spotify release period. This fixes source-local-midnight misordering
+  without creating `edition_at`, upgrading provenance or changing retention semantics.
+
+### Compatibility / operations
+
+- No persistence migration is required from 0.2.0: managed-state remains schema **v5** and SQLite
+  remains database format **3**.
+- The historical diagnostic label `applied_without_attribution` remains readable/exportable for rows
+  written by earlier versions, while the current runtime no longer emits that success outcome.
+- The supported interpreter remains CPython **3.14.x**; the pinned Python 3.14.7 slim image digest was
+  refreshed without changing the runtime contract.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added
