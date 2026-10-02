@@ -6,6 +6,7 @@ import calendar
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
@@ -103,20 +104,47 @@ def release_period(value: str, precision: str) -> tuple[date, date]:
     return date(year, 1, 1), date(year, 12, 31)
 
 
-def episode_order_key(episode: SpotifyFirstEpisode) -> tuple[int, int, int, str, str]:
+def episode_evidence_period(
+    episode: SpotifyFirstEpisode, timezone: ZoneInfo | None
+) -> tuple[datetime, datetime]:
+    """Return the conservative physical UTC interval supported by episode chronology evidence."""
+    if episode.edition_at is not None:
+        return episode.edition_at, episode.edition_at
+    start, end = release_period(episode.release_date_raw, episode.release_date_precision)
+    zone = timezone or ZoneInfo("UTC")
+    # A catalogue day/month/year is source-local calendar evidence, not an exact UTC period.
+    # Bound both folds at transitions; even an imaginary boundary must only widen the
+    # interval, never make coarse evidence look more precise than it is.
+    try:
+        starts = [
+            as_utc(datetime.combine(start, datetime.min.time(), tzinfo=zone).replace(fold=fold))
+            for fold in (0, 1)
+        ]
+        ends = [
+            as_utc(datetime.combine(end, datetime.max.time(), tzinfo=zone).replace(fold=fold))
+            for fold in (0, 1)
+        ]
+    except OverflowError:
+        # Extreme catalogue years can extend beyond datetime's UTC range. Widen instead
+        # of asserting chronology or failing the source.
+        return datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
+    return min(starts), max(ends)
+
+
+def episode_order_key(
+    episode: SpotifyFirstEpisode, timezone: ZoneInfo | None = None
+) -> tuple[datetime, str, str]:
+    """Order by exact chronology or a coherent physical upper bound for coarse evidence."""
     if episode.edition_at is not None:
         value = episode.edition_at
-        day = value.date()
     else:
-        day, _ = release_period(episode.release_date_raw, episode.release_date_precision)
-        value = episode.first_seen_at
-    return (
-        day.toordinal(),
-        value.hour * 3600 + value.minute * 60 + value.second,
-        value.microsecond,
-        str(episode.source_id),
-        episode.spotify_episode_id,
-    )
+        _, release_end = episode_evidence_period(episode, timezone)
+        # first_seen_at is a physical observation upper bound. The release period is
+        # independent source-local calendar evidence. Taking the earlier physical instant
+        # keeps old bootstrap rows bounded without grafting one evidence source's calendar
+        # date onto another source's clock-of-day.
+        value = min(episode.first_seen_at, release_end)
+    return value, str(episode.source_id), episode.spotify_episode_id
 
 
 def spotify_id(value: str) -> str:
