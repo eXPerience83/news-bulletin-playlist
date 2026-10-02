@@ -13,7 +13,6 @@ from news_bulletin_playlist.managed_admin import (
     LEGACY_PROJECT_REPOSITORY_URL,
     MAX_PLAYLIST_DESCRIPTION_LENGTH,
     PROJECT_DESCRIPTION_FOOTER,
-    PROJECT_DESCRIPTION_SEPARATOR,
     PROJECT_PROFILE_URL,
     ManagedAdminError,
     ManagedAdminService,
@@ -61,8 +60,9 @@ def _service(tmp_path: Path, spotify: _Spotify) -> ManagedAdminService:
 def test_renderer_appends_public_profile_attribution_footer() -> None:
     rendered = render_spotify_description("Descripción")
 
-    assert rendered == (f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}")
-    assert "News Bulletin Playlist" in rendered
+    assert rendered == "Descripción · by eXPerience83 · https://github.com/eXPerience83"
+    assert "\n" not in rendered
+    assert "\r" not in rendered
     assert "eXPerience83" in rendered
     assert rendered.count(PROJECT_PROFILE_URL) == 1
     assert LEGACY_PROJECT_REPOSITORY_URL not in rendered
@@ -75,6 +75,13 @@ def test_renderer_appends_public_profile_attribution_footer() -> None:
         f"Descripción\r\n\r\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}\r\n",
         f"Descripción\n\n{LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER}",
         f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}",
+        "Descripción · by eXPerience83 · https://github.com/eXPerience83",
+        (
+            f"Descripción\n\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}"
+            " · by eXPerience83 · https://github.com/eXPerience83"
+            f"\n\n{PROJECT_DESCRIPTION_FOOTER}"
+            " · by eXPerience83 · https://github.com/eXPerience83"
+        ),
         (f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}\n\n{PROJECT_DESCRIPTION_FOOTER}"),
         (
             f"Descripción\n\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}"
@@ -86,7 +93,7 @@ def test_renderer_appends_public_profile_attribution_footer() -> None:
 def test_renderer_strips_existing_terminal_footer_before_readding_one(contaminated: str) -> None:
     rendered = render_spotify_description(contaminated)
 
-    assert rendered == (f"Descripción{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}")
+    assert rendered == "Descripción · by eXPerience83 · https://github.com/eXPerience83"
     assert rendered.count(PROJECT_PROFILE_URL) == 1
     assert LEGACY_PROJECT_REPOSITORY_URL not in rendered
 
@@ -258,7 +265,8 @@ def test_maximum_editable_description_fits_spotify_limit_with_footer(tmp_path: P
     assert spotify.create_calls[-1][1] == ""
     rendered = render_spotify_description(maximum)
     assert len(rendered) == 300
-    assert rendered.endswith(PROJECT_DESCRIPTION_FOOTER)
+    assert MAX_PLAYLIST_DESCRIPTION_LENGTH == 248
+    assert rendered.endswith(" · by eXPerience83 · https://github.com/eXPerience83")
     assert rendered.count(PROJECT_PROFILE_URL) == 1
     assert LEGACY_PROJECT_REPOSITORY_URL not in rendered
 
@@ -281,3 +289,62 @@ def test_description_cannot_exceed_space_reserved_for_project_footer(tmp_path: P
             source_ids=template.default_source_ids,
             access_token="token",
         )
+
+
+def test_empty_base_renders_standalone_attribution() -> None:
+    assert render_spotify_description("") == (
+        "News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83"
+    )
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "Texto by eXPerience83 en medio de la descripción",
+        "Texto · by eXPerience83 · https://github.com/eXPerience83 y más texto",
+        "Texto by eXPerience83 · https://github.com/eXPerience83",
+        f"Texto {PROJECT_DESCRIPTION_FOOTER} y más texto",
+    ],
+)
+def test_renderer_preserves_prose_with_similar_attribution(prose: str) -> None:
+    assert render_spotify_description(prose) == (
+        f"{prose} · by eXPerience83 · https://github.com/eXPerience83"
+    )
+
+
+def test_inline_description_is_cleaned_in_local_managed_state_update(tmp_path: Path) -> None:
+    spotify = _Spotify()
+    service = _service(tmp_path, spotify)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = service.activate(
+        template_id=template.id,
+        display_name=template.display_name,
+        description="Base",
+        cover_id=template.cover_id,
+        source_ids=template.default_source_ids,
+        access_token="token",
+    )
+    service.client_factory = lambda _token: pytest.fail("ordinary Save must not create a client")
+    updated = service.update(
+        managed.id,
+        display_name="Nombre editado",
+        description=render_spotify_description("x" * 248),
+        cover_id=managed.cover_id,
+        source_ids=managed.source_ids,
+        enabled=True,
+        access_token="unused-token",
+    )
+    assert updated.description == "x" * 248
+    assert service.store.load().playlists[0].description == updated.description
+    assert spotify.update_calls == []
+    assert spotify.cover_calls == []
+    assert render_spotify_description(render_spotify_description("Base")) == (
+        "Base · by eXPerience83 · https://github.com/eXPerience83"
+    )
+
+
+def test_inline_cleanup_is_idempotent_when_base_ends_with_product_name() -> None:
+    base = "Texto News Bulletin Playlist"
+    rendered = render_spotify_description(base)
+    assert rendered == f"{base} · by eXPerience83 · https://github.com/eXPerience83"
+    assert render_spotify_description(rendered) == rendered

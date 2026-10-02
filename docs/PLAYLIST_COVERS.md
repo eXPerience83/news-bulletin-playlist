@@ -44,24 +44,26 @@ durable Spotify destination identity; it does not automatically push metadata or
 ### Playlist description behavior
 
 Managed state stores only the editable, provider-agnostic base description. On explicit Spotify
-metadata synchronization, the application first renders one bounded public attribution line:
+metadata synchronization, the application renders one inline attributed description:
 
-`News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83`
+`<base> · by eXPerience83 · https://github.com/eXPerience83`
 
-Live differential validation found that the attributed description can return Spotify HTTP 400 even
-when name-only/base-description updates and cover uploads succeed. The runtime therefore retries
-**only that definitive HTTP 400 metadata validation failure** once with the base description. Auth,
-rate-limit, 5xx and transport failures remain visible and are not masked by the fallback.
+An empty base renders `News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83`.
+The 52-character inline suffix reserves a maximum of 248 editable characters, keeping the final
+Spotify description within 300 characters. No CR/LF separator is generated.
 
-This provider-specific behavior is not documented by Spotify's public Change Playlist Details
-contract, so the project does not treat URL rejection as a portable API rule. Diagnostics record
-the sanitized metadata outcome explicitly as either `applied_with_attribution` or
-`applied_without_attribution`. No rejected description text or provider response body is retained.
+The controlled #296 LAB accepted inline descriptions of 73, 256 and exactly 300 characters;
+HTML-decoded readback matched. The newline separator was the relevant difference from the previous
+render, without establishing a universal Spotify newline rule or the historical production 400 cause.
 
-Historical managed state that already contains a terminal `Proyecto: <repository URL>` or
-`Proyecto / Project: <repository URL>` footer, as well as the current public attribution footer, is
-stripped back to the base description when validated/edited so repeated synchronization cannot
-duplicate attribution.
+Explicit synchronization performs one metadata PUT. HTTP 400 and other API/transport failures remain
+visible to the operator; there is no retry without attribution or compensating write. Cover upload
+is attempted independently, even after metadata failure. Successful metadata records
+`applied_with_attribution`. No rejected description text or provider response body is retained.
+
+Historical terminal Spanish/bilingual repository footers, the previous multiline public attribution,
+and the current inline suffix are stripped back to the base description when validated/edited.
+Repeated or mixed terminal generated forms are cleaned without removing partial matches in prose.
 
 ## When covers are uploaded
 

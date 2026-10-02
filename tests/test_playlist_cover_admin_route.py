@@ -239,7 +239,7 @@ def test_explicit_admin_sync_uses_token_and_does_not_restart_scheduler(tmp_path:
     }
 
 
-def test_explicit_admin_sync_reports_http_400_attribution_fallback(
+def test_explicit_admin_sync_reports_http_400_metadata_failure(
     tmp_path: Path,
     capsys,
 ) -> None:
@@ -267,18 +267,14 @@ def test_explicit_admin_sync_reports_http_400_attribution_fallback(
     handler.do_POST()
 
     assert handler.response is not None
-    assert handler.response.status == HTTPStatus.SEE_OTHER
-    assert handler.response.extra_headers["Location"] == "/admin/?notice=spotify-sync-applied"
+    assert handler.response.status == HTTPStatus.BAD_GATEWAY
+    assert "metadata failed (HTTP 400); cover applied" in handler.response.payload.decode()
+    assert "attribution-rejection-sentinel" not in handler.response.payload.decode()
     assert client.update_calls == [
         (
             "destination",
             managed.display_name,
             render_spotify_description(managed.description),
-        ),
-        (
-            "destination",
-            managed.display_name,
-            managed.description,
         ),
     ]
     assert client.cover_calls == [("destination", b"\xff\xd8cover\xff\xd9")]
@@ -286,7 +282,7 @@ def test_explicit_admin_sync_reports_http_400_attribution_fallback(
     assert "attribution-rejection-sentinel" not in captured.out
     assert "attribution-rejection-sentinel" not in captured.err
     diagnostic_output = handler.diagnostic_output.getvalue()
-    assert "metadata_outcome=applied_without_attribution" in diagnostic_output
+    assert "metadata_outcome=" not in diagnostic_output
     assert "attribution-rejection-sentinel" not in diagnostic_output
     assert handler.diagnostic_store is not None
     events = handler.diagnostic_store.list_events(limit=10)
@@ -294,9 +290,10 @@ def test_explicit_admin_sync_reports_http_400_attribution_fallback(
         event.details["operation"]: event for event in events if event.component == "admin"
     }
     assert by_operation["playlist_metadata"].details == {
-        "metadata_outcome": "applied_without_attribution",
+        "failure_class": "api_error",
+        "http_status": 400,
         "operation": "playlist_metadata",
-        "outcome": "applied",
+        "outcome": "failed",
     }
     assert by_operation["playlist_cover_upload"].details == {
         "operation": "playlist_cover_upload",
