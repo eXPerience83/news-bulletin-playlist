@@ -10,7 +10,11 @@ from news_bulletin_playlist.diagnostics import (
     DiagnosticEventStore,
     DiagnosticSeverity,
 )
-from news_bulletin_playlist.persistence import DATABASE_FORMAT_VERSION, SQLiteStore
+from news_bulletin_playlist.persistence import (
+    DATABASE_FORMAT_VERSION,
+    PersistenceError,
+    SQLiteStore,
+)
 
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
 
@@ -281,3 +285,43 @@ def test_diagnostics_initialize_is_idempotent(tmp_path: Path) -> None:
     assert "playlist_state" in tables
     assert "source_runs" not in tables
     assert "playlist_runs" not in tables
+
+
+def test_initialization_writer_contention_closes_connection_and_leaves_reads_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, diagnostics = _stores(tmp_path)
+    connect = sqlite3.connect
+    connections: list[sqlite3.Connection] = []
+    closed: list[sqlite3.Connection] = []
+
+    class Connection(sqlite3.Connection):
+        def execute(self, sql, parameters=(), /):
+            # Exercise a genuine busy failure without waiting the production five seconds.
+            if sql == "PRAGMA busy_timeout=5000":
+                sql = "PRAGMA busy_timeout=0"
+            return super().execute(sql, parameters)
+
+        def close(self) -> None:
+            closed.append(self)
+            super().close()
+
+    def open_connection(*args, **kwargs):
+        connection = connect(*args, **kwargs, factory=Connection)
+        connections.append(connection)
+        return connection
+
+    with connect(diagnostics.path) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        monkeypatch.setattr(sqlite3, "connect", open_connection)
+        # Read-only diagnostics do not reserve the writer or interfere with the contender.
+        assert diagnostics.list_events() == ()
+        with pytest.raises(PersistenceError) as raised:
+            diagnostics.initialize()
+        cause = raised.value.__cause__
+        assert isinstance(cause, sqlite3.OperationalError)
+        assert cause.sqlite_errorname == "SQLITE_BUSY"
+        assert connections == closed
+    writer.close()
+    diagnostics.initialize()
+    assert connections == closed
