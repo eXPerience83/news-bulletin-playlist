@@ -112,8 +112,16 @@ jobs:
           done
 
           test "$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-edge)" = healthy
-          curl --fail --silent --show-error http://127.0.0.1:18790/ | grep -q 'News Bulletin Playlists'
-          curl --fail --silent --show-error http://127.0.0.1:18790/healthz | grep -q '"status":"ok"'
+
+          status_page="$(mktemp)"
+          healthz_response="$(mktemp)"
+          trap 'rm -f "$status_page" "$healthz_response"' EXIT
+
+          curl --fail --silent --show-error --output "$status_page" http://127.0.0.1:18790/
+          grep -Fq 'News Bulletin Playlists' "$status_page"
+
+          curl --fail --silent --show-error --output "$healthz_response" http://127.0.0.1:18790/healthz
+          grep -Fq '"status":"ok"' "$healthz_response"
 
       - name: Stop edge candidate
         if: always()
@@ -226,4 +234,3 @@ jobs:
             echo "ERROR: immutable main SHA tag changed during edge promotion" >&2
             exit 1
           fi
-
