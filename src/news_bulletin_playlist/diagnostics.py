@@ -439,7 +439,10 @@ class DiagnosticEventStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise PersistenceError(f"initialize diagnostics failed for {self.path}: {exc}") from exc
-        with self._connection("initialize diagnostics") as connection:
+        # Existing CREATE IF NOT EXISTS checks establish a WAL read snapshot. Reserve
+        # the writer before them so a concurrent scheduler/Admin event cannot make
+        # that snapshot stale before the legacy-profile DELETE (SQLITE_BUSY_SNAPSHOT).
+        with self._connection("initialize diagnostics", immediate=True) as connection:
             connection.execute(_SCHEMA_SQL)
             for statement in _INDEXES:
                 connection.execute(statement)
@@ -659,8 +662,8 @@ class DiagnosticEventStore:
         )
         return max(cursor.rowcount, 0)
 
-    def _connection(self, operation: str):  # type: ignore[no-untyped-def]
-        return _DiagnosticConnection(self.path, operation)
+    def _connection(self, operation: str, *, immediate: bool = False) -> _DiagnosticConnection:
+        return _DiagnosticConnection(self.path, operation, immediate=immediate)
 
 
 def _event_filter_query(
@@ -688,19 +691,23 @@ def _event_filter_query(
 
 
 class _DiagnosticConnection:
-    def __init__(self, path: Path, operation: str) -> None:
+    def __init__(self, path: Path, operation: str, *, immediate: bool = False) -> None:
         self.path = path
         self.operation = operation
         self.connection: sqlite3.Connection | None = None
+        self.immediate = immediate
 
     def __enter__(self) -> sqlite3.Connection:
+        connection: sqlite3.Connection | None = None
         try:
             connection = sqlite3.connect(self.path, timeout=5.0)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
-            connection.execute("BEGIN")
+            connection.execute("BEGIN IMMEDIATE" if self.immediate else "BEGIN")
         except sqlite3.Error as exc:
+            if connection is not None:
+                connection.close()
             raise PersistenceError(f"{self.operation} failed for {self.path}: {exc}") from exc
         self.connection = connection
         return connection
