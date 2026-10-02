@@ -5,6 +5,21 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-02
+
+### Changed
+
+- Updated both Docker builder and runtime stages from the pinned
+  `python:3.14.7-slim-trixie` image to `python:3.14.8-slim-trixie` with the new pinned digest.
+  The supported interpreter contract remains CPython **3.14.x**.
+
+### Compatibility / operations
+
+- No persistence migration is required from 0.2.1: managed-state remains schema **v5** and SQLite
+  remains database format **3**.
+- This release candidate changes container patch level only; engine/provider/scheduler/source/catalog
+  and playlist behavior are unchanged.
+
 ## [0.2.1] - 2026-10-02
 
 ### Changed
