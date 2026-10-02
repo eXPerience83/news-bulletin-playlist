@@ -37,8 +37,11 @@ class _Response:
 
 
 class _CoverClient:
-    def __init__(self, *, fail_cover: bool = False) -> None:
+    def __init__(
+        self, *, fail_cover: bool = False, metadata_error: Exception | None = None
+    ) -> None:
         self.fail_cover = fail_cover
+        self.metadata_error = metadata_error
         self.create_calls: list[tuple[str, str]] = []
         self.update_calls: list[tuple[str, str, str]] = []
         self.cover_calls: list[tuple[str, bytes]] = []
@@ -58,6 +61,8 @@ class _CoverClient:
         description: str,
     ) -> dict[str, Any]:
         self.update_calls.append((playlist_id, name, description))
+        if self.metadata_error is not None:
+            raise self.metadata_error
         return {}
 
     def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]:
@@ -325,3 +330,32 @@ def test_local_save_without_access_token_skips_cover_and_still_persists(tmp_path
     assert updated.source_ids == ("ser",)
     assert service.snapshot().managed == (updated,)
     assert client.cover_calls == []
+
+
+@pytest.mark.parametrize(
+    ("error", "safe_error"),
+    [
+        (SpotifyApiError(400, "private-sentinel"), "HTTP 400"),
+        (SpotifyApiError(503, "private-sentinel"), "HTTP 503"),
+        (SpotifyTransportError("private-sentinel"), "network error"),
+    ],
+)
+@pytest.mark.parametrize("fail_cover", [False, True])
+def test_metadata_failure_never_retries_and_cover_remains_independent(
+    tmp_path: Path, error: Exception, safe_error: str, fail_cover: bool
+) -> None:
+    client = _CoverClient(metadata_error=error, fail_cover=fail_cover)
+    jpeg = b"\xff\xd8cover\xff\xd9"
+    service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
+
+    with pytest.raises(SpotifyPlaylistSyncError) as raised:
+        service.sync_spotify_metadata_and_cover(managed.id, access_token="token")
+
+    assert raised.value.metadata_error == safe_error
+    assert raised.value.metadata_outcome is None
+    assert raised.value.cover_error == ("HTTP 403" if fail_cover else None)
+    assert "private-sentinel" not in str(raised.value)
+    assert client.update_calls == [
+        ("destination", managed.display_name, render_spotify_description(managed.description))
+    ]
+    assert client.cover_calls == [("destination", jpeg)]

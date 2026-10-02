@@ -44,12 +44,10 @@ PROJECT_PROFILE_URL = "https://github.com/eXPerience83"
 LEGACY_PROJECT_REPOSITORY_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
 LEGACY_PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {LEGACY_PROJECT_REPOSITORY_URL}"
 LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER = f"Proyecto / Project: {LEGACY_PROJECT_REPOSITORY_URL}"
-PROJECT_DESCRIPTION_FOOTER = f"News Bulletin Playlist · by eXPerience83 · {PROJECT_PROFILE_URL}"
-PROJECT_DESCRIPTION_SEPARATOR = "\n\n"
-MAX_PLAYLIST_DESCRIPTION_LENGTH = (
-    SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT
-    - len(PROJECT_DESCRIPTION_SEPARATOR)
-    - len(PROJECT_DESCRIPTION_FOOTER)
+PROJECT_DESCRIPTION_SUFFIX = f" · by eXPerience83 · {PROJECT_PROFILE_URL}"
+PROJECT_DESCRIPTION_FOOTER = f"News Bulletin Playlist{PROJECT_DESCRIPTION_SUFFIX}"
+MAX_PLAYLIST_DESCRIPTION_LENGTH = SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT - len(
+    PROJECT_DESCRIPTION_SUFFIX
 )
 MAX_PLAYLIST_DURATION_MINUTES = MAX_NEW_MANAGED_DURATION_SECONDS // 60
 
@@ -100,7 +98,6 @@ class SpotifyMetadataSyncOutcome(StrEnum):
     """Sanitized attribution result for explicit Spotify metadata synchronization."""
 
     APPLIED_WITH_ATTRIBUTION = "applied_with_attribution"
-    APPLIED_WITHOUT_ATTRIBUTION = "applied_without_attribution"
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,7 +391,7 @@ class ManagedAdminService:
         metadata_outcome: SpotifyMetadataSyncOutcome | None = None
 
         try:
-            metadata_outcome = self._apply_metadata_with_attribution_fallback(client, current)
+            metadata_outcome = self._apply_metadata_with_attribution(client, current)
         except (SpotifyApiError, SpotifyTransportError) as exc:
             metadata_error = _safe_spotify_operation_error(exc)
 
@@ -447,28 +444,16 @@ class ManagedAdminService:
         )
         return current.destination.external_id
 
-    def _apply_metadata_with_attribution_fallback(
+    def _apply_metadata_with_attribution(
         self,
         client: PlaylistProvisioningClient,
         playlist: ManagedPlaylist,
     ) -> SpotifyMetadataSyncOutcome:
-        try:
-            client.change_playlist_details(
-                playlist.destination.external_id,
-                name=playlist.display_name,
-                description=render_spotify_description(playlist.description),
-            )
-        except SpotifyApiError as exc:
-            if exc.status != 400:
-                raise
-            # Attribution is optional. Retry only a definitive validation failure; auth,
-            # rate-limit, server and transport failures must remain visible to the operator.
-            client.change_playlist_details(
-                playlist.destination.external_id,
-                name=playlist.display_name,
-                description=_playlist_description(playlist.description),
-            )
-            return SpotifyMetadataSyncOutcome.APPLIED_WITHOUT_ATTRIBUTION
+        client.change_playlist_details(
+            playlist.destination.external_id,
+            name=playlist.display_name,
+            description=render_spotify_description(playlist.description),
+        )
         return SpotifyMetadataSyncOutcome.APPLIED_WITH_ATTRIBUTION
 
     def _upload_cover_explicit(
@@ -592,7 +577,7 @@ def render_spotify_description(base_description: str) -> str:
     base = _playlist_description(base_description)
     if not base:
         return PROJECT_DESCRIPTION_FOOTER
-    return f"{base}{PROJECT_DESCRIPTION_SEPARATOR}{PROJECT_DESCRIPTION_FOOTER}"
+    return f"{base}{PROJECT_DESCRIPTION_SUFFIX}"
 
 
 def _required_text(value: str, label: str) -> str:
@@ -650,12 +635,19 @@ def _strip_terminal_project_footer(value: str) -> str:
             None,
         )
         if matched_footer is None:
+            if candidate.endswith(PROJECT_DESCRIPTION_SUFFIX):
+                result = candidate[: -len(PROJECT_DESCRIPTION_SUFFIX)]
+                continue
             return result
         if candidate == matched_footer:
             result = ""
             continue
         prefix = candidate[: -len(matched_footer)]
         if not prefix.endswith(("\n", "\r")):
+            # A base ending in the product name overlaps the standalone footer.
+            if matched_footer == PROJECT_DESCRIPTION_FOOTER:
+                result = candidate[: -len(PROJECT_DESCRIPTION_SUFFIX)]
+                continue
             return result
         result = prefix.rstrip()
 
