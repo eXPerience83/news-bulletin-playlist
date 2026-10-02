@@ -4,6 +4,7 @@ import base64
 import hashlib
 import io
 import json
+import sqlite3
 import threading
 import urllib.error
 import urllib.request
@@ -448,6 +449,26 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
         playlist_id="spain_spanish_news",
         details={"desired_count": 12, "write_decision": "preserved"},
     )
+    # Simulate an unchanged diagnostic row persisted by a pre-inline runtime.
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "INSERT INTO diagnostic_events "
+            "(occurred_at, severity, component, event_name, details_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "2026-09-02T10:00:00Z",
+                "INFO",
+                "admin",
+                "admin_spotify_operation_completed",
+                json.dumps(
+                    {
+                        "metadata_outcome": "applied_without_attribution",
+                        "operation": "playlist_metadata",
+                        "outcome": "applied",
+                    }
+                ),
+            ),
+        )
     status = OperationalStatus(configured=True)
     status.finish_cycle(_failed_cycle(), next_run_at=NOW + timedelta(minutes=10))
 
@@ -493,6 +514,7 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
                 diagnostics_body = response.read()
         finally:
             thread.join(timeout=2)
+        assert b"metadata_outcome=applied_without_attribution" in diagnostics_body
         assert b"destination_preserved" in diagnostics_body
         assert b"Time (Europe/Madrid)" in diagnostics_body
         assert b"2026-09-02T12:00:00+02:00" in diagnostics_body
@@ -518,6 +540,10 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
         assert SECRET.encode() not in combined_export
         assert b'"occurred_at":"2026-09-02T10:00:00Z"' in exported_jsonl
         assert b"+02:00" not in exported_jsonl
+        assert any(
+            json.loads(line)["details"].get("metadata_outcome") == "applied_without_attribution"
+            for line in exported_jsonl.splitlines()
+        )
 
         thread = _serve_one(server)
         try:

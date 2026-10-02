@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -325,3 +326,47 @@ def test_initialization_writer_contention_closes_connection_and_leaves_reads_ava
     writer.close()
     diagnostics.initialize()
     assert connections == closed
+
+
+@pytest.mark.parametrize("export", [False, True])
+def test_historical_metadata_outcome_remains_readable_without_rewriting(
+    tmp_path: Path, export: bool
+) -> None:
+    _, diagnostics = _stores(tmp_path)
+    details = {
+        "metadata_outcome": "applied_without_attribution",
+        "operation": "playlist_metadata",
+        "outcome": "applied",
+    }
+    historical_json = json.dumps(details)
+    with sqlite3.connect(diagnostics.path) as connection:
+        cursor = connection.execute(
+            "INSERT INTO diagnostic_events "
+            "(occurred_at, severity, component, event_name, details_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "2026-09-02T10:00:00Z",
+                "INFO",
+                "admin",
+                "admin_spotify_operation_completed",
+                historical_json,
+            ),
+        )
+        event_id = cursor.lastrowid
+
+    restarted = DiagnosticEventStore(diagnostics.path)
+    restarted.initialize()
+    if export:
+        events, truncated = restarted.list_events_for_export_with_truncation(limit=10_000)
+        assert truncated is False
+    else:
+        events = restarted.list_events()
+
+    assert len(events) == 1
+    assert events[0].event_id == event_id
+    assert events[0].occurred_at == NOW
+    assert events[0].details == details
+    with sqlite3.connect(diagnostics.path) as connection:
+        assert connection.execute(
+            "SELECT details_json FROM diagnostic_events WHERE event_id = ?", (event_id,)
+        ).fetchone() == (historical_json,)

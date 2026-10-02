@@ -73,6 +73,9 @@ The fields and textual values accepted by the durable event model are allow-list
 managed-playlist metadata synchronization records only a sanitized `metadata_outcome`:
 `applied_with_attribution` when Spotify accepted the rendered inline attribution. Metadata failures,
 including HTTP 400, record a failed operation without a success outcome; cover results remain independent.
+`applied_without_attribution` remains in the durable allow-list exclusively as a legacy label so
+historical events persisted by earlier versions can still be read and exported. The current runtime
+never emits that outcome; historical rows are neither migrated nor deleted.
 The rejected provider body and user description text are not copied into diagnostics.
 
 Diagnostic persistence is fail-soft: if the event store cannot be written, the playlist engine

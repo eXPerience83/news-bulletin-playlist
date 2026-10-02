@@ -288,7 +288,8 @@ _ALLOWED_DETAIL_STRING_VALUES = {
             "snapshot",
         }
     ),
-    "metadata_outcome": frozenset({"applied_with_attribution"}),
+    # Keep the pre-inline label readable in durable history; the runtime no longer emits it.
+    "metadata_outcome": frozenset({"applied_with_attribution", "applied_without_attribution"}),
     "outcome": frozenset({"applied", "failed"}),
     "pending_snapshot_created": frozenset({"exact", "partial"}),
     "pending_snapshot_resolution": frozenset(
