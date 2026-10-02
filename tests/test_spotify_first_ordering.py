@@ -204,28 +204,34 @@ def test_release_interval_preserves_dst_day_width(release_date: str, expected_ho
     assert end - start + timedelta(microseconds=1) == timedelta(hours=expected_hours)
 
 
-def test_cross_source_fallback_order_uses_each_source_timezone() -> None:
-    madrid = _source("madrid", RNE_SHOW, "Europe/Madrid")
-    new_york = _source("new_york", SER_SHOW, "America/New_York")
+@pytest.mark.parametrize("reverse_input", [False, True])
+def test_cross_source_fallback_order_uses_each_source_timezone(reverse_input: bool) -> None:
+    # If both periods are treated as UTC, identity ties must produce the wrong order.
+    madrid = _source("z_madrid", RNE_SHOW, "Europe/Madrid")
+    new_york = _source("a_new_york", SER_SHOW, "America/New_York")
     first_seen = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)
     madrid_episode = _episode(
-        "madrid",
+        "z_madrid",
         RNE_SHOW,
         "Z" * 22,
         release_date="2026-10-02",
         first_seen_at=first_seen,
     )
     new_york_episode = _episode(
-        "new_york",
+        "a_new_york",
         SER_SHOW,
         "A" * 22,
         release_date="2026-10-02",
         first_seen_at=first_seen,
     )
 
+    episodes = (madrid_episode, new_york_episode)
+    if reverse_input:
+        episodes = tuple(reversed(episodes))
+
     build = build_spotify_first_desired_state(
-        _playlist("madrid", "new_york"),
-        (madrid_episode, new_york_episode),
+        _playlist("z_madrid", "a_new_york"),
+        episodes,
         sources={madrid.id: madrid, new_york.id: new_york},
         now=datetime(2026, 10, 3, 13, 0, tzinfo=UTC),
     )
