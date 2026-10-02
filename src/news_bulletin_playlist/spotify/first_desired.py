@@ -80,7 +80,10 @@ def build_spotify_first_desired_state(
             candidates.append((item, episode))
 
     candidates.sort(key=lambda pair: (str(pair[0].source_id), pair[0].source_native_id))
-    candidates.sort(key=lambda pair: episode_order_key(pair[1]), reverse=True)
+    candidates.sort(
+        key=lambda pair: episode_order_key(pair[1], source_timezones[pair[1].source_id]),
+        reverse=True,
+    )
 
     unique_items: list[DesiredPlaylistItem] = []
     seen_uris: set[str] = set()

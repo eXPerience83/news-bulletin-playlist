@@ -116,6 +116,11 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   resolution. Unreviewed structures require bounded corroborating catalogue evidence; token discovery
   alone is not proof. Preserve explicit parsing provenance and retain episodes through the existing
   catalogue/FIRST_SEEN fallback when evidence is insufficient. Never invent minute precision.
+- Exact TITLE/PUBLIC playlist ordering uses the physical UTC `edition_at` instant. FIRST_SEEN/coarse
+  fallback ordering uses one coherent physical upper bound: the earlier of the real `first_seen_at`
+  instant and the end of the source-local Spotify release period converted through the source IANA
+  timezone/DST rules. Never splice a catalogue calendar date onto an observation clock. This bound is
+  ordering-only: it must not create `edition_at`, upgrade provenance, or change retention semantics.
 - Historical parser IDs/layout adapters remain compatibility contracts, not per-source runtime
   dispatch. Temporal evidence and collection filtering must remain independent.
 - Temporal detection defaults to AUTO inferred exclusively from the current source catalogue.

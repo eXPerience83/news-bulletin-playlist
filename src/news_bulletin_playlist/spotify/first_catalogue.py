@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -17,6 +17,7 @@ from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
     TimestampSource,
     as_utc,
+    episode_evidence_period,
     release_period,
     spotify_id,
 )
@@ -444,39 +445,13 @@ def _provable_latest_id(
     if not episodes:
         return None
     for candidate in episodes:
-        candidate_start, _ = _evidence_period(candidate, timezone)
+        candidate_start, _ = episode_evidence_period(candidate, timezone)
         if all(
-            other is candidate or candidate_start > _evidence_period(other, timezone)[1]
+            other is candidate or candidate_start > episode_evidence_period(other, timezone)[1]
             for other in episodes
         ):
             return candidate.spotify_episode_id
     return None
-
-
-def _evidence_period(
-    episode: SpotifyFirstEpisode, timezone: ZoneInfo | None
-) -> tuple[datetime, datetime]:
-    if episode.edition_at is not None:
-        return episode.edition_at, episode.edition_at
-    start, end = release_period(episode.release_date_raw, episode.release_date_precision)
-    zone = timezone or ZoneInfo("UTC")
-    # A catalogue day is the source's local calendar evidence, not an exact UTC day.
-    # Bound both folds at midnight transitions; even an imaginary boundary must only
-    # widen the interval, never make a coarse episode look provably older.
-    try:
-        starts = [
-            as_utc(datetime.combine(start, datetime.min.time(), tzinfo=zone).replace(fold=fold))
-            for fold in (0, 1)
-        ]
-        ends = [
-            as_utc(datetime.combine(end, datetime.max.time(), tzinfo=zone).replace(fold=fold))
-            for fold in (0, 1)
-        ]
-    except OverflowError:
-        # Extreme catalogue years may extend beyond datetime's UTC range. Widen to
-        # the entire representable interval instead of asserting chronology or failing.
-        return datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
-    return min(starts), max(ends)
 
 
 def _boundary_covers(periods: list[tuple[date, date]], cutoff: datetime) -> bool:
