@@ -493,12 +493,26 @@ def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) ->
             for row in re.findall(rb"<tr>.*?</tr>", sources, flags=re.DOTALL)
             if control.split(b'value="')[1].split(b'"')[0] in row
         )
-        assert b"Disable affects: Operator playlist" in custom_row
-        assert b"next reconciliation" in custom_row
-        assert b"continue updating with their remaining enabled sources" in custom_row
-        assert b"return automatically on Enable" in custom_row
+        assert b'<td class="source-actions-cell"><div class="source-actions">' in custom_row
+        disclosure = re.search(
+            rb'<details class="source-action-disclosure">(.*?)</details>',
+            custom_row,
+            flags=re.DOTALL,
+        )
+        assert disclosure is not None
+        assert b"<summary>Disable impact</summary>" in disclosure[1]
+        assert b"Disable affects: Operator playlist" in disclosure[1]
+        assert b'<p class="warning">Disable affects:' not in custom_row
+        assert b'<form method="post" action="/admin/sources/set-enabled">' in custom_row
+        assert b">Disable</button>" in custom_row
+        assert b"its episodes may be removed from Spotify" in disclosure[1]
+        assert b"Assignments are kept" in disclosure[1]
+        assert_valid_admin_html(sources.decode())
+        assert b"next reconciliation" in disclosure[1]
+        assert b"continue updating with their remaining enabled sources" in disclosure[1]
+        assert b"return automatically on Enable" in disclosure[1]
         assert b"pauses affected destination updates" not in custom_row
-        assert custom_row.index(b"Disable affects:") < custom_row.index(b">Disable</button>")
+        assert custom_row.index(b"</details>") < custom_row.index(b">Disable</button>")
         for row in re.findall(rb"<tr>.*?</tr>", sources, flags=re.DOTALL):
             if b"Built-in" in row:
                 assert b"/admin/sources/delete" not in row
@@ -617,6 +631,81 @@ def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) ->
             == 303
         )
         assert _request(server, "GET", delete_path, cookie=cookie)[0] == 303
+
+
+def test_blocked_source_disable_has_one_contextual_disclosure(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store)
+        state = store.load()
+        playlist_name = "Operator <news> & updates"
+        store.save(
+            replace(state, playlists=(replace(state.playlists[0], display_name=playlist_name),))
+        )
+        cookie = _login(server)
+        status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        row = next(
+            row
+            for row in re.findall(rb"<tr>.*?</tr>", page, flags=re.DOTALL)
+            if str(source.id).encode() in row
+        )
+        disclosures = re.findall(
+            rb'<details class="source-action-disclosure">(.*?)</details>', row, flags=re.DOTALL
+        )
+        assert len(disclosures) == 1
+        assert b"<summary>Cannot disable</summary>" in disclosures[0]
+        assert b"Operator &lt;news&gt; &amp; updates" in disclosures[0]
+        assert b"would have no enabled sources" in disclosures[0]
+        assert b"Add another enabled source or pause the active playlists first" in disclosures[0]
+        assert b"resolve any pending activation" in disclosures[0]
+        assert b"Disable affects:" not in row
+        assert b"Disable impact" not in row
+        assert b">Disable</button>" not in row
+        assert b"/admin/sources/set-enabled" not in row
+        assert_valid_admin_html(page.decode())
+        assert client.calls == [] and _Handler.source_admin_service.auth.calls == 0
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_unreferenced_or_disabled_source_actions_need_no_disclosure(
+    tmp_path: Path, enabled: bool
+) -> None:
+    with _server(tmp_path) as (server, client, store):
+        source = _configured_source(store, enabled=enabled)
+        if enabled:
+            store.save(replace(store.load(), playlists=()))
+        cookie = _login(server)
+        status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        row = next(
+            row
+            for row in re.findall(rb"<tr>.*?</tr>", page, flags=re.DOTALL)
+            if str(source.id).encode() in row
+        )
+        assert b"<details" not in row
+        assert b"Disable affects:" not in row
+        assert b"Cannot disable:" not in row
+        assert b'<form method="post" action="/admin/sources/set-enabled">' in row
+        assert (b">Disable</button>" if enabled else b">Enable</button>") in row
+        assert_valid_admin_html(page.decode())
+        assert client.calls == [] and _Handler.source_admin_service.auth.calls == 0
+
+
+def test_source_action_css_wraps_and_bounds_disclosure_content(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, _, _):
+        cookie = _login(server)
+        status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        css = page.split(b"<style>", 1)[1].split(b"</style>", 1)[0]
+        cell = re.search(rb"td\.source-actions-cell\s*\{([^}]+)\}", css)
+        assert cell is not None and b"white-space: normal" in cell[1]
+        prose = re.search(rb"\.source-action-disclosure p\s*\{([^}]+)\}", css)
+        assert prose is not None
+        assert b"white-space: normal" in prose[1]
+        assert b"max-width: 100%" in prose[1] and b"width: 24rem" in prose[1]
+        focus = re.search(rb"\.source-action-disclosure summary:focus-visible\s*\{([^}]+)\}", css)
+        assert focus is not None and b"outline: 3px solid" in focus[1]
+        assert b"overflow-x: auto" in css
 
 
 def test_disabled_unselected_source_is_not_offered_and_backend_rejects_manual_assignment(

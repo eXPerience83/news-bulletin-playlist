@@ -127,14 +127,6 @@ def _sources_table(
             next_enabled = not source.enabled
             verb = "Enable" if next_enabled else "Disable"
             controls += f'<a href="/admin/sources/edit?source_id={safe_id}">Edit</a>'
-            if not next_enabled and used_by.get(source.id):
-                controls += (
-                    '<p class="warning">Disable affects: '
-                    f"{html.escape(', '.join(used_by[source.id]))}. This source stops contributing "
-                    "episodes at the next reconciliation; its episodes may be removed from "
-                    "Spotify. Playlists continue updating with their remaining enabled sources. "
-                    "Assignments are kept and return automatically on Enable.</p>"
-                )
             blocked = (
                 source_disable_blockers(
                     source.id,
@@ -147,12 +139,24 @@ def _sources_table(
             )
             if blocked:
                 controls += (
-                    '<p class="warning">Cannot disable: '
+                    '<details class="source-action-disclosure">'
+                    "<summary>Cannot disable</summary><p>Cannot disable: "
                     f"{html.escape(', '.join(blocked))} would have no enabled sources. "
                     "Add another enabled source or pause the active playlists first; "
-                    "resolve any pending activation.</p>"
+                    "resolve any pending activation.</p></details>"
                 )
             else:
+                if not next_enabled and used_by.get(source.id):
+                    controls += (
+                        '<details class="source-action-disclosure">'
+                        "<summary>Disable impact</summary><p>Disable affects: "
+                        f"{html.escape(', '.join(used_by[source.id]))}. "
+                        "This source stops contributing "
+                        "episodes at the next reconciliation; its episodes may be removed from "
+                        "Spotify. Playlists continue updating with their remaining enabled "
+                        "sources. "
+                        "Assignments are kept and return automatically on Enable.</p></details>"
+                    )
                 controls += (
                     '<form method="post" action="/admin/sources/set-enabled">'
                     f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
@@ -181,7 +185,7 @@ def _sources_table(
             f"<br>Public release: {source.public_release_mode.value}</td>"
             f"<td>{html.escape(playlists)}</td>"
             f"<td>{status_badge(ownership, tone='muted')}</td>"
-            f"<td>{controls}</td>"
+            f'<td class="source-actions-cell"><div class="source-actions">{controls}</div></td>'
             "</tr>"
         )
     return (
