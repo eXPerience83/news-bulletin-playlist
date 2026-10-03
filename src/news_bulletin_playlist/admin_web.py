@@ -85,6 +85,53 @@ _ADMIN_UI_STYLES = """
   flex-wrap: wrap;
 }
 
+td.source-actions-cell {
+  white-space: normal;
+}
+
+.source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 28rem;
+}
+
+.source-actions > form,
+.source-actions > a {
+  flex: 0 0 auto;
+}
+
+.source-actions > .muted {
+  margin: 0;
+}
+
+.source-action-disclosure {
+  min-width: 0;
+  max-width: 24rem;
+}
+
+.source-action-disclosure summary {
+  padding: 0.35rem 0;
+  color: var(--warning);
+  font-weight: 720;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.source-action-disclosure summary:focus-visible {
+  outline: 3px solid var(--accent-strong);
+  outline-offset: 3px;
+}
+
+.source-action-disclosure p {
+  width: 24rem;
+  max-width: 100%;
+  margin: 0.5rem 0 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .admin-section {
   min-width: 0;
 }
