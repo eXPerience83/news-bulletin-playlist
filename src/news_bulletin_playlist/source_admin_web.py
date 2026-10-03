@@ -158,9 +158,11 @@ def render_source_review_page(
   <p><a href="/admin/sources">Back to Sources</a></p>
   <p>Showing {min(len(report.episodes), _PREVIEW_LIMIT)} of
      {len(report.episodes)} evidence rows.</p>
-  <div class="table-scroll"><table><thead><tr><th>Position</th><th>Title</th><th>Release</th>
-    <th>Seconds</th><th>Filter</th><th>Parser</th><th>Edition</th>
-    <th>Provenance</th><th>Ordering</th><th>Warnings</th></tr></thead>
+  <div class="table-scroll"><table><thead><tr><th scope="col">Position</th>
+    <th scope="col">Title</th><th scope="col">Release</th><th scope="col">Seconds</th>
+    <th scope="col">Filter</th><th scope="col">Parser</th><th scope="col">Edition</th>
+    <th scope="col">Provenance</th><th scope="col">Ordering</th>
+    <th scope="col">Warnings</th></tr></thead>
     <tbody>{rows}</tbody></table></div>
 </section>
 {classification}
