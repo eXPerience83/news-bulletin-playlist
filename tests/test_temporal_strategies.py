@@ -347,17 +347,30 @@ def test_auto_precedes_configured_capability():
     assert all(e.temporal_evidence == "catalogue_structure" for e in result.evidence)
 
 
-def test_override_must_not_bypass_a_proven_date_order_or_catalogue_conflict():
+def test_override_preserves_proven_date_order_and_scopes_catalogue_conflict_per_row():
     ctx = CatalogueParseContext("2026-09-28", "day", ZoneInfo("Europe/Berlin"))
     corpus = tuple(TemporalSample(t, ctx) for t in DLF)
     detector = get_temporal_detector(corpus, Strategy.FULL_DATETIME)
     # DMY has been demonstrated; MDY cannot be chosen just to fit this new official day.
     changed = DLF[0].replace("28.09.2026", "09.10.2026")
-    assert detector.parse(changed, context=replace(ctx, release_date="2026-09-10")).parsed is None
+    changed_ctx = replace(ctx, release_date="2026-09-10")
+    assert detector.parse(changed, context=changed_ctx).parsed is None
+
     bad = TemporalSample(DLF[0].replace("28.09.2026", "29.09.2026"), ctx)
     detector = get_temporal_detector((*corpus, bad), Strategy.FULL_DATETIME)
     assert detector.conflicts == 1
-    assert detector.parse(DLF[0], context=ctx).parsed is None
+
+    good_attempt = detector.parse(DLF[0], context=ctx)
+    assert good_attempt.parsed is not None
+    assert good_attempt.temporal_evidence == "configured_capability"
+
+    bad_attempt = detector.parse(bad.title, context=bad.context)
+    assert bad_attempt.parsed is None
+    assert bad_attempt.temporal_evidence == "catalogue_date_conflict"
+
+    # A sibling contradiction does not permit the configured capability to switch
+    # away from the date order established by the compatible catalogue rows.
+    assert detector.parse(changed, context=changed_ctx).parsed is None
 
 
 @pytest.mark.parametrize("suffix", ["GMT", "GMT.", "UTC", "UTC."])
