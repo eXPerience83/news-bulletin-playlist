@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _html import assert_valid_admin_html
 
 from news_bulletin_playlist import engine_runtime
 from news_bulletin_playlist.admin_session import admin_session_manager_for
@@ -320,6 +321,53 @@ def _configured_source(store: ManagedStateStore, *, enabled: bool = True) -> Man
     )
     store.save(ManagedState(sources=(source,), playlists=(playlist,)))
     return source
+
+
+def test_source_admin_rendered_html_contract_over_real_http(tmp_path: Path) -> None:
+    """Keep the six normal Source Admin full-page surfaces visible in one matrix."""
+    with _server(tmp_path) as (server, _client, store):
+        cookie = _login(server)
+
+        # Add Source and successful inspection/review, with the rendered one-use CSRF.
+        status, _, page = _request(server, "GET", "/admin/sources/new", cookie=cookie)
+        assert status == HTTPStatus.OK
+        assert_valid_admin_html(page.decode())
+        status, _, review = _request(
+            server,
+            "POST",
+            "/admin/sources/inspect",
+            cookie=cookie,
+            form={"csrf_token": _csrf(page), "locator": SHOW},
+        )
+        assert status == HTTPStatus.OK
+        assert_valid_admin_html(review.decode())
+
+        # Read-only configured Source Audit, using the existing real CSRF journey.
+        source = _configured_source(store)
+        status, audit = _audit(server, cookie, str(source.id))
+        assert status == HTTPStatus.OK
+        assert_valid_admin_html(audit.decode())
+
+        # Custom edit and built-in public-release edit are distinct full documents.
+        status, _, custom_edit = _request(
+            server, "GET", f"/admin/sources/edit?source_id={source.id}", cookie=cookie
+        )
+        assert status == HTTPStatus.OK
+        assert_valid_admin_html(custom_edit.decode())
+        status, _, builtin_edit = _request(
+            server, "GET", "/admin/sources/edit?source_id=rne", cookie=cookie
+        )
+        assert status == HTTPStatus.OK
+        assert_valid_admin_html(builtin_edit.decode())
+
+        # Unreferenced custom source: audit the confirmation with its deletion POST form.
+        store.save(replace(store.load(), playlists=()))
+        status, _, confirmation = _request(
+            server, "GET", f"/admin/sources/delete?source_id={source.id}", cookie=cookie
+        )
+        assert status == HTTPStatus.OK
+        assert b'<form method="post" action="/admin/sources/delete">' in confirmation
+        assert_valid_admin_html(confirmation.decode())
 
 
 def _update_form(token: str) -> dict[str, str]:
