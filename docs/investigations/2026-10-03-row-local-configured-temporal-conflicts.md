@@ -52,3 +52,24 @@ requests, or relax destination/reconciliation safety.
 
 The focused regression keeps AUTO fail-closed, restores a compatible configured `full_datetime`
 row to TITLE, and proves the incompatible sibling remains `catalogue_date_conflict`.
+
+## Independent audit correction: coarse order witnesses
+
+The first fix incorrectly reused the day-only AUTO training rows to retain orders
+for configured conflict recovery. A uniquely valid `28/09/2026` calendar with
+official month `2026-09` or year `2026` therefore still lost TITLE when a contradictory
+sibling appeared and no valid day-precision sibling remained.
+
+The corrected implementation separates order witnesses from AUTO-valid rows.
+Witnesses must resolve uniquely against their own day/month/year period through
+`_resolve(..., recover_date=False)`. Their compatible orders must have a nonempty
+intersection. `09/10/2026` against year `2026` remains ambiguous and supplies no
+witness. Resolved witnesses requiring incompatible DMY/MDY orders cannot open the
+configured path. AUTO training, coverage, minimum rows, clock diversity and
+supporting-row counts continue to use day precision exclusively.
+
+Permanent regressions cover month/year with `full_datetime`, complete-calendar
+`partial_date_catalogue_day` and `explicit_utc`, exact UTC preservation, contradictory
+row rejection, corpus reversal, ambiguous calendars, incompatible witnesses and
+unchanged AUTO eligibility. No partial/damaged calendar or missing day is recovered
+by the order-witness path.

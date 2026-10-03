@@ -182,6 +182,16 @@ A structure requires:
   sibling conflict does not block a configured complete-calendar capability for a
   separately compatible row. A learned order cannot change to make a later row fit.
 
+AUTO training and configured conflict recovery use separate evidence sets. AUTO
+support, coverage, clock diversity and learned orders still use only uniquely
+resolved rows with canonical **day** precision. For a configured complete-calendar
+capability after a sibling conflict, order witnesses may have **day, month or year**
+precision, but each must first resolve uniquely against its own official period
+with date recovery disabled. The retained orders are the intersection of orders
+that produce each witness's resolved date. An ambiguous calendar contributes no
+witness; an empty intersection cannot authorize configured conflict recovery.
+Partial dates, damaged dates and clock-only fields gain no recovery privilege.
+
 The result is a deterministic structural contract, not a probability score or a
 linguistic proof that a title describes an edition. A source consistently formatted
 like an edition but actually describing event schedules is a residual limitation

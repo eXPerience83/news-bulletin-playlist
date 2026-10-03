@@ -399,38 +399,45 @@ class TemporalDetector:
                 (tokens, context, _resolve(tokens, context, recover_date=False))
                 for tokens, context in rows
             ]
-            valid = [
+            order_witnesses = [
+                (tokens, context, value) for tokens, context, value in proven if value is not None
+            ]
+            auto_valid = [
                 (tokens, context, value)
-                for tokens, context, value in proven
-                if value is not None and context.release_date_precision == "day"
+                for tokens, context, value in order_witnesses
+                if context.release_date_precision == "day"
             ]
             # No valid-but-contradictory calendar or invalid clock may train a structure.
             contradiction = any(
                 value is None and bool(_dates(tokens.dates[0].group()))
                 for tokens, _, value in proven
             )
-            orders = {"dmy", "mdy", "ymd", "named"}
-            for tokens, _, value in valid:
+            auto_orders = {"dmy", "mdy", "ymd", "named"}
+            witness_orders = auto_orders.copy()
+            for tokens, context, value in order_witnesses:
                 assert value is not None
-                orders.intersection_update(
+                compatible_orders = {
                     order
                     for order, days in _date_options(tokens.dates[0].group()).items()
                     if value.date() in days
-                )
-            if contradiction or valid and not orders:
+                }
+                witness_orders.intersection_update(compatible_orders)
+                if context.release_date_precision == "day":
+                    auto_orders.intersection_update(compatible_orders)
+            if contradiction or auto_valid and not auto_orders:
                 self._conflicted_signatures.add(signature)
                 self.conflicts += max(1, sum(value is None for _, _, value in proven))
-                if contradiction and valid and orders:
-                    self._conflicted_signature_orders[signature] = frozenset(orders)
+                if contradiction and order_witnesses and witness_orders:
+                    self._conflicted_signature_orders[signature] = frozenset(witness_orders)
             if (
-                orders
+                auto_orders
                 and not contradiction
-                and len({(tokens.title, context.release_date) for tokens, context, _ in valid})
+                and len({(tokens.title, context.release_date) for tokens, context, _ in auto_valid})
                 >= MIN_STRUCTURE_ROWS
-                and len(valid) * 5 >= len(samples) * 4
-                and len({_clock(tokens.clocks[0].group()) for tokens, _, _ in valid}) >= 3
+                and len(auto_valid) * 5 >= len(samples) * 4
+                and len({_clock(tokens.clocks[0].group()) for tokens, _, _ in auto_valid}) >= 3
             ):
-                self._structures[signature] = (frozenset(orders), len(valid))
+                self._structures[signature] = (frozenset(auto_orders), len(auto_valid))
 
     @property
     def supporting_rows(self) -> int:
