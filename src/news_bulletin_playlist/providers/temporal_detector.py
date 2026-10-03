@@ -265,6 +265,8 @@ def _override(
     tokens: _Tokens,
     context: CatalogueParseContext,
     strategy: TemporalStrategy,
+    *,
+    orders: frozenset[str] | None = None,
 ) -> tuple[datetime | None, bool]:
     """A configured capability attests edition semantics, never calendar validity.
 
@@ -293,7 +295,7 @@ def _override(
             return None, False
         if tokens.signature is None:
             return None, False
-        return _resolve(tokens, context, recover_date=False), False
+        return _resolve(tokens, context, recover_date=False, orders=orders), False
     if context.release_date_precision != "day":
         return None, True
     clock_token = tokens.clocks[0]
@@ -347,6 +349,22 @@ def _override(
     return unique_aware_datetime(day.year, day.month, day.day, *clock, tz=context.timezone), True
 
 
+def _can_use_configured_complete_date_after_signature_conflict(
+    tokens: _Tokens, strategy: TemporalStrategy
+) -> bool:
+    """Allow only row-local complete-date capabilities past a sibling conflict."""
+    return (
+        strategy
+        in {
+            TemporalStrategy.FULL_DATETIME,
+            TemporalStrategy.PARTIAL_DATE_CATALOGUE_DAY,
+            TemporalStrategy.EXPLICIT_UTC,
+        }
+        and len(tokens.dates) == 1
+        and bool(_dates(tokens.dates[0].group()))
+    )
+
+
 class TemporalDetector:
     """One detector per fetched catalogue, never persisted or trained across sources."""
 
@@ -360,6 +378,7 @@ class TemporalDetector:
         self.conflicts = 0
         self._structures: dict[str, tuple[frozenset[str], int]] = {}
         self._conflicted_signatures: set[str] = set()
+        self._conflicted_signature_orders: dict[str, frozenset[str]] = {}
         if (
             self.strategy is TemporalStrategy.DISABLED
             or not samples
@@ -380,36 +399,45 @@ class TemporalDetector:
                 (tokens, context, _resolve(tokens, context, recover_date=False))
                 for tokens, context in rows
             ]
-            valid = [
+            order_witnesses = [
+                (tokens, context, value) for tokens, context, value in proven if value is not None
+            ]
+            auto_valid = [
                 (tokens, context, value)
-                for tokens, context, value in proven
-                if value is not None and context.release_date_precision == "day"
+                for tokens, context, value in order_witnesses
+                if context.release_date_precision == "day"
             ]
             # No valid-but-contradictory calendar or invalid clock may train a structure.
             contradiction = any(
                 value is None and bool(_dates(tokens.dates[0].group()))
                 for tokens, _, value in proven
             )
-            orders = {"dmy", "mdy", "ymd", "named"}
-            for tokens, _, value in valid:
+            auto_orders = {"dmy", "mdy", "ymd", "named"}
+            witness_orders = auto_orders.copy()
+            for tokens, context, value in order_witnesses:
                 assert value is not None
-                orders.intersection_update(
+                compatible_orders = {
                     order
                     for order, days in _date_options(tokens.dates[0].group()).items()
                     if value.date() in days
-                )
-            if contradiction or valid and not orders:
+                }
+                witness_orders.intersection_update(compatible_orders)
+                if context.release_date_precision == "day":
+                    auto_orders.intersection_update(compatible_orders)
+            if contradiction or auto_valid and not auto_orders:
                 self._conflicted_signatures.add(signature)
                 self.conflicts += max(1, sum(value is None for _, _, value in proven))
+                if contradiction and order_witnesses and witness_orders:
+                    self._conflicted_signature_orders[signature] = frozenset(witness_orders)
             if (
-                orders
+                auto_orders
                 and not contradiction
-                and len({(tokens.title, context.release_date) for tokens, context, _ in valid})
+                and len({(tokens.title, context.release_date) for tokens, context, _ in auto_valid})
                 >= MIN_STRUCTURE_ROWS
-                and len(valid) * 5 >= len(samples) * 4
-                and len({_clock(tokens.clocks[0].group()) for tokens, _, _ in valid}) >= 3
+                and len(auto_valid) * 5 >= len(samples) * 4
+                and len({_clock(tokens.clocks[0].group()) for tokens, _, _ in auto_valid}) >= 3
             ):
-                self._structures[signature] = (frozenset(orders), len(valid))
+                self._structures[signature] = (frozenset(auto_orders), len(auto_valid))
 
     @property
     def supporting_rows(self) -> int:
@@ -440,6 +468,27 @@ class TemporalDetector:
         # A damaged date is recoverable only after other rows prove that same structure.
         signature = tokens.signature
         if signature in self._conflicted_signatures:
+            orders = self._conflicted_signature_orders.get(signature)
+            if orders is not None and _can_use_configured_complete_date_after_signature_conflict(
+                tokens, self.strategy
+            ):
+                configured_value, configured_catalogue_day = _override(
+                    tokens,
+                    context,
+                    self.strategy,
+                    orders=orders,
+                )
+                if configured_value is not None and _zone_agrees(normalized, configured_value):
+                    return self._attempt(
+                        title,
+                        configured_value,
+                        "catalogue_context"
+                        if configured_catalogue_day
+                        else "normalized"
+                        if normalized != title.strip()
+                        else "exact",
+                        evidence="configured_capability",
+                    )
             return TitleParseAttempt(None, "rejected", temporal_evidence="catalogue_date_conflict")
         if signature is not None and signature in self._structures:
             orders, count = self._structures[signature]
@@ -457,13 +506,13 @@ class TemporalDetector:
                     supporting_rows=count,
                 )
             return TitleParseAttempt(None, "rejected", temporal_evidence="catalogue_date_conflict")
-        value, catalogue_day = _override(tokens, context, self.strategy)
-        if value is not None and _zone_agrees(normalized, value):
+        configured_value, configured_catalogue_day = _override(tokens, context, self.strategy)
+        if configured_value is not None and _zone_agrees(normalized, configured_value):
             return self._attempt(
                 title,
-                value,
+                configured_value,
                 "catalogue_context"
-                if catalogue_day
+                if configured_catalogue_day
                 else "normalized"
                 if normalized != title.strip()
                 else "exact",

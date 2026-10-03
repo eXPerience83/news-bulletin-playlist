@@ -46,7 +46,9 @@ The runtime hierarchy is:
 
 1. AUTO inference using only this source's already fetched official catalogue.
 2. Its optional, explicitly configured reusable capability, if AUTO cannot prove
-   the row. A demonstrated contradiction cannot be overridden.
+   the row. A contradiction on that row cannot be overridden; a sibling signature
+   conflict still blocks AUTO but does not erase a complete-calendar capability that
+   independently validates the current row against its own official release period.
 3. Validated exact public Spotify release timestamp, interpreted with `PublicReleaseMode`,
    from the already observed current episode.
 4. Existing catalogue precision / `FIRST_SEEN` fallback, keeping the episode.
@@ -175,8 +177,20 @@ A structure requires:
 - Training uses canonical official day precision. Each title calendar/clock must
   resolve uniquely, agree with that day and survive DST validation.
 - Compatible date orders must have a nonempty intersection across supporting rows.
-  Contradictory calendars/clocks or inconsistent orders block that structure, also
-  for configured overrides. A learned order cannot change to make a later row fit.
+  Contradictory calendars/clocks or inconsistent orders block AUTO training for that
+  structure. They also block a configured capability on the contradictory row. A
+  sibling conflict does not block a configured complete-calendar capability for a
+  separately compatible row. A learned order cannot change to make a later row fit.
+
+AUTO training and configured conflict recovery use separate evidence sets. AUTO
+support, coverage, clock diversity and learned orders still use only uniquely
+resolved rows with canonical **day** precision. For a configured complete-calendar
+capability after a sibling conflict, order witnesses may have **day, month or year**
+precision, but each must first resolve uniquely against its own official period
+with date recovery disabled. The retained orders are the intersection of orders
+that produce each witness's resolved date. An ambiguous calendar contributes no
+witness; an empty intersection cannot authorize configured conflict recovery.
+Partial dates, damaged dates and clock-only fields gain no recovery privilege.
 
 The result is a deterministic structural contract, not a probability score or a
 linguistic proof that a title describes an edition. A source consistently formatted
@@ -307,10 +321,12 @@ partial dates. No new editorial inclusion/exclusion rule is introduced.
 ## Adversarial review
 
 The correction removes the reproduced P1 global-contract contamination. A second
-review also blocks overrides from bypassing a learned date order or a catalogue
-contradiction and checks explicit GMT/UTC even with trailing punctuation. Matrix
-tests caught adjacent RNE separators/bare-hour discovery gaps;
-generic token boundaries now preserve every original accepted timestamp.
+review blocks overrides from bypassing a learned date order or a row-local catalogue
+contradiction and checks explicit GMT/UTC even with trailing punctuation. A sibling
+signature conflict still disables AUTO training but no longer erases independently
+valid complete-calendar evidence under an explicitly configured capability. Matrix
+tests caught adjacent RNE separators/bare-hour discovery gaps; generic token boundaries
+now preserve every original accepted timestamp.
 
 Focused tests cover multiple clocks/dates, arbitrary narrative clocks, anniversary
 numbers, date-only titles, unsupported Unicode, full-width digits, safe normalization,
