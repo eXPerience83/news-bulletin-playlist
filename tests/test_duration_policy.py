@@ -209,3 +209,80 @@ def test_builtin_catalog_and_managed_compile_use_current_global_30_minute_defaul
     compiled = compile_engine_config(BUILTIN_CATALOG, state)
     assert compiled.playlists[0].duration_policy.default_max_seconds == 1800
     assert compiled.playlists[0].duration_policy.exceptions == ()
+
+
+def test_inclusive_range_and_exception_cannot_bypass_minimum() -> None:
+    from dataclasses import replace
+
+    from news_bulletin_playlist.desired_state import DURATION_BELOW_DEFAULT_MIN
+
+    playlist = replace(
+        _playlist(),
+        duration_policy=DurationPolicy(
+            default_min_seconds=600,
+            default_max_seconds=1800,
+            exceptions=(replace(_playlist().duration_policy.exceptions[0], max_seconds=2400),),
+        ),
+    )
+    for seconds, accepted in [(599, False), (600, True), (1800, True), (1801, False)]:
+        built = _build(_episode(9, seconds), playlist=playlist)
+        decision = built.desired.duration_decisions[0]
+        assert decision.accepted is accepted
+        assert decision.min_seconds == 600
+        if seconds == 599:
+            assert decision.reason == DURATION_BELOW_DEFAULT_MIN
+    assert not _build(_episode(6, 599), playlist=playlist).desired.uris
+    assert _build(_episode(6, 2400), playlist=playlist).desired.uris
+
+
+def test_default_range_and_independent_playlists_reuse_persisted_episode(tmp_path) -> None:
+    from dataclasses import replace
+
+    from news_bulletin_playlist.persistence import SQLiteStore
+    from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
+
+    # The same stored episode is evaluated independently; collection/history has no policy input.
+    episode = _episode(9, 599)
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    journal = SpotifyFirstJournal(store)
+    journal.initialize()
+    journal.replace_source_episodes(episode.source_id, (episode,), coverage_proven=True)
+    persisted = journal.list_episodes()
+    assert persisted == (episode,)
+    episode = persisted[0]
+    low = replace(_playlist(), duration_policy=DurationPolicy())
+    high = replace(low, duration_policy=DurationPolicy(default_min_seconds=600))
+    assert _build(episode, playlist=low).desired.uris
+    assert not _build(episode, playlist=high).desired.uris
+    for seconds, accepted in [(0, True), (1, True), (1800, True), (1801, False)]:
+        assert bool(_build(_episode(9, seconds), playlist=low).desired.uris) is accepted
+    for template in BUILTIN_CATALOG.playlists:
+        assert template.duration_policy.default_min_seconds == 0
+        assert template.duration_policy.default_max_seconds == 1800
+
+
+def test_minimum_changes_playlist_write_contract() -> None:
+    from dataclasses import replace
+
+    from news_bulletin_playlist.engine_runtime import _playlist_write_contract
+
+    state = ManagedState(
+        playlists=(activate_template(BUILTIN_CATALOG.playlists[0], "destination"),)
+    )
+    config = compile_engine_config(BUILTIN_CATALOG, state)
+    changed = compile_engine_config(
+        BUILTIN_CATALOG,
+        replace(state, playlists=(replace(state.playlists[0], min_duration_seconds=1),)),
+    )
+    assert _playlist_write_contract(config, state.playlists[0].id) != _playlist_write_contract(
+        changed, state.playlists[0].id
+    )
+
+
+def test_policy_rejects_invalid_ranges() -> None:
+    import pytest
+
+    for minimum, maximum in [(-1, 1800), (1801, 1800), (0, 0), (True, 1800), (0.5, 1800)]:
+        with pytest.raises(ValueError):
+            DurationPolicy(default_min_seconds=minimum, default_max_seconds=maximum)

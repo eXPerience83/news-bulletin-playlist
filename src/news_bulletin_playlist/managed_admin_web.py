@@ -14,7 +14,6 @@ from news_bulletin_playlist.managed_admin import (
     MAX_PLAYLIST_NAME_LENGTH,
     ManagedAdminSnapshot,
 )
-from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import (
     ManagedPlaylist,
@@ -101,7 +100,7 @@ def render_managed_admin_page(
     </div>
     <p class="section-note">Spotify authorization: {html.escape(spotify_label)}</p>
   </div>
-  <p class="muted">Each playlist keeps its own source selection and duration ceiling. A source
+  <p class="muted">Each playlist keeps its own source selection and duration range. A source
      shared by several playlists is still fetched only once per engine cycle.</p>
   <div class="admin-grid">{managed}</div>
 </section>
@@ -144,33 +143,19 @@ def single_form_value(
     return values[0]
 
 
-def max_duration_seconds_from_form(form: Mapping[str, list[str]]) -> int | None:
-    values = form.get("max_duration_minutes", [])
+def duration_minutes_from_form(form: Mapping[str, list[str]], bound: str) -> int | None:
+    name = f"{bound}_duration_minutes"
+    values = form.get(name, [])
     if not values:
         return None
-    if len(values) != 1:
-        raise ValueError("Exactly one max_duration_minutes value is required")
-    raw = values[0].strip()
-    remainder_values = form.get("max_duration_seconds_remainder", [])
-    if not remainder_values:
-        remainder = 0  # Compatibility with existing minute-only POSTs.
-    elif len(remainder_values) == 1:
-        try:
-            remainder = int(remainder_values[0].strip())
-        except ValueError as exc:
-            raise ValueError("max_duration_seconds_remainder must be an integer") from exc
-    else:
-        raise ValueError("Exactly one max_duration_seconds_remainder value is required")
+    raw = single_form_value(form, name)
     try:
-        minutes = int(raw)
+        minutes = int(raw.strip())
     except ValueError as exc:
-        raise ValueError("max_duration_minutes must be an integer") from exc
-    if minutes < 0 or not 0 <= remainder < 60:
-        raise ValueError("maximum duration must be positive with seconds remainder from 0 to 59")
-    try:
-        return validate_persisted_duration_seconds(minutes * 60 + remainder)
-    except ValueError as exc:
-        raise ValueError("maximum duration must be positive") from exc
+        raise ValueError(f"{name} must be an integer") from exc
+    if minutes < 0:
+        raise ValueError("duration minutes must be non-negative")
+    return minutes
 
 
 def playlist_id_from_form(form: Mapping[str, list[str]]) -> PlaylistId:
@@ -205,12 +190,6 @@ def _managed_card(
         playlist.destination.external_id,
         safe="",
     )
-    template = catalog.playlist(playlist.template_id)
-    effective_duration_seconds = (
-        template.duration_policy.default_max_seconds
-        if playlist.max_duration_seconds is None
-        else playlist.max_duration_seconds
-    )
     state = (
         status_badge("Active", tone="success")
         if playlist.enabled
@@ -219,7 +198,8 @@ def _managed_card(
     fields = _playlist_policy_fields(
         display_name=playlist.display_name,
         description=playlist.description,
-        duration_seconds=effective_duration_seconds,
+        min_duration_seconds=playlist.min_duration_seconds,
+        duration_seconds=playlist.max_duration_seconds,
         sources=sources,
         custom_source_ids=frozenset(source.id for source in custom_sources),
         selected_source_ids=set(playlist.source_ids),
@@ -276,6 +256,7 @@ def _template_card(
         display_name=template.display_name,
         description=template.description,
         duration_seconds=template.duration_policy.default_max_seconds,
+        min_duration_seconds=template.duration_policy.default_min_seconds,
         sources=sources,
         custom_source_ids=custom_source_ids,
         selected_source_ids=set(template.default_source_ids),
@@ -309,6 +290,7 @@ def _playlist_policy_fields(
     display_name: str,
     description: str,
     duration_seconds: int,
+    min_duration_seconds: int,
     sources: tuple[SourceDefinition, ...],
     custom_source_ids: frozenset[SourceId],
     selected_source_ids: set[SourceId],
@@ -317,7 +299,15 @@ def _playlist_policy_fields(
 ) -> str:
     """Render the policy fields shared by existing playlists and activation templates."""
 
-    duration_minutes, duration_remainder = divmod(duration_seconds, 60)
+    duration_minutes = duration_seconds // 60
+    min_duration_minutes = min_duration_seconds // 60
+    precision_note = (
+        '<p class="muted">Historical precision in seconds is preserved for each bound '
+        "whose displayed minutes are unchanged. "
+        "Changing minutes sets an exact whole-minute bound.</p>"
+        if duration_seconds % 60 or min_duration_seconds % 60
+        else ""
+    )
     source_controls = _source_checkboxes(
         tuple(source for source in sources if source.enabled),
         custom_source_ids=custom_source_ids,
@@ -366,16 +356,17 @@ def _playlist_policy_fields(
                 maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">{html.escape(description)}</textarea>
     </label>
     <div class="duration-row">
+      <label>Minimum duration · minutes
+        <input type="number" name="min_duration_minutes" required min="0" step="1"
+               value="{min_duration_minutes}">
+      </label>
       <label>Maximum duration · minutes
         <input type="number" name="max_duration_minutes" required min="0" step="1"
                value="{duration_minutes}">
       </label>
-      <label>Seconds
-        <input type="number" name="max_duration_seconds_remainder" required min="0" max="59"
-               step="1" value="{duration_remainder}">
-      </label>
     </div>
-    <p class="muted">Episodes longer than this are omitted from this playlist only.</p>
+    {precision_note}
+    <p class="muted">Episodes outside this inclusive range are omitted from this playlist only.</p>
     <fieldset><legend>Sources</legend>{source_controls}</fieldset>
     {inactive_controls}
     {enabled_control}

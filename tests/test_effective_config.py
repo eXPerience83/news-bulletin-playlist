@@ -149,7 +149,7 @@ def test_runtime_load_atomically_pauses_legacy_active_playlist_with_only_disable
 ) -> None:
     legacy = _legacy_dormant_state()
     store = ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME)
-    store.save(legacy)  # Supported schema v5: valid on main before #451.
+    store.save(legacy)  # Supported dormant assignments retain their durable contract.
     assert store.load() == legacy
     assert legacy.playlists[0].enabled is True
     assert not legacy.sources[0].enabled
@@ -159,7 +159,7 @@ def test_runtime_load_atomically_pauses_legacy_active_playlist_with_only_disable
     assert _load_runtime_config(tmp_path, {}) is None
     recovered = store.load()
     assert recovered == replace(legacy, playlists=(replace(legacy.playlists[0], enabled=False),))
-    assert recovered.schema_version == legacy.schema_version == 5
+    assert recovered.schema_version == legacy.schema_version == 6
     assert (
         compile_engine_config(BUILTIN_CATALOG, recovered).playlists[0].source_selection.explicit
         == ()

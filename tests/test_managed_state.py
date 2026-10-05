@@ -91,7 +91,7 @@ def test_builtin_source_origin_is_not_copied_into_managed_playlists() -> None:
     managed = activate_template(template, "spotify-playlist-id")
     payload = serialize_managed_state(ManagedState(playlists=(managed,)))
 
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == 6
     assert payload["sources"] == []
     assert payload["playlists"][0]["source_ids"] == ["un_news_en", "reuters_world"]
     assert "origin" not in json.dumps(payload)
@@ -155,7 +155,7 @@ def test_managed_state_store_round_trip_is_owner_only(tmp_path: Path) -> None:
     assert os.stat(path).st_mode & 0o777 == 0o600
     raw = path.read_text(encoding="utf-8")
     assert "Noticias en Español" in raw
-    assert '"schema_version": 5' in raw
+    assert '"schema_version": 6' in raw
     assert '"sources": []' in raw
     assert '"max_duration_seconds": 1800' in raw
     assert "endpoint_url" not in raw
@@ -237,11 +237,11 @@ def test_legacy_managed_state_without_duration_is_migrated_and_pinned(tmp_path: 
 
     state = ManagedStateStore(path).load()
 
-    assert state.schema_version == 5
+    assert state.schema_version == 6
     assert state.sources == ()
     assert state.playlists[0].max_duration_seconds == 1800
     persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 5
+    assert persisted["schema_version"] == 6
     assert persisted["sources"] == []
     assert persisted["playlists"][0]["max_duration_seconds"] == 1800
 
@@ -270,7 +270,7 @@ def test_legacy_managed_state_preserves_explicit_duration_during_migration(tmp_p
 
     state = ManagedStateStore(path).load()
 
-    assert state.schema_version == 5
+    assert state.schema_version == 6
     assert state.sources == ()
     assert state.playlists[0].max_duration_seconds == 1234
     persisted = json.loads(path.read_text(encoding="utf-8"))
@@ -308,4 +308,54 @@ def test_schema_v2_requires_materialized_duration(tmp_path: Path) -> None:
     path.write_text(document, encoding="utf-8")
 
     with pytest.raises(ManagedStateError, match="max_duration_seconds.*required"):
+        ManagedStateStore(path).load()
+
+
+@pytest.mark.parametrize("version", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("fail", [False, True])
+def test_all_legacy_schemas_migrate_exact_range_atomically(tmp_path, monkeypatch, version, fail):
+    payload = serialize_managed_state(
+        ManagedState(
+            playlists=(
+                replace(
+                    activate_template(BUILTIN_CATALOG.playlists[0], "destination"),
+                    max_duration_seconds=1234,
+                ),
+            )
+        )
+    )
+    payload["schema_version"] = version
+    payload["playlists"][0].pop("min_duration_seconds")
+    if version < 5:
+        payload.pop("source_overrides")
+    if version < 3:
+        payload.pop("sources")
+    path = tmp_path / "managed-state.json"
+    path.write_text(json.dumps(payload))
+    original = path.read_bytes()
+    if fail:
+
+        def fail_replace(*args):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr("news_bulletin_playlist.managed_state.os.replace", fail_replace)
+        with pytest.raises(ManagedStateError, match="original state preserved"):
+            ManagedStateStore(path).load()
+        assert path.read_bytes() == original
+    else:
+        state = ManagedStateStore(path).load()
+        assert state.schema_version == 6
+        assert state.playlists[0].min_duration_seconds == 0
+        assert state.playlists[0].max_duration_seconds == 1234
+        assert json.loads(path.read_text())["playlists"][0]["min_duration_seconds"] == 0
+
+
+def test_v6_requires_minimum(tmp_path):
+    payload = serialize_managed_state(
+        ManagedState(playlists=(activate_template(BUILTIN_CATALOG.playlists[0], "destination"),))
+    )
+    payload["playlists"][0].pop("min_duration_seconds")
+    path = tmp_path / "managed-state.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ManagedStateError, match="min_duration_seconds.*required"):
         ManagedStateStore(path).load()

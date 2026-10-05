@@ -670,7 +670,7 @@ def test_playlist_save_preserves_visible_custom_source(tmp_path: Path, disabled:
 @pytest.mark.parametrize(
     ("minutes", "expected_status"),
     [
-        ("0", HTTPStatus.BAD_REQUEST),
+        ("0", HTTPStatus.CONFLICT),
         ("-1", HTTPStatus.BAD_REQUEST),
         ("bad", HTTPStatus.BAD_REQUEST),
         ("1441", HTTPStatus.CONFLICT),
@@ -1089,3 +1089,82 @@ def test_lifecycle_reconcile_runs_after_configuration_lock_is_released(tmp_path:
     assert response.extra_headers["Location"] == "/admin/?notice=playlist-stopped"
     assert synchronization.depth == 0
     assert lifecycle.reconcile_calls == [False]
+
+
+@pytest.mark.parametrize("handler_kind", ["engine", "diagnostics"])
+@pytest.mark.parametrize("minutes,expected", [(20, 1234), (21, 1260)])
+def test_range_update_handlers_preserve_seconds_and_wake_without_provider_io(
+    tmp_path,
+    handler_kind,
+    minutes,
+    expected,
+):
+    from news_bulletin_playlist.diagnostics_runtime import DiagnosticOperationalHealthHandler
+
+    service, factory = _service(tmp_path)
+    template = BUILTIN_CATALOG.playlists[0]
+    current = replace(
+        activate_template(template, "destination"),
+        min_duration_seconds=1234,
+        max_duration_seconds=1234,
+    )
+    service.store.save(ManagedState(playlists=(current,)))
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/update",
+        security=security,
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(current.id)],
+            "display_name": [current.display_name],
+            "description": [current.description],
+            "cover_id": [current.cover_id],
+            "source_id": list(map(str, current.source_ids)),
+            "enabled": ["1"],
+            "min_duration_minutes": [str(minutes)],
+            "max_duration_minutes": [str(minutes)],
+            # Client seconds cannot override server-owned precision.
+            "max_duration_seconds_remainder": ["59"],
+        },
+    )
+    if handler_kind == "engine":
+        handler.do_POST()
+        assert _response(handler).status == HTTPStatus.SEE_OTHER
+        assert lifecycle.reconcile_calls == [True]
+    else:
+        # Exercise the diagnostics handler's actual form plumbing without a network server.
+        result = DiagnosticOperationalHealthHandler._update_managed_playlist(
+            handler, service, handler._form
+        )
+        assert result == (str(current.id), True)
+    updated = service.store.load().playlists[0]
+    assert (updated.min_duration_seconds, updated.max_duration_seconds) == (expected, expected)
+    assert factory.tokens == []
+    assert factory.client.create_calls == []
+    assert factory.client.update_calls == []
+
+
+def test_minimum_only_change_blocks_stale_playlist_mutation(tmp_path):
+    from news_bulletin_playlist.engine_runtime import ReloadingEngineCycleRunner
+    from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
+
+    service, _ = _service(tmp_path)
+    current = activate_template(BUILTIN_CATALOG.playlists[0], "destination")
+    service.store.save(ManagedState(playlists=(current,)))
+    expected = compile_engine_config(service.catalog, service.store.load())
+    runner = object.__new__(ReloadingEngineCycleRunner)
+    runner.data_dir = tmp_path
+    runner.environ = {}
+    runner.configuration_synchronization = ConfigurationSynchronization()
+    service.store.save(ManagedState(playlists=(replace(current, min_duration_seconds=600),)))
+    writes = []
+    with (
+        pytest.raises(SpotifyReconciliationError, match="configuration changed during cycle"),
+        runner._playlist_mutation_guard(expected, expected.playlists[0]),
+    ):
+        writes.append("mutation")
+    assert writes == []

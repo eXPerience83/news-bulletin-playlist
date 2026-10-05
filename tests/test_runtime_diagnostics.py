@@ -516,6 +516,7 @@ def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: P
         "duration_seconds": 1200,
         "eligibility_reason": "duration_exception",
         "max_seconds": 1800,
+        "min_seconds": 0,
         "policy_exception": "ser_morning_0800",
     }
     excluded = next(
@@ -526,6 +527,7 @@ def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: P
         "duration_seconds": 481,
         "eligibility_reason": "duration_exceeds_default_max",
         "max_seconds": 480,
+        "min_seconds": 0,
     }
     rne_profile = next(
         event
@@ -624,3 +626,66 @@ def test_unchanged_duration_diagnostics_are_not_repeated_but_new_identity_is_emi
     rendered = output.getvalue()
     assert "episode-a-private" not in rendered
     assert "episode-b-private" not in rendered
+
+
+def test_below_minimum_is_observable_and_minimum_changes_deduplication(tmp_path):
+    from news_bulletin_playlist.desired_state import DURATION_BELOW_DEFAULT_MIN
+
+    diagnostics, store, output = _diagnostics(tmp_path)
+    below = DurationEligibilityDecision(
+        SourceId("ser"), "private-id", 599, False, DURATION_BELOW_DEFAULT_MIN, 1800, min_seconds=600
+    )
+    above = replace(
+        below,
+        source_native_id="private-above",
+        duration_seconds=1801,
+        reason=DURATION_EXCEEDS_DEFAULT_MAX,
+    )
+    playlist = PlaylistCycleOutcome(
+        playlist_id=PlaylistId("test"),
+        ok=True,
+        desired_count=0,
+        applied_count=0,
+        wrote=False,
+        last_success_at=NOW,
+        duration_decisions=(below, above),
+    )
+    result = EngineCycleResult(
+        started_at=NOW, finished_at=NOW, ok=True, sources=(), playlists=(playlist,)
+    )
+    base = _Runner(result)
+    runner = InstrumentedEngineCycleRunner(base, diagnostics, clock=lambda: NOW)
+    runner.run_cycle()
+    runner.run_cycle()
+    exclusions = [
+        event
+        for event in store.list_events(limit=50)
+        if event.event_name == "duration_episode_excluded"
+    ]
+    assert len(exclusions) == 2
+    assert {event.details["eligibility_reason"] for event in exclusions} == {
+        DURATION_BELOW_DEFAULT_MIN,
+        DURATION_EXCEEDS_DEFAULT_MAX,
+    }
+    assert all(event.details["min_seconds"] == 600 for event in exclusions)
+    base.result = replace(
+        result,
+        playlists=(
+            replace(
+                playlist,
+                duration_decisions=(
+                    replace(below, min_seconds=601),
+                    above,
+                ),
+            ),
+        ),
+    )
+    runner.run_cycle()
+    exclusions = [
+        event
+        for event in store.list_events(limit=50)
+        if event.event_name == "duration_episode_excluded"
+    ]
+    assert len(exclusions) == 3
+    assert exclusions[0].details["min_seconds"] == 601
+    assert "private-id" not in output.getvalue()

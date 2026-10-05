@@ -8,6 +8,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 
 from news_bulletin_playlist.desired_state import (
+    DURATION_BELOW_DEFAULT_MIN,
     DURATION_EXCEEDS_DEFAULT_MAX,
     DURATION_EXCEEDS_EXCEPTION_MAX,
     DURATION_EXCEPTION,
@@ -39,7 +40,7 @@ from news_bulletin_playlist.spotify_metrics import (
 
 Clock = Callable[[], datetime]
 _LONG_DURATION_DIAGNOSTIC_SECONDS = 20 * 60
-type _DurationDecisionSignature = tuple[str, int, bool, str, int, str]
+type _DurationDecisionSignature = tuple[str, int, bool, str, int, str, int]
 
 
 class InstrumentedEngineCycleRunner:
@@ -332,6 +333,7 @@ class InstrumentedEngineCycleRunner:
                     "duration_seconds": decision.duration_seconds,
                     "eligibility_reason": decision.reason,
                     "max_seconds": decision.max_seconds,
+                    "min_seconds": decision.min_seconds,
                 }
                 if decision.exception_id is not None:
                     details["policy_exception"] = decision.exception_id
@@ -529,6 +531,7 @@ def _duration_decision_signature(
         decision.reason,
         decision.max_seconds,
         decision.exception_id or "",
+        decision.min_seconds,
     )
 
 
@@ -537,6 +540,7 @@ def _is_noteworthy_duration_decision(decision: DurationEligibilityDecision) -> b
         decision.reason
         in {
             DURATION_EXCEPTION,
+            DURATION_BELOW_DEFAULT_MIN,
             DURATION_EXCEEDS_DEFAULT_MAX,
             DURATION_EXCEEDS_EXCEPTION_MAX,
         }

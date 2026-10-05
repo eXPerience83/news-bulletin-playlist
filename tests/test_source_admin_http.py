@@ -2119,8 +2119,8 @@ def test_real_startup_recovers_supported_legacy_dormant_state_and_allows_admin_r
     )
     legacy = ManagedState(sources=(source,), playlists=(playlist,))
     store = ManagedStateStore(tmp_path / "managed-state.json")
-    store.save(legacy)  # Exactly the schema-v5 state accepted by main before #451.
-    assert store.load() == legacy and legacy.schema_version == 5
+    store.save(legacy)  # Supported dormant assignments retain their durable contract.
+    assert store.load() == legacy and legacy.schema_version == 6
     old_json = json.loads(store.path.read_text())
     provider_calls: list[str] = []
 

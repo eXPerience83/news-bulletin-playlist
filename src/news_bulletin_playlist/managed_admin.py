@@ -10,7 +10,10 @@ from typing import Any, Protocol
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.managed_duration import (
     MAX_NEW_MANAGED_DURATION_SECONDS,
+    duration_seconds_from_minutes,
+    validate_duration_range,
     validate_duration_update,
+    validate_min_duration_update,
     validate_new_duration_seconds,
 )
 from news_bulletin_playlist.managed_provisioning import (
@@ -200,6 +203,9 @@ class ManagedAdminService:
         source_ids: Sequence[SourceId | str],
         access_token: str,
         max_duration_seconds: int | None = None,
+        min_duration_seconds: int | None = None,
+        min_duration_minutes: int | None = None,
+        max_duration_minutes: int | None = None,
     ) -> ManagedPlaylist:
         if self.provisioning_journal.load() is not None:
             raise PlaylistProvisioningRecoveryRequired()
@@ -207,6 +213,15 @@ class ManagedAdminService:
         template = self._template(template_id)
         if any(playlist.template_id == template.id for playlist in state.playlists):
             raise ManagedAdminError(f"playlist template {template.id} is already managed")
+        duration_min, duration_max = _duration_range_candidate(
+            min_duration_seconds,
+            max_duration_seconds,
+            min_duration_minutes,
+            max_duration_minutes,
+            current_min=template.duration_policy.default_min_seconds,
+            current_max=template.duration_policy.default_max_seconds,
+            activating=True,
+        )
         intent = ProvisioningIntent(
             state=ProvisioningState.REQUEST_STARTED,
             template_id=template.id,
@@ -216,11 +231,8 @@ class ManagedAdminService:
             source_ids=self._source_ids(source_ids, state=state, allow_empty=False),
             retention_hours=template.retention_hours,
             max_episodes=template.max_episodes,
-            max_duration_seconds=(
-                template.duration_policy.default_max_seconds
-                if max_duration_seconds is None
-                else _new_duration_max_seconds(max_duration_seconds)
-            ),
+            max_duration_seconds=duration_max,
+            min_duration_seconds=duration_min,
         )
         self.provisioning_journal.save(intent)
 
@@ -283,6 +295,7 @@ class ManagedAdminService:
             retention_hours=intent.retention_hours,
             max_episodes=intent.max_episodes,
             max_duration_seconds=intent.max_duration_seconds,
+            min_duration_seconds=intent.min_duration_seconds,
         )
         self._save_validated(
             ManagedState(
@@ -344,6 +357,9 @@ class ManagedAdminService:
         enabled: bool,
         access_token: str | None,
         max_duration_seconds: int | None = None,
+        min_duration_seconds: int | None = None,
+        min_duration_minutes: int | None = None,
+        max_duration_minutes: int | None = None,
     ) -> ManagedPlaylist:
         # Saving managed configuration is deliberately local-only. Name/description are desired
         # metadata and are pushed to Spotify only by the explicit metadata & cover sync action.
@@ -356,13 +372,14 @@ class ManagedAdminService:
             allow_empty=not enabled,
             existing=current.source_ids,
         )
-        duration_max = (
-            current.max_duration_seconds
-            if max_duration_seconds is None
-            else _updated_duration_max_seconds(
-                max_duration_seconds,
-                current_seconds=current.max_duration_seconds,
-            )
+        duration_min, duration_max = _duration_range_candidate(
+            min_duration_seconds,
+            max_duration_seconds,
+            min_duration_minutes,
+            max_duration_minutes,
+            current_min=current.min_duration_seconds,
+            current_max=current.max_duration_seconds,
+            activating=False,
         )
         updated = replace(
             current,
@@ -372,6 +389,7 @@ class ManagedAdminService:
             cover_id=self._cover_id(cover_id),
             source_ids=selected_sources,
             max_duration_seconds=duration_max,
+            min_duration_seconds=duration_min,
         )
         next_state = self._state_with_replacement(state, updated)
         self._save_validated(next_state)
@@ -607,16 +625,44 @@ def _playlist_description(value: str) -> str:
     return result
 
 
-def _new_duration_max_seconds(value: int) -> int:
+def _duration_range_candidate(
+    minimum: int | None,
+    maximum: int | None,
+    min_minutes: int | None,
+    max_minutes: int | None,
+    *,
+    current_min: int,
+    current_max: int,
+    activating: bool,
+) -> tuple[int, int]:
     try:
-        return validate_new_duration_seconds(value)
-    except ValueError as exc:
-        raise ManagedAdminError(str(exc)) from exc
-
-
-def _updated_duration_max_seconds(value: int, *, current_seconds: int) -> int:
-    try:
-        return validate_duration_update(value, current_seconds=current_seconds)
+        if min_minutes is not None:
+            if minimum is not None:
+                raise ValueError("minimum duration supplied twice")
+            minimum = duration_seconds_from_minutes(min_minutes, current_seconds=current_min)
+        if max_minutes is not None:
+            if maximum is not None:
+                raise ValueError("maximum duration supplied twice")
+            maximum = duration_seconds_from_minutes(max_minutes, current_seconds=current_max)
+        candidate_min = (
+            current_min
+            if minimum is None
+            else validate_min_duration_update(
+                minimum,
+                current_seconds=None if activating else current_min,
+            )
+        )
+        candidate_max = (
+            current_max
+            if maximum is None
+            else (
+                validate_new_duration_seconds(maximum)
+                if activating
+                else validate_duration_update(maximum, current_seconds=current_max)
+            )
+        )
+        validate_duration_range(candidate_min, candidate_max)
+        return candidate_min, candidate_max
     except ValueError as exc:
         raise ManagedAdminError(str(exc)) from exc
 
