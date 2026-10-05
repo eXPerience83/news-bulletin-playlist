@@ -14,6 +14,7 @@ from news_bulletin_playlist.models import (
     SourceId,
 )
 
+DURATION_BELOW_DEFAULT_MIN = "duration_below_default_min"
 DURATION_WITHIN_DEFAULT_MAX = "duration_within_default_max"
 DURATION_EXCEPTION = "duration_exception"
 DURATION_EXCEEDS_DEFAULT_MAX = "duration_exceeds_default_max"
@@ -41,6 +42,7 @@ class DurationEligibilityDecision:
     reason: str
     max_seconds: int
     exception_id: str | None = None
+    min_seconds: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,16 @@ def duration_eligibility_decision(
     source_timezones: Mapping[SourceId, ZoneInfo],
 ) -> DurationEligibilityDecision:
     policy = playlist.duration_policy
+    if duration_seconds < policy.default_min_seconds:
+        return DurationEligibilityDecision(
+            source_id=edition.source_id,
+            source_native_id=edition.source_native_id,
+            duration_seconds=duration_seconds,
+            accepted=False,
+            reason=DURATION_BELOW_DEFAULT_MIN,
+            min_seconds=policy.default_min_seconds,
+            max_seconds=policy.default_max_seconds,
+        )
     if duration_seconds <= policy.default_max_seconds:
         return DurationEligibilityDecision(
             source_id=edition.source_id,
@@ -80,6 +92,7 @@ def duration_eligibility_decision(
             duration_seconds=duration_seconds,
             accepted=True,
             reason=DURATION_WITHIN_DEFAULT_MAX,
+            min_seconds=policy.default_min_seconds,
             max_seconds=policy.default_max_seconds,
         )
 
@@ -98,6 +111,7 @@ def duration_eligibility_decision(
             duration_seconds=duration_seconds,
             accepted=False,
             reason=DURATION_EXCEEDS_DEFAULT_MAX,
+            min_seconds=policy.default_min_seconds,
             max_seconds=policy.default_max_seconds,
         )
 
@@ -110,6 +124,7 @@ def duration_eligibility_decision(
         reason=(DURATION_EXCEPTION if accepted else DURATION_EXCEEDS_EXCEPTION_MAX),
         max_seconds=matching_exception.max_seconds,
         exception_id=matching_exception.id,
+        min_seconds=policy.default_min_seconds,
     )
 
 

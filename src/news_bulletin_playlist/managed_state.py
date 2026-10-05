@@ -16,7 +16,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.custom_source_policy import custom_strategy_allowed
 from news_bulletin_playlist.file_durability import fsync_directory
-from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
+from news_bulletin_playlist.managed_duration import (
+    validate_duration_range,
+    validate_persisted_duration_seconds,
+    validate_persisted_min_duration_seconds,
+)
 from news_bulletin_playlist.models import (
     AdapterId,
     DestinationReference,
@@ -39,7 +43,7 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 MANAGED_STATE_FILENAME = "managed-state.json"
-_MANAGED_STATE_SCHEMA_VERSION = 5
+_MANAGED_STATE_SCHEMA_VERSION = 6
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
 _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
@@ -74,6 +78,7 @@ class ManagedPlaylist:
     retention_hours: int
     max_episodes: int
     max_duration_seconds: int = _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS
+    min_duration_seconds: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +211,7 @@ def activate_template(
         retention_hours=template.retention_hours,
         max_episodes=template.max_episodes,
         max_duration_seconds=template.duration_policy.default_max_seconds,
+        min_duration_seconds=template.duration_policy.default_min_seconds,
     )
 
 
@@ -255,13 +261,12 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
 
         max_duration_seconds = managed.max_duration_seconds
         try:
-            validate_persisted_duration_seconds(max_duration_seconds)
+            validate_duration_range(managed.min_duration_seconds, max_duration_seconds)
         except ValueError as exc:
-            raise ManagedStateError(
-                f"managed playlist {managed.id} max_duration_seconds must be positive"
-            ) from exc
+            raise ManagedStateError(f"managed playlist {managed.id}: {exc}") from exc
         duration_policy = DurationPolicy(
             default_max_seconds=max_duration_seconds,
+            default_min_seconds=managed.min_duration_seconds,
             exceptions=tuple(
                 exception
                 for exception in template.duration_policy.exceptions
@@ -365,6 +370,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION,
         3,
         4,
+        5,
         _MANAGED_STATE_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
@@ -482,6 +488,7 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
             "retention_hours": playlist.retention_hours,
             "max_episodes": playlist.max_episodes,
             "max_duration_seconds": playlist.max_duration_seconds,
+            "min_duration_seconds": playlist.min_duration_seconds,
         }
         serialized_playlists.append(item)
     sorted_sources = tuple(sorted(state.sources, key=lambda source: str(source.id)))
@@ -652,6 +659,7 @@ def _parse_playlist(
             "retention_hours",
             "max_episodes",
             "max_duration_seconds",
+            "min_duration_seconds",
         },
         path,
     )
@@ -682,6 +690,16 @@ def _parse_playlist(
             f"{path}.max_duration_seconds",
         )
 
+    try:
+        min_duration_seconds = validate_persisted_min_duration_seconds(
+            _required(data, "min_duration_seconds", path)
+            if source_schema_version >= 6
+            else data.get("min_duration_seconds", 0)
+        )
+        validate_duration_range(min_duration_seconds, max_duration_seconds)
+    except ValueError as exc:
+        raise ManagedStateError(f"{path}: {exc}") from exc
+
     return ManagedPlaylist(
         id=PlaylistId(_nonempty_string(_required(data, "id", path), f"{path}.id")),
         template_id=PlaylistId(
@@ -709,6 +727,7 @@ def _parse_playlist(
         retention_hours=retention_hours,
         max_episodes=max_episodes,
         max_duration_seconds=max_duration_seconds,
+        min_duration_seconds=min_duration_seconds,
     )
 
 

@@ -251,7 +251,7 @@ def test_custom_roundtrip_and_builtin_isolation(mode):
         source_overrides=(ManagedSourceOverride(SourceId("rne"), Mode.DISABLED),),
     )
     payload = serialize_managed_state(state)
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == 6
     assert payload["source_overrides"] == [{"source_id": "rne", "public_release_mode": "disabled"}]
     assert parse_managed_state(payload) == state
     compiled = effective_sources(BUILTIN_CATALOG, state)
@@ -278,7 +278,7 @@ def test_legacy_to_v5_atomic_defaults_and_playlist_preservation(tmp_path, versio
     path = tmp_path / "managed-state.json"
     path.write_text(json.dumps(payload))
     state = ManagedStateStore(path).load()
-    assert state.schema_version == 5
+    assert state.schema_version == 6
     assert state.source_overrides == ()
     assert all(s.public_release_mode is Mode.INSTANT for s in state.sources)
     current = json.loads(path.read_text())

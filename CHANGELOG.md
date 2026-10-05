@@ -5,6 +5,21 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
+### Added
+
+- Configurable inclusive minimum/maximum duration per playlist, with the provisional default
+  unchanged at 0..30 minutes. Admin uses whole minutes and preserves historical exact seconds
+  when the displayed value is unchanged; changing minutes saves an exact whole-minute bound.
+- Below-minimum exclusion diagnostics and minimum-aware configuration write safety.
+
+### Compatibility / operations
+
+- Managed-state v6 atomically upgrades v1-v5 with minimum 0 and preserves exact maxima.
+  Provisioning journal v2 snapshots both bounds and still recovers pending v1 journals with minimum 0.
+  SQLite remains database format 3 with unchanged tables/columns.
+- Range Save remains local and wakes normal item reconciliation without direct OAuth,
+  metadata or cover operations. #132 still owns final limits and any short/long split.
+
 ## [0.2.2] - 2026-10-02
 
 ### Changed

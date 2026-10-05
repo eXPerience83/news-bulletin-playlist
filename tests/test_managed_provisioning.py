@@ -23,6 +23,7 @@ from news_bulletin_playlist.managed_provisioning import (
     ProvisioningState,
 )
 from news_bulletin_playlist.managed_state import ManagedStateStore
+from news_bulletin_playlist.models import DurationPolicy
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitSuppressed
 
@@ -245,10 +246,17 @@ def test_adoption_profile_scope_failure_is_actionable_and_preserves_intent(
 
 def test_known_destination_recovery_uses_journaled_template_snapshot(tmp_path: Path) -> None:
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
-    intent = _request_intent().with_destination("created")
+    intent = replace(
+        _request_intent(), min_duration_seconds=634, max_duration_seconds=1234
+    ).with_destination("created")
     journal = ProvisioningJournal(tmp_path / "provisioning.json")
     journal.save(intent)
-    changed_template = replace(template, retention_hours=12, max_episodes=7)
+    changed_template = replace(
+        template,
+        retention_hours=12,
+        max_episodes=7,
+        duration_policy=DurationPolicy(default_min_seconds=60, default_max_seconds=900),
+    )
     changed_catalog = BuiltInCatalog(
         sources=BUILTIN_CATALOG.sources,
         playlists=tuple(
@@ -265,6 +273,8 @@ def test_known_destination_recovery_uses_journaled_template_snapshot(tmp_path: P
     assert recovered is not None
     assert recovered.retention_hours == template.retention_hours
     assert recovered.max_episodes == template.max_episodes
+    assert recovered.min_duration_seconds == 634
+    assert recovered.max_duration_seconds == 1234
 
 
 def test_definite_create_rejection_clears_intent_and_allows_safe_retry(tmp_path: Path) -> None:
@@ -409,5 +419,30 @@ def test_journal_contains_no_credentials(tmp_path: Path) -> None:
         "retention_hours",
         "max_episodes",
         "max_duration_seconds",
+        "min_duration_seconds",
         "destination_id",
     }
+
+
+@pytest.mark.parametrize("known", [False, True])
+def test_v1_journal_remains_recoverable_with_zero_minimum(tmp_path, known):
+    journal = ProvisioningJournal(tmp_path / "provisioning.json")
+    intent = _request_intent()
+    if known:
+        intent = intent.with_destination("created")
+    journal.save(intent)
+    payload = json.loads(journal.path.read_text())
+    assert payload["schema_version"] == 2
+    assert payload.pop("min_duration_seconds") == 0
+    payload["schema_version"] = 1
+    journal.path.write_text(json.dumps(payload))
+    assert journal.load() == intent
+    if known:
+        client = _Client()
+        managed = _service(tmp_path, client, journal=journal).finalize_known_provisioning()
+        assert managed.min_duration_seconds == 0
+        assert managed.max_duration_seconds == 1800
+        assert client.create_calls == []
+    else:
+        journal.save(journal.load().with_destination("created"))
+        assert json.loads(journal.path.read_text())["schema_version"] == 2

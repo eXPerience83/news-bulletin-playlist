@@ -165,10 +165,19 @@ class DurationPolicy:
 
     default_max_seconds: int = DEFAULT_DURATION_MAX_SECONDS
     exceptions: tuple[DurationPolicyException, ...] = ()
+    default_min_seconds: int = 0
 
     def __post_init__(self) -> None:
-        if self.default_max_seconds <= 0:
+        if type(self.default_max_seconds) is not int or self.default_max_seconds <= 0:
             raise ValueError("duration policy default_max_seconds must be positive")
+        if (
+            type(self.default_min_seconds) is not int
+            or self.default_min_seconds < 0
+            or self.default_min_seconds > self.default_max_seconds
+        ):
+            raise ValueError(
+                "duration policy requires 0 <= default_min_seconds <= default_max_seconds"
+            )
         ids = [exception.id for exception in self.exceptions]
         if len(ids) != len(set(ids)):
             raise ValueError("duration policy exception ids must be unique")

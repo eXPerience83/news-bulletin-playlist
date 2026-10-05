@@ -97,7 +97,7 @@ def _payload() -> dict[str, object]:
 def test_temporal_strategy_round_trip_without_a_schema_migration(strategy):
     state = _state(replace(_source(), temporal_strategy=strategy))
     encoded = serialize_managed_state(state)
-    assert encoded["schema_version"] == 5
+    assert encoded["schema_version"] == 6
     parsed = parse_managed_state(encoded)
     assert parsed.sources[0].temporal_strategy is strategy
     assert effective_sources(BUILTIN_CATALOG, parsed)[-1].temporal_strategy is strategy
@@ -153,10 +153,10 @@ def test_v3_to_current_preserves_custom_metadata_and_migrates_atomically(
     path.write_text(json.dumps(payload))
     state = ManagedStateStore(path).load()
     expected = TemporalStrategy.DISABLED if has_strategy else TemporalStrategy.AUTO
-    assert state.schema_version == 5
+    assert state.schema_version == 6
     assert state.sources[0].temporal_strategy is expected
     migrated = json.loads(path.read_text())
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     assert migrated["playlists"] == payload["playlists"]
     for key, value in payload["sources"][0].items():
         assert migrated["sources"][0][key] == value
@@ -218,7 +218,7 @@ def test_legacy_schema_migrates_atomically_with_empty_sources(tmp_path: Path, ve
     state = ManagedStateStore(path).load()
 
     persisted = json.loads(path.read_text())
-    assert state.schema_version == persisted["schema_version"] == 5
+    assert state.schema_version == persisted["schema_version"] == 6
     assert state.sources == ()
     assert persisted["sources"] == []
     assert persisted["playlists"][0]["source_ids"] == ["ser"]
@@ -946,7 +946,7 @@ def test_disable_enable_restores_only_surviving_durable_assignments(
     service = _source_admin(store)
     service.set_enabled(str(b.id), False)
     dormant = store.load()
-    assert dormant.schema_version == state.schema_version == 5
+    assert dormant.schema_version == state.schema_version == 6
     assert dormant.playlists == (playlist,)
     compiled = compile_engine_config(BUILTIN_CATALOG, dormant)
     assert compiled.playlists[0].source_selection.explicit == (a.id,)

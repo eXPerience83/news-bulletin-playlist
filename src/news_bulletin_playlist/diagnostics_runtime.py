@@ -29,7 +29,7 @@ from news_bulletin_playlist.diagnostics_web import (
 from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
 from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
 from news_bulletin_playlist.managed_admin_web import (
-    max_duration_seconds_from_form,
+    duration_minutes_from_form,
     playlist_id_from_form,
     single_form_value,
 )
@@ -673,7 +673,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             cover_id=single_form_value(form, "cover_id"),
             source_ids=form.get("source_id", []),
             access_token=access_token,
-            max_duration_seconds=max_duration_seconds_from_form(form),
+            min_duration_minutes=duration_minutes_from_form(form, "min"),
+            max_duration_minutes=duration_minutes_from_form(form, "max"),
         )
         return str(managed.id)
 
@@ -702,7 +703,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             source_ids=form.get("source_id", []),
             enabled=enabled,
             access_token=None,
-            max_duration_seconds=max_duration_seconds_from_form(form),
+            min_duration_minutes=duration_minutes_from_form(form, "min"),
+            max_duration_minutes=duration_minutes_from_form(form, "max"),
         )
         return str(updated.id), updated.enabled
 

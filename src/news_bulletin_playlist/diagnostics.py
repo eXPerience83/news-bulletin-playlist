@@ -110,6 +110,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "limit",
         "metadata_outcome",
         "max_seconds",
+        "min_seconds",
         "next_state",
         "offset",
         "operation",
@@ -253,6 +254,7 @@ _ALLOWED_DETAIL_STRING_VALUES = {
         {
             "duration_exception",
             "duration_exceeds_default_max",
+            "duration_below_default_min",
             "duration_exceeds_exception_max",
             "duration_metadata_unavailable",
             "duration_within_default_max",

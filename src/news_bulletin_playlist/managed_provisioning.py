@@ -11,11 +11,15 @@ from enum import StrEnum
 from pathlib import Path
 
 from news_bulletin_playlist.file_durability import fsync_directory
-from news_bulletin_playlist.managed_duration import validate_persisted_duration_seconds
+from news_bulletin_playlist.managed_duration import (
+    validate_duration_range,
+    validate_persisted_duration_seconds,
+    validate_persisted_min_duration_seconds,
+)
 from news_bulletin_playlist.models import PlaylistId, SourceId
 
 MANAGED_PROVISIONING_FILENAME = "managed-playlist-provisioning.json"
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 class ProvisioningJournalError(ValueError):
@@ -39,6 +43,7 @@ class ProvisioningIntent:
     max_episodes: int
     max_duration_seconds: int
     destination_id: str | None = None
+    min_duration_seconds: int = 0
 
     def __post_init__(self) -> None:
         if not self.display_name.strip() or not self.cover_id.strip() or not self.source_ids:
@@ -49,7 +54,7 @@ class ProvisioningIntent:
             raise ValueError(
                 "provisioning intent retention and maximum episode values must be positive"
             )
-        validate_persisted_duration_seconds(self.max_duration_seconds)
+        validate_duration_range(self.min_duration_seconds, self.max_duration_seconds)
         if self.state is ProvisioningState.REQUEST_STARTED and self.destination_id is not None:
             raise ValueError("request-started provisioning intent cannot have a destination")
         if self.state is ProvisioningState.DESTINATION_KNOWN and (
@@ -71,6 +76,7 @@ class ProvisioningIntent:
             retention_hours=self.retention_hours,
             max_episodes=self.max_episodes,
             max_duration_seconds=self.max_duration_seconds,
+            min_duration_seconds=self.min_duration_seconds,
             destination_id=value,
         )
 
@@ -106,6 +112,7 @@ class ProvisioningJournal:
             "retention_hours": intent.retention_hours,
             "max_episodes": intent.max_episodes,
             "max_duration_seconds": intent.max_duration_seconds,
+            "min_duration_seconds": intent.min_duration_seconds,
             "destination_id": intent.destination_id,
         }
         _parse_intent(payload)
@@ -163,7 +170,10 @@ def _parse_intent(value: object) -> ProvisioningIntent:
         "max_duration_seconds",
         "destination_id",
     }
-    if set(value) != expected or value.get("schema_version") != _SCHEMA_VERSION:
+    version = value.get("schema_version")
+    if version == 2:
+        expected.add("min_duration_seconds")
+    if set(value) != expected or type(version) is not int or version not in {1, 2}:
         raise ProvisioningJournalError("provisioning journal has an unsupported schema")
     try:
         state = ProvisioningState(_nonempty_string(value["state"]))
@@ -180,6 +190,9 @@ def _parse_intent(value: object) -> ProvisioningIntent:
             retention_hours=_positive_integer(value["retention_hours"]),
             max_episodes=_positive_integer(value["max_episodes"]),
             max_duration_seconds=validate_persisted_duration_seconds(value["max_duration_seconds"]),
+            min_duration_seconds=validate_persisted_min_duration_seconds(
+                value["min_duration_seconds"] if version == 2 else 0
+            ),
             destination_id=(
                 None
                 if value["destination_id"] is None

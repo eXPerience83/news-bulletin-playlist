@@ -50,8 +50,8 @@ Initial product defaults:
 - keep episodes published within the last **48 hours**;
 - cap a playlist at **100 episodes**;
 - order by parsed semantic edition timestamp (`edition_at`) when available; otherwise preserve explicit Spotify release-date/first-seen provenance without inventing minute precision;
-- make the maximum episode duration a **per-managed-playlist setting** editable from `/admin/`;
-- use **30 minutes / 1800 seconds as the current general default for every playlist**;
+- make the minimum and maximum episode duration a **per-managed-playlist setting** editable from `/admin/`;
+- keep the provisional default at **0..30 minutes / 0..1800 seconds for every playlist**;
 - prefer bulletin sources whose normal publishing format is concise; a source that is predominantly long-form is not promoted merely because individual episodes might fit under 30 minutes;
 - retain operational metadata locally for **30 days**;
 - run the production engine approximately every **10 minutes**;
@@ -59,7 +59,19 @@ Initial product defaults:
 - use Spotify episode ID/URI as canonical runtime identity and the official show catalogue as episode authority;
 - allow playlist-specific policies to override defaults when required.
 
-The 30-minute ceiling is deliberately provisional while the catalog is being observed in production. Sanitized diagnostics record duration exclusions, accepted editions of at least 20 minutes and per-source/per-playlist duration histograms. Issue #132 uses that evidence to decide the eventual default hard ceiling. Occasional long editions from an otherwise concise bulletin source are acceptable; sources whose usual product is long-form are not.
+The 30-minute ceiling is deliberately provisional while the catalog is being observed in production. Sanitized diagnostics record duration exclusions, accepted editions of at least 20 minutes and per-source/per-playlist duration histograms. Issue #132 uses that evidence to decide the eventual default range and any short/long split. Occasional long editions from an otherwise concise bulletin source are acceptable; sources whose usual product is long-form are not.
+
+Admin exposes both bounds in whole minutes. Eligibility uses the inclusive range
+`min_duration_seconds <= duration_seconds <= max_duration_seconds`; unknown duration remains
+excluded. Existing exact-second bounds survive Save when their displayed minutes are unchanged;
+changing a minute value stores exactly `minutes * 60`. New choices are limited to 24 hours,
+while historical over-cap values remain loadable and can round-trip unchanged. Maximum exceptions
+raise only the upper bound and never bypass the minimum. Save is local and wakes normal item
+reconciliation; Spotify metadata/cover synchronization remains a separate action.
+
+Activation snapshots both bounds in provisioning journal v2; pending v1 journals recover with
+minimum 0. Managed-state upgrades use schema v6; SQLite stays at database format 3 with unchanged
+episode/history tables. Duration eligibility remains per playlist over the shared persisted catalogue.
 
 ## Editorial independence
 
@@ -122,7 +134,7 @@ docker compose ps
 
 The local status page is available only on `http://127.0.0.1:8788/`.
 
-The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in playlist templates, edit metadata/cover/source selection and maximum episode duration if needed, and activate the desired playlists. Activation provisions and persists the durable Spotify destination identity; use the separate **Apply Spotify metadata & cover** action when the public name, description or bundled cover should be synchronized. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the current trusted-LAN TrueNAS first-run flow and the separately supported hardened HTTPS/reverse-proxy mode.
+The base container remains healthy with no active managed playlist and reports the engine as **Not configured**. The normal production path does **not** require copying or editing an engine YAML file: configure the protected `/admin/` surface, connect Spotify, review the built-in playlist templates, edit metadata/cover/source selection and minimum and maximum episode duration if needed, and activate the desired playlists. Activation provisions and persists the durable Spotify destination identity; use the separate **Apply Spotify metadata & cover** action when the public name, description or bundled cover should be synchronized. See [`docs/DEPLOY_TRUENAS.md`](docs/DEPLOY_TRUENAS.md) for the current trusted-LAN TrueNAS first-run flow and the separately supported hardened HTTPS/reverse-proxy mode.
 
 For TrueNAS 26-BETA.3 or newer, create a dedicated dataset with the **Apps** preset and install [`deploy/truenas.yaml`](deploy/truenas.yaml) as a **Custom App via YAML**, not as a Community catalog app. The base YAML publishes the read-only status UI on port `8788` and contains no Spotify credentials.
 
@@ -154,13 +166,13 @@ CI runs `ruff check .`, `ruff format --check .`, mypy and pytest on Python 3.14.
 
 ## Domain and configuration contract
 
-Normal operation separates immutable application knowledge from installation-owned choices. The image ships a built-in catalog of supported sources and managed playlist templates; schema v5 `/data/managed-state.json` stores activated playlists, canonical installation-owned Spotify-first source definitions and bounded built-in public release mode overrides. Existing v1/v2 files migrate automatically and atomically to v5 with `sources: []`; v3 upgrades preserve custom sources and default an absent temporal strategy to Auto. v4 upgrades default custom public release modes to instant and initialize an empty built-in mode overlay. Custom source records contain only a canonical Spotify show ID and bounded classification/configuration fields, never OAuth credentials or raw provider responses. Admin Sources now offers an authenticated Add Source flow; built-in definitions remain image-owned, and a built-in/custom identity conflict fails closed rather than overwriting either source.
+Normal operation separates immutable application knowledge from installation-owned choices. The image ships a built-in catalog of supported sources and managed playlist templates; schema v6 `/data/managed-state.json` stores activated playlists, canonical installation-owned Spotify-first source definitions and bounded built-in public release mode overrides. Existing v1/v2 files migrate automatically and atomically to v6 with `sources: []`; v3 upgrades preserve custom sources and default an absent temporal strategy to Auto. v4 upgrades default custom public release modes to instant and initialize an empty built-in mode overlay. All v1-v5 playlists migrate with a missing minimum set to 0 seconds and preserve the exact existing maximum. Custom source records contain only a canonical Spotify show ID and bounded classification/configuration fields, never OAuth credentials or raw provider responses. Admin Sources now offers an authenticated Add Source flow; built-in definitions remain image-owned, and a built-in/custom identity conflict fails closed rather than overwriting either source.
 
 The Add Source flow accepts only a canonical 22-character show ID, `spotify:show:<id>`, or `https://open.spotify.com/show/<id>` (optionally with one `si` share parameter). It extracts the ID locally, then uses known Spotify API endpoints for bounded validation; it never fetches the pasted URL. Inspection remains transient and Create performs fresh validation before saving only the canonical source definition. Safe metadata editing, reversible enable/disable, playlist assignment, and explicit deletion of unreferenced custom sources are available.
 
 The managed state is compiled with the built-in catalog into the same `EngineConfig` used by the production engine. Ordinary administration happens through `/admin/`: built-in source definitions can be assigned or unassigned from playlists but are not deleted from the catalog. A disabled custom source remains assigned durably as an inactive assignment, but contributes no episodes. At the next normal reconciliation its episodes may be removed while the playlist keeps updating from its remaining enabled sources. Re-enabling restores the assignment automatically; explicit unassignment removes it permanently. Active playlists must retain at least one enabled assigned source, including during pending activation. Provider failures remain fail-closed and do not exclude enabled assignments. A source selected by several active playlists is refreshed at most once when a detector change, inactivity audit or explicit stale-item escalation makes that catalogue due; unchanged source state is reused locally. Duration-only changes are local playlist policy and do not require a Spotify reconnect or metadata write.
 
-When upgrading from the earlier freeze-on-disable contract, runtime loading atomically pauses active playlists whose assigned sources are all disabled. This durable normalization changes only the local playlist's `enabled` flag: schema v5, assignments and Spotify destinations remain unchanged, with no provider I/O. Admin remains available to enable an assigned source, select another enabled source or keep the playlist paused. Activation after repair is explicit and requires at least one enabled assigned source.
+When upgrading from the earlier freeze-on-disable contract, runtime loading atomically pauses active playlists whose assigned sources are all disabled. This durable normalization changes only the local playlist's `enabled` flag: schema v6, assignments and Spotify destinations remain unchanged, with no provider I/O. Admin remains available to enable an assigned source, select another enabled source or keep the playlist paused. Activation after repair is explicit and requires at least one enabled assigned source.
 
 The runtime now has one installation configuration model: the built-in catalog plus versioned `/data/managed-state.json`, administered through `/admin/`. The pre-1.0 full-YAML runtime path has been retired. To avoid silently starting a different configuration, a non-empty obsolete `NEWS_PLAYLIST_CONFIG` or a leftover `/data/news-bulletin-playlist.yaml` causes startup to fail with an actionable removal message; the obsolete file is never read, rewritten or deleted automatically.
 

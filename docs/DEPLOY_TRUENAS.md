@@ -41,7 +41,7 @@ The ordinary first-run flow is:
 2. Configure the protected production administration surface and Spotify settings described below.
 3. Connect Spotify from `/admin/`.
 4. Review the available built-in playlist templates. The primary Spain-focused Spanish template is **Noticias en Español**; the current catalog also exposes initial `INT · ES`, `INT · EN`, `INT · FR`, `INT · DE` and `INT · PL` experiments.
-5. Review/edit each playlist name, provider-agnostic description, bundled cover, selected supported sources and maximum episode duration. The current general default is **30 minutes**, but every managed playlist stores its own configurable ceiling.
+5. Review/edit each playlist name, provider-agnostic description, bundled cover, selected supported sources and minimum and maximum episode duration. The current provisional default is **0..30 minutes**, with inclusive bounds stored independently per playlist.
 6. Activate a template. The application creates a Spotify playlist destination using the current **public** product semantics and persists the managed instance under `/data/managed-state.json`.
 7. The scheduler is woken immediately; the read-only status page moves from **Not configured** to running/scheduled once an enabled managed playlist exists.
 8. Repeat activation only for the additional playlists you actually want this installation to manage.
@@ -56,7 +56,7 @@ The source table and selectors distinguish **provider origin** (country or insti
 
 ## Managed configuration only
 
-The runtime configuration is the image-owned built-in catalog plus schema v5 `/data/managed-state.json`. Existing v1/v2 managed state migrates atomically to v5 with an empty installation-owned `sources` collection; v3 upgrades preserve custom sources and default an absent temporal strategy to Auto. v4 upgrades default custom public release modes to instant and initialize an empty built-in mode overlay. Admin Sources can inspect and add validated custom Spotify-first sources, edit safe metadata, reversibly enable or disable them, assign them to playlists, and explicitly delete unreferenced custom sources after source-local operational cleanup. Managed state does not store OAuth secrets, inspection reports or raw provider responses.
+The runtime configuration is the image-owned built-in catalog plus schema v6 `/data/managed-state.json`. Existing v1/v2 managed state migrates atomically to v6 with an empty installation-owned `sources` collection; v3 upgrades preserve custom sources and default an absent temporal strategy to Auto. v4 upgrades default custom public release modes to instant and initialize an empty built-in mode overlay. All v1-v5 playlists migrate with a missing minimum set to 0 seconds and preserve the exact existing maximum. Admin Sources can inspect and add validated custom Spotify-first sources, edit safe metadata, reversibly enable or disable them, assign them to playlists, and explicitly delete unreferenced custom sources after source-local operational cleanup. Managed state does not store OAuth secrets, inspection reports or raw provider responses.
 Playlist activation, metadata, source membership and duration policy are managed through `/admin/`; there is no longer a second full-YAML runtime configuration path.
 
 The pre-1.0 settings `NEWS_PLAYLIST_CONFIG` and `/data/news-bulletin-playlist.yaml` are obsolete.
