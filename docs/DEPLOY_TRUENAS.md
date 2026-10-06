@@ -212,7 +212,7 @@ Container publication follows the channel contract documented in [`RELEASE_CHANN
 
 `dev -> edge -> stable = latest`
 
-The checked-in TrueNAS YAML follows `ghcr.io/experience83/news-bulletin-playlist:edge-amd64`. That channel contains only code already integrated into `main`; it is updated automatically after relevant merged changes pass the image build and hardened runtime smoke test. Normal TrueNAS upgrades therefore do **not** require editing a digest in the YAML for every build.
+The checked-in TrueNAS YAML follows `ghcr.io/experience83/news-bulletin-playlist:edge-amd64`. That channel contains only code already integrated into `main`; it advances only when **Publish edge AMD64** is manually dispatched from `main` and its image build and hardened runtime smoke test succeed. Until then, TrueNAS remains on the previous edge image. Normal TrueNAS upgrades therefore do **not** require editing a digest in the YAML for every build.
 
 `dev-amd64` is reserved for deliberate pre-merge testing of an explicitly owner-authorized PR candidate. Normal PR CI never moves `dev`. `stable-amd64` and `latest` move only when an exact `vMAJOR.MINOR.PATCH` release from `main` is published, and `latest` is always the same stable image rather than an alias for current development.
 
