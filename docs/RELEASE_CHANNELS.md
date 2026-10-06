@@ -11,7 +11,7 @@ Publication channels deliberately represent different trust levels:
 | Tag | Source | Moves when | Intended use |
 | --- | --- | --- | --- |
 | `dev` / `dev-amd64` | Explicitly authorized PR candidate | Only after `/publish-candidate <full-head-sha>` succeeds | Deliberate pre-merge validation |
-| `edge` / `edge-amd64` | Current integrated `main` | Automatically after relevant changes reach `main` | Normal experimental deployment |
+| `edge` / `edge-amd64` | Current integrated `main` | Only after **Publish edge AMD64** is manually dispatched from current `main` and succeeds | Normal experimental deployment |
 | `stable` / `stable-amd64` | Newest exact stable release | Only when an exact `vMAJOR.MINOR.PATCH` tag is published | Stable deployment |
 | `latest` | Same image as `stable` | Only together with `stable` | Conventional alias for latest stable |
 | `candidate-pr-<PR>-<short-sha>` | One published PR candidate | Candidate-specific and never intentionally overwritten | Pre-merge audit/debug |
@@ -43,13 +43,13 @@ Use `dev-amd64` only when deliberately validating unmerged code. Record the immu
 
 ## Edge: integrated main
 
-Relevant image/runtime changes merged into `main` automatically publish:
+`edge` is published deliberately from the current `main` tip by manually running **Publish edge AMD64** in GitHub Actions. A successful run publishes:
 
 - `edge`;
 - `edge-amd64`;
 - `sha-<full-main-sha>`.
 
-The build/smoke-test job has no package-write permission. It transfers the exact tested image through a hashed workflow artifact to a separate publishing job. Immediately before publication and again immediately before mutable promotion, the publisher verifies that the source SHA is still the current `main` tip. An older queued or manually dispatched run therefore cannot move `edge` backwards after `main` has advanced.
+The serialized publication job builds and smoke-tests the exact current `main` candidate before touching the mutable edge aliases. It verifies that the source SHA is still the current `main` tip before building, again before registry publication and immediately before mutable promotion. The workflow publishes or reuses the immutable `sha-<full-main-sha>` reference, verifies that its resolved image matches the tested local image, and promotes that exact digest to `edge` / `edge-amd64`. An older queued manual run therefore cannot move `edge` backwards after `main` has advanced.
 
 `sha-<full-main-sha>` is the immutable integrated-build reference. The workflow creates it only when absent, reuses it only when its image content matches the tested build, and fails rather than replacing a conflicting existing tag. `edge` and `edge-amd64` are then promoted together from that exact digest and verified against it.
 
@@ -57,7 +57,7 @@ The checked-in TrueNAS deployment follows:
 
 `ghcr.io/experience83/news-bulletin-playlist:edge-amd64`
 
-This means the normal NAS instance consumes only code that has already been integrated into `main`.
+This means the normal NAS instance consumes only code that has already been integrated into `main`. It remains on the previous edge image until **Publish edge AMD64** is deliberately run again.
 
 ## Stable and latest
 

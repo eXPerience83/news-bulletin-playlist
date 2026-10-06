@@ -1,16 +1,9 @@
 name: Publish edge AMD64
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "Dockerfile"
-      - ".dockerignore"
-      - "README.md"
-      - "assets/covers/spotify/**"
-      - "src/**"
-      - "pyproject.toml"
-      - ".github/workflows/publish-edge-amd64.yml"
+  # Automatic push publication is intentionally disabled to conserve hosted
+  # Actions usage. Restore the previous push/branches/paths block from Git
+  # history if automatic edge publication is wanted again.
   workflow_dispatch:
 
 permissions:
