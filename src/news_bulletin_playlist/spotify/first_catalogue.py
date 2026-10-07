@@ -114,11 +114,23 @@ class CatalogueSnapshot:
 
     temporal_conflicts: int = 0
     public_release_counts: tuple[tuple[PublicReleaseOutcome, int], ...] = ()
+    null_item_count: int = 0
+
+    def __post_init__(self) -> None:
+        # Count only slots in the requested prefix, never hypothetical unseen content.
+        if type(self.null_item_count) is not int or not (
+            0 <= self.null_item_count <= self.request_count * DEFAULT_PAGE_SIZE - len(self.api_ids)
+        ):
+            raise ValueError("catalogue null count exceeds the observed prefix bound")
+        if self.null_item_count and (
+            self.complete or self.coverage_proven or self.api_latest_id is not None
+        ):
+            raise ValueError("unknown catalogue slots cannot carry source authority")
 
 
 @dataclass(frozen=True, slots=True)
 class CatalogueEpisodeEvidence:
-    position: int
+    position: int  # One-based provider slot: requested offset + zero-based item index + 1.
     spotify_episode_id: str
     spotify_episode_uri: str
     title: str
@@ -136,6 +148,7 @@ class CatalogueEpisodeEvidence:
 
 @dataclass(frozen=True, slots=True)
 class _EpisodeCandidate:
+    position: int
     episode_id: str
     uri: str
     title: str
@@ -160,7 +173,7 @@ def fetch_source_catalogue(
     observed = as_utc(now)
     retention_cutoff = as_utc(cutoff)
     show_id = spotify_show_id(source)
-    candidates, request_count, complete = _fetch_catalogue(
+    candidates, request_count, complete, null_item_count = _fetch_catalogue(
         client,
         show_id,
         max_pages=max_pages,
@@ -195,7 +208,8 @@ def fetch_source_catalogue(
         strategy=getattr(source, "temporal_strategy", TemporalStrategy.AUTO),
     )
 
-    for position, candidate in enumerate(candidates, start=1):
+    for candidate in candidates:
+        position = candidate.position
         api_ids.append(candidate.episode_id)
         periods.append(release_period(candidate.release_date, candidate.release_date_precision))
         if collection_filter is not None and not collection_filter.accepts(candidate.title):
@@ -290,10 +304,14 @@ def fetch_source_catalogue(
     return CatalogueSnapshot(
         episodes=tuple(episodes),
         request_count=request_count,
-        complete=complete,
-        coverage_proven=complete or _boundary_covers(periods, retention_cutoff),
+        complete=complete and not null_item_count,
+        coverage_proven=not null_item_count
+        and (complete or _boundary_covers(periods, retention_cutoff)),
         api_ids=tuple(api_ids),
-        api_latest_id=_provable_latest_id(episodes, catalogue_timezone),
+        api_latest_id=None
+        if null_item_count
+        else _provable_latest_id(episodes, catalogue_timezone),
+        null_item_count=null_item_count,
         parser_fallback_count=parser_fallbacks,
         filter_rejected_count=filter_rejected,
         evidence=tuple(evidence),
@@ -349,7 +367,7 @@ def apply_public_release_evidence(
         snapshot,
         episodes=tuple(episodes),
         evidence=rows,
-        api_latest_id=_provable_latest_id(episodes, zone),
+        api_latest_id=None if snapshot.null_item_count else _provable_latest_id(episodes, zone),
         public_release_counts=tuple(sorted(Counter(outcomes.values()).items())),
     )
 
@@ -359,10 +377,11 @@ def _fetch_catalogue(
     show_id: str,
     *,
     max_pages: int,
-) -> tuple[tuple[_EpisodeCandidate, ...], int, bool]:
+) -> tuple[tuple[_EpisodeCandidate, ...], int, bool, int]:
     candidates: list[_EpisodeCandidate] = []
     seen_ids: set[str] = set()
     expected_total: int | None = None
+    null_item_count = 0
 
     for page_number in range(max_pages):
         offset = page_number * DEFAULT_PAGE_SIZE
@@ -380,6 +399,9 @@ def _fetch_catalogue(
             expected_total = total
 
         for item_index, raw in enumerate(items):
+            if raw is None:
+                null_item_count += 1
+                continue
             candidate = _candidate_from_item(raw, requested_offset=offset, item_index=item_index)
             if candidate.episode_id in seen_ids:
                 raise CatalogueResponseError(
@@ -391,9 +413,9 @@ def _fetch_catalogue(
             candidates.append(candidate)
 
         if next_page is None:
-            return tuple(candidates), page_number + 1, True
+            return tuple(candidates), page_number + 1, True, null_item_count
 
-    return tuple(candidates), max_pages, False
+    return tuple(candidates), max_pages, False, null_item_count
 
 
 def _validate_page(
@@ -550,6 +572,7 @@ def _candidate_from_item(
         duration_seconds = round(duration_ms / 1000)
 
     return _EpisodeCandidate(
+        position=requested_offset + item_index + 1,
         episode_id=episode_id,
         uri=uri,
         title=title.strip(),

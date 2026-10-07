@@ -143,7 +143,9 @@ def render_source_review_page(
   <p>URI: <code>{esc(report.spotify_uri)}</code></p>
   <p><a href="{esc(report.spotify_url)}" target="_blank" rel="noopener noreferrer">
      Open canonical Spotify show</a></p>
-  <p>Catalogue coverage proven: {str(report.coverage_proven).lower()};
+  <p>Catalogue complete: {str(report.catalogue_complete).lower()};
+     unknown null slots: {report.null_item_count};
+     coverage proven: {str(report.coverage_proven).lower()};
      observed: {report.observed_episodes}; accepted: {report.accepted_episodes};
      filter-rejected: {report.filter_rejected_count};
      parser fallback: {report.parser_fallback_count}.</p>

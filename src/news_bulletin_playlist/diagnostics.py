@@ -33,6 +33,9 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "30_to_60m",
         "60m_plus",
         "catalogue_reason",
+        "null_item_count",
+        "catalogue_complete",
+        "coverage_proven",
         "item_value_kind",
         "requested_offset",
         "item_index",
@@ -752,6 +755,10 @@ def _normalize_details(
         raise ValueError(f"diagnostic details contain unknown key: {unknown[0]}")
     normalized: dict[str, DiagnosticValue] = {}
     for key, value in details.items():
+        if key == "null_item_count" and (type(value) is not int or not 0 <= value <= 200):
+            raise ValueError("diagnostic null count must be an integer in 0..200")
+        if key in {"catalogue_complete", "coverage_proven"} and type(value) is not bool:
+            raise ValueError("diagnostic catalogue authority must be boolean")
         if key in {"catalogue_reason", "item_value_kind"} and (
             not isinstance(value, str) or value not in _ALLOWED_DETAIL_STRING_VALUES[key]
         ):

@@ -78,7 +78,6 @@ class SecretNonJsonType:
 
 
 NON_OBJECT_CASES = {
-    "item_none": (None, CatalogueItemValueKind.NULL),
     "item_empty_array": ([], CatalogueItemValueKind.ARRAY),
     "item_array": (["secret-provider-array-entry", _item(96)], CatalogueItemValueKind.ARRAY),
     "item_string": ("secret-provider-string", CatalogueItemValueKind.STRING),
@@ -487,7 +486,9 @@ def test_item_value_kind_exception_invariant(
 
 
 def test_closed_item_value_kinds_are_all_covered() -> None:
-    assert {kind for _, kind in NON_OBJECT_CASES.values()} == set(CatalogueItemValueKind)
+    assert {kind for _, kind in NON_OBJECT_CASES.values()} == set(CatalogueItemValueKind) - {
+        CatalogueItemValueKind.NULL
+    }
     assert {kind.value for kind in CatalogueItemValueKind} == {
         "null",
         "array",

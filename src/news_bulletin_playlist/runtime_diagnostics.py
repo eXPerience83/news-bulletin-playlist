@@ -149,3 +149,26 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("operational diagnostic timestamps must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def emit_catalogue_null_slots(
+    diagnostics: OperationalDiagnostics | None,
+    *,
+    occurred_at: datetime,
+    source_id: str,
+    null_item_count: int,
+) -> None:
+    """Describe tolerated unknown slots without any neighboring provider content."""
+    if diagnostics is not None and null_item_count:
+        diagnostics.emit(
+            occurred_at=occurred_at,
+            severity=DiagnosticSeverity.WARNING,
+            component="catalogue",
+            event_name="source_catalogue_null_slots_observed",
+            source_id=source_id,
+            details={
+                "null_item_count": null_item_count,
+                "catalogue_complete": False,
+                "coverage_proven": False,
+            },
+        )

@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
+from news_bulletin_playlist.spotify.first_catalogue import CatalogueSnapshot
 from news_bulletin_playlist.spotify.first_models import (
     RefreshReason,
     SpotifyFirstEpisode,
@@ -236,71 +237,88 @@ class SpotifyFirstJournal:
         coverage_proven: bool,
         reuse_public_release_history: bool = True,
     ) -> UpsertCounts:
+        """Standalone episode update; runtime refreshes must use apply_source_refresh."""
         values = tuple(episodes)
         if any(episode.source_id != source_id for episode in values):
             raise ValueError("Spotify-first replacement contains another source")
         if len({episode.spotify_episode_id for episode in values}) != len(values):
             raise ValueError("Spotify-first replacement contains duplicate episode ids")
 
-        removed = 0
         with self._connection("replace Spotify-first source catalogue") as connection:
             self._ensure_tables(connection)
-            if not reuse_public_release_history:
-                # Apply disabled policy at refresh, including retained rows of a partial prefix.
-                # The separate history table remains evidence, never current chronology.
-                connection.execute(
-                    "UPDATE spotify_first_episode_state SET edition_at = NULL, "
-                    "timestamp_source = 'first_seen' WHERE source_id = ? "
+            return self._replace_source_episodes(
+                connection,
+                source_id,
+                values,
+                coverage_proven=coverage_proven,
+                reuse_public_release_history=reuse_public_release_history,
+            )
+
+    def _replace_source_episodes(
+        self,
+        connection: sqlite3.Connection,
+        source_id: SourceId,
+        values: tuple[SpotifyFirstEpisode, ...],
+        *,
+        coverage_proven: bool,
+        reuse_public_release_history: bool,
+    ) -> UpsertCounts:
+        removed = 0
+        if not reuse_public_release_history:
+            # Apply disabled policy at refresh, including retained rows of a partial prefix.
+            # The separate history table remains evidence, never current chronology.
+            connection.execute(
+                "UPDATE spotify_first_episode_state SET edition_at = NULL, "
+                "timestamp_source = 'first_seen' WHERE source_id = ? "
+                "AND timestamp_source = 'spotify_public_release'",
+                (str(source_id),),
+            )
+        for episode in values:
+            history_episode = episode
+            if episode.timestamp_source is TimestampSource.FIRST_SEEN:
+                row = connection.execute(
+                    "SELECT * FROM spotify_first_episode_history WHERE source_id = ? "
+                    "AND spotify_episode_id = ? AND spotify_show_id = ? "
                     "AND timestamp_source = 'spotify_public_release'",
+                    (str(source_id), episode.spotify_episode_id, episode.spotify_show_id),
+                ).fetchone()
+                if row is not None:
+                    previous = _episode_from_row(row)
+                    # Reuse only the same identity and still-compatible calendar.
+                    if (previous.release_date_raw, previous.release_date_precision) == (
+                        episode.release_date_raw,
+                        episode.release_date_precision,
+                    ):
+                        history_episode = replace(
+                            episode,
+                            edition_at=previous.edition_at,
+                            timestamp_source=previous.timestamp_source,
+                        )
+                        if reuse_public_release_history:
+                            # Reuse history only when no new exact evidence exists.
+                            episode = history_episode
+            episode_values = _episode_values(episode)
+            connection.execute(_UPSERT_EPISODE, episode_values)
+            connection.execute(_UPSERT_HISTORY, _episode_values(history_episode))
+
+        if coverage_proven:
+            keep_ids = tuple(episode.spotify_episode_id for episode in values)
+            if keep_ids:
+                placeholders = ",".join("?" for _ in keep_ids)
+                cursor = connection.execute(
+                    f"""
+                    DELETE FROM spotify_first_episode_state
+                    WHERE source_id = ?
+                      AND spotify_episode_id NOT IN ({placeholders})
+                    """,
+                    (str(source_id), *keep_ids),
+                )
+            else:
+                cursor = connection.execute(
+                    "DELETE FROM spotify_first_episode_state WHERE source_id = ?",
                     (str(source_id),),
                 )
-            for episode in values:
-                history_episode = episode
-                if episode.timestamp_source is TimestampSource.FIRST_SEEN:
-                    row = connection.execute(
-                        "SELECT * FROM spotify_first_episode_history WHERE source_id = ? "
-                        "AND spotify_episode_id = ? AND spotify_show_id = ? "
-                        "AND timestamp_source = 'spotify_public_release'",
-                        (str(source_id), episode.spotify_episode_id, episode.spotify_show_id),
-                    ).fetchone()
-                    if row is not None:
-                        previous = _episode_from_row(row)
-                        # Reuse only the same identity and still-compatible calendar.
-                        if (previous.release_date_raw, previous.release_date_precision) == (
-                            episode.release_date_raw,
-                            episode.release_date_precision,
-                        ):
-                            history_episode = replace(
-                                episode,
-                                edition_at=previous.edition_at,
-                                timestamp_source=previous.timestamp_source,
-                            )
-                            if reuse_public_release_history:
-                                # Reuse history only when no new exact evidence exists.
-                                episode = history_episode
-                episode_values = _episode_values(episode)
-                connection.execute(_UPSERT_EPISODE, episode_values)
-                connection.execute(_UPSERT_HISTORY, _episode_values(history_episode))
-
-            if coverage_proven:
-                keep_ids = tuple(episode.spotify_episode_id for episode in values)
-                if keep_ids:
-                    placeholders = ",".join("?" for _ in keep_ids)
-                    cursor = connection.execute(
-                        f"""
-                        DELETE FROM spotify_first_episode_state
-                        WHERE source_id = ?
-                          AND spotify_episode_id NOT IN ({placeholders})
-                        """,
-                        (str(source_id), *keep_ids),
-                    )
-                else:
-                    cursor = connection.execute(
-                        "DELETE FROM spotify_first_episode_state WHERE source_id = ?",
-                        (str(source_id),),
-                    )
-                removed = max(cursor.rowcount, 0)
-
+            removed = max(cursor.rowcount, 0)
         return UpsertCounts(removed=removed)
 
     def list_episode_history(
@@ -350,49 +368,134 @@ class SpotifyFirstJournal:
         coverage_proven: bool,
         coverage_cutoff_at: datetime,
     ) -> None:
-        if request_count < 0:
-            raise ValueError("Spotify-first request_count must be non-negative")
+        """Standalone trust update; runtime refreshes must use apply_source_refresh."""
         with self._connection("persist Spotify-first source refresh") as connection:
             self._ensure_tables(connection)
-            connection.execute(
-                """
-                INSERT INTO spotify_first_source_state (
-                    source_id,
-                    spotify_show_id,
-                    last_refresh_at,
-                    refresh_reason,
-                    detector_episode_id,
-                    api_episode_id,
-                    request_count,
-                    catalogue_complete,
-                    coverage_proven,
-                    coverage_cutoff_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(source_id) DO UPDATE SET
-                    spotify_show_id = excluded.spotify_show_id,
-                    last_refresh_at = excluded.last_refresh_at,
-                    refresh_reason = excluded.refresh_reason,
-                    detector_episode_id = excluded.detector_episode_id,
-                    api_episode_id = excluded.api_episode_id,
-                    request_count = excluded.request_count,
-                    catalogue_complete = excluded.catalogue_complete,
-                    coverage_proven = excluded.coverage_proven,
-                    coverage_cutoff_at = excluded.coverage_cutoff_at
-                WHERE excluded.last_refresh_at >= spotify_first_source_state.last_refresh_at
-                """,
-                (
-                    str(source.id),
-                    spotify_show_id(source),
-                    _format_timestamp(refreshed_at),
-                    reason.value,
-                    detector_episode_id,
-                    api_episode_id,
-                    request_count,
-                    int(complete),
-                    int(coverage_proven),
-                    _format_timestamp(coverage_cutoff_at),
-                ),
+            self._record_refresh(
+                connection,
+                source,
+                refreshed_at=refreshed_at,
+                reason=reason,
+                detector_episode_id=detector_episode_id,
+                api_episode_id=api_episode_id,
+                request_count=request_count,
+                complete=complete,
+                coverage_proven=coverage_proven,
+                coverage_cutoff_at=coverage_cutoff_at,
             )
+
+    def _record_refresh(
+        self,
+        connection: sqlite3.Connection,
+        source: SourceDefinition,
+        *,
+        refreshed_at: datetime,
+        reason: RefreshReason,
+        detector_episode_id: str | None,
+        api_episode_id: str | None,
+        request_count: int,
+        complete: bool,
+        coverage_proven: bool,
+        coverage_cutoff_at: datetime,
+    ) -> None:
+        if request_count < 0:
+            raise ValueError("Spotify-first request_count must be non-negative")
+        connection.execute(
+            """
+            INSERT INTO spotify_first_source_state (
+                source_id,
+                spotify_show_id,
+                last_refresh_at,
+                refresh_reason,
+                detector_episode_id,
+                api_episode_id,
+                request_count,
+                catalogue_complete,
+                coverage_proven,
+                coverage_cutoff_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                spotify_show_id = excluded.spotify_show_id,
+                last_refresh_at = excluded.last_refresh_at,
+                refresh_reason = excluded.refresh_reason,
+                detector_episode_id = excluded.detector_episode_id,
+                api_episode_id = excluded.api_episode_id,
+                request_count = excluded.request_count,
+                catalogue_complete = excluded.catalogue_complete,
+                coverage_proven = excluded.coverage_proven,
+                coverage_cutoff_at = excluded.coverage_cutoff_at
+            WHERE excluded.last_refresh_at >= spotify_first_source_state.last_refresh_at
+            """,
+            (
+                str(source.id),
+                spotify_show_id(source),
+                _format_timestamp(refreshed_at),
+                reason.value,
+                detector_episode_id,
+                api_episode_id,
+                request_count,
+                int(complete),
+                int(coverage_proven),
+                _format_timestamp(coverage_cutoff_at),
+            ),
+        )
+
+    def apply_source_refresh(
+        self,
+        source: SourceDefinition,
+        snapshot: CatalogueSnapshot,
+        *,
+        refreshed_at: datetime,
+        reason: RefreshReason,
+        detector_episode_id: str | None,
+        coverage_cutoff_at: datetime,
+        reuse_public_release_history: bool = True,
+    ) -> UpsertCounts:
+        """Commit known rows, accepted history and source authority together.
+
+        Unproven coverage merges without deletion by absence. A failed write/commit
+        rolls back the entire refresh; old authority can never certify new partial rows.
+        """
+        values = snapshot.episodes
+        show_id = spotify_show_id(source)
+        if any(
+            episode.source_id != source.id or episode.spotify_show_id != show_id
+            for episode in values
+        ):
+            raise ValueError("Spotify-first refresh contains another source/show")
+        if len({episode.spotify_episode_id for episode in values}) != len(values):
+            raise ValueError("Spotify-first refresh contains duplicate episode ids")
+        with self._connection("apply Spotify-first source refresh") as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._ensure_tables(connection)
+            previous = connection.execute(
+                "SELECT last_refresh_at FROM spotify_first_source_state WHERE source_id = ?",
+                (str(source.id),),
+            ).fetchone()
+            if previous is not None and _parse_timestamp(previous["last_refresh_at"]) > as_utc(
+                refreshed_at
+            ):
+                raise ValueError("Spotify-first refresh predates current source authority")
+            counts = self._replace_source_episodes(
+                connection,
+                source.id,
+                values,
+                coverage_proven=snapshot.coverage_proven,
+                reuse_public_release_history=reuse_public_release_history,
+            )
+            self._record_refresh(
+                connection,
+                source,
+                refreshed_at=refreshed_at,
+                reason=reason,
+                detector_episode_id=detector_episode_id,
+                api_episode_id=snapshot.api_latest_id,
+                request_count=snapshot.request_count,
+                complete=snapshot.complete,
+                coverage_proven=snapshot.coverage_proven,
+                coverage_cutoff_at=coverage_cutoff_at,
+            )
+            return counts
 
     def get_destination_verification(
         self,

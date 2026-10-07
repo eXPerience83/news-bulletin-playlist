@@ -24,6 +24,7 @@ from news_bulletin_playlist.models import ParserId, PublicReleaseMode, SourceId,
 from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
 from news_bulletin_playlist.registry import has_collection_filter, has_title_parser
+from news_bulletin_playlist.runtime_diagnostics import emit_catalogue_null_slots
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
@@ -208,6 +209,17 @@ class SourceInspection:
     temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
     temporal_supporting_rows: int = 0
     temporal_conflicts: int = 0
+    null_item_count: int = 0
+
+    def __post_init__(self) -> None:
+        if type(self.null_item_count) is not int or not (
+            0
+            <= self.null_item_count
+            <= self.catalogue_requests * self.page_size - self.observed_episodes
+        ):
+            raise ValueError("inspection null count exceeds the observed prefix bound")
+        if self.null_item_count and (self.catalogue_complete or self.coverage_proven):
+            raise ValueError("unknown catalogue slots cannot prove inspection coverage")
 
 
 def _bounded(value: str) -> tuple[str, bool]:
@@ -484,6 +496,12 @@ def inspect_source(
             InspectionResponseReason.CATALOGUE_SHAPE,
         ) from None
 
+    emit_catalogue_null_slots(
+        rate_limit.diagnostics,
+        occurred_at=observed,
+        source_id=str(source.id),
+        null_item_count=snapshot.null_item_count,
+    )
     evidence = _episode_evidence(snapshot.evidence)
     known = [
         episode.duration_seconds
@@ -497,6 +515,8 @@ def inspect_source(
         episode.timestamp_source is TimestampSource.FIRST_SEEN for episode in snapshot.episodes
     )
     warnings = []
+    if snapshot.null_item_count:
+        warnings.append("catalogue_null_slots_observed")
     if not snapshot.coverage_proven:
         warnings.append("coverage_unproven")
     if not snapshot.episodes:
@@ -530,6 +550,7 @@ def inspect_source(
         page_size=DEFAULT_PAGE_SIZE,
         max_pages=DEFAULT_MAX_PAGES,
         catalogue_requests=snapshot.request_count,
+        null_item_count=snapshot.null_item_count,
         catalogue_complete=snapshot.complete,
         coverage_proven=snapshot.coverage_proven,
         observed_episodes=len(snapshot.api_ids),
@@ -655,6 +676,7 @@ def serialize_source_inspection(report: SourceInspection) -> bytes:
         "page_size": report.page_size,
         "max_pages": report.max_pages,
         "catalogue_requests": report.catalogue_requests,
+        "null_item_count": report.null_item_count,
         "catalogue_complete": report.catalogue_complete,
         "coverage_proven": report.coverage_proven,
         "observed_episodes": report.observed_episodes,

@@ -5,6 +5,14 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
+### Changed
+
+- Tolerate literal null Spotify catalogue slots as incomplete/unproven evidence, preserving original
+  positions and a bounded null count in Source Audit. Dependent playlists cannot reconcile until a
+  clean refresh proves coverage; no retry, new endpoint or database migration is introduced.
+- Commit source episodes, accepted history and refresh trust atomically, rolling back the whole
+  refresh on failure instead of certifying partial new rows with old coverage.
+
 ### Added
 
 - Closed `item_value_kind` diagnostics for rejected non-object catalogue items, without retaining

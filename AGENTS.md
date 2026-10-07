@@ -107,6 +107,13 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - A normal detector change refreshes only the changed source catalogue. Reuse persisted state for
   unchanged sources and apply playlist retention/ordering locally; do not fan out into all source
   catalogues before an ordinary write.
+- Each source catalogue refresh must commit operational episode rows, accepted history and source
+  refresh/coverage authority in one SQLite transaction (`apply_source_refresh`). Never commit rows
+  separately from trust in engine refresh or stale escalation paths.
+- Literal null catalogue slots are unknown identities: retain original provider positions and only
+  known episodes, force incomplete/unproven coverage and suppress API latest identity even after
+  public enrichment. Unproven sources cannot authorize any dependent destination reconciliation.
+  Arrays, strings, numbers, booleans and malformed episode objects remain fail-closed.
 - Independent detector audits are inactivity-triggered, not fixed-period while normal transitions
   are occurring. A detector or audit failure must preserve last-known-good state.
 - Deterministic stale/unavailable desired-item evidence may escalate to refreshing the other
