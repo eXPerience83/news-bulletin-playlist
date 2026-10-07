@@ -288,6 +288,8 @@ def _emit_response_failure(
         details["requested_offset"] = catalogue_error.requested_offset
         if catalogue_error.item_index is not None:
             details["item_index"] = catalogue_error.item_index
+        if catalogue_error.item_value_kind is not None:
+            details["item_value_kind"] = catalogue_error.item_value_kind.value
         if catalogue_error.expected_total is not None:
             details["expected_total"] = catalogue_error.expected_total
         if catalogue_error.observed_total is not None:

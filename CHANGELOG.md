@@ -7,6 +7,9 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ### Added
 
+- Closed `item_value_kind` diagnostics for rejected non-object catalogue items, without retaining
+  their contents or changing Source Audit acceptance, pagination or request counts.
+
 - Configurable inclusive minimum/maximum duration per playlist, with the provisional default
   unchanged at 0..30 minutes. Admin uses whole minutes and preserves historical exact seconds
   when the displayed value is unchanged; changing minutes saves an exact whole-minute bound.

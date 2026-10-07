@@ -24,3 +24,14 @@ class CatalogueValidationReason(StrEnum):
     INVALID_RELEASE_PRECISION = "invalid_release_precision"
     INVALID_DURATION = "invalid_duration"
     DUPLICATE_EPISODE_ID = "duplicate_episode_id"
+
+
+class CatalogueItemValueKind(StrEnum):
+    """Closed JSON kinds; OTHER covers unexpected non-JSON client/fake values."""
+
+    NULL = "null"
+    ARRAY = "array"
+    STRING = "string"
+    NUMBER = "number"
+    BOOLEAN = "boolean"
+    OTHER = "other"

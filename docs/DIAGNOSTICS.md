@@ -101,6 +101,12 @@ Item reasons are `item_not_object`, `invalid_episode_id`, `invalid_episode_uri`,
 and `invalid_duration`. `duplicate_episode_id` identifies identity consistency failures,
 including repeats across pages. No duplicate ID or rejected field value is retained.
 
+For `catalogue_reason=item_not_object`, `item_value_kind` classifies the rejected item as
+`null`, `array`, `string`, `number` or `boolean`. The fixed `other` label covers unexpected
+non-JSON values from clients/fakes. Booleans are classified before numbers. This field includes
+no rejected value, repr or dynamic type name; historical `item_not_object` events without it
+remain readable. It changes no acceptance rule and adds no request.
+
 The fields survive SQLite persistence and the authenticated Diagnostics ZIP export. Older events
 without these fields remain readable. No SQLite or Source Audit report schema migration is needed.
 The Audit All ZIP failure summary remains unchanged, and independent sources continue after a

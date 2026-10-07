@@ -13,7 +13,10 @@ from news_bulletin_playlist.providers.base import CatalogueParseContext
 from news_bulletin_playlist.providers.temporal_detector import TemporalSample
 from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
 from news_bulletin_playlist.registry import get_collection_filter, get_temporal_detector
-from news_bulletin_playlist.spotify.catalogue_errors import CatalogueValidationReason
+from news_bulletin_playlist.spotify.catalogue_errors import (
+    CatalogueItemValueKind,
+    CatalogueValidationReason,
+)
 from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
     TimestampSource,
@@ -71,12 +74,21 @@ class CatalogueResponseError(RuntimeError):
         item_index: int | None = None,
         expected_total: int | None = None,
         observed_total: int | None = None,
+        item_value_kind: CatalogueItemValueKind | None = None,
     ) -> None:
         if not isinstance(reason, CatalogueValidationReason):
             raise ValueError("catalogue reason must be a closed validation code")
         for value in (requested_offset, item_index, expected_total, observed_total):
             if value is not None and (type(value) is not int or value < 0):
                 raise ValueError("catalogue context must contain non-negative integers")
+        if reason is CatalogueValidationReason.ITEM_NOT_OBJECT:
+            if item_index is None or not isinstance(item_value_kind, CatalogueItemValueKind):
+                raise ValueError(
+                    "non-object catalogue items require an index and closed value kind"
+                )
+        elif item_value_kind is not None:
+            raise ValueError("catalogue item value kind is only valid for non-object items")
+        self.item_value_kind = item_value_kind
         self.reason = reason
         self.requested_offset = requested_offset
         self.item_index = item_index
@@ -440,6 +452,21 @@ def _validate_page(
     return items, total, next_page
 
 
+def _non_object_item_value_kind(item: object) -> CatalogueItemValueKind:
+    """Classify locally without reading content, repr or dynamic type names."""
+    if item is None:
+        return CatalogueItemValueKind.NULL
+    if isinstance(item, bool):  # bool is an int subclass: check it before numbers.
+        return CatalogueItemValueKind.BOOLEAN
+    if isinstance(item, list):
+        return CatalogueItemValueKind.ARRAY
+    if isinstance(item, str):
+        return CatalogueItemValueKind.STRING
+    if isinstance(item, int | float):
+        return CatalogueItemValueKind.NUMBER
+    return CatalogueItemValueKind.OTHER
+
+
 def _candidate_from_item(
     item: object, *, requested_offset: int, item_index: int
 ) -> _EpisodeCandidate:
@@ -448,6 +475,7 @@ def _candidate_from_item(
             CatalogueValidationReason.ITEM_NOT_OBJECT,
             requested_offset=requested_offset,
             item_index=item_index,
+            item_value_kind=_non_object_item_value_kind(item),
         )
 
     episode_id = item.get("id")
