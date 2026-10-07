@@ -81,6 +81,33 @@ The rejected provider body and user description text are not copied into diagnos
 Diagnostic persistence is fail-soft: if the event store cannot be written, the playlist engine
 continues and emits only a fixed safe logging classification.
 
+## Source Audit catalogue validation failures
+
+Source Audit and Audit All retain the public failure `malformed_response / catalogue_shape`.
+The event `source_inspection_catalogue_shape_invalid` retains
+`failure_class=response_shape_error` and `phase=collection`, with these additional allowlisted
+fields:
+
+- `catalogue_reason`: a stable code from `CatalogueValidationReason`;
+- `requested_offset`: the locally requested page offset, including zero;
+- `item_index`: zero-based position **within that page**, only for item failures or duplicates;
+- `expected_total` and `observed_total`: validated non-negative integer totals, only for
+  `total_changed`.
+
+Page reasons are `page_not_object`, `items_not_list`, `invalid_limit`, `invalid_offset`,
+`invalid_total`, `total_changed`, `invalid_next`, `next_contradiction` and `impossible_paging`.
+Item reasons are `item_not_object`, `invalid_episode_id`, `invalid_episode_uri`,
+`episode_uri_id_mismatch`, `invalid_title`, `invalid_release_date`, `invalid_release_precision`
+and `invalid_duration`. `duplicate_episode_id` identifies identity consistency failures,
+including repeats across pages. No duplicate ID or rejected field value is retained.
+
+The fields survive SQLite persistence and the authenticated Diagnostics ZIP export. Older events
+without these fields remain readable. No SQLite or Source Audit report schema migration is needed.
+The Audit All ZIP failure summary remains unchanged, and independent sources continue after a
+catalogue validation failure. Classification uses the existing response only; it adds no request,
+retry or acceptance rule. Catalogue diagnostics contain no raw provider body, title, episode ID,
+URI, arbitrary URL, header, credential or exception message.
+
 ## Authenticated diagnostics UI
 
 Open:

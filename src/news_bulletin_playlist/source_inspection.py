@@ -13,7 +13,7 @@ from typing import Any, Protocol
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.build_info import build_revision
 from news_bulletin_playlist.catalog import BuiltInCatalog
-from news_bulletin_playlist.diagnostics import DiagnosticSeverity
+from news_bulletin_playlist.diagnostics import DiagnosticSeverity, DiagnosticValue
 from news_bulletin_playlist.duration_profile import (
     DurationProfile,
     duration_profile,
@@ -272,6 +272,7 @@ def _emit_response_failure(
     source_id: SourceId,
     occurred_at: datetime,
     reason: InspectionResponseReason,
+    catalogue_error: CatalogueResponseError | None = None,
 ) -> None:
     diagnostics = rate_limit.diagnostics
     if diagnostics is None:
@@ -281,13 +282,23 @@ def _emit_response_failure(
         InspectionResponseReason.PROVIDER_JSON,
     }
     phase = "collection" if collection_reason else "configuration"
+    details: dict[str, DiagnosticValue] = {"failure_class": "response_shape_error", "phase": phase}
+    if catalogue_error is not None:
+        details["catalogue_reason"] = catalogue_error.reason.value
+        details["requested_offset"] = catalogue_error.requested_offset
+        if catalogue_error.item_index is not None:
+            details["item_index"] = catalogue_error.item_index
+        if catalogue_error.expected_total is not None:
+            details["expected_total"] = catalogue_error.expected_total
+        if catalogue_error.observed_total is not None:
+            details["observed_total"] = catalogue_error.observed_total
     diagnostics.emit(
         occurred_at=occurred_at,
         severity=DiagnosticSeverity.WARNING,
         component="source_inspection",
         event_name=f"source_inspection_{reason.value}_invalid",
         source_id=str(source_id),
-        details={"failure_class": "response_shape_error", "phase": phase},
+        details=details,
     )
 
 
@@ -458,12 +469,13 @@ def inspect_source(
             429: InspectionFailure.RATE_LIMITED,
         }.get(exc.status, InspectionFailure.UNAVAILABLE)
         raise SourceInspectionError(failure_kind) from None
-    except CatalogueResponseError:
+    except CatalogueResponseError as exc:
         _emit_response_failure(
             rate_limit,
             source_id=source.id,
             occurred_at=observed,
             reason=InspectionResponseReason.CATALOGUE_SHAPE,
+            catalogue_error=exc,
         )
         raise SourceInspectionError(
             InspectionFailure.MALFORMED_RESPONSE,

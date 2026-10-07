@@ -13,6 +13,7 @@ from news_bulletin_playlist.providers.base import CatalogueParseContext
 from news_bulletin_playlist.providers.temporal_detector import TemporalSample
 from news_bulletin_playlist.providers.title_recovery import TemporalEvidenceKind
 from news_bulletin_playlist.registry import get_collection_filter, get_temporal_detector
+from news_bulletin_playlist.spotify.catalogue_errors import CatalogueValidationReason
 from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
     TimestampSource,
@@ -56,7 +57,32 @@ class CatalogueSource(SpotifyShowSource, Protocol):
 
 
 class CatalogueResponseError(RuntimeError):
-    """Raised when Spotify returns a structurally invalid show catalogue."""
+    """Safe validation cause; item_index is relative to its page and zero-based.
+
+    Context contains only requested positions and already validated integer totals.
+    No rejected value or free-form exception message is retained.
+    """
+
+    def __init__(
+        self,
+        reason: CatalogueValidationReason,
+        *,
+        requested_offset: int,
+        item_index: int | None = None,
+        expected_total: int | None = None,
+        observed_total: int | None = None,
+    ) -> None:
+        if not isinstance(reason, CatalogueValidationReason):
+            raise ValueError("catalogue reason must be a closed validation code")
+        for value in (requested_offset, item_index, expected_total, observed_total):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("catalogue context must contain non-negative integers")
+        self.reason = reason
+        self.requested_offset = requested_offset
+        self.item_index = item_index
+        self.expected_total = expected_total
+        self.observed_total = observed_total
+        super().__init__(f"Spotify catalogue validation failed: {reason.value}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,11 +367,13 @@ def _fetch_catalogue(
         if expected_total is None:
             expected_total = total
 
-        for raw in items:
-            candidate = _candidate_from_item(raw)
+        for item_index, raw in enumerate(items):
+            candidate = _candidate_from_item(raw, requested_offset=offset, item_index=item_index)
             if candidate.episode_id in seen_ids:
                 raise CatalogueResponseError(
-                    "Spotify catalogue repeated an episode id across pages"
+                    CatalogueValidationReason.DUPLICATE_EPISODE_ID,
+                    requested_offset=offset,
+                    item_index=item_index,
                 )
             seen_ids.add(candidate.episode_id)
             candidates.append(candidate)
@@ -363,37 +391,64 @@ def _validate_page(
     expected_total: int | None,
 ) -> tuple[list[object], int, str | None]:
     if not isinstance(page, dict):
-        raise CatalogueResponseError("Spotify show episodes response was not an object")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.PAGE_NOT_OBJECT, requested_offset=requested_offset
+        )
     items = page.get("items")
     if not isinstance(items, list):
-        raise CatalogueResponseError("Spotify show episodes response lacked an item list")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.ITEMS_NOT_LIST, requested_offset=requested_offset
+        )
 
     limit = page.get("limit")
     offset = page.get("offset")
     total = page.get("total")
     next_page = page.get("next")
     if isinstance(limit, bool) or limit != DEFAULT_PAGE_SIZE:
-        raise CatalogueResponseError("Spotify show episodes response contained invalid limit")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_LIMIT, requested_offset=requested_offset
+        )
     if isinstance(offset, bool) or offset != requested_offset:
-        raise CatalogueResponseError("Spotify show episodes response contained invalid offset")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_OFFSET, requested_offset=requested_offset
+        )
     if isinstance(total, bool) or not isinstance(total, int) or total < 0:
-        raise CatalogueResponseError("Spotify show episodes response contained invalid total")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_TOTAL, requested_offset=requested_offset
+        )
     if expected_total is not None and total != expected_total:
-        raise CatalogueResponseError("Spotify show episodes total changed during pagination")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.TOTAL_CHANGED,
+            requested_offset=requested_offset,
+            expected_total=expected_total,
+            observed_total=total,
+        )
     if next_page is not None and (not isinstance(next_page, str) or not next_page.strip()):
-        raise CatalogueResponseError("Spotify show episodes response contained invalid next")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_NEXT, requested_offset=requested_offset
+        )
     if len(items) > DEFAULT_PAGE_SIZE or requested_offset + len(items) > total:
-        raise CatalogueResponseError("Spotify show episodes response contained impossible paging")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.IMPOSSIBLE_PAGING, requested_offset=requested_offset
+        )
 
     has_more = requested_offset + len(items) < total
     if (next_page is not None) != has_more:
-        raise CatalogueResponseError("Spotify show episodes paging contradicted next")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.NEXT_CONTRADICTION, requested_offset=requested_offset
+        )
     return items, total, next_page
 
 
-def _candidate_from_item(item: object) -> _EpisodeCandidate:
+def _candidate_from_item(
+    item: object, *, requested_offset: int, item_index: int
+) -> _EpisodeCandidate:
     if not isinstance(item, dict):
-        raise CatalogueResponseError("Spotify episode item was not an object")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.ITEM_NOT_OBJECT,
+            requested_offset=requested_offset,
+            item_index=item_index,
+        )
 
     episode_id = item.get("id")
     uri = item.get("uri")
@@ -403,29 +458,67 @@ def _candidate_from_item(item: object) -> _EpisodeCandidate:
     duration_ms = item.get("duration_ms")
 
     if not isinstance(episode_id, str):
-        raise CatalogueResponseError("Spotify episode item contained invalid id")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_EPISODE_ID,
+            requested_offset=requested_offset,
+            item_index=item_index,
+        )
     try:
         spotify_id(episode_id)
     except ValueError as exc:
-        raise CatalogueResponseError("Spotify episode item contained invalid id") from exc
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_EPISODE_ID,
+            requested_offset=requested_offset,
+            item_index=item_index,
+        ) from exc
 
     if not isinstance(uri, str) or not is_spotify_episode_uri(uri):
-        raise CatalogueResponseError("Spotify episode item contained invalid URI")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_EPISODE_URI,
+            requested_offset=requested_offset,
+            item_index=item_index,
+        )
     if uri != f"spotify:episode:{episode_id}":
-        raise CatalogueResponseError("Spotify episode item URI/id disagreed")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.EPISODE_URI_ID_MISMATCH,
+            requested_offset=requested_offset,
+            item_index=item_index,
+        )
     if not isinstance(title, str) or not title.strip():
-        raise CatalogueResponseError("Spotify episode item contained invalid title")
-    if not isinstance(release_date, str) or not isinstance(precision, str):
-        raise CatalogueResponseError("Spotify episode item contained invalid release date")
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_TITLE,
+            requested_offset=requested_offset,
+            item_index=item_index,
+        )
+    if not isinstance(release_date, str):
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_RELEASE_DATE,
+            requested_offset=requested_offset,
+            item_index=item_index,
+        )
+    if not isinstance(precision, str) or precision not in {"day", "month", "year"}:
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_RELEASE_PRECISION,
+            requested_offset=requested_offset,
+            item_index=item_index,
+        )
     try:
         release_period(release_date, precision)
     except ValueError as exc:
-        raise CatalogueResponseError("Spotify episode release date was invalid") from exc
+        raise CatalogueResponseError(
+            CatalogueValidationReason.INVALID_RELEASE_DATE,
+            requested_offset=requested_offset,
+            item_index=item_index,
+        ) from exc
 
     duration_seconds: int | None = None
     if duration_ms is not None:
         if isinstance(duration_ms, bool) or not isinstance(duration_ms, int) or duration_ms < 0:
-            raise CatalogueResponseError("Spotify episode item contained invalid duration")
+            raise CatalogueResponseError(
+                CatalogueValidationReason.INVALID_DURATION,
+                requested_offset=requested_offset,
+                item_index=item_index,
+            )
         duration_seconds = round(duration_ms / 1000)
 
     return _EpisodeCandidate(
