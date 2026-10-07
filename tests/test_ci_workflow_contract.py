@@ -16,6 +16,8 @@ EXPECTED_PR_PATHS = {
     ".github/workflows/ci.yml",
     ".github/workflows/publish-pr-candidate-amd64.yml",
     ".github/workflows/publish-pr-candidate-worker-amd64.yml",
+    ".github/workflows/publish-edge-amd64.yml",
+    ".github/workflows/publish-stable-amd64.yml",
 }
 
 

@@ -26,8 +26,8 @@ Keep three concerns separate:
 2. **Built-in runtime catalog (`catalog.py`):** implemented sources with deterministic provider and
    Spotify contracts plus automated tests.
 3. **Installation state (`/data/managed-state.json`):** explicit playlist selections, canonical
-   installation-owned Spotify-first source definitions and schema v5 bounded built-in public
-   release mode overrides. This is a persistence
+   installation-owned Spotify-first source definitions, schema v6 bounded built-in public
+   release mode overrides and per-playlist duration ranges. This is a persistence
    foundation with authenticated Add Source, safe custom-source lifecycle, assignment, and
    reference-aware deletion UI.
 
