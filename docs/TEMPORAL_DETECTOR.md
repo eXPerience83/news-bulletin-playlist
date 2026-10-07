@@ -106,14 +106,15 @@ New York transition tests cover this contract. The serialized offset must still 
 syntactically supported: wall time does not admit naive ISO or unsupported shapes.
 Catalogue and future checks operate on the resulting physical instant.
 
-Built-in bases remain image-owned. Managed-state v5 stores only `source_id` and
+Built-in bases remain image-owned. Current managed-state v6 stores only `source_id` and
 `public_release_mode` in `source_overrides`; effective compilation uses `replace`
 on the base. Missing override uses the image default. Selecting that default in
 Admin removes the override. Unknown/duplicate built-in overrides fail closed.
 Custom sources keep one mode in their own `ManagedSource`, with no custom overrides.
-v4 migration initializes every custom mode to instant and no built-in overrides;
-playlists and other metadata are preserved. v1/v2/v3 also upgrade atomically to v5.
-New fields are not accepted as an alternative v4 format.
+v4 migration initializes every custom mode to instant and no built-in overrides; the v5
+public-policy representation is preserved. v1/v2/v3/v4/v5 documents upgrade atomically to v6,
+with a missing playlist minimum defaulted to 0 seconds and the existing maximum preserved.
+New public-policy fields are not accepted as an alternative v4 format.
 
 RNE's declarative built-in default is provisionally wall_time, based on repeated
 #439 observations of impossible literal instants and plausible local clocks.
@@ -241,8 +242,9 @@ They are not injected into the detector. Some old `provider_compat` inputs now u
 generic `exact` parsing; UTC timestamps are unchanged and this provenance change is
 explicitly tested. `normalized` and `catalogue_context` remain distinct.
 
-Managed JSON schema v5 defaults absent title strategy to AUTO and absent public mode
-to instant. v1/v2/v3/v4 documents migrate through the existing atomic save. SQLite format 3
+Current managed JSON schema v6 preserves the defaults of absent title strategy to AUTO and absent
+public mode to instant. v1/v2/v3/v4/v5 documents migrate through the existing atomic save, with a
+missing playlist minimum defaulted to 0 seconds and the existing maximum preserved. SQLite format 3
 transactionally widens both episode provenance checks; rollback to an older binary
 requires pre-upgrade database and managed-state backups. Create/Edit use the shared
 server-rendered selector; unknown values fail validation. Existing auth/CSRF checks
@@ -371,7 +373,7 @@ existing timestamps, source state and old provenance are retained. Format 1 firs
 uses the existing history migration, then upgrades to 3 in the same transaction.
 Incompatible schemas or invalid rows roll back. New databases use format 3. There is
 no public backfill or history conversion. Old binaries cannot read format 3: rollback
-requires a pre-upgrade backup. Managed JSON v5 is an independent atomic migration; #439 does not change SQLite format 3.
+requires a pre-upgrade backup. The managed JSON v5 public-policy migration remains an independent historical step inside current v6 upgrades; #439 does not change SQLite format 3.
 
 Real recorded fixtures (no live provider access): Expansión live 05:21Z is accepted;
 its old 2026-09-25 05:27Z bootstrap is accepted despite age and excluded at 48h.

@@ -41,6 +41,7 @@ Treat CI and Container validation as independent evidence; do not claim local te
 - Prefer amending or folding unreviewed intermediate fixups when appropriate rather than creating a long chain of fixup commits.
 - A push to an open PR can trigger multiple GitHub-hosted jobs. Treat unnecessary pushes as consuming a finite CI-cost resource, especially while the repository is private.
 - Local validation is the normal feedback loop; GitHub Actions is the authoritative integration check at meaningful checkpoints.
+- Before merging any PR, compare it with the latest `main`. If the PR is behind, rebase/update it and rerun the required CI. Check `main` again immediately before merge; if it advanced, repeat the update and CI cycle. `mergeable=true` and green CI do not prove that the PR is based on the latest `main`.
 - This does not relax scope discipline: unrelated changes still belong in separate issues/PRs. Optimize push frequency, not change scope.
 
 ## Review discipline

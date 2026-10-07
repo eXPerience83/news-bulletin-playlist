@@ -162,7 +162,7 @@ python scripts/ruff_fix.py
 
 That helper runs `ruff check --fix .` followed by `ruff format .`; Ruff remains the single source of truth and no additional formatting tool or pre-commit dependency is required.
 
-CI runs `ruff check .`, `ruff format --check .`, mypy and pytest on Python 3.14. A separate container workflow validates Docker/Compose changes and publishes successful `main` builds to GHCR.
+CI runs `ruff check .`, `ruff format --check .`, mypy and pytest on Python 3.14. A separate container workflow validates Docker/Compose changes. Edge publication is deliberate: **Publish edge AMD64** is manually dispatched from the current `main`, builds and smoke-tests that exact revision, and only after success promotes its immutable `sha-<full-main-sha>` digest to `edge` / `edge-amd64` in GHCR.
 
 ## Domain and configuration contract
 

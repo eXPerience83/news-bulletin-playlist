@@ -65,9 +65,10 @@ invent provider work.
 
 Application-owned built-in source/catalog knowledge is separate from installation-owned playlist and
 custom Spotify-first source choices and bounded built-in public release mode overrides.
-Managed-state schema v5 persists canonical custom source configuration plus only the public
-release mode override for built-ins; v1/v2 migrate atomically with no custom sources. v3/v4
-upgrades preserve existing choices and initialize the new public policy defaults.
+Managed-state schema v6 persists canonical custom source configuration, per-playlist duration
+ranges and only the public release mode override for built-ins; v1/v2 migrate atomically with no
+custom sources. v3/v4 upgrades preserve existing choices and initialize the public policy defaults;
+v5 upgrades preserve the existing maximum duration and default the missing minimum to 0 seconds.
 Authenticated Add Source inspection and creation are available. Custom sources also support safe metadata editing,
 enable/disable, playlist assignment and guarded deletion when unreferenced.
 
@@ -89,7 +90,7 @@ Managed state stores installation choices such as:
 - Spotify destination ID;
 - playlist metadata and cover choices;
 - explicit source membership;
-- per-playlist duration ceiling.
+- per-playlist inclusive minimum/maximum duration range.
 
 The protected `/admin/` UI and versioned `/data/managed-state.json` are the supported installation
 configuration path.
@@ -115,8 +116,8 @@ sufficient evidence for:
 - source timezone/language/country classification;
 - failure behavior compatible with the runtime safety model.
 
-A predominantly long-form show is not promoted merely because some episodes fit below a playlist
-duration ceiling.
+A predominantly long-form show is not promoted merely because some episodes fit within a playlist's
+configured duration range.
 
 ## Public detector
 
@@ -305,8 +306,8 @@ The normal policy is:
 
 - retain recent content for 48 hours;
 - cap the destination at 100 episodes;
-- apply the playlist's duration ceiling (currently 1800 seconds by default);
-- apply any explicit bounded duration exception;
+- apply the playlist's inclusive duration range (currently 0..1800 seconds by default);
+- apply any explicit bounded maximum-duration exception to the upper bound;
 - sort newest-first under the semantic Spotify-first ordering policy;
 - deduplicate identical Spotify episode URIs at destination level.
 
