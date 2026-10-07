@@ -507,9 +507,11 @@ def test_source_audit_bundle_rejects_unsafe_archive_source_id() -> None:
         build_source_audit_bundle(batch, build_revision="test-build")
 
 
+@pytest.mark.parametrize("item_kind", [None, "null", "string", "array"])
 def test_batch_catalogue_failure_keeps_17_source_export_read_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    item_kind: str | None,
 ) -> None:
     with _server(tmp_path) as (server, client, public, store):
         service = _Handler.source_admin_service
@@ -536,6 +538,12 @@ def test_batch_catalogue_failure_keeps_17_source_export_read_only(
                     raw_json="secret-provider-body",
                     external_url="https://secret-external-url.test/",
                 )
+                if item_kind is not None:
+                    page["items"][0] = {
+                        "null": None,
+                        "string": "secret-provider-string",
+                        "array": ["secret-provider-array-entry", page["items"][0]],
+                    }[item_kind]
             return page
 
         monkeypatch.setattr(client, "show_episodes", malformed)
@@ -568,6 +576,7 @@ def test_batch_catalogue_failure_keeps_17_source_export_read_only(
         assert failed["failure"] == "malformed_response"
         assert failed["response_reason"] == "catalogue_shape"
         assert failed["report_path"] is None
+        assert "item_value_kind" not in failed
         assert f"sources/{failed_source.id}.json" not in archive.namelist()
         archive.close()
         serialized = _decompressed_archive(payload)
@@ -575,6 +584,8 @@ def test_batch_catalogue_failure_keeps_17_source_export_read_only(
             secret_episode_id,
             "secret-title",
             "secret-rejected-value",
+            "secret-provider-string",
+            "secret-provider-array-entry",
             "Authorization",
             "secret-access-token",
             "secret-refresh-token",
@@ -594,10 +605,13 @@ def test_batch_catalogue_failure_keeps_17_source_export_read_only(
         assert diagnostics is not None and diagnostics.store is not None
         events = diagnostics.store.list_events(source_id=str(failed_source.id))
         assert len(events) == 1
-        assert events[0].details == {
+        expected = {
             "failure_class": "response_shape_error",
             "phase": "collection",
-            "catalogue_reason": "invalid_duration",
+            "catalogue_reason": "invalid_duration" if item_kind is None else "item_not_object",
             "requested_offset": 0,
             "item_index": 0,
         }
+        if item_kind is not None:
+            expected["item_value_kind"] = item_kind
+        assert events[0].details == expected

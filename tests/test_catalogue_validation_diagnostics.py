@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import logging
+import sqlite3
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,7 +23,10 @@ from news_bulletin_playlist.source_inspection import (
     SourceInspectionError,
     inspect_configured_source,
 )
-from news_bulletin_playlist.spotify.catalogue_errors import CatalogueValidationReason
+from news_bulletin_playlist.spotify.catalogue_errors import (
+    CatalogueItemValueKind,
+    CatalogueValidationReason,
+)
 from news_bulletin_playlist.spotify.first_catalogue import (
     CatalogueResponseError,
     fetch_source_catalogue,
@@ -43,6 +48,10 @@ SECRETS = (
     "spotify:episode:",
     "secret-exception-string",
     "secret-rejected-value",
+    "secret-provider-string",
+    "secret-provider-array-entry",
+    "secret-uri",
+    "SecretNonJsonType",
 )
 
 
@@ -61,6 +70,25 @@ def _item(position: int) -> dict[str, Any]:
         "raw_body": "secret-provider-body",
         "external_urls": {"spotify": URL},
     }
+
+
+class SecretNonJsonType:
+    def __repr__(self) -> str:
+        raise AssertionError("rejected item repr must never be read")
+
+
+NON_OBJECT_CASES = {
+    "item_none": (None, CatalogueItemValueKind.NULL),
+    "item_empty_array": ([], CatalogueItemValueKind.ARRAY),
+    "item_array": (["secret-provider-array-entry", _item(96)], CatalogueItemValueKind.ARRAY),
+    "item_string": ("secret-provider-string", CatalogueItemValueKind.STRING),
+    "item_integer": (123, CatalogueItemValueKind.NUMBER),
+    "item_float": (123.5, CatalogueItemValueKind.NUMBER),
+    "item_true": (True, CatalogueItemValueKind.BOOLEAN),
+    "item_false": (False, CatalogueItemValueKind.BOOLEAN),
+    "item_object": (object(), CatalogueItemValueKind.OTHER),
+    "item_hostile_repr": (SecretNonJsonType(), CatalogueItemValueKind.OTHER),
+}
 
 
 # All existing guards, including both sides of each important disjunction.
@@ -84,8 +112,7 @@ CASES = [
     ("next_absent", "next_contradiction"),
     ("paging_count", "impossible_paging"),
     ("paging_total", "impossible_paging"),
-    ("item_none", "item_not_object"),
-    ("item_string", "item_not_object"),
+    *((case, "item_not_object") for case in NON_OBJECT_CASES),
     ("id_missing", "invalid_episode_id"),
     ("id_type", "invalid_episode_id"),
     ("id_format", "invalid_episode_id"),
@@ -108,6 +135,11 @@ CASES = [
 
 
 def _pages(case: str) -> list[Any]:
+    if case in NON_OBJECT_CASES:
+        first = catalogue_page([_item(i) for i in range(50)], total=97, next_url=URL)
+        second = catalogue_page([_item(i) for i in range(50, 97)], offset=50, total=97)
+        second["items"][46] = NON_OBJECT_CASES[case][0]
+        return [first, second]
     total = 53 if case == "next_absent" else 52
     first = catalogue_page([_item(i) for i in range(50)], total=total, next_url=URL)
     second = catalogue_page([_item(50), _item(51)], offset=50, total=total)
@@ -159,10 +191,6 @@ def _pages(case: str) -> list[Any]:
         second["items"] = [_item(i) for i in range(50, 101)]
     elif case == "paging_total":
         second["items"].append(_item(52))
-    elif case == "item_none":
-        second["items"][1] = None
-    elif case == "item_string":
-        second["items"][1] = "secret-provider-body"
     elif case == "id_missing":
         del second["items"][1]["id"]
     elif case == "duplicate":
@@ -196,7 +224,7 @@ class _Auth:
 
 
 def _safe(serialized: str) -> None:
-    for secret in (*SECRETS, *(f"{i:022d}" for i in range(52)), "Z" * 22):
+    for secret in (*SECRETS, *(f"{i:022d}" for i in range(97)), "Z" * 22):
         assert secret not in serialized
 
 
@@ -206,6 +234,7 @@ def test_catalogue_error_and_persisted_exported_diagnostic(
     case: str,
     reason: str,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     client = _Client(_pages(case))
     with pytest.raises(CatalogueResponseError) as raised:
@@ -224,8 +253,10 @@ def test_catalogue_error_and_persisted_exported_diagnostic(
         "invalid_duration",
         "duplicate_episode_id",
     }
-    item_index = 1 if reason in item_reasons else None
+    item_index = 46 if case in NON_OBJECT_CASES else 1 if reason in item_reasons else None
     assert error.item_index == item_index
+    kind = NON_OBJECT_CASES[case][1] if case in NON_OBJECT_CASES else None
+    assert error.item_value_kind is kind
     assert client.calls == [("episodes", 0), ("episodes", 50)]
     _safe(str(error) + repr(vars(error)))
 
@@ -235,6 +266,7 @@ def test_catalogue_error_and_persisted_exported_diagnostic(
     diagnostics = journal.diagnostics
     assert diagnostics is not None and diagnostics.store is not None
     store = diagnostics.store
+    diagnostics.logger = logging.getLogger("catalogue-test")
     original_init = CatalogueResponseError.__init__
 
     def with_arbitrary_message(self: CatalogueResponseError, *args: Any, **kwargs: Any) -> None:
@@ -271,10 +303,19 @@ def test_catalogue_error_and_persisted_exported_diagnostic(
     }
     if item_index is not None:
         expected["item_index"] = item_index
+    if kind is not None:
+        expected["item_value_kind"] = kind.value
     if reason == "total_changed":
         expected.update(expected_total=52, observed_total=53 if case == "total_increase" else 51)
     assert event.details == expected
     _safe(json.dumps(event.details))
+    _safe(caplog.text)
+    if kind is not None:
+        assert f"item_value_kind={kind.value}" in caplog.text
+    with sqlite3.connect(store.path) as connection:
+        persisted = connection.execute("SELECT details_json FROM diagnostic_events").fetchone()[0]
+        assert json.loads(persisted) == expected
+        _safe(persisted)
     payload = build_diagnostic_bundle(
         events=events,
         generated_at=NOW,
@@ -287,6 +328,8 @@ def test_catalogue_error_and_persisted_exported_diagnostic(
         documents = "\n".join(archive.read(name).decode() for name in archive.namelist())
         assert json.loads(archive.read("diagnostics.jsonl"))["details"] == expected
         _safe(documents)
+        if kind is not None:
+            assert f"item_value_kind={kind.value}" in archive.read("diagnostics.txt").decode()
 
 
 def test_matrix_covers_closed_reason_set() -> None:
@@ -357,10 +400,13 @@ def test_new_diagnostic_fields_reject_noncontract_values(
     assert not store.list_events()
 
 
-def test_old_catalogue_events_remain_exportable(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_reason", [False, True])
+def test_old_catalogue_events_remain_exportable(tmp_path: Path, with_reason: bool) -> None:
     store = DiagnosticEventStore(tmp_path / "events.sqlite3")
     store.initialize()
     details = {"failure_class": "response_shape_error", "phase": "collection"}
+    if with_reason:
+        details.update(catalogue_reason="item_not_object", requested_offset=50, item_index=46)
     store.record(
         occurred_at=NOW,
         severity=DiagnosticSeverity.WARNING,
@@ -407,3 +453,46 @@ def test_diagnostic_persistence_failure_preserves_public_catalogue_failure(
     assert public.value.response_reason is InspectionResponseReason.CATALOGUE_SHAPE
     _safe(str(public.value))
     assert client.calls == [("details", 0), ("episodes", 0), ("episodes", 50)]
+
+
+@pytest.mark.parametrize("value", ["dict", "secret-provider-value", "", None, 123, True])
+def test_item_value_kind_rejects_noncontract_diagnostic_values(tmp_path: Path, value: Any) -> None:
+    store = DiagnosticEventStore(tmp_path / "events.sqlite3")
+    store.initialize()
+    with pytest.raises(ValueError):
+        store.record(
+            occurred_at=NOW,
+            severity=DiagnosticSeverity.WARNING,
+            component="source_inspection",
+            event_name="source_inspection_catalogue_shape_invalid",
+            details={"item_value_kind": value},
+        )
+    assert not store.list_events()
+
+
+@pytest.mark.parametrize(
+    ("reason", "index", "kind"),
+    [
+        (CatalogueValidationReason.ITEM_NOT_OBJECT, 46, None),
+        (CatalogueValidationReason.ITEM_NOT_OBJECT, None, CatalogueItemValueKind.NULL),
+        (CatalogueValidationReason.ITEM_NOT_OBJECT, 46, "null"),
+        (CatalogueValidationReason.INVALID_DURATION, 46, CatalogueItemValueKind.NULL),
+    ],
+)
+def test_item_value_kind_exception_invariant(
+    reason: CatalogueValidationReason, index: int | None, kind: Any
+) -> None:
+    with pytest.raises(ValueError):
+        CatalogueResponseError(reason, requested_offset=50, item_index=index, item_value_kind=kind)
+
+
+def test_closed_item_value_kinds_are_all_covered() -> None:
+    assert {kind for _, kind in NON_OBJECT_CASES.values()} == set(CatalogueItemValueKind)
+    assert {kind.value for kind in CatalogueItemValueKind} == {
+        "null",
+        "array",
+        "string",
+        "number",
+        "boolean",
+        "other",
+    }

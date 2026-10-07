@@ -13,7 +13,10 @@ from enum import StrEnum
 from pathlib import Path
 
 from news_bulletin_playlist.persistence import DEFAULT_DB_PATH, PersistenceError
-from news_bulletin_playlist.spotify.catalogue_errors import CatalogueValidationReason
+from news_bulletin_playlist.spotify.catalogue_errors import (
+    CatalogueItemValueKind,
+    CatalogueValidationReason,
+)
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 DEFAULT_DIAGNOSTIC_RETENTION_DAYS = 30
@@ -30,6 +33,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "30_to_60m",
         "60m_plus",
         "catalogue_reason",
+        "item_value_kind",
         "requested_offset",
         "item_index",
         "expected_total",
@@ -139,6 +143,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
 )
 _ALLOWED_DETAIL_STRING_VALUES = {
     "catalogue_reason": frozenset(reason.value for reason in CatalogueValidationReason),
+    "item_value_kind": frozenset(kind.value for kind in CatalogueItemValueKind),
     "public_release_mode": frozenset({"instant", "wall_time", "disabled"}),
     "temporal_strategy": frozenset(
         {
@@ -747,10 +752,10 @@ def _normalize_details(
         raise ValueError(f"diagnostic details contain unknown key: {unknown[0]}")
     normalized: dict[str, DiagnosticValue] = {}
     for key, value in details.items():
-        if key == "catalogue_reason" and (
+        if key in {"catalogue_reason", "item_value_kind"} and (
             not isinstance(value, str) or value not in _ALLOWED_DETAIL_STRING_VALUES[key]
         ):
-            raise ValueError("diagnostic catalogue reason must be a closed validation code")
+            raise ValueError(f"diagnostic detail {key} must be a closed catalogue code")
         if key in {"requested_offset", "item_index", "expected_total", "observed_total"} and (
             type(value) is not int or value < 0
         ):
