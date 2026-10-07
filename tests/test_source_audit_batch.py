@@ -507,7 +507,7 @@ def test_source_audit_bundle_rejects_unsafe_archive_source_id() -> None:
         build_source_audit_bundle(batch, build_revision="test-build")
 
 
-@pytest.mark.parametrize("item_kind", [None, "null", "string", "array"])
+@pytest.mark.parametrize("item_kind", [None, "string", "array"])
 def test_batch_catalogue_failure_keeps_17_source_export_read_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -615,3 +615,93 @@ def test_batch_catalogue_failure_keeps_17_source_export_read_only(
         if item_kind is not None:
             expected["item_value_kind"] = item_kind
         assert events[0].details == expected
+
+
+def test_batch_null_slots_succeeds_for_17_sources_with_degraded_report_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _server(tmp_path) as (server, client, public, store):
+        service = _Handler.source_admin_service
+        assert service is not None
+        custom = tuple(_custom_source(service, f"{index:022d}") for index in range(4))
+        store.save(ManagedState(sources=custom))
+        before = store.path.read_bytes()
+        sources = effective_sources(BUILTIN_CATALOG, store.load())
+        affected = sources[0]
+        original = client.show_episodes
+
+        def null_page(show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+            page = original(show_id, limit=limit, offset=offset)
+            if show_id == _show_id(affected):
+                page["items"].insert(0, None)
+                page["total"] = 2
+                page["raw_body"] = "secret-provider-body"
+                page["Authorization"] = "secret-access-token"
+                page["external_url"] = "https://secret-external-url.test/"
+            return page
+
+        monkeypatch.setattr(client, "show_episodes", null_page)
+        # Provider fakes expose reads only. A null does not create catalogue/history tables.
+        service.rate_limit.get()
+        with sqlite3.connect(tmp_path / "state.sqlite3") as connection:
+            tables = [
+                name
+                for (name,) in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            ]
+            durable_before = {
+                name: connection.execute(f'SELECT * FROM "{name}"').fetchall()
+                for name in tables
+                if name not in {"diagnostic_events", "sqlite_sequence"}
+            }
+        report = service.audit(str(affected.id))
+        assert (
+            report.null_item_count == 1
+            and not report.catalogue_complete
+            and not report.coverage_proven
+        )
+        assert "catalogue_null_slots_observed" in report.warnings
+        assert report.episodes[0].catalogue_position == 2
+        client.calls.clear()
+        public.calls.clear()
+        cookie = _login(server)
+        status, _, payload, _ = _export(server, cookie)
+        assert status == HTTPStatus.OK
+        manifest, archive = _archive(payload)
+        assert manifest["counts"] == {
+            "total": 17,
+            "attempted": 17,
+            "succeeded": 17,
+            "failed": 0,
+            "not_attempted": 0,
+        }
+        entry = next(item for item in manifest["sources"] if item["source_id"] == str(affected.id))
+        assert entry["status"] == "succeeded" and entry["failure"] is None
+        document = json.loads(archive.read(entry["report_path"]))
+        assert document["null_item_count"] == 1
+        assert document["catalogue_complete"] is False and document["coverage_proven"] is False
+        assert "catalogue_null_slots_observed" in document["warnings"]
+        archive.close()
+        assert len(client.calls) == 34 and len(public.calls) == 17
+        assert store.path.read_bytes() == before
+        serialized = _decompressed_archive(payload)
+        for secret in (
+            "secret-access-token",
+            "secret-refresh-token",
+            "secret-provider-body",
+            "Authorization",
+            "https://secret-external-url.test/",
+        ):
+            assert secret.encode() not in serialized
+        with sqlite3.connect(tmp_path / "state.sqlite3") as connection:
+            for table, values in durable_before.items():
+                assert connection.execute(f'SELECT * FROM "{table}"').fetchall() == values
+            for table in ("spotify_first_episode_state", "spotify_first_source_state"):
+                assert (
+                    connection.execute(
+                        "SELECT name FROM sqlite_master WHERE name=?", (table,)
+                    ).fetchone()
+                    is None
+                )

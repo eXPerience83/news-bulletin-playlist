@@ -34,6 +34,7 @@ from news_bulletin_playlist.reconciliation import (
     SpotifyReconciliationError,
     reconcile_spotify_playlist,
 )
+from news_bulletin_playlist.runtime_diagnostics import emit_catalogue_null_slots
 from news_bulletin_playlist.snapshot_pending import PendingSnapshotJournal
 from news_bulletin_playlist.spotify.auth import SpotifyAuthError
 from news_bulletin_playlist.spotify.client import (
@@ -585,23 +586,22 @@ class EngineRunner:
                 max_pages=self.max_catalogue_pages,
                 public_release_evidence=PublicReleaseEvidence.from_state(public),
             )
-            counts = self.first_journal.replace_source_episodes(
-                source.id,
-                snapshot.episodes,
-                coverage_proven=snapshot.coverage_proven,
-                reuse_public_release_history=source.public_release_mode
-                is not PublicReleaseMode.DISABLED,
-            )
-            self.first_journal.record_refresh(
+            if snapshot.null_item_count:
+                emit_catalogue_null_slots(
+                    self.rate_limit_journal.diagnostics,
+                    occurred_at=now,
+                    source_id=str(source.id),
+                    null_item_count=snapshot.null_item_count,
+                )
+            counts = self.first_journal.apply_source_refresh(
                 source,
+                snapshot,
                 refreshed_at=now,
                 reason=reason,
                 detector_episode_id=None if public is None else public.last_episode_id,
-                api_episode_id=snapshot.api_latest_id,
-                request_count=snapshot.request_count,
-                complete=snapshot.complete,
-                coverage_proven=snapshot.coverage_proven,
                 coverage_cutoff_at=cutoff,
+                reuse_public_release_history=source.public_release_mode
+                is not PublicReleaseMode.DISABLED,
             )
             self.detector_journal.mark_catalogue_refresh(
                 source.id,
@@ -946,32 +946,32 @@ class EngineRunner:
                     max_pages=self.max_catalogue_pages,
                     public_release_evidence=PublicReleaseEvidence.from_state(public),
                 )
-                if not snapshot.coverage_proven:
+                if snapshot.null_item_count:
+                    emit_catalogue_null_slots(
+                        self.rate_limit_journal.diagnostics,
+                        occurred_at=now,
+                        source_id=str(source.id),
+                        null_item_count=snapshot.null_item_count,
+                    )
+                if not snapshot.coverage_proven and not snapshot.null_item_count:
                     return None
-                self.first_journal.replace_source_episodes(
-                    source.id,
-                    snapshot.episodes,
-                    coverage_proven=True,
-                    reuse_public_release_history=source.public_release_mode
-                    is not PublicReleaseMode.DISABLED,
-                )
-                public = self.detector_journal.get(source.id, spotify_show_id(source))
-                self.first_journal.record_refresh(
+                self.first_journal.apply_source_refresh(
                     source,
+                    snapshot,
                     refreshed_at=now,
                     reason=RefreshReason.STALE_ESCALATION,
                     detector_episode_id=None if public is None else public.last_episode_id,
-                    api_episode_id=snapshot.api_latest_id,
-                    request_count=snapshot.request_count,
-                    complete=snapshot.complete,
-                    coverage_proven=True,
                     coverage_cutoff_at=cutoff,
+                    reuse_public_release_history=source.public_release_mode
+                    is not PublicReleaseMode.DISABLED,
                 )
                 self.detector_journal.mark_catalogue_refresh(
                     source.id,
                     spotify_show_id(source),
                     refreshed_at=now,
                 )
+                if not snapshot.coverage_proven:
+                    return None
 
             build = self._rebuild_build(playlist, now=now)
             removed = set(old_desired.uris) - set(build.desired.uris)

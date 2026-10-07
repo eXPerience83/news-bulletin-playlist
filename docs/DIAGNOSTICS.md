@@ -83,7 +83,8 @@ continues and emits only a fixed safe logging classification.
 
 ## Source Audit catalogue validation failures
 
-Source Audit and Audit All retain the public failure `malformed_response / catalogue_shape`.
+Rejected catalogue shapes in Source Audit and Audit All retain the public failure
+`malformed_response / catalogue_shape`.
 The event `source_inspection_catalogue_shape_invalid` retains
 `failure_class=response_shape_error` and `phase=collection`, with these additional allowlisted
 fields:
@@ -105,14 +106,42 @@ For `catalogue_reason=item_not_object`, `item_value_kind` classifies the rejecte
 `null`, `array`, `string`, `number` or `boolean`. The fixed `other` label covers unexpected
 non-JSON values from clients/fakes. Booleans are classified before numbers. This field includes
 no rejected value, repr or dynamic type name; historical `item_not_object` events without it
-remain readable. It changes no acceptance rule and adds no request.
+remain readable. Current collection tolerates only literal JSON null slots as described below;
+all other non-object kinds still fail closed. Classification adds no request.
 
 The fields survive SQLite persistence and the authenticated Diagnostics ZIP export. Older events
 without these fields remain readable. No SQLite or Source Audit report schema migration is needed.
 The Audit All ZIP failure summary remains unchanged, and independent sources continue after a
 catalogue validation failure. Classification uses the existing response only; it adds no request,
-retry or acceptance rule. Catalogue diagnostics contain no raw provider body, title, episode ID,
+retry. Catalogue failure diagnostics contain no raw provider body, title, episode ID,
 URI, arbitrary URL, header, credential or exception message.
+
+## Tolerated unknown catalogue slots
+
+A literal JSON null item is an unknown slot, without inferred identity or age. Source Audit succeeds
+with `null_item_count`, `catalogue_complete=false`, `coverage_proven=false` and the closed warning
+`catalogue_null_slots_observed` (alongside `coverage_unproven`). Audit All counts this inspection as
+succeeded and includes the degraded report. The additive count defaults to zero for older in-memory
+reports; report/ZIP schema versions remain unchanged. Episode evidence positions remain one-based
+provider slots (`requested_offset + item_index + 1`), leaving holes where nulls occurred.
+
+The warning event `source_catalogue_null_slots_observed` (`component=catalogue`) contains only
+`null_item_count` (integer 0..200), `catalogue_complete=false` and `coverage_proven=false`.
+It is emitted once per successful null-bearing fetch in audit/runtime; it is not a malformed-shape
+failure. No neighboring ID/title, rejected value, repr, type name, URL, token or raw page is included.
+Historical null rejection events continue reading/exporting without migration.
+
+Runtime suppresses `api_latest_id` whenever nulls were observed, including after public enrichment.
+Known rows and accepted history merge without deletion by absence. Their source trust/freshness
+fields commit together in one SQLite transaction; failure rolls the entire refresh back. Every
+playlist depending on an unproven source remains blocked from all reconciliation, including
+additions, cap eviction, replacement and reorder. A later clean refresh recovers normal semantics.
+Audit remains read-only. SQLite stays format 3 with no new tables/columns, and the null count is not
+persisted as source authority.
+
+No retry, refetch, episode lookup or extra endpoint is added. Continuing after null may reach later
+pages within the existing 50 × 4 prefix; subsequent 429/duplicate/total failures still fail the
+whole fetch under the existing guards. Nulls beyond the observed prefix are not counted.
 
 ## Authenticated diagnostics UI
 
