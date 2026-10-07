@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
-FROM python:3.14.8-slim-trixie@sha256:89fb7d3da20043c370643435258bdd7ab755d326d359001d02988ed15ae5219e AS builder
+FROM python:3.14.8-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 AS builder
 
 WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN python -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 
-FROM python:3.14.8-slim-trixie@sha256:89fb7d3da20043c370643435258bdd7ab755d326d359001d02988ed15ae5219e AS runtime
+FROM python:3.14.8-slim-trixie@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 AS runtime
 
 ARG SOURCE_REVISION=dev
 
