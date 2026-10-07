@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 import re
+import sqlite3
 import threading
 import urllib.parse
 import zipfile
@@ -504,3 +505,99 @@ def test_source_audit_bundle_rejects_unsafe_archive_source_id() -> None:
     )
     with pytest.raises(ValueError, match="unsafe source id"):
         build_source_audit_bundle(batch, build_revision="test-build")
+
+
+def test_batch_catalogue_failure_keeps_17_source_export_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _server(tmp_path) as (server, client, public, store):
+        service = _Handler.source_admin_service
+        assert service is not None
+        custom = tuple(_custom_source(service, f"{index:022d}") for index in range(4))
+        store.save(ManagedState(sources=custom))
+        before = store.path.read_bytes()
+        sources = effective_sources(BUILTIN_CATALOG, store.load())
+        assert len(sources) == 17
+        failed_source = sources[0]
+        failed_show = _show_id(failed_source)
+        original = client.show_episodes
+        secret_episode_id = "S" * 22
+
+        def malformed(show_id: str, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+            page = original(show_id, limit=limit, offset=offset)
+            if show_id == failed_show:
+                page["items"][0].update(
+                    id=secret_episode_id,
+                    uri=f"spotify:episode:{secret_episode_id}",
+                    name="secret-title",
+                    duration_ms="secret-rejected-value",
+                    Authorization="Bearer secret-access-token",
+                    raw_json="secret-provider-body",
+                    external_url="https://secret-external-url.test/",
+                )
+            return page
+
+        monkeypatch.setattr(client, "show_episodes", malformed)
+
+        # Provider stubs expose reads only. Inspect all existing durable tables before/after.
+        def durable_rows() -> dict[str, list[tuple[Any, ...]]]:
+            with sqlite3.connect(tmp_path / "state.sqlite3") as connection:
+                return {
+                    table: connection.execute(f'SELECT * FROM "{table}"').fetchall()
+                    for (table,) in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                    if table not in {"diagnostic_events", "sqlite_sequence"}
+                }
+
+        service.rate_limit.get()
+        rows_before = durable_rows()
+        cookie = _login(server)
+        status, _, payload, _ = _export(server, cookie)
+        assert status == HTTPStatus.OK
+        manifest, archive = _archive(payload)
+        assert manifest["counts"] == {
+            "total": 17,
+            "attempted": 17,
+            "succeeded": 16,
+            "failed": 1,
+            "not_attempted": 0,
+        }
+        failed = manifest["sources"][0]
+        assert failed["failure"] == "malformed_response"
+        assert failed["response_reason"] == "catalogue_shape"
+        assert failed["report_path"] is None
+        assert f"sources/{failed_source.id}.json" not in archive.namelist()
+        archive.close()
+        serialized = _decompressed_archive(payload)
+        for secret in (
+            secret_episode_id,
+            "secret-title",
+            "secret-rejected-value",
+            "Authorization",
+            "secret-access-token",
+            "secret-refresh-token",
+            "secret-provider-body",
+            "https://secret-external-url.test/",
+        ):
+            assert secret.encode() not in serialized
+        assert client.calls == [
+            (operation, _show_id(source))
+            for source in sources
+            for operation in ("details", "episodes")
+        ]
+        assert len(public.calls) == 16
+        assert store.path.read_bytes() == before
+        assert durable_rows() == rows_before
+        diagnostics = service.rate_limit.diagnostics
+        assert diagnostics is not None and diagnostics.store is not None
+        events = diagnostics.store.list_events(source_id=str(failed_source.id))
+        assert len(events) == 1
+        assert events[0].details == {
+            "failure_class": "response_shape_error",
+            "phase": "collection",
+            "catalogue_reason": "invalid_duration",
+            "requested_offset": 0,
+            "item_index": 0,
+        }
