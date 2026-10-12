@@ -7,6 +7,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CI_PATH = ROOT / ".github/workflows/ci.yml"
 
+
 def _workflow() -> dict[object, object]:
     payload = yaml.load(CI_PATH.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     assert isinstance(payload, dict), "CI workflow must parse to a mapping"
@@ -20,6 +21,7 @@ def test_required_ci_check_runs_for_every_pull_request() -> None:
     assert trigger.get("push") == {"branches": ["main"]}
     # Required checks must not be skipped for docs-only or admin-only PRs.
     assert trigger.get("pull_request") == {}
+
 
 def test_untrusted_pr_ci_never_persists_checkout_credentials() -> None:
     workflow = _workflow()
