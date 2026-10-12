@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO / ".github/workflows/render-playlist-covers.yml"
 
