@@ -355,6 +355,16 @@ def _playlist_policy_fields(
       <textarea name="description"
                 maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">{html.escape(description)}</textarea>
     </label>
+    <label class="attribution-indicator" for="attribution-{html.escape(source_prefix, quote=True)}">
+      <input id="attribution-{html.escape(source_prefix, quote=True)}" type="checkbox"
+             checked disabled
+             aria-describedby="attribution-note-{html.escape(source_prefix, quote=True)}">
+      News Bulletin Playlist attribution enabled
+    </label>
+    <p class="muted" id="attribution-note-{html.escape(source_prefix, quote=True)}">
+      The official app includes project attribution when Spotify metadata is explicitly applied.
+      Saving this form does not update Spotify; a failed metadata sync does not mean it was applied.
+    </p>
     <div class="duration-row">
       <label>Minimum duration · minutes
         <input type="number" name="min_duration_minutes" required min="0" step="1"
