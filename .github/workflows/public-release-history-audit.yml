@@ -30,12 +30,21 @@ jobs:
 
       - name: Fetch existing branch, tag and pull-request refs for read-only audit
         shell: bash
+        env:
+          AUDIT_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            '+refs/heads/*:refs/remotes/origin/*' \
-            '+refs/tags/*:refs/tags/*' \
-            '+refs/pull/*/head:refs/remotes/audit-pull/*'
+          # Checkout deliberately does not persist credentials. Supply a one-command
+          # temporary read-only header; do not write it into Git config or output.
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$AUDIT_GITHUB_TOKEN" | base64 -w0)"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="$auth_header" \
+            git fetch --no-tags origin \
+              '+refs/heads/*:refs/remotes/origin/*' \
+              '+refs/tags/*:refs/tags/*' \
+              '+refs/pull/*/head:refs/remotes/audit-pull/*'
+          unset auth_header AUDIT_GITHUB_TOKEN
           echo "Reachable history commit count: $(git rev-list --all --count)"
 
       - name: Install audited Gitleaks CLI
