@@ -11,6 +11,7 @@ from test_catalogue_validation_diagnostics import NOW, SOURCE, _item
 from test_reconciliation import _desired, _FakeSpotify, _playlist
 from test_source_refresh_atomic import rows
 
+import news_bulletin_playlist.engine as engine_module
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.engine import EngineRunner
 from news_bulletin_playlist.models import EngineConfig
@@ -252,3 +253,109 @@ def test_destination_verification_cannot_bypass_unproven_source(
     assert client.writes == [] and client.reads == []
     if verification == "pending":
         assert pending.get(playlist.id) is not None
+
+
+def test_regular_and_stale_paths_use_one_catalogue_refresh_helper(tmp_path, monkeypatch):
+    show = spotify_show_id(SOURCE)
+    client = Client({show: [_item(1), _item(2)]})
+    engine = runner(tmp_path, client)
+    applied = []
+    original_apply = engine._apply_source_catalogue_refresh
+
+    def record_apply(source, snapshot, **kwargs):
+        applied.append((kwargs["reason"], snapshot.null_item_count))
+        return original_apply(source, snapshot, **kwargs)
+
+    monkeypatch.setattr(engine, "_apply_source_catalogue_refresh", record_apply)
+
+    initial = engine.run_cycle()
+    assert initial.sources[0].ok
+    assert applied == [(RefreshReason.BOOTSTRAP, 0)]
+    writes_before = list(client.writes)
+
+    client.catalogues[show] = [_item(9), None]
+    playlist = engine.config.playlists[0]
+    exc = SpotifyReconciliationError("stale desired item")
+    exc.__cause__ = SpotifyApiError(400, "secret-provider-body")
+    retry = engine._stale_rejection_retry(
+        playlist,
+        _desired(playlist, f"spotify:episode:{1:022d}"),
+        client,
+        ProviderAuthorizationSession("secret-token", "test-authorization"),
+        exc,
+        now=NOW + timedelta(minutes=10),
+    )
+
+    assert retry is None
+    assert applied == [
+        (RefreshReason.BOOTSTRAP, 0),
+        (RefreshReason.STALE_ESCALATION, 1),
+    ]
+    assert client.writes == writes_before
+    state = engine.first_journal.get_source_state(SOURCE.id)
+    assert state is not None and not state.coverage_proven
+    assert state.api_episode_id is None
+
+
+@pytest.mark.parametrize("has_null", [False, True])
+@pytest.mark.parametrize("fail_commit", [False, True])
+def test_shared_refresh_helper_orders_warning_commit_and_detector_marker(
+    tmp_path, monkeypatch, has_null, fail_commit
+):
+    show = spotify_show_id(SOURCE)
+    items = [_item(1), None] if has_null else [_item(1)]
+    client = Client({show: items})
+    engine = runner(tmp_path, client)
+    cutoff = NOW - timedelta(days=2)
+    snapshot = fetch_source_catalogue(client, SOURCE, now=NOW, cutoff=cutoff)
+    events = []
+    original_apply = engine.first_journal.apply_source_refresh
+    original_mark = engine.detector_journal.mark_catalogue_refresh
+
+    def warn(*args, **kwargs):
+        assert kwargs["null_item_count"] == 1
+        events.append("warning")
+
+    def apply(*args, **kwargs):
+        events.append("persist")
+        if fail_commit:
+            raise PersistenceError("injected source refresh failure")
+        return original_apply(*args, **kwargs)
+
+    def mark(*args, **kwargs):
+        events.append("marker")
+        return original_mark(*args, **kwargs)
+
+    monkeypatch.setattr(engine_module, "emit_catalogue_null_slots", warn)
+    monkeypatch.setattr(engine.first_journal, "apply_source_refresh", apply)
+    monkeypatch.setattr(engine.detector_journal, "mark_catalogue_refresh", mark)
+
+    if fail_commit:
+        with pytest.raises(PersistenceError, match="injected source refresh failure"):
+            engine._apply_source_catalogue_refresh(
+                SOURCE,
+                snapshot,
+                now=NOW,
+                reason=RefreshReason.CHANGE,
+                detector_episode_id=None,
+                cutoff=cutoff,
+            )
+    else:
+        removed = engine._apply_source_catalogue_refresh(
+            SOURCE,
+            snapshot,
+            now=NOW,
+            reason=RefreshReason.CHANGE,
+            detector_episode_id=None,
+            cutoff=cutoff,
+        )
+        assert removed == 0
+
+    assert events == (
+        (["warning"] if has_null else []) + ["persist"] + ([] if fail_commit else ["marker"])
+    )
+    state = engine.first_journal.get_source_state(SOURCE.id)
+    if fail_commit:
+        assert state is None
+    else:
+        assert state is not None and state.coverage_proven is not has_null

@@ -566,6 +566,41 @@ class EngineRunner:
                 plan.append((source.id, RefreshReason.INACTIVITY_AUDIT))
         return tuple(plan)
 
+    def _apply_source_catalogue_refresh(
+        self,
+        source: SourceDefinition,
+        snapshot: CatalogueSnapshot,
+        *,
+        now: datetime,
+        reason: RefreshReason,
+        detector_episode_id: str | None,
+        cutoff: datetime,
+    ) -> int:
+        """Persist source data and trust atomically, then mark its catalogue refresh."""
+        if snapshot.null_item_count:
+            emit_catalogue_null_slots(
+                self.rate_limit_journal.diagnostics,
+                occurred_at=now,
+                source_id=str(source.id),
+                null_item_count=snapshot.null_item_count,
+            )
+        counts = self.first_journal.apply_source_refresh(
+            source,
+            snapshot,
+            refreshed_at=now,
+            reason=reason,
+            detector_episode_id=detector_episode_id,
+            coverage_cutoff_at=cutoff,
+            reuse_public_release_history=source.public_release_mode
+            is not PublicReleaseMode.DISABLED,
+        )
+        self.detector_journal.mark_catalogue_refresh(
+            source.id,
+            spotify_show_id(source),
+            refreshed_at=now,
+        )
+        return counts.removed
+
     def _refresh_source(
         self,
         source: SourceDefinition,
@@ -586,27 +621,13 @@ class EngineRunner:
                 max_pages=self.max_catalogue_pages,
                 public_release_evidence=PublicReleaseEvidence.from_state(public),
             )
-            if snapshot.null_item_count:
-                emit_catalogue_null_slots(
-                    self.rate_limit_journal.diagnostics,
-                    occurred_at=now,
-                    source_id=str(source.id),
-                    null_item_count=snapshot.null_item_count,
-                )
-            counts = self.first_journal.apply_source_refresh(
+            removed = self._apply_source_catalogue_refresh(
                 source,
                 snapshot,
-                refreshed_at=now,
+                now=now,
                 reason=reason,
                 detector_episode_id=None if public is None else public.last_episode_id,
-                coverage_cutoff_at=cutoff,
-                reuse_public_release_history=source.public_release_mode
-                is not PublicReleaseMode.DISABLED,
-            )
-            self.detector_journal.mark_catalogue_refresh(
-                source.id,
-                spotify_show_id(source),
-                refreshed_at=now,
+                cutoff=cutoff,
             )
             false_negative = _possible_false_negative(
                 reason,
@@ -629,7 +650,7 @@ class EngineRunner:
                 detector_false_negative=false_negative,
                 parser_fallback_count=snapshot.parser_fallback_count,
                 filter_rejected_count=snapshot.filter_rejected_count,
-                removed_count=counts.removed,
+                removed_count=removed,
                 temporal_metrics=TemporalRefreshMetrics.from_snapshot(snapshot),
                 error=(
                     None
@@ -946,29 +967,15 @@ class EngineRunner:
                     max_pages=self.max_catalogue_pages,
                     public_release_evidence=PublicReleaseEvidence.from_state(public),
                 )
-                if snapshot.null_item_count:
-                    emit_catalogue_null_slots(
-                        self.rate_limit_journal.diagnostics,
-                        occurred_at=now,
-                        source_id=str(source.id),
-                        null_item_count=snapshot.null_item_count,
-                    )
                 if not snapshot.coverage_proven and not snapshot.null_item_count:
                     return None
-                self.first_journal.apply_source_refresh(
+                self._apply_source_catalogue_refresh(
                     source,
                     snapshot,
-                    refreshed_at=now,
+                    now=now,
                     reason=RefreshReason.STALE_ESCALATION,
                     detector_episode_id=None if public is None else public.last_episode_id,
-                    coverage_cutoff_at=cutoff,
-                    reuse_public_release_history=source.public_release_mode
-                    is not PublicReleaseMode.DISABLED,
-                )
-                self.detector_journal.mark_catalogue_refresh(
-                    source.id,
-                    spotify_show_id(source),
-                    refreshed_at=now,
+                    cutoff=cutoff,
                 )
                 if not snapshot.coverage_proven:
                     return None
