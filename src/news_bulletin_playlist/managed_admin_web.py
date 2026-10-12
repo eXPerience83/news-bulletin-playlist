@@ -12,6 +12,7 @@ from news_bulletin_playlist.engine import EngineCycleResult
 from news_bulletin_playlist.managed_admin import (
     MAX_PLAYLIST_DESCRIPTION_LENGTH,
     MAX_PLAYLIST_NAME_LENGTH,
+    MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH,
     ManagedAdminSnapshot,
 )
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
@@ -355,6 +356,10 @@ def _playlist_policy_fields(
       <textarea name="description"
                 maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">{html.escape(description)}</textarea>
     </label>
+    <p class="muted">Local descriptions allow {MAX_PLAYLIST_DESCRIPTION_LENGTH} characters.
+      To apply Spotify metadata with project attribution, use at most
+      {MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH} characters. Longer descriptions stay saved locally;
+      shorten them before syncing metadata. Cover upload is independent.</p>
     <label class="attribution-indicator" for="attribution-{html.escape(source_prefix, quote=True)}">
       <input id="attribution-{html.escape(source_prefix, quote=True)}" type="checkbox"
              checked disabled

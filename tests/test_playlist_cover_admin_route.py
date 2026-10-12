@@ -3,10 +3,12 @@ from __future__ import annotations
 import io
 import logging
 import threading
+from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
+import pytest
 from _http_handler import (
     HandlerCaptureMixin,
     initialize_handler_capture,
@@ -565,3 +567,92 @@ def test_admin_dashboard_ignores_unknown_notice_text(tmp_path: Path) -> None:
     assert handler.response.status == HTTPStatus.OK
     assert sentinel not in body
     assert "Spotify metadata and cover applied successfully." not in body
+
+
+@pytest.mark.parametrize("length", [191, 248])
+@pytest.mark.parametrize("cover_fails", [False, True])
+def test_long_legacy_description_page_save_and_sync_are_safe(
+    tmp_path: Path, length: int, cover_fails: bool
+) -> None:
+    service, client, managed = _managed_service(tmp_path)
+    base = "📰" * length
+    state = service.store.load()
+    service.store.save(replace(state, playlists=(replace(managed, description=base),)))
+    provider = _Provider()
+    security = LanAdminSecurity(_PASSWORD)
+    lifecycle = _Lifecycle()
+    page = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=provider,
+        security=security,
+        path="/admin/",
+    )
+    page.do_GET()
+    assert page.response is not None
+    assert page.response.status == HTTPStatus.OK
+    assert base in page.response.payload.decode()
+    assert 'maxlength="248"' in page.response.payload.decode()
+    assert "190 characters" in " ".join(page.response.payload.decode().split())
+    save = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=provider,
+        security=security,
+        path="/admin/playlists/update",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(managed.id)],
+            "display_name": [managed.display_name],
+            "description": [base],
+            "cover_id": [managed.cover_id],
+            "source_id": [str(source_id) for source_id in managed.source_ids],
+            "enabled": ["1"],
+        },
+    )
+    save.do_POST()
+    assert save.response is not None
+    assert save.response.status == HTTPStatus.SEE_OTHER
+    assert service.store.load().playlists[0].description == base
+    assert provider.calls == 0
+    assert client.update_calls == client.cover_calls == []
+    if cover_fails:
+        client.cover_error = SpotifyApiError(400, "secret-cover-response")
+    sync = _Handler(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        provider=provider,
+        security=security,
+        path="/admin/playlists/sync",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "playlist_id": [str(managed.id)],
+        },
+    )
+    sync.do_POST()
+    assert sync.response is not None
+    assert sync.response.status == HTTPStatus.BAD_GATEWAY
+    body = sync.response.payload.decode()
+    assert "shorten the base description to 190 characters" in body
+    assert "local description is preserved" in body
+    assert ("cover failed (HTTP 400)" if cover_fails else "cover applied") in body
+    assert base not in body
+    assert "secret-cover-response" not in body
+    assert client.update_calls == []
+    assert len(client.cover_calls) == 1
+    assert service.store.load().playlists[0].description == base
+    assert sync.diagnostic_store is not None
+    metadata = next(
+        event
+        for event in sync.diagnostic_store.list_events(limit=10)
+        if event.details.get("operation") == "playlist_metadata"
+    )
+    assert metadata.details == {
+        "operation": "playlist_metadata",
+        "outcome": "failed",
+        "failure_class": "configuration_error",
+    }
+    assert base not in sync.diagnostic_output.getvalue()

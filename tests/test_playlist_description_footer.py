@@ -10,12 +10,17 @@ from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_admin import (
     LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER,
     LEGACY_PROJECT_DESCRIPTION_FOOTER,
+    LEGACY_PROJECT_DESCRIPTION_SUFFIX,
     LEGACY_PROJECT_REPOSITORY_URL,
+    LEGACY_STANDALONE_PROJECT_DESCRIPTION_FOOTER,
     MAX_PLAYLIST_DESCRIPTION_LENGTH,
+    MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH,
     PROJECT_DESCRIPTION_FOOTER,
+    PROJECT_DESCRIPTION_SUFFIX,
     PROJECT_PROFILE_URL,
     ManagedAdminError,
     ManagedAdminService,
+    SpotifyPlaylistSyncError,
     render_spotify_description,
 )
 from news_bulletin_playlist.managed_state import ManagedStateStore
@@ -57,15 +62,15 @@ def _service(tmp_path: Path, spotify: _Spotify) -> ManagedAdminService:
     )
 
 
-def test_renderer_appends_public_profile_attribution_footer() -> None:
+def test_renderer_appends_public_repository_attribution_footer() -> None:
     rendered = render_spotify_description("Descripción")
 
-    assert rendered == "Descripción · by eXPerience83 · https://github.com/eXPerience83"
+    assert rendered == f"Descripción{PROJECT_DESCRIPTION_SUFFIX}"
     assert "\n" not in rendered
     assert "\r" not in rendered
     assert "eXPerience83" in rendered
     assert rendered.count(PROJECT_PROFILE_URL) == 1
-    assert LEGACY_PROJECT_REPOSITORY_URL not in rendered
+    assert LEGACY_PROJECT_REPOSITORY_URL in rendered
 
 
 @pytest.mark.parametrize(
@@ -75,6 +80,11 @@ def test_renderer_appends_public_profile_attribution_footer() -> None:
         f"Descripción\r\n\r\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}\r\n",
         f"Descripción\n\n{LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER}",
         f"Descripción\n\n{PROJECT_DESCRIPTION_FOOTER}",
+        f"Descripción\r\n{LEGACY_STANDALONE_PROJECT_DESCRIPTION_FOOTER}\r\n",
+        f"Descripción{PROJECT_DESCRIPTION_SUFFIX}",
+        f"Descripción{PROJECT_DESCRIPTION_SUFFIX}{LEGACY_PROJECT_DESCRIPTION_SUFFIX}",
+        f"Descripción{LEGACY_PROJECT_DESCRIPTION_SUFFIX}{PROJECT_DESCRIPTION_SUFFIX}",
+        f"Descripción{PROJECT_DESCRIPTION_SUFFIX}{PROJECT_DESCRIPTION_SUFFIX}",
         "Descripción · by eXPerience83 · https://github.com/eXPerience83",
         (
             f"Descripción\n\n{LEGACY_PROJECT_DESCRIPTION_FOOTER}"
@@ -93,9 +103,9 @@ def test_renderer_appends_public_profile_attribution_footer() -> None:
 def test_renderer_strips_existing_terminal_footer_before_readding_one(contaminated: str) -> None:
     rendered = render_spotify_description(contaminated)
 
-    assert rendered == "Descripción · by eXPerience83 · https://github.com/eXPerience83"
+    assert rendered == f"Descripción{PROJECT_DESCRIPTION_SUFFIX}"
     assert rendered.count(PROJECT_PROFILE_URL) == 1
-    assert LEGACY_PROJECT_REPOSITORY_URL not in rendered
+    assert LEGACY_PROJECT_REPOSITORY_URL in rendered
 
 
 def test_managed_state_keeps_only_editable_base_description(tmp_path: Path) -> None:
@@ -161,7 +171,7 @@ def test_repeated_metadata_edits_sync_only_latest_value_with_one_project_footer(
     assert name == "Noticias España 2"
     assert description == render_spotify_description("Segunda")
     assert description.count(PROJECT_PROFILE_URL) == 1
-    assert LEGACY_PROJECT_REPOSITORY_URL not in description
+    assert LEGACY_PROJECT_REPOSITORY_URL in description
 
 
 def test_metadata_update_strips_terminal_footer_from_editable_state(tmp_path: Path) -> None:
@@ -246,11 +256,11 @@ def test_source_only_update_cleans_known_footer_without_spotify_metadata_write(
     assert spotify.update_calls == []
 
 
-def test_maximum_editable_description_fits_spotify_limit_with_footer(tmp_path: Path) -> None:
+def test_maximum_syncable_description_fits_spotify_limit_with_footer(tmp_path: Path) -> None:
     spotify = _Spotify()
     service = _service(tmp_path, spotify)
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
-    maximum = "x" * MAX_PLAYLIST_DESCRIPTION_LENGTH
+    maximum = "x" * MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH
 
     managed = service.activate(
         template_id=template.id,
@@ -266,12 +276,14 @@ def test_maximum_editable_description_fits_spotify_limit_with_footer(tmp_path: P
     rendered = render_spotify_description(maximum)
     assert len(rendered) == 300
     assert MAX_PLAYLIST_DESCRIPTION_LENGTH == 248
-    assert rendered.endswith(" · by eXPerience83 · https://github.com/eXPerience83")
+    assert MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH == 190
+    assert len(PROJECT_DESCRIPTION_SUFFIX) == 110
+    assert rendered.endswith(PROJECT_DESCRIPTION_SUFFIX)
     assert rendered.count(PROJECT_PROFILE_URL) == 1
-    assert LEGACY_PROJECT_REPOSITORY_URL not in rendered
+    assert LEGACY_PROJECT_REPOSITORY_URL in rendered
 
 
-def test_description_cannot_exceed_space_reserved_for_project_footer(tmp_path: Path) -> None:
+def test_local_description_cannot_exceed_legacy_248_character_contract(tmp_path: Path) -> None:
     spotify = _Spotify()
     service = _service(tmp_path, spotify)
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
@@ -293,8 +305,10 @@ def test_description_cannot_exceed_space_reserved_for_project_footer(tmp_path: P
 
 def test_empty_base_renders_standalone_attribution() -> None:
     assert render_spotify_description("") == (
-        "News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83"
+        "Made with News Bulletin Playlist · by eXPerience83 · "
+        "https://github.com/eXPerience83/news-bulletin-playlist"
     )
+    assert len(PROJECT_DESCRIPTION_FOOTER) == 107
 
 
 @pytest.mark.parametrize(
@@ -307,9 +321,7 @@ def test_empty_base_renders_standalone_attribution() -> None:
     ],
 )
 def test_renderer_preserves_prose_with_similar_attribution(prose: str) -> None:
-    assert render_spotify_description(prose) == (
-        f"{prose} · by eXPerience83 · https://github.com/eXPerience83"
-    )
+    assert render_spotify_description(prose) == (f"{prose}{PROJECT_DESCRIPTION_SUFFIX}")
 
 
 def test_inline_description_is_cleaned_in_local_managed_state_update(tmp_path: Path) -> None:
@@ -328,7 +340,7 @@ def test_inline_description_is_cleaned_in_local_managed_state_update(tmp_path: P
     updated = service.update(
         managed.id,
         display_name="Nombre editado",
-        description=render_spotify_description("x" * 248),
+        description="x" * 248 + LEGACY_PROJECT_DESCRIPTION_SUFFIX,
         cover_id=managed.cover_id,
         source_ids=managed.source_ids,
         enabled=True,
@@ -339,12 +351,81 @@ def test_inline_description_is_cleaned_in_local_managed_state_update(tmp_path: P
     assert spotify.update_calls == []
     assert spotify.cover_calls == []
     assert render_spotify_description(render_spotify_description("Base")) == (
-        "Base · by eXPerience83 · https://github.com/eXPerience83"
+        f"Base{PROJECT_DESCRIPTION_SUFFIX}"
     )
 
 
 def test_inline_cleanup_is_idempotent_when_base_ends_with_product_name() -> None:
     base = "Texto News Bulletin Playlist"
     rendered = render_spotify_description(base)
-    assert rendered == f"{base} · by eXPerience83 · https://github.com/eXPerience83"
+    assert rendered == f"{base}{PROJECT_DESCRIPTION_SUFFIX}"
     assert render_spotify_description(rendered) == rendered
+
+
+@pytest.mark.parametrize("length", [191, 200, 248])
+def test_legacy_long_base_loads_and_saves_but_metadata_preflight_preserves_it(
+    tmp_path: Path, length: int
+) -> None:
+    spotify = _Spotify()
+    service = _service(tmp_path, spotify)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    managed = service.activate(
+        template_id=template.id,
+        display_name=template.display_name,
+        description="Base",
+        cover_id=template.cover_id,
+        source_ids=template.default_source_ids,
+        access_token="token",
+    )
+    base = "á" * length
+    state = service.store.load()
+    service.store.save(replace(state, playlists=(replace(managed, description=base),)))
+    reloaded = _service(tmp_path, spotify)
+    assert reloaded.snapshot().managed[0].description == base
+    reloaded.update(
+        managed.id,
+        display_name=managed.display_name,
+        description=base,
+        cover_id=managed.cover_id,
+        source_ids=managed.source_ids,
+        enabled=True,
+        access_token=None,
+    )
+    assert spotify.update_calls == spotify.cover_calls == []
+    with pytest.raises(SpotifyPlaylistSyncError, match="shorten.*190") as exc_info:
+        reloaded.sync_spotify_metadata_and_cover(managed.id, access_token="sync-token")
+    assert exc_info.value.cover_error is None
+    assert exc_info.value.metadata_outcome is None
+    assert spotify.update_calls == []
+    assert len(spotify.cover_calls) == 1
+    assert reloaded.store.load().playlists[0].description == base
+
+
+@pytest.mark.parametrize("base", ["", "á" * 190, "😀" * 190, "漢字 café 📰", "a\r\nb\rc\nd"])
+def test_unicode_and_line_breaks_render_idempotently(base: str) -> None:
+    rendered = render_spotify_description(base)
+    normalized = base.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    expected = normalized + PROJECT_DESCRIPTION_SUFFIX if base else PROJECT_DESCRIPTION_FOOTER
+    assert rendered == expected
+    assert len(rendered) <= 300
+    assert "\r" not in rendered and "\n" not in rendered
+    assert render_spotify_description(rendered) == rendered
+
+
+@pytest.mark.parametrize(
+    "footer",
+    [
+        PROJECT_DESCRIPTION_FOOTER,
+        LEGACY_STANDALONE_PROJECT_DESCRIPTION_FOOTER,
+        LEGACY_PROJECT_DESCRIPTION_FOOTER,
+        LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER,
+    ],
+)
+def test_standalone_footers_normalize_to_new_empty_base(footer: str) -> None:
+    assert render_spotify_description(footer) == PROJECT_DESCRIPTION_FOOTER
+
+
+@pytest.mark.parametrize("length", [191, 248, 249])
+def test_renderer_rejects_overflow(length: int) -> None:
+    with pytest.raises(ManagedAdminError):
+        render_spotify_description("😀" * length)
