@@ -161,6 +161,52 @@ def test_dashboard_uses_service_limits_and_keeps_destination_server_owned(
     assert "LAN development mode" in body
 
 
+def test_project_attribution_indicator_is_read_only_and_not_remote_sync_state(
+    tmp_path: Path,
+) -> None:
+    service, factory = _service(tmp_path)
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+
+    def render() -> str:
+        return render_managed_admin_page(
+            snapshot=service.snapshot(),
+            state=service.store.load(),
+            catalog=BUILTIN_CATALOG,
+            spotify_state=AuthorizationState.CONNECTED,
+            csrf_token="csrf-token",
+            last_cycle=None,
+            lan_mode=True,
+        ).decode()
+
+    before_activation = render()
+    template_input = re.search(
+        rf'<input[^>]*id="attribution-new-{re.escape(str(template.id))}"[^>]*>',
+        before_activation,
+    )
+    assert template_input is not None
+    assert "checked" in template_input.group()
+    assert "disabled" in template_input.group()
+    assert "name=" not in template_input.group()
+    assert "The official app includes project attribution" in before_activation
+    assert "Saving this form does not update Spotify" in before_activation
+    assert "a failed metadata sync does not mean it was applied" in before_activation
+    assert factory.client.update_calls == []
+
+    _activate(service)
+    after_activation = render()
+    managed = service.snapshot().managed[0]
+    active_input = re.search(
+        rf'<input[^>]*id="attribution-edit-{re.escape(str(managed.id))}"[^>]*>',
+        after_activation,
+    )
+    assert active_input is not None
+    assert "checked" in active_input.group()
+    assert "disabled" in active_input.group()
+    assert "name=" not in active_input.group()
+    assert 'aria-describedby="attribution-note-edit-' in active_input.group()
+    assert factory.client.update_calls == []
+
+
 def test_available_template_requires_spotify_but_local_save_button_does_not(
     tmp_path: Path,
 ) -> None:

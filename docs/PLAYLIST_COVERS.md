@@ -43,6 +43,12 @@ durable Spotify destination identity; it does not automatically push metadata or
 
 ### Playlist description behavior
 
+The Admin playlist form shows a **checked, disabled** attribution indicator for both
+new templates and active playlists. It is informational, not a persisted setting or
+evidence that Spotify has already accepted the remote metadata. Local **Save playlist**
+does not trigger Spotify metadata I/O; after activation, the operator uses the separate
+**Apply Spotify metadata & cover** action, whose failures remain visible.
+
 Managed state stores only the editable, provider-agnostic base description. On explicit Spotify
 metadata synchronization, the application renders one inline attributed description:
 
