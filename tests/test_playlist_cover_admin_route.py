@@ -593,7 +593,9 @@ def test_long_legacy_description_page_save_and_sync_are_safe(
     assert page.response is not None
     assert page.response.status == HTTPStatus.OK
     assert base in page.response.payload.decode()
-    assert 'maxlength="248"' in page.response.payload.decode()
+    # The textarea must not reject 191 emojis as 382 UTF-16 code units in a browser.
+    assert '<textarea name="description">' in page.response.payload.decode()
+    assert 'maxlength="248"' not in page.response.payload.decode()
     assert "190 characters" in " ".join(page.response.payload.decode().split())
     save = _Handler(
         tmp_path=tmp_path,

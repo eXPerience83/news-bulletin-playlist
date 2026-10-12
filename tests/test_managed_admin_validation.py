@@ -151,7 +151,13 @@ def test_dashboard_uses_service_limits_and_keeps_destination_server_owned(
     ).decode()
 
     assert f'maxlength="{MAX_PLAYLIST_NAME_LENGTH}"' in body
-    assert f'maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}"' in body
+    # HTML maxlength counts UTF-16 units while Python validates Unicode code points.
+    # Removing the browser limit allows 191–248 emojis to be edited and saved intact.
+    textarea = re.search(r"<textarea\\b([^>]*)>", body)
+    assert textarea is not None
+    assert 'name="description"' in textarea.group(1)
+    assert "maxlength" not in textarea.group(1)
+    assert f"{MAX_PLAYLIST_DESCRIPTION_LENGTH} Unicode characters" in body
     assert 'name="destination_id"' not in body
     assert "/admin/covers/spain_spanish_news.jpg" in body
     assert "Cadena SER" in body

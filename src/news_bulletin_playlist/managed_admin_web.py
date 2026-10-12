@@ -353,10 +353,9 @@ def _playlist_policy_fields(
              value="{html.escape(display_name, quote=True)}">
     </label>
     <label>Description
-      <textarea name="description"
-                maxlength="{MAX_PLAYLIST_DESCRIPTION_LENGTH}">{html.escape(description)}</textarea>
+      <textarea name="description">{html.escape(description)}</textarea>
     </label>
-    <p class="muted">Local descriptions allow {MAX_PLAYLIST_DESCRIPTION_LENGTH} characters.
+    <p class="muted">The server allows {MAX_PLAYLIST_DESCRIPTION_LENGTH} Unicode characters in local descriptions.
       To apply Spotify metadata with project attribution, use at most
       {MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH} characters. Longer descriptions stay saved locally;
       shorten them before syncing metadata. Cover upload is independent.</p>

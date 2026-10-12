@@ -110,11 +110,12 @@ runtime data into cover assets.
 
 ## Public release and asset rights
 
-Curated SVG masters and their derived JPEG covers require a provenance and redistribution-rights
-review before the repository changes visibility. The project's MIT **software** license does not
-convey Spotify's, publishers' or other third-party marks and content. Record any separately licensed
-artwork and applicable notices instead of assuming that image assets inherit code permissions.
+The repository is public. The project owner has confirmed the curated SVG masters were generated
+specifically for this project with ChatGPT; their derived JPEG covers share that provenance.
+The project's MIT **software** license does not grant rights to Spotify's, publishers' or other
+third-party marks and content. Keep separate notices for any third-party assets.
 
-When the repository becomes public, [#490](https://github.com/eXPerience83/news-bulletin-playlist/issues/490)
-will update generated Spotify description attribution from the public author profile to a verified
-repository URL, without changing the current explicit metadata/cover synchronization contract.
+The public repository URL is now used in generated Spotify description attribution under [#506](https://github.com/eXPerience83/news-bulletin-playlist/issues/506), following
+the earlier admin-indicator work in [#490](https://github.com/eXPerience83/news-bulletin-playlist/issues/490).
+The existing explicit metadata/cover synchronization contract remains unchanged; existing Spotify
+descriptions are not mass-updated by an application release.
