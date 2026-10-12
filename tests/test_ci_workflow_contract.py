@@ -7,19 +7,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CI_PATH = ROOT / ".github/workflows/ci.yml"
 
-EXPECTED_PR_PATHS = {
-    "src/**",
-    "tests/**",
-    "scripts/**/*.py",
-    "pyproject.toml",
-    "assets/covers/spotify/spain_spanish_news.jpg",
-    ".github/workflows/ci.yml",
-    ".github/workflows/publish-pr-candidate-amd64.yml",
-    ".github/workflows/publish-pr-candidate-worker-amd64.yml",
-    ".github/workflows/publish-edge-amd64.yml",
-    ".github/workflows/publish-stable-amd64.yml",
-}
-
 
 def _workflow() -> dict[object, object]:
     payload = yaml.load(CI_PATH.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
@@ -27,24 +14,13 @@ def _workflow() -> dict[object, object]:
     return payload
 
 
-def test_pull_request_ci_paths_cover_tested_contract_inputs() -> None:
+def test_required_ci_check_runs_for_every_pull_request() -> None:
     workflow = _workflow()
     trigger = workflow.get("on")
     assert isinstance(trigger, dict), "workflow on trigger must be a mapping"
-
-    push = trigger.get("push")
-    assert isinstance(push, dict), "push trigger must be a mapping"
-    assert push == {"branches": ["main"]}
-
-    pull_request = trigger.get("pull_request")
-    assert isinstance(pull_request, dict), "pull_request trigger must be a mapping"
-    assert set(pull_request) == {"paths"}
-
-    paths = pull_request.get("paths")
-    assert isinstance(paths, list), "pull_request paths must be a list"
-    assert all(isinstance(path, str) for path in paths)
-    assert len(paths) == len(set(paths)), "pull_request paths must not contain duplicates"
-    assert set(paths) == EXPECTED_PR_PATHS
+    assert trigger.get("push") == {"branches": ["main"]}
+    # Required checks must not be skipped for docs-only or admin-only PRs.
+    assert trigger.get("pull_request") == {}
 
 
 def test_untrusted_pr_ci_never_persists_checkout_credentials() -> None:
