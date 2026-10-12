@@ -129,6 +129,7 @@ def test_admin_routes_require_auth_and_share_navigation(tmp_path: Path) -> None:
         assert '<a class="admin-tab" href="/admin/">Playlists</a>' in body or (path == "/admin/")
         assert 'href="/admin/sources"' in body
         assert 'href="/admin/diagnostics"' in body
+        assert "Copyright (c) 2026 Roberto Ribes" in body
         assert '<a class="button" href="/">Status</a>' in body
         assert 'action="/admin/logout"' in body
         assert body.count('aria-current="page"') == 1
