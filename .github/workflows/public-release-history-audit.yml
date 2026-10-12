@@ -85,6 +85,14 @@ jobs:
               collections.Counter(item.get("RuleID", "unknown") for item in findings).items()
           ):
               print(f"  Rule {rule}: {count}")
+          # File path / commit / line are location metadata only. Never log
+          # Secret, Match, Line, Context, any excerpt or raw report.
+          for item in findings[:30]:
+              filename = str(item.get("File", "unknown"))
+              filename = "".join(ch for ch in filename if ch.isprintable())[:140]
+              commit = str(item.get("Commit", "unknown"))[:12]
+              line = item.get("StartLine", "unknown")
+              print(f"  Location: commit={commit} file={filename!r} line={line}")
           PY
           fi
           case "$scan_rc" in
