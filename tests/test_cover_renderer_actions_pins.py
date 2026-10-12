@@ -12,9 +12,9 @@ def test_cover_render_uses_immutable_actions() -> None:
     assert "uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in workflow
 
     references = [
-        line.strip().split()[2]
+        line.split("uses: ", 1)[1].split()[0]
         for line in workflow.splitlines()
-        if line.lstrip().startswith("- uses: ")
+        if line.lstrip().startswith(("uses: ", "- uses: "))
     ]
     assert references
     for reference in references:
