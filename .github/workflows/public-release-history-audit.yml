@@ -1,0 +1,109 @@
+name: Pre-publication Git history secret audit
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/public-release-history-audit.yml"
+      - ".gitleaksignore"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pre-publication-history-audit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  history-secrets:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout complete history without stored credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch existing branch, tag and pull-request refs for read-only audit
+        shell: bash
+        env:
+          AUDIT_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Checkout deliberately does not persist credentials. Supply a one-command
+          # temporary read-only header; do not write it into Git config or output.
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$AUDIT_GITHUB_TOKEN" | base64 -w0)"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="$auth_header" \
+            git fetch --no-tags origin \
+              '+refs/heads/*:refs/remotes/origin/*' \
+              '+refs/tags/*:refs/tags/*' \
+              '+refs/pull/*/head:refs/remotes/audit-pull/*'
+          unset auth_header AUDIT_GITHUB_TOKEN
+          echo "Reachable history commit count: $(git rev-list --all --count)"
+
+      - name: Install audited Gitleaks CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Pinned v8.30.1 commit. Upstream repository moved to gitleaks/gitleaks,
+          # but its go.mod module path is still github.com/zricethezav/gitleaks/v8.
+          GOTOOLCHAIN=auto go install github.com/zricethezav/gitleaks/v8@83d9cd684c87d95d656c1458ef04895a7f1cbd8e
+          "$(go env GOPATH)/bin/gitleaks" version
+
+      - name: Scan full reachable history; never publish raw findings
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="${RUNNER_TEMP}/release-history-gitleaks.json"
+          trap 'rm -f "$report"' EXIT
+          set +e
+          "$(go env GOPATH)/bin/gitleaks" git \
+            --no-banner \
+            --redact=100 \
+            --report-format=json \
+            --report-path="$report" \
+            --log-opts="--all" \
+            . >/dev/null 2>&1
+          scan_rc=$?
+          set -e
+          if [ -f "$report" ]; then
+            python3 - "$report" <<'PY'
+          import collections
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              findings = json.load(stream)
+          print(f"Findings requiring private review: {len(findings)}")
+          for rule, count in sorted(
+              collections.Counter(item.get("RuleID", "unknown") for item in findings).items()
+          ):
+              print(f"  Rule {rule}: {count}")
+          # File path / commit / line are location metadata only. Never log
+          # Secret, Match, Line, Context, any excerpt or raw report.
+          for item in findings[:30]:
+              filename = str(item.get("File", "unknown"))
+              filename = "".join(ch for ch in filename if ch.isprintable())[:140]
+              commit = str(item.get("Commit", "unknown"))[:12]
+              line = item.get("StartLine", "unknown")
+              print(f"  Location: commit={commit} file={filename!r} line={line}")
+          PY
+          fi
+          case "$scan_rc" in
+            0) echo "No findings from pinned Gitleaks CLI" ;;
+            1)
+              echo "::error::Potential historical secrets detected. Keep repository PRIVATE. Review privately; no report or raw values are uploaded."
+              exit 1
+              ;;
+            *)
+              echo "::error::Secret scan did not complete successfully (exit $scan_rc). Do not treat as a pass."
+              exit "$scan_rc"
+              ;;
+          esac
