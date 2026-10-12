@@ -389,7 +389,7 @@ def render_admin_shell(
       {body_html}
     </main>
     <footer class="footer">
-      <span>Authenticated operator area</span>
+      <span>Authenticated operator area · Copyright (c) 2026 Roberto Ribes</span>
       <a href="/">Return to read-only status</a>
     </footer>
   </div>
