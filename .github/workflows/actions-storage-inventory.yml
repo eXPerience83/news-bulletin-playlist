@@ -1,0 +1,63 @@
+name: Read-only Actions storage inventory
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/actions-storage-inventory.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inventory:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Read retained artifacts and cache quota without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts="${RUNNER_TEMP}/artifacts.json"
+          caches="${RUNNER_TEMP}/cache-usage.json"
+          trap 'rm -f "$artifacts" "$caches"' EXIT
+
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" > "$artifacts"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/cache/usage" > "$caches"
+
+          python3 - "$artifacts" "$caches" <<'PY'
+          import datetime
+          import json
+          import sys
+
+          pages = json.load(open(sys.argv[1], encoding="utf-8"))
+          cache = json.load(open(sys.argv[2], encoding="utf-8"))
+          artifacts = [a for page in pages for a in page.get("artifacts", [])]
+          artifacts.sort(key=lambda a: a.get("size_in_bytes", 0), reverse=True)
+          active = [a for a in artifacts if not a.get("expired", False)]
+          total = sum(int(a.get("size_in_bytes", 0)) for a in active)
+          print("Actions artifacts — current retained inventory")
+          print(f"  All listed: {len(artifacts)} | active: {len(active)}")
+          print(f"  Active bytes: {total} | active MiB: {total / 2**20:.2f}")
+          print("  Largest 25 active artifacts (ID, MiB, created, expiry, workflow run):")
+          for artifact in active[:25]:
+              size = int(artifact.get("size_in_bytes", 0))
+              workflow = (artifact.get("workflow_run") or {}).get("id", "unknown")
+              print(
+                  f"    id={artifact.get('id')} | {size / 2**20:.2f} MiB"
+                  f" | created={artifact.get('created_at')}"
+                  f" | expires={artifact.get('expires_at')} | run={workflow}"
+              )
+          print("Actions cache — separate 10 GiB/repo allowance")
+          print("  Count:", cache.get("active_caches_count", "unknown"))
+          print("  Active bytes:", cache.get("active_caches_size_in_bytes", "unknown"))
+          PY
