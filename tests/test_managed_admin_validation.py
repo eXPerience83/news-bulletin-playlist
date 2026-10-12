@@ -161,7 +161,6 @@ def test_dashboard_uses_service_limits_and_keeps_destination_server_owned(
     assert "LAN development mode" in body
 
 
-
 def test_project_attribution_indicator_is_read_only_and_not_remote_sync_state(
     tmp_path: Path,
 ) -> None:
@@ -181,7 +180,7 @@ def test_project_attribution_indicator_is_read_only_and_not_remote_sync_state(
 
     before_activation = render()
     template_input = re.search(
-        rf'<input\\b[^>]*\\bid="attribution-new-{re.escape(str(template.id))}"[^>]*>',
+        rf'<input[^>]*id="attribution-new-{re.escape(str(template.id))}"[^>]*>',
         before_activation,
     )
     assert template_input is not None
@@ -197,7 +196,7 @@ def test_project_attribution_indicator_is_read_only_and_not_remote_sync_state(
     after_activation = render()
     managed = service.snapshot().managed[0]
     active_input = re.search(
-        rf'<input\\b[^>]*\\bid="attribution-edit-{re.escape(str(managed.id))}"[^>]*>',
+        rf'<input[^>]*id="attribution-edit-{re.escape(str(managed.id))}"[^>]*>',
         after_activation,
     )
     assert active_input is not None
@@ -206,6 +205,7 @@ def test_project_attribution_indicator_is_read_only_and_not_remote_sync_state(
     assert "name=" not in active_input.group()
     assert 'aria-describedby="attribution-note-edit-' in active_input.group()
     assert factory.client.update_calls == []
+
 
 def test_available_template_requires_spotify_but_local_save_button_does_not(
     tmp_path: Path,
