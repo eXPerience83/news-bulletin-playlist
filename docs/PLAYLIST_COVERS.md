@@ -52,15 +52,19 @@ does not trigger Spotify metadata I/O; after activation, the operator uses the s
 Managed state stores only the editable, provider-agnostic base description. On explicit Spotify
 metadata synchronization, the application renders one inline attributed description:
 
-`<base> · by eXPerience83 · https://github.com/eXPerience83`
+`<base> · Made with News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83/news-bulletin-playlist`
 
-An empty base renders `News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83`.
-The 52-character inline suffix reserves a maximum of 248 editable characters, keeping the final
-Spotify description within 300 characters. No CR/LF separator is generated.
+An empty base renders the standalone `Made with News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83/news-bulletin-playlist` (107 characters).
+The 110-character inline suffix leaves 190 base characters for a final description of at most 300.
+Local descriptions retain the existing 248-character limit: existing 191–248-character bases load
+and save intact. Explicit metadata sync rejects overflow locally before its PUT and explains how to
+shorten the base, while still attempting cover upload independently. No truncation or schema migration
+occurs. CR/LF in the base is converted to spaces only for remote rendering.
 
-The controlled #296 LAB accepted inline descriptions of 73, 256 and exactly 300 characters;
-HTML-decoded readback matched. The newline separator was the relevant difference from the previous
-render, without establishing a universal Spotify newline rule or the historical production 400 cause.
+The controlled #506 LAB accepted the new single-line footer with a short base (142 total characters)
+and a Unicode base of 190 characters (exactly 300 total). HTML-decoded GET readback matched exactly,
+and original metadata restoration was verified by GET. The earlier #296 evidence does not establish
+a universal Spotify newline rule or the historical production 400 cause.
 
 Explicit synchronization performs one metadata PUT. HTTP 400 and other API/transport failures remain
 visible to the operator; there is no retry without attribution or compensating write. Cover upload
@@ -68,7 +72,7 @@ is attempted independently, even after metadata failure. Successful metadata rec
 `applied_with_attribution`. No rejected description text or provider response body is retained.
 
 Historical terminal Spanish/bilingual repository footers, the previous multiline public attribution,
-and the current inline suffix are stripped back to the base description when validated/edited.
+the previous profile inline suffix, and the new repository inline suffix are stripped back to the base description when validated/edited.
 Repeated or mixed terminal generated forms are cleaned without removing partial matches in prose.
 
 ## When covers are uploaded
@@ -106,11 +110,12 @@ runtime data into cover assets.
 
 ## Public release and asset rights
 
-Curated SVG masters and their derived JPEG covers require a provenance and redistribution-rights
-review before the repository changes visibility. The project's MIT **software** license does not
-convey Spotify's, publishers' or other third-party marks and content. Record any separately licensed
-artwork and applicable notices instead of assuming that image assets inherit code permissions.
+The repository is public. The project owner has confirmed the curated SVG masters were generated
+specifically for this project with ChatGPT; their derived JPEG covers share that provenance.
+The project's MIT **software** license does not grant rights to Spotify's, publishers' or other
+third-party marks and content. Keep separate notices for any third-party assets.
 
-When the repository becomes public, [#490](https://github.com/eXPerience83/news-bulletin-playlist/issues/490)
-will update generated Spotify description attribution from the public author profile to a verified
-repository URL, without changing the current explicit metadata/cover synchronization contract.
+The public repository URL is now used in generated Spotify description attribution under [#506](https://github.com/eXPerience83/news-bulletin-playlist/issues/506), following
+the earlier admin-indicator work in [#490](https://github.com/eXPerience83/news-bulletin-playlist/issues/490).
+The existing explicit metadata/cover synchronization contract remains unchanged; existing Spotify
+descriptions are not mass-updated by an application release.

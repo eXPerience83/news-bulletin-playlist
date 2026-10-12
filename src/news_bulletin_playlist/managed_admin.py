@@ -47,10 +47,20 @@ PROJECT_PROFILE_URL = "https://github.com/eXPerience83"
 LEGACY_PROJECT_REPOSITORY_URL = "https://github.com/eXPerience83/news-bulletin-playlist"
 LEGACY_PROJECT_DESCRIPTION_FOOTER = f"Proyecto: {LEGACY_PROJECT_REPOSITORY_URL}"
 LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER = f"Proyecto / Project: {LEGACY_PROJECT_REPOSITORY_URL}"
-PROJECT_DESCRIPTION_SUFFIX = f" · by eXPerience83 · {PROJECT_PROFILE_URL}"
-PROJECT_DESCRIPTION_FOOTER = f"News Bulletin Playlist{PROJECT_DESCRIPTION_SUFFIX}"
-MAX_PLAYLIST_DESCRIPTION_LENGTH = SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT - len(
+LEGACY_PROJECT_DESCRIPTION_SUFFIX = f" · by eXPerience83 · {PROJECT_PROFILE_URL}"
+LEGACY_STANDALONE_PROJECT_DESCRIPTION_FOOTER = (
+    f"News Bulletin Playlist{LEGACY_PROJECT_DESCRIPTION_SUFFIX}"
+)
+PROJECT_DESCRIPTION_FOOTER = (
+    f"Made with News Bulletin Playlist · by eXPerience83 · {LEGACY_PROJECT_REPOSITORY_URL}"
+)
+PROJECT_DESCRIPTION_SUFFIX = f" · {PROJECT_DESCRIPTION_FOOTER}"
+MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH = SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT - len(
     PROJECT_DESCRIPTION_SUFFIX
+)
+# Preserve the local description contract for existing state and ordinary Saves.
+MAX_PLAYLIST_DESCRIPTION_LENGTH = SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT - len(
+    LEGACY_PROJECT_DESCRIPTION_SUFFIX
 )
 MAX_PLAYLIST_DURATION_MINUTES = MAX_NEW_MANAGED_DURATION_SECONDS // 60
 
@@ -412,6 +422,8 @@ class ManagedAdminService:
             metadata_outcome = self._apply_metadata_with_attribution(client, current)
         except (SpotifyApiError, SpotifyTransportError) as exc:
             metadata_error = _safe_spotify_operation_error(exc)
+        except ManagedAdminError as exc:
+            metadata_error = str(exc)
 
         try:
             self._upload_cover_explicit(
@@ -593,6 +605,15 @@ def _safe_spotify_operation_error(
 def render_spotify_description(base_description: str) -> str:
     """Append public generator attribution while keeping managed state footer-free."""
     base = _playlist_description(base_description)
+    # Sanitize remote line breaks without changing the editable local description.
+    base = base.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    if len(base) > MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH:
+        raise ManagedAdminError(
+            "Spotify metadata was not sent: shorten the base description to "
+            f"{MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH} characters or fewer to fit the "
+            f"{SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT}-character limit with project attribution; "
+            "the local description is preserved"
+        )
     if not base:
         return PROJECT_DESCRIPTION_FOOTER
     return f"{base}{PROJECT_DESCRIPTION_SUFFIX}"
@@ -671,31 +692,32 @@ def _strip_terminal_project_footer(value: str) -> str:
     result = value
     footers = (
         PROJECT_DESCRIPTION_FOOTER,
+        LEGACY_STANDALONE_PROJECT_DESCRIPTION_FOOTER,
         LEGACY_BILINGUAL_PROJECT_DESCRIPTION_FOOTER,
         LEGACY_PROJECT_DESCRIPTION_FOOTER,
     )
+    suffixes = (PROJECT_DESCRIPTION_SUFFIX, LEGACY_PROJECT_DESCRIPTION_SUFFIX)
     while True:
         candidate = result.rstrip()
-        matched_footer = next(
-            (footer for footer in footers if candidate == footer or candidate.endswith(footer)),
-            None,
-        )
-        if matched_footer is None:
-            if candidate.endswith(PROJECT_DESCRIPTION_SUFFIX):
-                result = candidate[: -len(PROJECT_DESCRIPTION_SUFFIX)]
-                continue
-            return result
-        if candidate == matched_footer:
+        if candidate in footers:
             result = ""
             continue
-        prefix = candidate[: -len(matched_footer)]
-        if not prefix.endswith(("\n", "\r")):
-            # A base ending in the product name overlaps the standalone footer.
-            if matched_footer == PROJECT_DESCRIPTION_FOOTER:
-                result = candidate[: -len(PROJECT_DESCRIPTION_SUFFIX)]
-                continue
-            return result
-        result = prefix.rstrip()
+        newline_footer = next(
+            (
+                footer
+                for footer in footers
+                if candidate.endswith(footer) and candidate[: -len(footer)].endswith(("\n", "\r"))
+            ),
+            None,
+        )
+        if newline_footer is not None:
+            result = candidate[: -len(newline_footer)].rstrip()
+            continue
+        suffix = next((suffix for suffix in suffixes if candidate.endswith(suffix)), None)
+        if suffix is not None:
+            result = candidate[: -len(suffix)]
+            continue
+        return result
 
 
 def _spotify_playlist_id(response: object) -> str:

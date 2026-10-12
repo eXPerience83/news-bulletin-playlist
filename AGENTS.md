@@ -54,6 +54,7 @@ Treat CI and Container validation as independent evidence; do not claim local te
 ## Spotify and live-system safety
 
 - Unit/integration tests must not perform real network or OAuth operations.
+- Local base descriptions retain the 248-character contract. Explicit metadata sync adds the public-repository footer (110-character suffix) and rejects bases above 190 before metadata PUT, preserving local text and independent cover upload. No cosmetic metadata writes on load, ordinary Save or activation.
 - Use the disposable LAB environment for destructive Spotify experiments when explicitly requested.
 - Production Spotify playlists, OAuth state, `/data`, TrueNAS datasets, metadata and covers must not be modified without explicit operator authorization.
 - Read-only production inspection is acceptable only when the task requires it and credentials are already available through the approved environment.
