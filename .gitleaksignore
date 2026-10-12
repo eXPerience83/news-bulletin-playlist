@@ -1,0 +1,7 @@
+# Public, syndicated RFI podcast RSS links from the superseded P0 catalog.
+# These historical URLs included RFI's shared "token_application" feed parameter,
+# independently published by podcast indexes. They are not project-owned credentials.
+# Only the exact historical findings are suppressed; do not disable generic-api-key.
+# https://github.com/eXPerience83/news-bulletin-playlist/issues/495
+d0ffb1ba760308b39637c0396dc58e756eaaa392:src/news_bulletin_playlist/catalog.py:generic-api-key:192
+a5aadc4718b362b4e431dd9429057008e887e6af:src/news_bulletin_playlist/catalog.py:generic-api-key:199
