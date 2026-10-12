@@ -8,7 +8,9 @@ version = "0.2.2"
 description = "Service for dynamic news bulletin playlists across countries and languages"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
-authors = [{ name = "news-bulletin-playlist contributors" }]
+authors = [{ name = "Roberto Ribes" }]
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.14",
