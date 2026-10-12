@@ -45,3 +45,27 @@ def test_pull_request_ci_paths_cover_tested_contract_inputs() -> None:
     assert all(isinstance(path, str) for path in paths)
     assert len(paths) == len(set(paths)), "pull_request paths must not contain duplicates"
     assert set(paths) == EXPECTED_PR_PATHS
+
+
+def test_untrusted_pr_ci_never_persists_checkout_credentials() -> None:
+    workflow = _workflow()
+    assert workflow.get("permissions") == {"contents": "read"}
+
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict)
+    test_job = jobs.get("test")
+    assert isinstance(test_job, dict)
+    steps = test_job.get("steps")
+    assert isinstance(steps, list)
+
+    checkouts = [
+        step
+        for step in steps
+        if isinstance(step, dict)
+        and isinstance(step.get("uses"), str)
+        and str(step["uses"]).startswith("actions/checkout@")
+    ]
+    assert len(checkouts) == 1
+    checkout_config = checkouts[0].get("with")
+    assert isinstance(checkout_config, dict)
+    assert checkout_config.get("persist-credentials") == "false"
