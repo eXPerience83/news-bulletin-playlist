@@ -69,3 +69,25 @@ def test_untrusted_pr_ci_never_persists_checkout_credentials() -> None:
     checkout_config = checkouts[0].get("with")
     assert isinstance(checkout_config, dict)
     assert checkout_config.get("persist-credentials") == "false"
+
+
+def test_ci_uses_only_python_315_without_a_matrix() -> None:
+    workflow = _workflow()
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict)
+    job = jobs.get("test")
+    assert isinstance(job, dict)
+    assert "strategy" not in job, "single-interpreter CI must not create a matrix"
+    steps = job.get("steps")
+    assert isinstance(steps, list)
+    setup_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict)
+        and isinstance(step.get("uses"), str)
+        and str(step["uses"]).startswith("actions/setup-python@")
+    ]
+    assert len(setup_steps) == 1
+    config = setup_steps[0].get("with")
+    assert isinstance(config, dict)
+    assert config.get("python-version") == "3.15"
