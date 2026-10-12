@@ -1023,6 +1023,10 @@ def _safe_operational_status_page(
             A read-only view of the engine, Spotify connection, sources and published playlists.
             Detailed failure context stays inside authenticated administration.
           </p>
+          <p class="hero-copy">
+            Pre-release: built-in playlist templates and custom sources are supported;
+            creating arbitrary new playlist templates is not available yet.
+          </p>
         </div>
         <div class="hero-actions">
           <a class="button button-primary" href="/admin/">Administration</a>
@@ -1110,6 +1114,7 @@ def _safe_operational_status_page(
 
     <footer class="footer">
       <p>Read-only status · sensitive diagnostics are not exposed here.</p>
+      <p>Copyright (c) 2026 Roberto Ribes</p>
       <p>Version <code>{html.escape(__version__)}</code> · Build
         <code>{html.escape(build_revision)}</code></p>
     </footer>
