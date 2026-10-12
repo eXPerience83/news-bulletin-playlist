@@ -7,6 +7,12 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ### Changed
 
+- Prepared MIT software licensing under `Copyright (c) 2026 Roberto Ribes`,
+  updated package/image license metadata and the public/admin copyright notices.
+- Clarified the pre-release built-in-template limitations and the uncertainty of
+  automated undocumented Spotify Embed change detection, without altering
+  the detector, playlist descriptions or Spotify API behavior.
+
 - Tolerate literal null Spotify catalogue slots as incomplete/unproven evidence, preserving original
   positions and a bounded null count in Source Audit. Dependent playlists cannot reconcile until a
   clean refresh proves coverage; no retry, new endpoint or database migration is introduced.

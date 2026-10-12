@@ -73,6 +73,8 @@ def test_public_status_uses_modern_read_only_shell() -> None:
     assert "Read-only status" in payload
     assert "Version" in payload
     assert "test-build" in payload
+    assert "creating arbitrary new playlist templates is not available yet" in payload
+    assert "Copyright (c) 2026 Roberto Ribes" in payload
     assert "<form" not in payload
 
 

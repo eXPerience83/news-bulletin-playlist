@@ -3,7 +3,7 @@
 Service for dynamic news bulletin playlists across countries and languages,
 with Spotify as the first destination.
 
-> Pre-release. The runtime is Spotify-first: public Spotify state is a change signal and the official Spotify Web API show catalogue is the episode authority. This project is not affiliated with or endorsed by Spotify or any news provider.
+> **Pre-release / active development (0.2.x).** This is experimental software, not a finished multi-user playlist platform. Spotify's official Web API is the authority for episode catalogues and playlist operations; a separate, experimental public change detector is described below. The project is not affiliated with or endorsed by Spotify or any news provider.
 
 Version **0.1.0** establishes the first supported persistence compatibility baseline: database
 format 1 in `/data/news-bulletin-playlist-v1.sqlite3`. The private-development database at
@@ -26,6 +26,13 @@ Core architectural invariant:
 A source is independent from a playlist and may feed several playlists. Public Spotify observation is used only to decide whether a source catalogue needs refreshing. The official Spotify Web API show catalogue supplies episode IDs, URIs and metadata; unchanged sources reuse durable local state, then every configured destination playlist is evaluated and reconciled independently.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contract and invariants. Notable product/runtime changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
+
+## What works today — and what does not
+
+- **Available:** activate and manage the playlist templates shipped with the application, adjust their source assignments and duration limits, and manage supported Spotify-first news sources through the authenticated administration UI.
+- **Available:** add your own supported Spotify **show/source** via Admin, then assign it to an existing managed playlist. This is **not** the same as creating a new playlist template.
+- **Not yet available:** define and create an arbitrary new managed playlist type/template from Admin. More national, international and long-form playlists are planned; follow [the playlist catalog roadmap](https://github.com/eXPerience83/news-bulletin-playlist/issues/44). Features, storage migrations and Spotify behavior may evolve before 1.0.
+- **Deployment scope:** experimental, self-hosted operation; protect Admin and credentials on a trusted LAN or through the supported hardened HTTPS/reverse-proxy configuration. Publishing the source under MIT does not grant expanded Spotify API access.
 
 ## Playlists
 
@@ -81,13 +88,34 @@ Paid playlist placement, guaranteed inclusion, paid priority and sponsor-funded 
 
 Possible future monetization of the software or a separate qualifying non-streaming service is a different concern and must remain separate from playlist composition.
 
-## Spotify access model
+## Spotify access model and compatibility notice
 
-As of 2026-08-27, Spotify Development Mode is intended for learning, experimentation and personal **non-commercial** projects. The current deployment is therefore treated as non-commercial.
+The application currently targets personal, non-commercial experimentation with Spotify's
+**Development Mode**, not unrestricted public use of Spotify's API. Spotify's current
+[quota-mode documentation](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
+requires the developer-account owner to have Spotify Premium and limits the number of authorized
+test users; access and quota conditions can change. Releasing this code publicly does not provide
+API authorization, extra quota, or a commercial-use license from Spotify.
 
-Spotify's Developer Policy permits certain limited commercial uses for qualifying non-streaming applications, but any future commercial use would require re-checking Spotify's then-current access mode, eligibility requirements and policies. Development Mode must not be used as the assumed foundation for building or scaling a business.
+**Important — experimental automated public-page access:** approximately every ten minutes, the
+engine observes configured **Spotify show Embeds** to check for a possible new episode. It extracts
+the newest episode identity from an internal `__NEXT_DATA__` representation that Spotify does not
+document as a supported change-detection API. This is a bounded change signal, not a substitute
+for an official episode catalogue: the application retrieves authoritative episode data and performs
+playlist reads/writes through the authenticated Spotify Web API; it never downloads podcast audio.
+Nevertheless, this automated use of an undocumented public interface **may be inconsistent with
+Spotify's terms and is not confirmed as permitted**. Low request volume, avoiding full-catalogue
+scraping and publishing a warning do **not** themselves establish permission.
 
-See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for historical Spotify platform research and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the current runtime contract.
+The current detector remains in the experimental implementation pending a tested lower-quota,
+officially supported alternative. [Issue #297](https://github.com/eXPerience83/news-bulletin-playlist/issues/297)
+tracks that non-blocking research. Anyone operating or distributing the software is responsible
+for reviewing applicable [Spotify Developer Policy](https://developer.spotify.com/policy),
+[Developer Terms](https://developer.spotify.com/terms) and service rules independently.
+This repository does not claim Spotify approval or guaranteed future compatibility.
+
+See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md) for historical Spotify research and
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the current runtime contract.
 
 ## Initial providers
 
@@ -184,14 +212,20 @@ A cycle builds desired playlists from durable Spotify-first episode state. There
 
 Spotify playlist descriptions are plain text from the Web API contract. Managed descriptions stay attribution-free locally; when metadata is explicitly synchronized, the runtime renders `<base> · by eXPerience83 · https://github.com/eXPerience83` (or `News Bulletin Playlist · by eXPerience83 · https://github.com/eXPerience83` with an empty base), bounded to 300 characters. Whether a Spotify client renders that URL as clickable is client behavior and is not assumed by the application.
 
-## Copyright
+## License and copyright
 
-Copyright (c) 2026 eXPerience83. All rights reserved.
+The project software is released under the **MIT License**; see [`LICENSE`](LICENSE).
 
-The current codebase is not offered under an open-source license. No permission is granted to use,
-copy, modify, distribute, sublicense or otherwise exploit the current repository state unless
-separately authorized in writing by the copyright holder. This does not revoke rights already
-granted for historical copies that were distributed under the MIT License.
+Copyright (c) 2026 Roberto Ribes.
+
+The MIT notice must remain in copies or substantial portions of the software. The official
+application also displays its author and generator credit. MIT does not require independent
+forks to preserve a visible attribution in Spotify playlist descriptions.
+
+Spotify, publishers' names, logos, audio, metadata and other third-party intellectual property
+remain subject to their respective owners' rights; the software license does not grant rights to
+those external materials. Curated bundled cover assets need a separate provenance/rights check
+before the repository is made public.
 
 ## Security
 
@@ -214,9 +248,10 @@ administration experience rather than a persistence-format milestone.
    Spotify-first sources without restoring a second runtime configuration path.
 3. **Source/catalog expansion** — add more concise, deterministic sources and playlist definitions
    without duplicating the engine.
-4. **Distribution readiness** — keep #297 non-blocking for private development while investigating a
-   clearly supported low/zero-quota Spotify change signal before reconsidering broad public
-   distribution.
+4. **Public release readiness** — complete the MIT, security/history and asset-license checks in
+   [#491](https://github.com/eXPerience83/news-bulletin-playlist/issues/491); publish the code
+   with the explicit experimental Spotify detector notice while continuing #297 research.
+   This is not an assurance that Spotify endorses or permits the undocumented detector.
 
 ### Historical implementation milestones
 

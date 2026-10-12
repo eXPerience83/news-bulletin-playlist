@@ -97,3 +97,14 @@ For a new country/language playlist:
 
 Do not use provider logos as the core identity of a managed playlist and do not put credentials or
 runtime data into cover assets.
+
+## Public release and asset rights
+
+Curated SVG masters and their derived JPEG covers require a provenance and redistribution-rights
+review before the repository changes visibility. The project's MIT **software** license does not
+convey Spotify's, publishers' or other third-party marks and content. Record any separately licensed
+artwork and applicable notices instead of assuming that image assets inherit code permissions.
+
+When the repository becomes public, [#490](https://github.com/eXPerience83/news-bulletin-playlist/issues/490)
+will update generated Spotify description attribution from the public author profile to a verified
+repository URL, without changing the current explicit metadata/cover synchronization contract.
