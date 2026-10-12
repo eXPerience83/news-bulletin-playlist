@@ -170,10 +170,10 @@ Production `/admin/` and the Spotify callback are intentionally fail-closed. Whe
 
 ## Development
 
-The project targets **Python 3.14** and currently has no third-party runtime dependencies; development checks use pytest, Ruff and mypy.
+Development and GitHub CI now target **Python 3.15 only**. The distributed Docker runtime remains pinned to **Python 3.14.8** pending separate image validation (#494), so package metadata still permits Python 3.14 without claiming it is covered by current CI. The project has no third-party runtime dependencies; development checks use pytest, Ruff and mypy.
 
 ```bash
-python3.14 -m venv .venv
+python3.15 -m venv .venv
 . .venv/bin/activate
 pip install -e '.[dev]'
 pytest
@@ -190,7 +190,7 @@ python scripts/ruff_fix.py
 
 That helper runs `ruff check --fix .` followed by `ruff format .`; Ruff remains the single source of truth and no additional formatting tool or pre-commit dependency is required.
 
-CI runs `ruff check .`, `ruff format --check .`, mypy and pytest on Python 3.14. A separate container workflow validates Docker/Compose changes. Edge publication is deliberate: **Publish edge AMD64** is manually dispatched from the current `main`, builds and smoke-tests that exact revision, and only after success promotes its immutable `sha-<full-main-sha>` digest to `edge` / `edge-amd64` in GHCR.
+CI runs `ruff check .`, `ruff format --check .`, mypy and pytest on **Python 3.15 only**. Ruff and mypy deliberately retain the Python 3.14 grammar/type minimum while Docker runs 3.14.8. A separate container workflow validates Docker/Compose changes. Edge publication is deliberate: **Publish edge AMD64** is manually dispatched from the current `main`, builds and smoke-tests that exact revision, and only after success promotes its immutable `sha-<full-main-sha>` digest to `edge` / `edge-amd64` in GHCR.
 
 ## Domain and configuration contract
 

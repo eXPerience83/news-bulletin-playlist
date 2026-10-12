@@ -4,11 +4,10 @@ Instructions for AI coding/review agents working in this repository.
 
 ## Runtime contract
 
-- This branch is testing **CPython 3.14.x and 3.15.x** compatibility in parallel; package metadata declares `requires-python = ">=3.14,<3.16"`. Do not call Python 3.15 production-ready until the matrix and container candidate validation succeed.
-- Ruff targets `py314` and mypy checks Python `3.14` **deliberately as the minimum supported grammar**; CI runs both Python 3.14 and 3.15. The **production Docker image remains CPython 3.14.x** until a separate reviewed candidate and rollout.
-- Interpret syntax, AST, typing and compatibility using at least the Python 3.14 grammar; both supported interpreters must accept code and pass the checks.
-- **PEP 758 is part of the contract.** In Python 3.14, `except A, B:` is valid when there is no `as` clause. Do not rewrite valid PEP 758 syntax merely to satisfy an older parser.
-- Before using `python`, `python3`, `ast.parse`, `compile`, a linter or a static analyzer as evidence of a syntax/compatibility defect, verify that it supports at least Python 3.14. Older parser results are non-authoritative; verify with the 3.14/3.15 CI matrix and the pinned Docker candidate. Do not remove 3.14 support for a 3.15-only refactoring.
+- **Development and required GitHub CI use CPython 3.15.x only.** The project metadata still declares `requires-python = ">=3.14,<3.16"` because the **published production Docker image remains pinned to CPython 3.14.8** pending a separate tested 3.15 Docker promotion (#494). CI is **not** proof of continued 3.14 package compatibility.
+- Ruff `target-version = "py314"` and mypy `python_version = "3.14"` are deliberate lower-bound grammar/type checks to protect the existing Docker 3.14 runtime; do not move those to 3.15 until the runtime and declared minimum actually change.
+- **PEP 758 is supported by the project grammar.** Python 3.14 allows `except A, B:` without an `as` clause. Do not report or rewrite it as invalid merely because an older parser rejects it.
+- For Python syntax/compatibility evidence, use a 3.15-aware parser and actual 3.15 CI. For any behavior relying on 3.15-only language/library features, account for the still-deployed 3.14 Docker runtime. Preserve compatibility until a separately reviewed Docker migration or a deliberate packaging-contract change.
 
 ## Repository and Git safety
 
@@ -19,7 +18,7 @@ Instructions for AI coding/review agents working in this repository.
 
 ## Required local validation
 
-For normal source changes, run the repository gates with Python 3.14:
+For normal source changes, run the repository gates with Python 3.15:
 
 ```text
 python scripts/ruff_fix.py
@@ -46,7 +45,7 @@ Treat CI and Container validation as independent evidence; do not claim local te
 ## Review discipline
 
 - Reproduce or prove a finding before changing code. Classify it as a real bug, regression risk, hardening, observability improvement, test gap, or false positive.
-- Do not make compatibility changes for Python versions/toolchains outside the explicitly tested 3.14/3.15 matrix. Differentiate experimental Python 3.15 test support from the 3.14 production container.
+- CI validates Python 3.15 only. Distinguish this development/test target from the pinned Python 3.14 production container; changes requiring Python 3.15 runtime must wait for #494. Do not claim 3.14 CI coverage.
 - Static-analysis findings are leads, not proof. Check reachability, runtime contract and actual data flow.
 - Prefer the smallest change that fixes the demonstrated problem and add a regression test.
 - Preserve fail-closed behavior around persistence, Spotify reconciliation, OAuth and diagnostics.
@@ -165,6 +164,6 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - For Spotify endpoint/scopes/limits/response-contract claims, verify current official Spotify documentation before treating a claim as a defect.
 - Treat database format 1 / 0.1.0 as the first supported persistence compatibility baseline. Pre-0.1 RSS/matcher/planner documents and schemas are historical provenance, not upgrade targets for the current database.
 - The owner explicitly decided on 2026-10-12 to publish the project software under **MIT**, with `Copyright (c) 2026 Roberto Ribes`. Preserve the LICENSE, Python package/image license metadata and author notices. Do not assume MIT grants rights to Spotify data, third-party marks or unreviewed cover assets. Public repository visibility requires a separate security/history and asset-provenance review.
-- Keep `pyproject.toml`, the 3.14+3.15 CI matrix, the 3.14 production Docker pin, and review-agent configuration clear about the separate test/runtime version contracts.
+- Keep `pyproject.toml`, 3.15-only CI, the still-pinned 3.14 production Docker image, and review-agent configuration consistent. The declared 3.14 lower bound remains until a separately validated Docker and package migration.
 - Keep the README **Playlists** index synchronized in the same change whenever a public production playlist is added, removed, renamed or replaced. Never list private, test or merely built-in-but-unpublished destinations.
 - Root `AGENTS.md` applies repository-wide and should be updated when an invariant changes materially.
