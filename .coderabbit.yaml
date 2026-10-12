@@ -74,23 +74,20 @@ reviews:
   path_instructions:
     - path: "**/*.py"
       instructions: |
-        Contrato de lenguaje: este repositorio soporta únicamente CPython 3.14.x.
-        `pyproject.toml` declara `>=3.14,<3.15`; Ruff usa `target-version = py314`,
-        mypy usa `python_version = 3.14`, CI ejecuta Python 3.14 y la imagen de
-        producción usa CPython 3.14.x. Interpreta toda sintaxis, AST, typing y
-        compatibilidad con la gramática de Python 3.14.
+        Contrato en prueba: el paquete admite CPython 3.14.x y 3.15.x
+        (`pyproject.toml`: `>=3.14,<3.16`). Ruff `py314` y mypy
+        `python_version = 3.14` mantienen la gramática mínima; CI prueba
+        ambas versiones. La imagen de producción sigue fijada en CPython 3.14.x
+        hasta validar la candidata 3.15 por separado. No exigir 3.15 como mínimo.
 
         PEP 758 forma parte explícita del contrato: en Python 3.14 una cláusula
         `except A, B:` sin `as` es sintaxis válida. No la marques como error ni
         propongas añadir paréntesis por compatibilidad con parsers anteriores.
 
-        Antes de usar `python`, `python3`, `ast.parse`, `compile`, linters o análisis
-        estático como evidencia de un error de sintaxis/compatibilidad, confirma que
-        la herramienta está interpretando Python 3.14. Si el sandbox o analizador
-        interno usa Python <3.14 o una gramática anterior, trata ese resultado como
-        no autoritativo y contrástalo con `pyproject.toml`, CI Python 3.14 y el
-        Container validate. No solicites cambios de código para satisfacer un
-        toolchain fuera del runtime soportado.
+        Para errores de sintaxis/compatibilidad, confirma que la herramienta
+        utiliza una gramática 3.14 o superior; un parser interno anterior no es
+        autoridad. Contrasta los hallazgos contra la matriz CI 3.14/3.15 y
+        Container validate. No sacrifiques compatibilidad con Python 3.14.
 
     - path: "src/news_bulletin_playlist/spotify/**"
       instructions: |
@@ -132,7 +129,8 @@ reviews:
     - path: ".github/workflows/**"
       instructions: |
         Mantén permisos mínimos y acciones de terceros fijadas por SHA completo.
-        El proyecto soporta únicamente Python 3.14.x. GitHub Actions sirve para CI,
+        CI prueba Python 3.14 y 3.15, mientras Docker productivo sigue en 3.14.
+        GitHub Actions sirve para CI,
         watchdog y automatización del repositorio; no debe convertirse en el
         scheduler de producción que actualizará playlists.
 
@@ -145,7 +143,7 @@ reviews:
 
     - path: "Dockerfile"
       instructions: |
-        Mantén la imagen en CPython 3.14.x, ligera, con usuario no-root, superficie
+        Mantén por ahora la imagen productiva en CPython 3.14.x, ligera, con usuario no-root, superficie
         mínima, healthcheck y secretos fuera de la imagen. El runtime debe ser apto
         para Docker/TrueNAS y escribir solo en almacenamiento persistente explícito.
 
