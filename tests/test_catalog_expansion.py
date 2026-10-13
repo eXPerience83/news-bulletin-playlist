@@ -1,8 +1,14 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.managed_state import (
+    ManagedState,
+    activate_template,
+    compile_engine_config,
+)
 from news_bulletin_playlist.models import (
     CountryCode,
     EditorialScope,
@@ -22,8 +28,13 @@ def test_builtin_catalog_exposes_phase_one_playlist_templates() -> None:
         "international_french_news",
         "international_german_news",
         "international_polish_news",
+        "international_spanish_long_news",
     }
-    assert all(template.duration_policy.default_max_seconds == 1800 for template in by_id.values())
+    assert all(
+        template.duration_policy.default_max_seconds == 1800
+        for template_id, template in by_id.items()
+        if template_id != "international_spanish_long_news"
+    )
     assert by_id["spain_spanish_news"].display_name == "Noticias en Español"
     assert by_id["spain_spanish_news"].default_source_ids == (
         SourceId("ser"),
@@ -38,6 +49,40 @@ def test_builtin_catalog_exposes_phase_one_playlist_templates() -> None:
         SourceId("un_news_en"),
         SourceId("reuters_world"),
     )
+
+
+def test_long_news_template_has_reviewed_independent_policy_and_bundled_cover() -> None:
+    template = BUILTIN_CATALOG.playlist("international_spanish_long_news")
+    assert template.display_name == "Actualidad en profundidad · ES"
+    assert template.countries == ()
+    assert tuple(map(str, template.languages)) == ("es",)
+    assert template.default_source_ids == (
+        SourceId("dw_actualidad"),
+        SourceId("nplus_univision"),
+    )
+    assert template.retention_hours == 96
+    assert template.max_episodes == 100
+    assert template.duration_policy.default_min_seconds == 600
+    assert template.duration_policy.default_max_seconds == 2100
+    assert template.duration_policy.exceptions == ()
+    assert template.cover_id == "international_spanish_long_news"
+    assert len(template.description) <= 190
+
+    root = Path(__file__).resolve().parents[1] / "assets" / "covers"
+    master = root / "master" / f"{template.cover_id}.svg"
+    jpeg = root / "spotify" / f"{template.cover_id}.jpg"
+    assert master.is_file()
+    payload = jpeg.read_bytes()
+    assert payload[:2] == bytes((0xFF, 0xD8)) and payload[-2:] == bytes((0xFF, 0xD9))
+    assert len(payload) <= 256 * 1024
+
+    activated = activate_template(template, "test-only-destination")
+    assert activated.source_ids == template.default_source_ids
+    assert activated.retention_hours == 96
+    assert activated.min_duration_seconds == 600
+    assert activated.max_duration_seconds == 2100
+    compiled = compile_engine_config(BUILTIN_CATALOG, ManagedState(playlists=(activated,)))
+    assert compiled.playlists[0].duration_policy == template.duration_policy
 
 
 def test_builtin_sources_expose_origin_scope_and_language() -> None:

@@ -302,6 +302,20 @@ BUILTIN_PLAYLISTS: tuple[PlaylistTemplate, ...] = (
         cover_id="international_spanish_news",
     ),
     PlaylistTemplate(
+        id=PlaylistId("international_spanish_long_news"),
+        display_name="Actualidad en profundidad · ES",
+        description=(
+            "Noticias y análisis en profundidad en español, con contexto internacional "
+            "y enfoques diversos. Episodios de 10 a 35 minutos de los últimos 4 días."
+        ),
+        countries=(),
+        languages=(LanguageTag("es"),),
+        default_source_ids=(SourceId("dw_actualidad"), SourceId("nplus_univision")),
+        cover_id="international_spanish_long_news",
+        retention_hours=96,
+        duration_policy=DurationPolicy(default_min_seconds=600, default_max_seconds=2100),
+    ),
+    PlaylistTemplate(
         id=PlaylistId("international_english_news"),
         display_name="International News · EN",
         description=(
