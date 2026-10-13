@@ -72,20 +72,20 @@ completed #132 duration research recommended a future concise range of 0..21 min
 changing existing destinations. Sanitized diagnostics continue to record duration exclusions,
 accepted editions of at least 20 minutes and per-source/per-playlist duration histograms.
 
-The optional built-in **Actualidad en profundidad · ES**
-(`international_spanish_long_news`, issue #509) is **not yet an activated or public playlist**.
-It offers international news analysis in Spanish, initially from DW Actualidad en análisis and
-N+ Univision 24-7, with an inclusive **600..2100-second (10..35 minute)** range, **96-hour**
-retention and the existing 100-episode cap. DW and N+ are catalogued separately and do not
-change any existing concise source assignment. A four-day window reduces weekend gaps for their
-mostly weekday cadence; it does **not** guarantee a specific number of playable episodes.
-The historical N+ audit had proven 48-hour coverage but sometimes lagged behind the publication
-date, so check current Source Audit freshness and catalogue authority before activation.
-Hoy en EL PAÍS is **not** included: its latest reviewed Source Audit contained a null catalogue
-slot and unproven coverage. Do not activate or publish the new destination merely because this
-template is present in the image; first verify sources, available episodes and intended editorial
-scope, then provision explicitly through authenticated Admin. A public Spotify URL is added to
-this index **only after actual confirmed activation**.
+The built-in [**Actualidad en profundidad · ES**](https://open.spotify.com/playlist/0HrvxOBqYHSBwNpiZQeLOy)
+(`international_spanish_long_news`, #509) was publicly activated and validated on
+**2026-10-13** after a controlled TrueNAS deployment and Spotify metadata/cover sync.
+It curates international Spanish-language news analysis from DW Actualidad en análisis
+and N+ Univision 24-7, with an inclusive **600..2100-second (10..35 minute)** range,
+**96-hour** retention and the existing 100-episode cap. These sources do not change
+any concise playlist assignment. Four-day retention helps bridge weekday/weekend gaps,
+but does **not** guarantee a minimum number of playable episodes. The deployment's
+initial four entries expanded to five in verified subsequent cycles without repeated
+unnecessary playlist writes; ongoing freshness/coverage remains subject to monitoring.
+
+Hoy en EL PAÍS is **not** included: the latest reviewed source audit observed a null
+catalogue slot and unproven coverage. It must not be used as reconciliation authority
+for any dependent destination until a fresh audit proves safe coverage.
 
 Admin exposes both bounds in whole minutes. Eligibility uses the inclusive range
 `min_duration_seconds <= duration_seconds <= max_duration_seconds`; unknown duration remains
