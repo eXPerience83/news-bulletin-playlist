@@ -44,6 +44,7 @@ The currently public production playlists are:
 
 ### International
 
+- [**Actualidad en profundidad · ES**](https://open.spotify.com/playlist/0HrvxOBqYHSBwNpiZQeLOy) — noticias y análisis internacionales en español de 10 a 35 minutos, procedentes de DW y N+ Univision.
 - [**International News · EN**](https://open.spotify.com/playlist/0lmtVEWVIgA8C0iobnohBh) — concise international news bulletins in English.
 - [**Wiadomości międzynarodowe · PL**](https://open.spotify.com/playlist/4ctM8CugEdvNVXjrDwNcDX) — international and Poland/world news bulletins in Polish.
 
