@@ -13,6 +13,8 @@ bulletin reconciliation.
 
 The first production template, `spain_spanish_news`, uses
 `assets/covers/spotify/spain_spanish_news.jpg`.
+The separate, not-yet-activated long-form template, `international_spanish_long_news`,
+ships matching master and JPEG artwork with an analysis-specific title and duration band.
 
 The repository workflow `.github/workflows/render-playlist-covers.yml` renders the curated masters
 into 1000×1000 Spotify-ready JPEGs. The visual family is shared across languages/countries, while

@@ -54,11 +54,11 @@ the stable public discovery point.
 
 Initial product defaults:
 
-- keep episodes published within the last **48 hours**;
+- keep episodes published within the last **48 hours** by default; a separate curated long-form template uses 96 hours to span weekends;
 - cap a playlist at **100 episodes**;
 - order by parsed semantic edition timestamp (`edition_at`) when available; otherwise preserve explicit Spotify release-date/first-seen provenance without inventing minute precision;
 - make the minimum and maximum episode duration a **per-managed-playlist setting** editable from `/admin/`;
-- keep the provisional default at **0..30 minutes / 0..1800 seconds for every playlist**;
+- keep the provisional default at **0..30 minutes / 0..1800 seconds** for existing concise templates; the optional long-form template has a reviewed **10..35-minute** range;
 - prefer bulletin sources whose normal publishing format is concise; a source that is predominantly long-form is not promoted merely because individual episodes might fit under 30 minutes;
 - retain operational metadata locally for **30 days**;
 - run the production engine approximately every **10 minutes**;
@@ -66,7 +66,25 @@ Initial product defaults:
 - use Spotify episode ID/URI as canonical runtime identity and the official show catalogue as episode authority;
 - allow playlist-specific policies to override defaults when required.
 
-The 30-minute ceiling is deliberately provisional while the catalog is being observed in production. Sanitized diagnostics record duration exclusions, accepted editions of at least 20 minutes and per-source/per-playlist duration histograms. Issue #132 uses that evidence to decide the eventual default range and any short/long split. Occasional long editions from an otherwise concise bulletin source are acceptable; sources whose usual product is long-form are not.
+The 30-minute ceiling remains provisional for **currently active concise playlists**; the
+completed #132 duration research recommended a future concise range of 0..21 minutes without
+changing existing destinations. Sanitized diagnostics continue to record duration exclusions,
+accepted editions of at least 20 minutes and per-source/per-playlist duration histograms.
+
+The optional built-in **Actualidad en profundidad · ES**
+(`international_spanish_long_news`, issue #509) is **not yet an activated or public playlist**.
+It offers international news analysis in Spanish, initially from DW Actualidad en análisis and
+N+ Univision 24-7, with an inclusive **600..2100-second (10..35 minute)** range, **96-hour**
+retention and the existing 100-episode cap. DW and N+ are catalogued separately and do not
+change any existing concise source assignment. A four-day window reduces weekend gaps for their
+mostly weekday cadence; it does **not** guarantee a specific number of playable episodes.
+The historical N+ audit had proven 48-hour coverage but sometimes lagged behind the publication
+date, so check current Source Audit freshness and catalogue authority before activation.
+Hoy en EL PAÍS is **not** included: its latest reviewed Source Audit contained a null catalogue
+slot and unproven coverage. Do not activate or publish the new destination merely because this
+template is present in the image; first verify sources, available episodes and intended editorial
+scope, then provision explicitly through authenticated Admin. A public Spotify URL is added to
+this index **only after actual confirmed activation**.
 
 Admin exposes both bounds in whole minutes. Eligibility uses the inclusive range
 `min_duration_seconds <= duration_seconds <= max_duration_seconds`; unknown duration remains

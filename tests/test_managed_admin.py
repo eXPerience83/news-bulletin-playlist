@@ -115,6 +115,7 @@ def test_snapshot_exposes_unmanaged_builtin_template(tmp_path: Path) -> None:
     assert tuple(template.display_name for template in snapshot.available_templates) == (
         "Noticias en Español",
         "Noticias Internacional · ES",
+        "Actualidad en profundidad · ES",
         "International News · EN",
         "Actualités internationales · FR",
         "Internationale Nachrichten · DE",

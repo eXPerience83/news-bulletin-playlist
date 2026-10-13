@@ -199,7 +199,12 @@ def test_unknown_spotify_duration_is_excluded_and_counted() -> None:
 
 def test_builtin_catalog_and_managed_compile_use_current_global_30_minute_default() -> None:
     for template in BUILTIN_CATALOG.playlists:
-        assert template.duration_policy.default_max_seconds == 1800
+        if str(template.id) == "international_spanish_long_news":
+            assert template.duration_policy.default_min_seconds == 600
+            assert template.duration_policy.default_max_seconds == 2100
+        else:
+            assert template.duration_policy.default_min_seconds == 0
+            assert template.duration_policy.default_max_seconds == 1800
         assert template.duration_policy.exceptions == ()
 
     template = BUILTIN_CATALOG.playlist("spain_spanish_news")
@@ -258,8 +263,12 @@ def test_default_range_and_independent_playlists_reuse_persisted_episode(tmp_pat
     for seconds, accepted in [(0, True), (1, True), (1800, True), (1801, False)]:
         assert bool(_build(_episode(9, seconds), playlist=low).desired.uris) is accepted
     for template in BUILTIN_CATALOG.playlists:
-        assert template.duration_policy.default_min_seconds == 0
-        assert template.duration_policy.default_max_seconds == 1800
+        if str(template.id) == "international_spanish_long_news":
+            assert template.duration_policy.default_min_seconds == 600
+            assert template.duration_policy.default_max_seconds == 2100
+        else:
+            assert template.duration_policy.default_min_seconds == 0
+            assert template.duration_policy.default_max_seconds == 1800
 
 
 def test_minimum_changes_playlist_write_contract() -> None:
