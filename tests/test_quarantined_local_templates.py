@@ -100,9 +100,12 @@ def test_invalid_unreferenced_draft_does_not_stop_four_existing_destinations(
         "DO-NOT-EXPOSE-IN-ADMIN"
     )
     assert len(after.playlists) == 3
-    assert json.loads(store.path.read_bytes())["quarantined_templates"][0]["raw"][
-        "max_duration_seconds"
-    ] == -123
+    assert (
+        json.loads(store.path.read_bytes())["quarantined_templates"][0]["raw"][
+            "max_duration_seconds"
+        ]
+        == -123
+    )
     assert store.load() == after
 
 
