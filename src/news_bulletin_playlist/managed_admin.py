@@ -325,6 +325,37 @@ class ManagedAdminService:
         )
         return updated
 
+    def select_uploaded_cover(
+        self, *, target_kind: str, target_id: str, cover_id: str
+    ) -> None:
+        """Select an already persisted, verified owner cover; never calls Spotify."""
+        if not is_uploaded_cover_id(cover_id):
+            raise ManagedAdminError("uploaded cover ID is not valid")
+        self._cover_id(cover_id)  # Recheck asset integrity before committing a reference.
+        state = self.store.load()
+        pending = self.provisioning_journal.load()
+        if pending is not None:
+            raise ManagedAdminError("Resolve pending Spotify provisioning before changing artwork")
+        if target_kind == "draft":
+            draft = self._local_template(state, target_id)
+            updated = replace(draft, cover_id=cover_id)
+            self._save_validated(
+                replace(
+                    state,
+                    templates=tuple(
+                        updated if value.id == draft.id else value for value in state.templates
+                    ),
+                )
+            )
+            return
+        if target_kind == "managed":
+            playlist = self._managed(state, target_id)
+            if not str(playlist.template_id).startswith("custom_"):
+                raise ManagedAdminError("Only custom managed playlists support uploaded covers")
+            self._replace(state, replace(playlist, cover_id=cover_id))
+            return
+        raise ManagedAdminError("Unknown owner cover target")
+
     def delete_local_template(self, template_id: PlaylistId | str) -> None:
         """Only unreferenced drafts can be deleted; never deletes from Spotify."""
         state = self.store.load()
