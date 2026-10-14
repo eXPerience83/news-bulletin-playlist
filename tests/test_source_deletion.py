@@ -437,9 +437,7 @@ def test_custom_draft_reference_blocks_source_deletion_even_when_hidden(tmp_path
         cover_id="spain_spanish_news",
         hidden=True,
     )
-    service.store.save(
-        ManagedState(schema_version=7, sources=(source,), templates=(draft,))
-    )
+    service.store.save(ManagedState(schema_version=7, sources=(source,), templates=(draft,)))
 
     _, used_by, pending = service.deletion_references(str(source.id))
     assert used_by == ("Saved draft (custom template)",)
