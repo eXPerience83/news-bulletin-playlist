@@ -1434,12 +1434,14 @@ def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_onl
     assert _response(missing).status == HTTPStatus.BAD_REQUEST
     assert len(service.store.load().quarantined_templates) == 1
 
+    # Give this independently authorized request a fresh one-use token.
+    accepted_form = {**form, "csrf_token": [security.issue_csrf_token()]}
     accepted = _HandlerHarness(
         tmp_path=tmp_path,
         service=service,
         lifecycle=lifecycle,
         path="/admin/playlists/templates/quarantine/discard",
-        form=form,
+        form=accepted_form,
         security=security,
     )
     accepted.do_POST()
@@ -1457,7 +1459,7 @@ def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_onl
         service=service,
         lifecycle=lifecycle,
         path="/admin/playlists/templates/quarantine/discard",
-        form=form,
+        form=accepted_form,
         security=security,
     )
     replay.do_POST()
