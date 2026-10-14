@@ -240,7 +240,7 @@ def _managed_card(
         playlist.destination.external_id,
         safe="",
     )
-    state = (
+    status_label = (
         status_badge("Active", tone="success")
         if playlist.enabled
         else status_badge("Paused", tone="warning")
@@ -276,7 +276,7 @@ def _managed_card(
     {_cover_image(playlist.cover_id, playlist.display_name)}
     <div>
       <h3>{html.escape(playlist.display_name)}</h3>
-      <p>{state} {result}</p>
+      <p>{status_label} {result}</p>
       <p><a href="{html.escape(spotify_url, quote=True)}" target="_blank"
             rel="noopener noreferrer">Open in Spotify</a></p>
       <p class="muted">Spotify metadata/cover sync is independent from bulletin policy changes.</p>
