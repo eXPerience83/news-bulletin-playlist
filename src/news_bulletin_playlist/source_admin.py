@@ -515,6 +515,10 @@ class SourceAdminService:
                 playlist.display_name
                 for playlist in state.playlists
                 if source.id in playlist.source_ids
+            ) + tuple(
+                f"{template.display_name} (custom template)"
+                for template in state.templates
+                if source.id in template.default_source_ids
             )
             intent = self.provisioning_journal.load()
             pending = intent is not None and source.id in intent.source_ids
@@ -540,8 +544,10 @@ class SourceAdminService:
                 state = self.store.load()
                 source = self._custom_source(state, source_id)
                 intent = self.provisioning_journal.load()
-                if any(source.id in playlist.source_ids for playlist in state.playlists) or (
-                    intent is not None and source.id in intent.source_ids
+                if (
+                    any(source.id in playlist.source_ids for playlist in state.playlists)
+                    or any(source.id in template.default_source_ids for template in state.templates)
+                    or (intent is not None and source.id in intent.source_ids)
                 ):
                     raise SourceReferencedError("Unassign this source before deletion")
                 next_state = replace(

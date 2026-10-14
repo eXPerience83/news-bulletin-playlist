@@ -14,6 +14,7 @@ import pytest
 
 from news_bulletin_playlist import engine_runtime
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
 from news_bulletin_playlist.engine import EngineRunner
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.engine_runtime import (
@@ -28,7 +29,7 @@ from news_bulletin_playlist.managed_state import (
     activate_template,
     compile_engine_config,
 )
-from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.models import PlaylistId, SourceId
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.source_admin import (
     EngineCycleBusyError,
@@ -423,3 +424,25 @@ def test_cycle_and_delete_acquire_gate_before_configuration_lock(
     service.synchronization = OrderedConfiguration()
     assert service.delete(str(target.id)) is False
     assert observed == ["configuration", "configuration", "configuration"]
+
+
+def test_custom_draft_reference_blocks_source_deletion_even_when_hidden(tmp_path: Path) -> None:
+    service, _, _, _ = _setup(tmp_path)
+    source = _source(service, "Q")
+    draft = LocalPlaylistTemplate(
+        id=PlaylistId("custom_hidden_edition"),
+        display_name="Saved draft",
+        description="An installation-owned draft that still uses a custom source",
+        default_source_ids=(source.id,),
+        cover_id="spain_spanish_news",
+        hidden=True,
+    )
+    service.store.save(ManagedState(schema_version=7, sources=(source,), templates=(draft,)))
+
+    _, used_by, pending = service.deletion_references(str(source.id))
+    assert used_by == ("Saved draft (custom template)",)
+    assert pending is False
+    with pytest.raises(SourceReferencedError, match="Unassign"):
+        service.delete(str(source.id))
+    assert service.store.load().sources == (source,)
+    assert service.store.load().templates == (draft,)
