@@ -346,9 +346,10 @@ def _custom_draft_fields(
         source_prefix=prefix,
         enabled=None,
     )
+    selected_cover = draft.cover_id if draft is not None else "international_spanish_news"
     covers = "".join(
         f'<option value="{html.escape(template.cover_id, quote=True)}"'
-        f'{" selected" if template.cover_id == (draft.cover_id if draft else "international_spanish_news") else ""}>'
+        f'{" selected" if template.cover_id == selected_cover else ""}>'
         f"{html.escape(template.display_name)}</option>"
         for template in catalog.playlists
     )
