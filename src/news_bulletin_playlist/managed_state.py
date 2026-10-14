@@ -135,6 +135,31 @@ def _validate_overrides(
         seen.add(override.source_id)
 
 
+
+@dataclass(frozen=True, slots=True)
+class QuarantinedPlaylistTemplate:
+    """Preserve an invalid local draft losslessly as JSON data, never as active config."""
+
+    source_index: int
+    reason: str
+    raw_json: str
+
+    @property
+    def template_id(self) -> str | None:
+        value = json.loads(self.raw_json)
+        if isinstance(value, dict) and isinstance(value.get("id"), str):
+            return value["id"]
+        return None
+
+
+def _quarantined(raw: object, index: int, reason: str) -> QuarantinedPlaylistTemplate:
+    return QuarantinedPlaylistTemplate(
+        source_index=index,
+        reason=reason,
+        raw_json=json.dumps(raw, sort_keys=True, ensure_ascii=False),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ManagedState:
     schema_version: int = _MANAGED_STATE_SCHEMA_VERSION
@@ -142,6 +167,7 @@ class ManagedState:
     playlists: tuple[ManagedPlaylist, ...] = ()
     source_overrides: tuple[ManagedSourceOverride, ...] = ()
     templates: tuple[LocalPlaylistTemplate, ...] = ()
+    quarantined_templates: tuple[QuarantinedPlaylistTemplate, ...] = ()
 
 
 class ManagedStateStore:
@@ -394,7 +420,10 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         )
     _known_keys(
         root,
-        {"schema_version", "playlists", "sources", "source_overrides", "templates"}
+        {
+            "schema_version", "playlists", "sources", "source_overrides",
+            "templates", "quarantined_templates",
+        }
         if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION
         else {"schema_version", "playlists", "sources", "source_overrides"}
         if source_schema_version >= 5
@@ -474,35 +503,79 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         source_schema_version if source_schema_version < _MANAGED_STATE_SCHEMA_VERSION else None
     )
     sources = tuple(sorted(sources, key=lambda source: str(source.id)))
-    templates = (
-        tuple(
-            _parse_local_template(item, f"templates[{index}]")
-            for index, item in enumerate(
-                _sequence(_required(root, "templates", "managed state"), "templates")
-            )
-        )
-        if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION
-        else ()
+    source_definitions = effective_sources(
+        BUILTIN_CATALOG,
+        ManagedState(sources=sources, source_overrides=sorted_overrides),
     )
+    templates: list[LocalPlaylistTemplate] = []
+    quarantined: list[QuarantinedPlaylistTemplate] = []
+    if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION:
+        raw_templates = _sequence(
+            _required(root, "templates", "managed state"), "templates"
+        )
+        for index, raw in enumerate(raw_templates):
+            try:
+                draft = _parse_local_template(raw, f"templates[{index}]")
+                effective_playlist_templates(
+                    BUILTIN_CATALOG, (draft,), sources=source_definitions
+                )
+            except (ManagedStateError, LocalPlaylistTemplateError):
+                quarantined.append(_quarantined(raw, index, "invalid_definition"))
+            else:
+                templates.append(draft)
+        raw_quarantine = _sequence(root.get("quarantined_templates", []), "quarantined_templates")
+        for index, raw in enumerate(raw_quarantine):
+            item = _mapping(raw, f"quarantined_templates[{index}]")
+            _known_keys(
+                item, {"source_index", "reason", "raw"}, f"quarantined_templates[{index}]"
+            )
+            source_index = _integer(
+                _required(item, "source_index", f"quarantined_templates[{index}]"),
+                f"quarantined_templates[{index}].source_index",
+            )
+            if source_index < 0:
+                raise ManagedStateError("quarantine source_index cannot be negative")
+            reason = _string(
+                _required(item, "reason", f"quarantined_templates[{index}]"),
+                f"quarantined_templates[{index}].reason",
+            )
+            if reason not in {"invalid_definition", "duplicate_id"}:
+                raise ManagedStateError("unknown quarantine reason")
+            quarantined.append(
+                _quarantined(
+                    _required(item, "raw", f"quarantined_templates[{index}]"),
+                    source_index,
+                    reason,
+                )
+            )
+    # Duplicate draft IDs are ambiguous: quarantine *all* contenders, not just
+    # whichever one happened to appear second in JSON.
+    id_counts: dict[str, int] = {}
+    for template in templates:
+        id_counts[str(template.id)] = id_counts.get(str(template.id), 0) + 1
+    for invalid in quarantined:
+        if invalid.template_id is not None:
+            id_counts[invalid.template_id] = id_counts.get(invalid.template_id, 0) + 1
+    for template in tuple(templates):
+        if id_counts[str(template.id)] > 1:
+            templates.remove(template)
+            quarantined.append(
+                _quarantined(
+                    _serialize_local_template(template),
+                    len(raw_playlists) + len(quarantined),
+                    "duplicate_id",
+                )
+            )
     state = ManagedState(
-        schema_version=(
-            _CUSTOM_TEMPLATES_SCHEMA_VERSION
-            if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION
-            else _MANAGED_STATE_SCHEMA_VERSION
-        ),
+        schema_version=source_schema_version
+        if source_schema_version >= _MANAGED_STATE_SCHEMA_VERSION
+        else _MANAGED_STATE_SCHEMA_VERSION,
         sources=sources,
         playlists=playlists,
         source_overrides=sorted_overrides,
         templates=tuple(sorted(templates, key=lambda item: str(item.id))),
+        quarantined_templates=tuple(quarantined),
     )
-    try:
-        effective_playlist_templates(
-            BUILTIN_CATALOG,
-            state.templates,
-            sources=effective_sources(BUILTIN_CATALOG, state),
-        )
-    except LocalPlaylistTemplateError as exc:
-        raise ManagedStateError(str(exc)) from exc
     return state, migrated_from
 
 
@@ -512,7 +585,9 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
         _CUSTOM_TEMPLATES_SCHEMA_VERSION,
     }:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
-    if state.schema_version == _MANAGED_STATE_SCHEMA_VERSION and state.templates:
+    if state.schema_version == _MANAGED_STATE_SCHEMA_VERSION and (
+        state.templates or state.quarantined_templates
+    ):
         raise ManagedStateError("custom playlist templates require managed-state schema v7")
     _validate_overrides(state.source_overrides, BUILTIN_CATALOG)
     for index, source in enumerate(state.sources):
@@ -559,6 +634,15 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
         except LocalPlaylistTemplateError as exc:
             raise ManagedStateError(str(exc)) from exc
         payload["templates"] = [_serialize_local_template(item) for item in sorted_templates]
+        if state.quarantined_templates:
+            payload["quarantined_templates"] = [
+                {
+                    "source_index": item.source_index,
+                    "reason": item.reason,
+                    "raw": json.loads(item.raw_json),
+                }
+                for item in state.quarantined_templates
+            ]
     canonical = parse_managed_state(payload)
     if canonical != replace(
         state,
