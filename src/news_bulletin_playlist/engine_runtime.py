@@ -106,6 +106,7 @@ _ADMIN_NOTICE_MESSAGES = {
     "local-draft-created": "Custom playlist draft saved locally.",
     "local-draft-updated": "Custom playlist draft updated locally.",
     "local-draft-deleted": "Custom playlist draft deleted locally.",
+    "local-quarantine-discarded": "Damaged draft discarded locally after backup confirmation.",
 }
 _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/activate": "playlist-activated",
@@ -117,6 +118,7 @@ _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/templates/create": "local-draft-created",
     "/admin/playlists/templates/update": "local-draft-updated",
     "/admin/playlists/templates/delete": "local-draft-deleted",
+    "/admin/playlists/templates/quarantine/discard": "local-quarantine-discarded",
 }
 _MANAGED_POST_PATHS = frozenset(_ADMIN_POST_NOTICE_KEYS)
 
@@ -761,6 +763,7 @@ class OperationalHealthHandler(LanAdminHandler):
                 "/admin/playlists/templates/create",
                 "/admin/playlists/templates/update",
                 "/admin/playlists/templates/delete",
+                "/admin/playlists/templates/quarantine/discard",
             }:
                 # A template draft is local configuration only. Do not touch Spotify,
                 # auth tokens, lifecycle scheduling or playlist reconciliation.
@@ -893,6 +896,18 @@ class OperationalHealthHandler(LanAdminHandler):
             template_id = single_form_value(form, "template_id")
             service.delete_local_template(template_id)
             return template_id
+        if path == "/admin/playlists/templates/quarantine/discard":
+            if form.get("backup_confirmed", []) != ["1"]:
+                raise ValueError("Verified local backup confirmation is required")
+            raw_index = single_form_value(form, "quarantine_index")
+            if not raw_index.isascii() or not raw_index.isdecimal():
+                raise ValueError("Invalid quarantined draft index")
+            service.discard_quarantined_template(
+                int(raw_index),
+                single_form_value(form, "quarantine_fingerprint"),
+                backup_confirmed=True,
+            )
+            return "quarantine"
 
         minimum = duration_minutes_from_form(form, "min")
         maximum = duration_minutes_from_form(form, "max")
