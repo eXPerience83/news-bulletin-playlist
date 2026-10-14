@@ -11,6 +11,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.custom_playlist_templates import (
     CUSTOM_DEFAULT_COVER_ID,
     LocalPlaylistTemplate,
@@ -789,8 +790,15 @@ class ManagedAdminService:
         cover_id = _required_text(value, "cover id")
         known = {template.cover_id for template in self.catalog.playlists}
         known.add(CUSTOM_DEFAULT_COVER_ID)
-        if cover_id not in known:
+        if cover_id not in known and not is_uploaded_cover_id(cover_id):
             raise ManagedAdminError(f"unknown bundled cover: {cover_id}")
+        if is_uploaded_cover_id(cover_id):
+            if self.cover_loader is None:
+                raise ManagedAdminError("custom cover asset storage is unavailable")
+            try:
+                self.cover_loader(cover_id)
+            except OSError, ValueError as exc:
+                raise ManagedAdminError("custom cover asset is missing or invalid") from exc
         return cover_id
 
 
