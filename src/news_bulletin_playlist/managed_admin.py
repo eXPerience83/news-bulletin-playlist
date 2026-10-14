@@ -11,6 +11,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.custom_playlist_templates import (
     CUSTOM_DEFAULT_COVER_ID,
     LocalPlaylistTemplate,
@@ -323,6 +324,35 @@ class ManagedAdminService:
             )
         )
         return updated
+
+    def select_uploaded_cover(self, *, target_kind: str, target_id: str, cover_id: str) -> None:
+        """Select an already persisted, verified owner cover; never calls Spotify."""
+        if not is_uploaded_cover_id(cover_id):
+            raise ManagedAdminError("uploaded cover ID is not valid")
+        self._cover_id(cover_id)  # Recheck asset integrity before committing a reference.
+        state = self.store.load()
+        pending = self.provisioning_journal.load()
+        if pending is not None:
+            raise ManagedAdminError("Resolve pending Spotify provisioning before changing artwork")
+        if target_kind == "draft":
+            draft = self._local_template(state, target_id)
+            updated = replace(draft, cover_id=cover_id)
+            self._save_validated(
+                replace(
+                    state,
+                    templates=tuple(
+                        updated if value.id == draft.id else value for value in state.templates
+                    ),
+                )
+            )
+            return
+        if target_kind == "managed":
+            playlist = self._managed(state, target_id)
+            if not str(playlist.template_id).startswith("custom_"):
+                raise ManagedAdminError("Only custom managed playlists support uploaded covers")
+            self._replace(state, replace(playlist, cover_id=cover_id))
+            return
+        raise ManagedAdminError("Unknown owner cover target")
 
     def delete_local_template(self, template_id: PlaylistId | str) -> None:
         """Only unreferenced drafts can be deleted; never deletes from Spotify."""
@@ -789,8 +819,15 @@ class ManagedAdminService:
         cover_id = _required_text(value, "cover id")
         known = {template.cover_id for template in self.catalog.playlists}
         known.add(CUSTOM_DEFAULT_COVER_ID)
-        if cover_id not in known:
+        if cover_id not in known and not is_uploaded_cover_id(cover_id):
             raise ManagedAdminError(f"unknown bundled cover: {cover_id}")
+        if is_uploaded_cover_id(cover_id):
+            if self.cover_loader is None:
+                raise ManagedAdminError("custom cover asset storage is unavailable")
+            try:
+                self.cover_loader(cover_id)
+            except (OSError, ValueError) as exc:
+                raise ManagedAdminError("custom cover asset is missing or invalid") from exc
         return cover_id
 
 
