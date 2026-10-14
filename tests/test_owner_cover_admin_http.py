@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from test_source_admin_http import _Handler, _csrf, _login, _request, _server
+from test_source_admin_http import _csrf, _Handler, _login, _request, _server
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.custom_cover_assets import (
