@@ -11,9 +11,9 @@ import pytest
 from PIL import Image, PngImagePlugin
 
 from news_bulletin_playlist.custom_cover_assets import (
+    MAX_SOURCE_BYTES,
     CustomCoverAssetError,
     CustomCoverAssetStore,
-    MAX_SOURCE_BYTES,
     is_uploaded_cover_id,
 )
 
