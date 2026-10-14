@@ -187,9 +187,7 @@ class _CreateOnlySpotify:
     def create_playlist(
         self, name: str, *, public: bool = True, description: str = ""
     ) -> dict[str, str]:
-        assert description == render_spotify_description(
-            "Curated Spanish and English headlines."
-        )
+        assert description == render_spotify_description("Curated Spanish and English headlines.")
         self.calls.append((name, public))
         return {"id": "A" * 22}
 
