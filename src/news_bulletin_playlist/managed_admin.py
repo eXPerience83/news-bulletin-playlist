@@ -325,9 +325,7 @@ class ManagedAdminService:
         )
         return updated
 
-    def select_uploaded_cover(
-        self, *, target_kind: str, target_id: str, cover_id: str
-    ) -> None:
+    def select_uploaded_cover(self, *, target_kind: str, target_id: str, cover_id: str) -> None:
         """Select an already persisted, verified owner cover; never calls Spotify."""
         if not is_uploaded_cover_id(cover_id):
             raise ManagedAdminError("uploaded cover ID is not valid")
