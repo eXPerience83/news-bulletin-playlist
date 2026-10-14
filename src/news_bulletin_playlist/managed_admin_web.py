@@ -9,7 +9,10 @@ from collections.abc import Mapping
 
 from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warning
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
-from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
+from news_bulletin_playlist.custom_playlist_templates import (
+    CUSTOM_DEFAULT_COVER_ID,
+    LocalPlaylistTemplate,
+)
 from news_bulletin_playlist.engine import EngineCycleResult
 from news_bulletin_playlist.managed_admin import (
     MAX_PLAYLIST_DESCRIPTION_LENGTH,
@@ -417,8 +420,13 @@ def _custom_draft_fields(
         source_prefix=prefix,
         enabled=None,
     )
-    selected_cover = draft.cover_id if draft is not None else "international_spanish_news"
-    covers = "".join(
+    selected_cover = draft.cover_id if draft is not None else CUSTOM_DEFAULT_COVER_ID
+    default_option = (
+        f'<option value="{CUSTOM_DEFAULT_COVER_ID}"'
+        f'{" selected" if selected_cover == CUSTOM_DEFAULT_COVER_ID else ""}>'
+        "News Bulletin · Custom (default)</option>"
+    )
+    covers = default_option + "".join(
         f'<option value="{html.escape(template.cover_id, quote=True)}"'
         f"{' selected' if template.cover_id == selected_cover else ''}>"
         f"{html.escape(template.display_name)}</option>"
@@ -437,7 +445,7 @@ def _custom_draft_fields(
         )
     return f"""
 {policy}
-<label>Bundled cover (custom uploads are not yet supported)
+<label>Cover · choose the custom default or another bundled design (uploads coming soon)
   <select name="cover_id">{covers}</select>
 </label>
 <div class="duration-row">
