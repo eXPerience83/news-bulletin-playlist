@@ -496,7 +496,11 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         templates=tuple(sorted(templates, key=lambda item: str(item.id))),
     )
     try:
-        effective_playlist_templates(BUILTIN_CATALOG, state.templates, sources=effective_sources(BUILTIN_CATALOG, state))
+        effective_playlist_templates(
+            BUILTIN_CATALOG,
+            state.templates,
+            sources=effective_sources(BUILTIN_CATALOG, state),
+        )
     except LocalPlaylistTemplateError as exc:
         raise ManagedStateError(str(exc)) from exc
     return state, migrated_from
@@ -634,7 +638,9 @@ def _parse_local_template(value: object, path: str) -> LocalPlaylistTemplate:
                 LanguageTag(_string(item, f"{path}.languages[{index}]"))
                 for index, item in enumerate(languages)
             ),
-            retention_hours=_integer(_required(data, "retention_hours", path), f"{path}.retention_hours"),
+            retention_hours=_integer(
+                _required(data, "retention_hours", path), f"{path}.retention_hours"
+            ),
             max_episodes=_integer(_required(data, "max_episodes", path), f"{path}.max_episodes"),
             min_duration_seconds=_integer(
                 _required(data, "min_duration_seconds", path), f"{path}.min_duration_seconds"
