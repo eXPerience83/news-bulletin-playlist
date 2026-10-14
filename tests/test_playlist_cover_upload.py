@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.custom_playlist_templates import CUSTOM_DEFAULT_COVER_ID
 from news_bulletin_playlist.engine_runtime import _load_bundled_cover
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminService,
@@ -214,6 +215,17 @@ def test_bundled_spain_cover_is_a_spotify_sized_jpeg() -> None:
     assert jpeg.startswith(b"\xff\xd8")
     assert jpeg.endswith(b"\xff\xd9")
     assert len(base64.b64encode(jpeg)) <= 256 * 1024
+
+
+def test_custom_default_cover_is_a_separate_spotify_sized_jpeg() -> None:
+    jpeg = _load_bundled_cover(CUSTOM_DEFAULT_COVER_ID)
+    assert jpeg.startswith(b"\xff\xd8")
+    assert jpeg.endswith(b"\xff\xd9")
+    assert len(base64.b64encode(jpeg)) <= 256 * 1024
+    assert jpeg != _load_bundled_cover("international_spanish_news")
+    assert CUSTOM_DEFAULT_COVER_ID not in {
+        template.cover_id for template in BUILTIN_CATALOG.playlists
+    }
 
 
 def test_coverless_injected_client_skips_optional_cover_capability(tmp_path: Path) -> None:
