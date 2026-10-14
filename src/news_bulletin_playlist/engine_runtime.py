@@ -103,6 +103,9 @@ _ADMIN_NOTICE_MESSAGES = {
     "playlist-stopped": "Playlist is no longer managed.",
     "playlist-provisioning-adopted": "Existing Spotify playlist adopted successfully.",
     "playlist-provisioning-cleared": "Uncertain playlist creation state cleared successfully.",
+    "local-draft-created": "Custom playlist draft saved locally.",
+    "local-draft-updated": "Custom playlist draft updated locally.",
+    "local-draft-deleted": "Custom playlist draft deleted locally.",
 }
 _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/activate": "playlist-activated",
@@ -111,6 +114,9 @@ _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/stop": "playlist-stopped",
     "/admin/provisioning/adopt": "playlist-provisioning-adopted",
     "/admin/provisioning/clear": "playlist-provisioning-cleared",
+    "/admin/playlists/templates/create": "local-draft-created",
+    "/admin/playlists/templates/update": "local-draft-updated",
+    "/admin/playlists/templates/delete": "local-draft-deleted",
 }
 _MANAGED_POST_PATHS = frozenset(_ADMIN_POST_NOTICE_KEYS)
 
@@ -751,6 +757,20 @@ class OperationalHealthHandler(LanAdminHandler):
                     cover_error=None,
                     metadata_outcome=metadata_outcome,
                 )
+            elif path in {
+                "/admin/playlists/templates/create",
+                "/admin/playlists/templates/update",
+                "/admin/playlists/templates/delete",
+            }:
+                # A template draft is local configuration only. Do not touch Spotify,
+                # auth tokens, lifecycle scheduling or playlist reconciliation.
+                with synchronization.hold():
+                    playlist_id_for_event = self._handle_local_template_form(service, form, path)
+                self._emit_admin_configuration_event(
+                    event_name="admin_local_template_changed",
+                    playlist_id=playlist_id_for_event,
+                    next_state="deleted" if path.endswith("/delete") else "draft",
+                )
             elif path in {"/admin/provisioning/adopt", "/admin/provisioning/clear"}:
                 with synchronization.hold():
                     if path == "/admin/provisioning/adopt":
@@ -860,6 +880,54 @@ class OperationalHealthHandler(LanAdminHandler):
             HTTPStatus.SEE_OTHER,
             b"",
             extra_headers={"Location": location},
+        )
+
+    def _handle_local_template_form(
+        self,
+        service: ManagedAdminService,
+        form: Mapping[str, list[str]],
+        path: str,
+    ) -> str:
+        """Local-only custom template mutation behind existing auth/CSRF/lock."""
+        if path == "/admin/playlists/templates/delete":
+            template_id = single_form_value(form, "template_id")
+            service.delete_local_template(template_id)
+            return template_id
+
+        minimum = duration_minutes_from_form(form, "min")
+        maximum = duration_minutes_from_form(form, "max")
+        if minimum is None or maximum is None:
+            raise ValueError("both duration bounds are required")
+        name = single_form_value(form, "display_name")
+        description = single_form_value(form, "description", required=False)
+        cover = single_form_value(form, "cover_id")
+        retention = int(single_form_value(form, "retention_hours"))
+        max_episodes = int(single_form_value(form, "max_episodes"))
+        langs = single_form_value(form, "language_tags", required=False)
+        countries = single_form_value(form, "country_codes", required=False)
+        values = {
+            "display_name": name,
+            "description": description,
+            "cover_id": cover,
+            "source_ids": form.get("source_id", []),
+            "retention_hours": retention,
+            "max_episodes": max_episodes,
+            "min_duration_minutes": minimum,
+            "max_duration_minutes": maximum,
+            "languages": tuple(part.strip() for part in langs.split(",") if part.strip()),
+            "countries": tuple(part.strip() for part in countries.split(",") if part.strip()),
+        }
+        if path == "/admin/playlists/templates/create":
+            return str(service.create_local_template(**values).id)
+        hidden_values = form.get("hidden", [])
+        if hidden_values not in ([], ["1"]):
+            raise ValueError("hidden must be omitted or set exactly once")
+        return str(
+            service.update_local_template(
+                single_form_value(form, "template_id"),
+                **values,
+                hidden=bool(hidden_values),
+            ).id
         )
 
     def _activate_managed_playlist(
