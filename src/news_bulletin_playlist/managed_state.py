@@ -14,6 +14,11 @@ from typing import cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_playlist_templates import (
+    LocalPlaylistTemplate,
+    LocalPlaylistTemplateError,
+    effective_playlist_templates,
+)
 from news_bulletin_playlist.custom_source_policy import custom_strategy_allowed
 from news_bulletin_playlist.file_durability import fsync_directory
 from news_bulletin_playlist.managed_duration import (
@@ -23,12 +28,14 @@ from news_bulletin_playlist.managed_duration import (
 )
 from news_bulletin_playlist.models import (
     AdapterId,
+    CountryCode,
     DestinationReference,
     DurationPolicy,
     EditorialScope,
     EngineConfig,
     ExternalReference,
     LanguageTag,
+    OrderingPolicy,
     ParserId,
     PlaylistDefinition,
     PlaylistId,
@@ -44,6 +51,7 @@ from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 MANAGED_STATE_FILENAME = "managed-state.json"
 _MANAGED_STATE_SCHEMA_VERSION = 6
+_CUSTOM_TEMPLATES_SCHEMA_VERSION = 7
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
 _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
@@ -133,6 +141,7 @@ class ManagedState:
     sources: tuple[ManagedSource, ...] = ()
     playlists: tuple[ManagedPlaylist, ...] = ()
     source_overrides: tuple[ManagedSourceOverride, ...] = ()
+    templates: tuple[LocalPlaylistTemplate, ...] = ()
 
 
 class ManagedStateStore:
@@ -220,7 +229,13 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
     sources = effective_sources(catalog, state)
     source_ids = {source.id for source in sources}
     enabled_source_ids = {source.id for source in sources if source.enabled}
-    templates = {template.id: template for template in catalog.playlists}
+    try:
+        templates = {
+            template.id: template
+            for template in effective_playlist_templates(catalog, state.templates, sources=sources)
+        }
+    except LocalPlaylistTemplateError as exc:
+        raise ManagedStateError(str(exc)) from exc
     playlists: list[PlaylistDefinition] = []
     seen_ids: set[PlaylistId] = set()
     seen_destinations: set[tuple[AdapterId, str]] = set()
@@ -372,13 +387,16 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         4,
         5,
         _MANAGED_STATE_SCHEMA_VERSION,
+        _CUSTOM_TEMPLATES_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
             f"unsupported managed-state schema version: {source_schema_version}"
         )
     _known_keys(
         root,
-        {"schema_version", "playlists", "sources", "source_overrides"}
+        {"schema_version", "playlists", "sources", "source_overrides", "templates"}
+        if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION
+        else {"schema_version", "playlists", "sources", "source_overrides"}
         if source_schema_version >= 5
         else {"schema_version", "playlists", "sources"}
         if source_schema_version >= 3
@@ -450,24 +468,48 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         if playlist.enabled:
             seen_destinations.add(destination_key)
 
+    # Schema v6 remains on disk until the operator explicitly creates a custom draft.
+    # Merely deploying a newer image must not make a v6 rollback impossible.
     migrated_from = (
-        source_schema_version if source_schema_version != _MANAGED_STATE_SCHEMA_VERSION else None
+        source_schema_version if source_schema_version < _MANAGED_STATE_SCHEMA_VERSION else None
     )
     sources = tuple(sorted(sources, key=lambda source: str(source.id)))
-    return (
-        ManagedState(
-            schema_version=_MANAGED_STATE_SCHEMA_VERSION,
-            sources=sources,
-            playlists=playlists,
-            source_overrides=sorted_overrides,
-        ),
-        migrated_from,
+    templates = (
+        tuple(
+            _parse_local_template(item, f"templates[{index}]")
+            for index, item in enumerate(
+                _sequence(_required(root, "templates", "managed state"), "templates")
+            )
+        )
+        if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION
+        else ()
     )
+    state = ManagedState(
+        schema_version=(
+            _CUSTOM_TEMPLATES_SCHEMA_VERSION
+            if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION
+            else _MANAGED_STATE_SCHEMA_VERSION
+        ),
+        sources=sources,
+        playlists=playlists,
+        source_overrides=sorted_overrides,
+        templates=tuple(sorted(templates, key=lambda item: str(item.id))),
+    )
+    try:
+        effective_playlist_templates(BUILTIN_CATALOG, state.templates, sources=effective_sources(BUILTIN_CATALOG, state))
+    except LocalPlaylistTemplateError as exc:
+        raise ManagedStateError(str(exc)) from exc
+    return state, migrated_from
 
 
 def serialize_managed_state(state: ManagedState) -> dict[str, object]:
-    if state.schema_version != _MANAGED_STATE_SCHEMA_VERSION:
+    if state.schema_version not in {
+        _MANAGED_STATE_SCHEMA_VERSION,
+        _CUSTOM_TEMPLATES_SCHEMA_VERSION,
+    }:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
+    if state.schema_version == _MANAGED_STATE_SCHEMA_VERSION and state.templates:
+        raise ManagedStateError("custom playlist templates require managed-state schema v7")
     _validate_overrides(state.source_overrides, BUILTIN_CATALOG)
     for index, source in enumerate(state.sources):
         _validate_source(source, f"sources[{index}]")
@@ -504,16 +546,107 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
         ],
         "playlists": serialized_playlists,
     }
+    if state.schema_version == _CUSTOM_TEMPLATES_SCHEMA_VERSION:
+        sorted_templates = tuple(sorted(state.templates, key=lambda item: str(item.id)))
+        try:
+            effective_playlist_templates(
+                BUILTIN_CATALOG, sorted_templates, sources=effective_sources(BUILTIN_CATALOG, state)
+            )
+        except LocalPlaylistTemplateError as exc:
+            raise ManagedStateError(str(exc)) from exc
+        payload["templates"] = [_serialize_local_template(item) for item in sorted_templates]
     canonical = parse_managed_state(payload)
     if canonical != replace(
         state,
         sources=sorted_sources,
+        templates=tuple(sorted(state.templates, key=lambda item: str(item.id))),
         source_overrides=tuple(
             sorted(state.source_overrides, key=lambda item: str(item.source_id))
         ),
     ):
         raise ManagedStateError("managed state contains non-canonical values")
     return payload
+
+
+
+def _serialize_local_template(item: LocalPlaylistTemplate) -> dict[str, object]:
+    return {
+        "id": str(item.id),
+        "display_name": item.display_name,
+        "description": item.description,
+        "default_source_ids": [str(value) for value in item.default_source_ids],
+        "cover_id": item.cover_id,
+        "countries": [str(value) for value in item.countries],
+        "languages": [str(value) for value in item.languages],
+        "retention_hours": item.retention_hours,
+        "max_episodes": item.max_episodes,
+        "min_duration_seconds": item.min_duration_seconds,
+        "max_duration_seconds": item.max_duration_seconds,
+        "ordering": item.ordering.value,
+        "hidden": item.hidden,
+    }
+
+
+def _parse_local_template(value: object, path: str) -> LocalPlaylistTemplate:
+    data = _mapping(value, path)
+    _known_keys(
+        data,
+        {
+            "id",
+            "display_name",
+            "description",
+            "default_source_ids",
+            "cover_id",
+            "countries",
+            "languages",
+            "retention_hours",
+            "max_episodes",
+            "min_duration_seconds",
+            "max_duration_seconds",
+            "ordering",
+            "hidden",
+        },
+        path,
+    )
+    source_values = _sequence(
+        _required(data, "default_source_ids", path), f"{path}.default_source_ids"
+    )
+    countries = _sequence(_required(data, "countries", path), f"{path}.countries")
+    languages = _sequence(_required(data, "languages", path), f"{path}.languages")
+    ordering_name = _string(_required(data, "ordering", path), f"{path}.ordering")
+    if ordering_name != OrderingPolicy.EDITION_AT_DESC.value:
+        raise ManagedStateError(f"{path}.ordering: unsupported ordering")
+    try:
+        return LocalPlaylistTemplate(
+            id=PlaylistId(_nonempty_string(_required(data, "id", path), f"{path}.id")),
+            display_name=_string(_required(data, "display_name", path), f"{path}.display_name"),
+            description=_string(_required(data, "description", path), f"{path}.description"),
+            default_source_ids=tuple(
+                SourceId(_string(item, f"{path}.default_source_ids[{index}]"))
+                for index, item in enumerate(source_values)
+            ),
+            cover_id=_string(_required(data, "cover_id", path), f"{path}.cover_id"),
+            countries=tuple(
+                CountryCode(_string(item, f"{path}.countries[{index}]"))
+                for index, item in enumerate(countries)
+            ),
+            languages=tuple(
+                LanguageTag(_string(item, f"{path}.languages[{index}]"))
+                for index, item in enumerate(languages)
+            ),
+            retention_hours=_integer(_required(data, "retention_hours", path), f"{path}.retention_hours"),
+            max_episodes=_integer(_required(data, "max_episodes", path), f"{path}.max_episodes"),
+            min_duration_seconds=_integer(
+                _required(data, "min_duration_seconds", path), f"{path}.min_duration_seconds"
+            ),
+            max_duration_seconds=_integer(
+                _required(data, "max_duration_seconds", path), f"{path}.max_duration_seconds"
+            ),
+            ordering=OrderingPolicy.EDITION_AT_DESC,
+            hidden=_boolean(_required(data, "hidden", path), f"{path}.hidden"),
+        )
+    except LocalPlaylistTemplateError as exc:
+        raise ManagedStateError(f"{path}: {exc}") from exc
 
 
 def _serialize_source(source: ManagedSource) -> dict[str, object]:
