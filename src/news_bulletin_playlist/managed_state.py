@@ -266,7 +266,17 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
     seen_ids: set[PlaylistId] = set()
     seen_destinations: set[tuple[AdapterId, str]] = set()
 
+    quarantined_ids = {
+        item.template_id
+        for item in state.quarantined_templates
+        if item.template_id is not None and item.template_id not in templates
+    }
     for managed in state.playlists:
+        # A corrupted custom draft must never reconcile by a made-up/default policy.
+        # Excluding its destination causes zero provider writes, without removing the
+        # managed record or affecting unrelated destinations.
+        if str(managed.template_id) in quarantined_ids:
+            continue
         if managed.id in seen_ids:
             raise ManagedStateError(f"duplicate managed playlist id: {managed.id}")
         seen_ids.add(managed.id)
@@ -508,6 +518,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         ManagedState(sources=sources, source_overrides=sorted_overrides),
     )
     templates: list[LocalPlaylistTemplate] = []
+    template_positions: list[int] = []
     quarantined: list[QuarantinedPlaylistTemplate] = []
     if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION:
         raw_templates = _sequence(
@@ -523,6 +534,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
                 quarantined.append(_quarantined(raw, index, "invalid_definition"))
             else:
                 templates.append(draft)
+                template_positions.append(index)
         raw_quarantine = _sequence(root.get("quarantined_templates", []), "quarantined_templates")
         for index, raw in enumerate(raw_quarantine):
             item = _mapping(raw, f"quarantined_templates[{index}]")
@@ -556,16 +568,14 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     for invalid in quarantined:
         if invalid.template_id is not None:
             id_counts[invalid.template_id] = id_counts.get(invalid.template_id, 0) + 1
-    for template in tuple(templates):
+    accepted: list[LocalPlaylistTemplate] = []
+    for template, index in zip(templates, template_positions, strict=True):
         if id_counts[str(template.id)] > 1:
-            templates.remove(template)
             quarantined.append(
-                _quarantined(
-                    _serialize_local_template(template),
-                    len(raw_playlists) + len(quarantined),
-                    "duplicate_id",
-                )
+                _quarantined(_serialize_local_template(template), index, "duplicate_id")
             )
+        else:
+            accepted.append(template)
     state = ManagedState(
         schema_version=source_schema_version
         if source_schema_version >= _MANAGED_STATE_SCHEMA_VERSION
@@ -573,7 +583,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         sources=sources,
         playlists=playlists,
         source_overrides=sorted_overrides,
-        templates=tuple(sorted(templates, key=lambda item: str(item.id))),
+        templates=tuple(sorted(accepted, key=lambda item: str(item.id))),
         quarantined_templates=tuple(quarantined),
     )
     return state, migrated_from
