@@ -15,7 +15,7 @@ from news_bulletin_playlist.managed_admin import (
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 
-JPEG = b"\\xff\\xd8" + b"custom-default-cover" + b"\\xff\\xd9"
+JPEG = b"\xff\xd8" + b"custom-default-cover" + b"\xff\xd9"
 
 
 class _Spotify:
