@@ -307,14 +307,7 @@ class ManagedAdminService:
             max_duration_seconds=intent.max_duration_seconds,
             min_duration_seconds=intent.min_duration_seconds,
         )
-        self._save_validated(
-            ManagedState(
-                schema_version=state.schema_version,
-                sources=state.sources,
-                source_overrides=state.source_overrides,
-                playlists=state.playlists + (managed,),
-            )
-        )
+        self._save_validated(replace(state, playlists=state.playlists + (managed,)))
         self.provisioning_journal.clear()
         return managed
 
@@ -464,14 +457,7 @@ class ManagedAdminService:
         state = self.store.load()
         current = self._managed(state, playlist_id)
         remaining = tuple(playlist for playlist in state.playlists if playlist.id != current.id)
-        self._save_validated(
-            ManagedState(
-                schema_version=state.schema_version,
-                sources=state.sources,
-                source_overrides=state.source_overrides,
-                playlists=remaining,
-            )
-        )
+        self._save_validated(replace(state, playlists=remaining))
         return current.destination.external_id
 
     def _apply_metadata_with_attribution(
@@ -511,12 +497,7 @@ class ManagedAdminService:
         playlists = tuple(
             updated if playlist.id == updated.id else playlist for playlist in state.playlists
         )
-        return ManagedState(
-            schema_version=state.schema_version,
-            sources=state.sources,
-            source_overrides=state.source_overrides,
-            playlists=playlists,
-        )
+        return replace(state, playlists=playlists)
 
     def _validate_state(self, state: ManagedState) -> None:
         compile_engine_config(self.catalog, state)
