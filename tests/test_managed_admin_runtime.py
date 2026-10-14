@@ -1464,3 +1464,48 @@ def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_onl
     )
     replay.do_POST()
     assert _response(replay).status == HTTPStatus.FORBIDDEN
+
+
+def test_custom_playlist_creation_with_cover_failure_shows_pending_notice(
+    tmp_path: Path,
+) -> None:
+    service, factory = _service(tmp_path)
+    # A real service always has a cover loader; this stub lacks upload support.
+    service.cover_loader = lambda _cover_id: b"\xff\\xd8fixture\xff\\xd9"
+    draft = service.create_local_template(
+        display_name="Personalizada",
+        description="Boletines de actualidad",
+        cover_id="international_spanish_news",
+        source_ids=("cnn",),
+        retention_hours=48,
+        max_episodes=100,
+        min_duration_minutes=0,
+        max_duration_minutes=30,
+    )
+    security = LanAdminSecurity(_PASSWORD)
+    handler = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=_FakeLifecycle(),
+        path="/admin/playlists/activate",
+        security=security,
+        auth_provider=_AccessTokenProvider(),
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "template_id": [str(draft.id)],
+            "display_name": [draft.display_name],
+            "description": [draft.description],
+            "cover_id": [draft.cover_id],
+            "source_id": ["cnn"],
+            "min_duration_minutes": ["0"],
+            "max_duration_minutes": ["30"],
+        },
+    )
+    handler.do_POST()
+    result = _response(handler)
+    assert result.status == HTTPStatus.SEE_OTHER
+    assert result.extra_headers["Location"] == "/admin/?notice=playlist-activated-cover-pending"
+    assert len(factory.client.create_calls) == 1
+    assert len(service.store.load().playlists) == 1
+    assert service.provisioning_journal.load() is None
+    assert service.last_initial_cover_error == "local cover unavailable"

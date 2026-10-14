@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
+from news_bulletin_playlist.managed_admin import (
+    ManagedAdminError,
+    ManagedAdminService,
+    render_spotify_description,
+)
 from news_bulletin_playlist.managed_provisioning import (
     ProvisioningIntent,
     ProvisioningJournal,
@@ -183,7 +187,7 @@ class _CreateOnlySpotify:
     def create_playlist(
         self, name: str, *, public: bool = True, description: str = ""
     ) -> dict[str, str]:
-        assert description == ""
+        assert description == render_spotify_description("Curated Spanish and English headlines.")
         self.calls.append((name, public))
         return {"id": "A" * 22}
 

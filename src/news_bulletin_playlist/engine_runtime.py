@@ -98,6 +98,10 @@ _SCHEDULER_SHUTDOWN_WAIT_SECONDS = 10.0
 _BUNDLED_COVER_DIR = Path("/opt/news-bulletin-playlist/covers")
 _ADMIN_NOTICE_MESSAGES = {
     "playlist-activated": "Playlist activated successfully.",
+    "playlist-activated-cover-pending": (
+        "Spotify playlist created with initial project attribution, but its cover "
+        "could not be applied. Use Apply Spotify metadata & cover to retry."
+    ),
     "playlist-settings-saved": "Playlist settings saved successfully.",
     "spotify-sync-applied": "Spotify metadata and cover applied successfully.",
     "playlist-stopped": "Playlist is no longer managed.",
@@ -878,6 +882,8 @@ class OperationalHealthHandler(LanAdminHandler):
             return
 
         notice_key = _ADMIN_POST_NOTICE_KEYS[path]
+        if path == "/admin/playlists/activate" and service.last_initial_cover_error is not None:
+            notice_key = "playlist-activated-cover-pending"
         location = f"/admin/?notice={notice_key}"
         self._reply(
             HTTPStatus.SEE_OTHER,
