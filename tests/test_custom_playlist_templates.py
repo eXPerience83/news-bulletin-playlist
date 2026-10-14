@@ -65,9 +65,7 @@ def test_hidden_template_remains_resolvable_for_existing_managed_references() ->
 def test_custom_drafts_are_ordered_deterministically_without_reordering_builtins() -> None:
     z = _draft(id=PlaylistId("custom_z"))
     a = _draft(id=PlaylistId("custom_a"))
-    result = effective_playlist_templates(
-        BUILTIN_CATALOG, (z, a), sources=BUILTIN_CATALOG.sources
-    )
+    result = effective_playlist_templates(BUILTIN_CATALOG, (z, a), sources=BUILTIN_CATALOG.sources)
     assert [str(item.id) for item in result[-2:]] == ["custom_a", "custom_z"]
 
 
@@ -108,12 +106,14 @@ def test_rejects_colliding_id_or_cover_or_deleted_source() -> None:
         )
     with pytest.raises(LocalPlaylistTemplateError, match="cover"):
         effective_playlist_templates(
-            BUILTIN_CATALOG, (replace(draft, cover_id="nonexistent"),),
+            BUILTIN_CATALOG,
+            (replace(draft, cover_id="nonexistent"),),
             sources=BUILTIN_CATALOG.sources,
         )
     with pytest.raises(LocalPlaylistTemplateError, match="source"):
         effective_playlist_templates(
-            BUILTIN_CATALOG, (_draft(default_source_ids=(SourceId("not_installed"),)),),
+            BUILTIN_CATALOG,
+            (_draft(default_source_ids=(SourceId("not_installed"),)),),
             sources=BUILTIN_CATALOG.sources,
         )
 
