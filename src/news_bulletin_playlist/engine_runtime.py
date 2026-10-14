@@ -16,6 +16,16 @@ from types import FrameType
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.custom_cover_assets import (
+    CustomCoverAssetError,
+    CustomCoverAssetStore,
+    is_uploaded_cover_id,
+)
+from news_bulletin_playlist.owner_cover_upload import (
+    MAX_MULTIPART_BYTES,
+    CoverUploadRequestError,
+    parse_owner_cover_multipart,
+)
 from news_bulletin_playlist.custom_playlist_templates import CUSTOM_DEFAULT_COVER_ID
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.effective_config import load_effective_config
@@ -111,6 +121,10 @@ _ADMIN_NOTICE_MESSAGES = {
     "local-draft-created": "Custom playlist draft saved locally.",
     "local-draft-updated": "Custom playlist draft updated locally.",
     "local-draft-deleted": "Custom playlist draft deleted locally.",
+    "owner-cover-uploaded": (
+        "Custom cover saved locally. For an existing Spotify playlist, "
+        "use Apply Spotify metadata & cover to publish this change."
+    ),
     "local-quarantine-discarded": "Damaged draft discarded locally after backup confirmation.",
 }
 _ADMIN_POST_NOTICE_KEYS = {
@@ -569,6 +583,9 @@ class OperationalHealthHandler(LanAdminHandler):
         except ValueError:
             self._reply(HTTPStatus.BAD_REQUEST, b"Invalid request")
             return
+        if parsed.path == "/admin/owner-covers/upload":
+            self._handle_owner_cover_upload()
+            return
         if parsed.path in _MANAGED_POST_PATHS and self.managed_admin_service is not None:
             self._handle_managed_post(parsed.path)
             return
@@ -604,6 +621,10 @@ class OperationalHealthHandler(LanAdminHandler):
                 HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
                 payload,
             )
+            return
+
+        if parsed.path.startswith("/admin/owner-covers/"):
+            self._serve_owner_cover(parsed.path)
             return
 
         if parsed.path.startswith("/admin/covers/"):
@@ -712,6 +733,91 @@ class OperationalHealthHandler(LanAdminHandler):
             )
             return
         self._reply(HTTPStatus.OK, payload, content_type="image/jpeg")
+
+    def _serve_owner_cover(self, path: str) -> None:
+        if self._require_admin() is None:
+            return
+        prefix = "/admin/owner-covers/"
+        filename = urllib.parse.unquote(path[len(prefix) :])
+        if not filename.endswith(".jpg"):
+            self._reply(HTTPStatus.NOT_FOUND, b"Not found")
+            return
+        cover_id = filename[:-4]
+        if not is_uploaded_cover_id(cover_id):
+            self._reply(HTTPStatus.NOT_FOUND, b"Not found")
+            return
+        try:
+            jpeg = CustomCoverAssetStore(self.data_dir / "custom-covers").load(cover_id)
+        except CustomCoverAssetError:
+            self._reply(HTTPStatus.NOT_FOUND, b"Custom cover unavailable")
+            return
+        self._reply(
+            HTTPStatus.OK,
+            jpeg,
+            content_type="image/jpeg",
+            extra_headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    def _handle_owner_cover_upload(self) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.managed_admin_service
+        synchronization = self.configuration_synchronization
+        if service is None or synchronization is None:
+            self._reply(HTTPStatus.SERVICE_UNAVAILABLE, b"Cover upload unavailable")
+            return
+        try:
+            if self.headers.get("Transfer-Encoding") is not None:
+                raise CoverUploadRequestError("Chunked image uploads are not supported")
+            raw_length = self.headers.get("Content-Length", "")
+            if not raw_length.isascii() or not raw_length.isdecimal():
+                raise CoverUploadRequestError("Missing or invalid upload content length")
+            length = int(raw_length)
+            if not 0 < length <= MAX_MULTIPART_BYTES:
+                raise CoverUploadRequestError("Image upload request exceeds 2 MiB")
+            content_type = self.headers.get("Content-Type", "")
+            raw_body = self.rfile.read(length)
+            if len(raw_body) != length:
+                raise CoverUploadRequestError("Incomplete image upload")
+            token, target_kind, target_id, image = parse_owner_cover_multipart(
+                content_type, raw_body
+            )
+        except CoverUploadRequestError as exc:
+            self._reply(HTTPStatus.BAD_REQUEST, str(exc).encode("utf-8"))
+            return
+        if not security.consume_csrf_token(token):
+            self._reply(HTTPStatus.FORBIDDEN, b"Administration form validation failed")
+            return
+        try:
+            with synchronization.hold():
+                store = CustomCoverAssetStore(self.data_dir / "custom-covers")
+                new_cover_id = store.save(image)
+                service.select_uploaded_cover(
+                    target_kind=target_kind,
+                    target_id=target_id,
+                    cover_id=new_cover_id,
+                )
+        except CustomCoverAssetError as exc:
+            self._reply(HTTPStatus.BAD_REQUEST, str(exc).encode("utf-8"))
+            return
+        except ManagedAdminError as exc:
+            self._managed_error(HTTPStatus.CONFLICT, str(exc))
+            return
+        except ManagedStateError, OSError:
+            self._managed_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Could not persist the selected custom cover",
+            )
+            return
+        self._reply(
+            HTTPStatus.SEE_OTHER,
+            b"",
+            extra_headers={"Location": "/admin/?notice=owner-cover-uploaded"},
+        )
 
     def _handle_managed_post(self, path: str) -> None:
         security = self._require_admin()
@@ -1318,10 +1424,17 @@ def _build_managed_admin_service(
             clock=lambda: datetime.now(UTC),
         )
 
+    owner_covers = CustomCoverAssetStore(data_dir / "custom-covers")
+
+    def cover_loader(cover_id: str) -> bytes:
+        if is_uploaded_cover_id(cover_id):
+            return owner_covers.load(cover_id)
+        return _load_bundled_cover(cover_id)
+
     return ManagedAdminService(
         ManagedStateStore(data_dir / MANAGED_STATE_FILENAME),
         client_factory=client_factory,
-        cover_loader=_load_bundled_cover,
+        cover_loader=cover_loader,
     )
 
 
