@@ -435,6 +435,13 @@ class ManagedAdminService:
                 raise PlaylistProvisioningRecoveryRequired()
             self.provisioning_journal.clear()
             return existing
+        if any(
+            item.template_id == str(intent.template_id)
+            for item in state.quarantined_templates
+        ):
+            # Never fabricate an activated destination from a quarantined draft.
+            # Keep the journal for explicit operator recovery.
+            return None
         template = self._template(intent.template_id, state=state)
         managed = replace(
             activate_template(template, intent.destination_id),
@@ -663,6 +670,13 @@ class ManagedAdminService:
     def _managed(self, state: ManagedState, playlist_id: PlaylistId | str) -> ManagedPlaylist:
         for playlist in state.playlists:
             if playlist.id == playlist_id:
+                if any(
+                    item.template_id == str(playlist.template_id)
+                    for item in state.quarantined_templates
+                ):
+                    raise ManagedAdminError(
+                        "managed playlist has a quarantined template; repair it before editing"
+                    )
                 return playlist
         raise ManagedAdminError(f"unknown managed playlist: {playlist_id}")
 
