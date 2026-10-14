@@ -5,9 +5,12 @@ and its implementation slices [#516](https://github.com/eXPerience83/news-bullet
 [#517](https://github.com/eXPerience83/news-bulletin-playlist/issues/517) and
 [#518](https://github.com/eXPerience83/news-bulletin-playlist/issues/518).
 
-This document covers the **state/persistence foundation only**. Having schema support
-does **not** mean that Admin can already create drafts, that new templates are
-available for activation, or that Spotify playlists will be created automatically.
+Implementation layers: #516 supplies the state/persistence contract; #517 adds
+authenticated **My playlists → New playlist** draft create/edit/hide/delete.
+#518 integrates an explicit, separately authorized Spotify activation action.
+These changes exist in source control, **not yet in the deployed TrueNAS image**.
+Saving, editing or deleting a draft **never** calls Spotify; creating a real
+Spotify destination remains a separate deliberate user action.
 
 ## Built-in vs installation-owned
 
@@ -32,8 +35,8 @@ a v6 document into v7.** Reading and ordinary saving of a v6 document leaves it
 at v6, including existing Spotify destination IDs, source choices and duration ranges.
 
 Schema **v7** introduces one top-level `templates` array of strictly validated
-custom draft definitions. The migration is explicit: the future authenticated
-Admin create-draft operation must atomically replace v6 with v7 **only after**
+custom draft definitions. The migration is explicit: authenticated
+Admin **Save local draft** atomically replaces v6 with v7 **only after**
 the user deliberately creates the first custom draft. Saving/updating or
 stop-managing a playlist must preserve every custom-template definition.
 
@@ -42,6 +45,30 @@ draft IDs, references to deleted or unknown sources, unrecognized cover IDs,
 invalid policy ranges and malformed values. Malformed data must not authorize
 a Spotify write. Isolation/repair UX for malformed custom drafts must be
 completed before production activation of draft CRUD.
+
+## Explicit Spotify activation (not a local draft save)
+
+The Admin **My playlists** section shows a separate **Create Spotify playlist
+from draft** action only when a draft is visible, not already managed, has
+enabled selected sources, there is no pending provisioning to recover and Spotify
+is connected. This calls the existing journaled Spotify playlist-create path.
+
+Activation snapshots the draft defaults into the managed destination instance,
+including the selected source list, duration range, retention and item count;
+subsequent draft edits do not silently overwrite an already managed Spotify
+playlist. A partial/uncertain provider creation must be recovered through the
+existing provisioning journal rather than retried blindly. Stop-managing keeps
+the Spotify destination and does not delete the local draft.
+
+Creation is **public** by the current operator-controlled Spotify action.
+**Apply Spotify metadata & cover** is an independent explicit Admin action;
+successful playlist creation does not imply cover/attribution was applied.
+No automatic public README link is generated from a mere local draft.
+
+**Production safety gate:** the remaining invalid-template quarantine/repair
+contract must be reviewed before rolling out the new v7 draft UI to TrueNAS.
+Do not infer production readiness from a green PR or deploy without a verified
+state backup and user approval.
 
 ## Backup and rollback checklist
 

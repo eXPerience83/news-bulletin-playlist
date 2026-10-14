@@ -89,6 +89,7 @@ def render_managed_admin_page(
                 csrf_token=csrf_token,
                 sources=sources,
                 custom_source_ids=custom_sources,
+                spotify_connected=spotify_connected,
                 managed=snapshot.managed,
                 provisioning_intent=snapshot.provisioning_intent,
             )
@@ -425,6 +426,7 @@ def _custom_draft_card(
     csrf_token: str,
     sources: tuple[SourceDefinition, ...],
     custom_source_ids: frozenset[SourceId],
+    spotify_connected: bool,
     managed: tuple[ManagedPlaylist, ...],
     provisioning_intent: ProvisioningIntent | None,
 ) -> str:
@@ -455,6 +457,39 @@ def _custom_draft_card(
         if draft.hidden
         else status_badge("Draft", tone="muted")
     )
+    selected_sources = tuple(source for source in sources if source.id in draft.default_source_ids)
+    eligible_sources = len(selected_sources) == len(draft.default_source_ids) and all(
+        source.enabled for source in selected_sources
+    )
+    if referenced:
+        publish = '<p class="muted">This draft already has a managed Spotify destination.</p>'
+    elif draft.hidden:
+        publish = '<p class="muted">Unhide and save this draft before publishing.</p>'
+    elif provisioning_intent is not None:
+        publish = '<p class="muted">Resolve pending Spotify creation first.</p>'
+    elif not eligible_sources:
+        publish = '<p class="muted">Enable or unassign inactive sources before publishing.</p>'
+    elif not spotify_connected:
+        publish = '<p class="muted">Connect Spotify before publishing this draft.</p>'
+    else:
+        source_fields = "".join(
+            _hidden_input("source_id", str(source_id)) for source_id in draft.default_source_ids
+        )
+        publish = f"""
+<form method="post" action="/admin/playlists/activate">
+  {_hidden_input("csrf_token", csrf_token)}
+  {_hidden_input("template_id", str(draft.id))}
+  {_hidden_input("display_name", draft.display_name)}
+  {_hidden_input("description", draft.description)}
+  {_hidden_input("cover_id", draft.cover_id)}
+  {_hidden_input("min_duration_minutes", str(draft.min_duration_seconds // 60))}
+  {_hidden_input("max_duration_minutes", str(draft.max_duration_seconds // 60))}
+  {source_fields}
+  <p class="muted">Creates a public Spotify playlist. Applying its bundled cover and
+     project attribution is a separate, explicit action after creation.</p>
+  <button class="button button-primary" type="submit">Create Spotify playlist from draft</button>
+</form>
+"""
     return f"""
 <article class="card playlist-card">
   <div class="card-head">
@@ -471,6 +506,7 @@ def _custom_draft_card(
     {fields}
     <button class="button" type="submit">Save draft changes</button>
   </form>
+  {publish}
   {delete_control}
 </article>
 """

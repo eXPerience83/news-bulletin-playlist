@@ -357,7 +357,10 @@ class ManagedAdminService:
         if self.provisioning_journal.load() is not None:
             raise PlaylistProvisioningRecoveryRequired()
         state = self.store.load()
-        template = self._template(template_id)
+        template = self._template(template_id, state=state)
+        local = next((item for item in state.templates if item.id == template_id), None)
+        if local is not None and local.hidden:
+            raise ManagedAdminError("hidden custom template cannot be activated")
         if any(playlist.template_id == template.id for playlist in state.playlists):
             raise ManagedAdminError(f"playlist template {template.id} is already managed")
         duration_min, duration_max = _duration_range_candidate(
@@ -432,7 +435,7 @@ class ManagedAdminService:
                 raise PlaylistProvisioningRecoveryRequired()
             self.provisioning_journal.clear()
             return existing
-        template = self._template(intent.template_id)
+        template = self._template(intent.template_id, state=state)
         managed = replace(
             activate_template(template, intent.destination_id),
             display_name=intent.display_name,
@@ -644,7 +647,14 @@ class ManagedAdminService:
         self._validate_state(state)
         self.store.save(state)
 
-    def _template(self, template_id: PlaylistId | str) -> PlaylistTemplate:
+    def _template(
+        self, template_id: PlaylistId | str, *, state: ManagedState | None = None
+    ) -> PlaylistTemplate:
+        """Resolve both image-owned and installation-owned templates safely."""
+        effective_state = self.store.load() if state is None else state
+        local = next((item for item in effective_state.templates if item.id == template_id), None)
+        if local is not None:
+            return local.as_playlist_template()
         try:
             return self.catalog.playlist(template_id)
         except KeyError as exc:
