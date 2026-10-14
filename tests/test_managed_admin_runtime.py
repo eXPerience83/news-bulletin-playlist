@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import threading
 import time
@@ -1360,3 +1362,90 @@ def test_custom_draft_explicit_activation_is_separate_from_local_save(
     )
     already_active.do_GET()
     assert "Create Spotify playlist from draft" not in _response(already_active).payload.decode()
+
+
+
+def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_only(
+    tmp_path: Path,
+) -> None:
+    service, factory = _service(tmp_path)
+    draft = service.create_local_template(
+        display_name="Draft to recover",
+        description="Local only",
+        cover_id="international_spanish_news",
+        source_ids=("cnn",),
+        retention_hours=48,
+        max_episodes=100,
+        min_duration_minutes=0,
+        max_duration_minutes=30,
+    )
+    raw = json.loads(service.store.path.read_bytes())
+    raw["templates"][0]["max_duration_seconds"] = -100
+    raw["templates"][0]["description"] = "PRIVATE-RAW-METADATA"
+    service.store.path.write_text(json.dumps(raw), encoding="utf-8")
+    quarantined = service.store.load().quarantined_templates[0]
+    assert quarantined.template_id == str(draft.id)
+    fingerprint = hashlib.sha256(quarantined.raw_json.encode("utf-8")).hexdigest()
+
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    page = _HandlerHarness(
+        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
+        path="/admin/", security=security,
+    )
+    page.do_GET()
+    html_body = _response(page).payload.decode()
+    assert "Custom playlist drafts require repair" in html_body
+    assert "/admin/playlists/templates/quarantine/discard" in html_body
+    assert "PRIVATE-RAW-METADATA" not in html_body
+
+    form = {
+        "csrf_token": [security.issue_csrf_token()],
+        "quarantine_index": ["0"],
+        "quarantine_fingerprint": [fingerprint],
+        "backup_confirmed": ["1"],
+    }
+    forbidden = _HandlerHarness(
+        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
+        path="/admin/playlists/templates/quarantine/discard",
+        form=form, security=security, password=None,
+    )
+    forbidden.do_POST()
+    assert _response(forbidden).status != HTTPStatus.SEE_OTHER or (
+        _response(forbidden).extra_headers.get("Location") == "/admin/login"
+    )
+    assert len(service.store.load().quarantined_templates) == 1
+
+    missing = _HandlerHarness(
+        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
+        path="/admin/playlists/templates/quarantine/discard",
+        form={**form, "csrf_token": [security.issue_csrf_token()],
+              "backup_confirmed": []},
+        security=security,
+    )
+    missing.do_POST()
+    assert _response(missing).status == HTTPStatus.BAD_REQUEST
+    assert len(service.store.load().quarantined_templates) == 1
+
+    accepted = _HandlerHarness(
+        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
+        path="/admin/playlists/templates/quarantine/discard",
+        form=form, security=security,
+    )
+    accepted.do_POST()
+    assert _response(accepted).status == HTTPStatus.SEE_OTHER
+    assert _response(accepted).extra_headers["Location"] == (
+        "/admin/?notice=local-quarantine-discarded"
+    )
+    assert service.store.load().quarantined_templates == ()
+    assert factory.tokens == []
+    assert factory.client.create_calls == []
+    assert lifecycle.reconcile_calls == []
+
+    replay = _HandlerHarness(
+        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
+        path="/admin/playlists/templates/quarantine/discard",
+        form=form, security=security,
+    )
+    replay.do_POST()
+    assert _response(replay).status == HTTPStatus.FORBIDDEN
