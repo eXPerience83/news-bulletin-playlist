@@ -474,7 +474,7 @@ class ManagedAdminService:
                 self.last_initial_cover_error = "Spotify API cooldown"
             except (SpotifyApiError, SpotifyTransportError) as exc:
                 self.last_initial_cover_error = _safe_spotify_operation_error(exc)
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 self.last_initial_cover_error = "local cover unavailable"
         return managed
 
