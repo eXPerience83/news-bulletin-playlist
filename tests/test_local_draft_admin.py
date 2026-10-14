@@ -174,3 +174,134 @@ def test_invalid_source_or_duration_keeps_previous_draft(tmp_path: Path) -> None
             hidden=False,
         )
     assert service.store.load().templates == (draft,)
+
+
+
+class _CreateOnlySpotify:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool]] = []
+
+    def create_playlist(
+        self, name: str, *, public: bool = True, description: str = ""
+    ) -> dict[str, str]:
+        assert description == ""
+        self.calls.append((name, public))
+        return {"id": "A" * 22}
+
+    def change_playlist_details(self, *_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Activation must not change Spotify metadata")
+
+    def upload_playlist_cover(self, *_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Cover sync must be an explicit separate operation")
+
+
+def test_custom_draft_activates_through_existing_journal_without_implicit_metadata(
+    tmp_path: Path,
+) -> None:
+    spotify = _CreateOnlySpotify()
+    service = ManagedAdminService(
+        ManagedStateStore(tmp_path / "managed-state.json"),
+        client_factory=lambda _token: spotify,
+    )
+    draft = _create(service)
+    managed = service.activate(
+        template_id=draft.id,
+        display_name=draft.display_name,
+        description=draft.description,
+        cover_id=draft.cover_id,
+        source_ids=draft.default_source_ids,
+        access_token="test-token",
+        min_duration_minutes=0,
+        max_duration_minutes=30,
+    )
+
+    assert spotify.calls == [(draft.display_name, True)]
+    assert managed.template_id == draft.id
+    assert managed.destination.external_id == "A" * 22
+    assert managed.source_ids == draft.default_source_ids
+    assert managed.retention_hours == draft.retention_hours
+    assert managed.max_episodes == draft.max_episodes
+    assert managed.min_duration_seconds == draft.min_duration_seconds
+    assert managed.max_duration_seconds == draft.max_duration_seconds
+    assert service.store.load().templates == (draft,)
+    assert service.provisioning_journal.load() is None
+
+    with pytest.raises(ManagedAdminError, match="already managed"):
+        service.activate(
+            template_id=draft.id,
+            display_name=draft.display_name,
+            description=draft.description,
+            cover_id=draft.cover_id,
+            source_ids=draft.default_source_ids,
+            access_token="test-token",
+        )
+    assert len(spotify.calls) == 1
+
+    service.stop_managing(managed.id)
+    assert service.store.load().templates == (draft,)
+    assert service.store.load().playlists == ()
+    assert len(spotify.calls) == 1
+
+
+def test_hidden_draft_cannot_be_force_activated(tmp_path: Path) -> None:
+    spotify = _CreateOnlySpotify()
+    service = ManagedAdminService(
+        ManagedStateStore(tmp_path / "managed-state.json"),
+        client_factory=lambda _token: spotify,
+    )
+    draft = _create(service)
+    service.update_local_template(
+        draft.id,
+        display_name=draft.display_name,
+        description=draft.description,
+        cover_id=draft.cover_id,
+        source_ids=draft.default_source_ids,
+        retention_hours=draft.retention_hours,
+        max_episodes=draft.max_episodes,
+        min_duration_minutes=0,
+        max_duration_minutes=30,
+        hidden=True,
+    )
+    with pytest.raises(ManagedAdminError, match="hidden"):
+        service.activate(
+            template_id=draft.id,
+            display_name=draft.display_name,
+            description=draft.description,
+            cover_id=draft.cover_id,
+            source_ids=draft.default_source_ids,
+            access_token="test-token",
+        )
+    assert spotify.calls == []
+    assert service.provisioning_journal.load() is None
+
+
+def test_known_custom_provisioning_recovers_without_duplicate_spotify_creation(
+    tmp_path: Path,
+) -> None:
+    spotify = _CreateOnlySpotify()
+    service = ManagedAdminService(
+        ManagedStateStore(tmp_path / "managed-state.json"),
+        client_factory=lambda _token: spotify,
+    )
+    draft = _create(service)
+    service.provisioning_journal.save(
+        ProvisioningIntent(
+            state=ProvisioningState.DESTINATION_KNOWN,
+            template_id=draft.id,
+            display_name=draft.display_name,
+            description=draft.description,
+            cover_id=draft.cover_id,
+            source_ids=draft.default_source_ids,
+            retention_hours=draft.retention_hours,
+            max_episodes=draft.max_episodes,
+            min_duration_seconds=draft.min_duration_seconds,
+            max_duration_seconds=draft.max_duration_seconds,
+            destination_id="B" * 22,
+        )
+    )
+    managed = service.finalize_known_provisioning()
+    assert managed is not None
+    assert managed.template_id == draft.id
+    assert managed.destination.external_id == "B" * 22
+    assert spotify.calls == []
+    assert service.provisioning_journal.load() is None
