@@ -444,11 +444,15 @@ def _custom_draft_fields(
         if is_uploaded_cover_id(selected_cover)
         else ""
     )
-    covers = uploaded_option + default_option + "".join(
-        f'<option value="{html.escape(template.cover_id, quote=True)}"'
-        f"{' selected' if template.cover_id == selected_cover else ''}>"
-        f"{html.escape(template.display_name)}</option>"
-        for template in catalog.playlists
+    covers = (
+        uploaded_option
+        + default_option
+        + "".join(
+            f'<option value="{html.escape(template.cover_id, quote=True)}"'
+            f"{' selected' if template.cover_id == selected_cover else ''}>"
+            f"{html.escape(template.display_name)}</option>"
+            for template in catalog.playlists
+        )
     )
     retention = 48 if draft is None else draft.retention_hours
     maximum = 100 if draft is None else draft.max_episodes
