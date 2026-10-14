@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import stat
+from contextlib import suppress
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -158,8 +159,6 @@ class CustomCoverAssetStore:
         except OSError as exc:
             raise CustomCoverAssetError("Could not persist the custom cover") from exc
         finally:
-            try:
+            with suppress(FileNotFoundError):
                 os.unlink(temp_name, dir_fd=directory)
-            except FileNotFoundError:
-                pass
             os.close(directory)
