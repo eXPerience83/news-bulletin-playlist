@@ -55,6 +55,7 @@ def render_managed_admin_page(
                 last_cycle=last_cycle,
                 custom_sources=state.sources,
                 sources=sources,
+                state=state,
             )
             for playlist in snapshot.managed
         )
@@ -115,6 +116,17 @@ def render_managed_admin_page(
             render_lan_warning() if lan_mode else "",
             _message("notice", notice),
             _message("error", error),
+            (
+                '<section class="warning" role="alert">'
+                '<h2>Custom playlist drafts require repair</h2>'
+                '<p>One or more saved local drafts are invalid. Their original data is '
+                'preserved; affected playlist destinations are suspended without '
+                'modifying Spotify. Other validated playlists remain available. '
+                'Back up /data/managed-state.json before repairing this state.</p>'
+                '</section>'
+                if state.quarantined_templates
+                else ""
+            ),
             _provisioning_recovery(snapshot.provisioning_intent, csrf_token=csrf_token),
             f"""
 <section class="section admin-section" aria-labelledby="active-playlists-heading">
@@ -210,6 +222,7 @@ def _managed_card(
     last_cycle: EngineCycleResult | None,
     custom_sources: tuple[ManagedSource, ...],
     sources: tuple[SourceDefinition, ...],
+    state: ManagedState,
 ) -> str:
     outcome = None
     if last_cycle is not None:
@@ -232,6 +245,20 @@ def _managed_card(
         if playlist.enabled
         else status_badge("Paused", tone="warning")
     )
+    if any(
+        item.template_id == str(playlist.template_id)
+        for item in state.quarantined_templates
+    ):
+        return f"""
+<article class="card playlist-card">
+  <h3>{html.escape(playlist.display_name)}</h3>
+  <p>{status_badge("Suspended — invalid template", tone="danger")}</p>
+  <p>Reconciliation and administrative changes are blocked until the saved
+     template is repaired. The Spotify destination remains untouched.</p>
+  <p><a href="{html.escape(spotify_url, quote=True)}" target="_blank"
+        rel="noopener noreferrer">Open unchanged Spotify playlist</a></p>
+</article>
+"""
     fields = _playlist_policy_fields(
         display_name=playlist.display_name,
         description=playlist.description,
