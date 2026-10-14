@@ -652,9 +652,7 @@ class ManagedAdminService:
     ) -> PlaylistTemplate:
         """Resolve both image-owned and installation-owned templates safely."""
         effective_state = self.store.load() if state is None else state
-        local = next(
-            (item for item in effective_state.templates if item.id == template_id), None
-        )
+        local = next((item for item in effective_state.templates if item.id == template_id), None)
         if local is not None:
             return local.as_playlist_template()
         try:
