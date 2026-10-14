@@ -112,7 +112,9 @@ def test_authenticated_upload_and_private_preview_do_not_call_spotify(tmp_path: 
         token = _csrf(page)
         kind, body = _binary_form(token, "draft", str(draft.id), _png())
 
-        assert _upload_http(server, None, kind, body)[0] != HTTPStatus.SEE_OTHER
+        unauth_status, unauth_headers, _ = _upload_http(server, None, kind, body)
+        assert unauth_status == HTTPStatus.SEE_OTHER
+        assert unauth_headers["Location"] == "/admin/login"
         assert store.load().templates == (draft,)
 
         status, headers, response = _upload_http(server, cookie, kind, body)
