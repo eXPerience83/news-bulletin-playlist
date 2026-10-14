@@ -33,6 +33,8 @@ MAX_LOCAL_TEMPLATE_LANGUAGES = 10
 MAX_LOCAL_TEMPLATE_COUNTRIES = 10
 MAX_LOCAL_TEMPLATE_RETENTION_HOURS = 24 * 30
 MAX_LOCAL_TEMPLATE_EPISODES = 100
+# Dedicated, locale-neutral default artwork reserved for installation-owned playlists.
+CUSTOM_DEFAULT_COVER_ID = "custom_default"
 MAX_LOCAL_TEMPLATE_DURATION_SECONDS = 24 * 60 * 60
 
 
@@ -167,6 +169,7 @@ def effective_playlist_templates(
     local = tuple(custom_templates)
     built_in_ids = {template.id for template in catalog.playlists}
     allowed_covers = {template.cover_id for template in catalog.playlists}
+    allowed_covers.add(CUSTOM_DEFAULT_COVER_ID)
     source_ids = {source.id for source in sources}
     seen: set[PlaylistId] = set()
     output: list[PlaylistTemplate] = []
