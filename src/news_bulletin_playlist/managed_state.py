@@ -146,8 +146,10 @@ class QuarantinedPlaylistTemplate:
     @property
     def template_id(self) -> str | None:
         value = json.loads(self.raw_json)
-        if isinstance(value, dict) and isinstance(value.get("id"), str):
-            return value["id"]
+        if isinstance(value, dict):
+            candidate = value.get("id")
+            if isinstance(candidate, str):
+                return candidate
         return None
 
 
