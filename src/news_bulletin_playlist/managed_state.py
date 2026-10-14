@@ -572,7 +572,6 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
     return payload
 
 
-
 def _serialize_local_template(item: LocalPlaylistTemplate) -> dict[str, object]:
     return {
         "id": str(item.id),
