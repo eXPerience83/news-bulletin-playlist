@@ -108,12 +108,13 @@ class _Client:
             callback = self.on_episodes
             self.on_episodes = None
             callback()
+        release_day = self.release_day_override or datetime.now(UTC).date().isoformat()
         items = [
             {
                 "id": OTHER,
                 "uri": f"spotify:episode:{OTHER}",
                 "name": "<img src=x onerror=alert(1)>",
-                "release_date": self.release_day_override or datetime.now(UTC).date().isoformat(),
+                "release_date": release_day,
                 "release_date_precision": "day",
                 "duration_ms": None,
                 "secret": "secret-refresh-token",
@@ -125,7 +126,7 @@ class _Client:
                     "id": "C" * 22,
                     "uri": f"spotify:episode:{'C' * 22}",
                     "name": "Another bulletin",
-                    "release_date": self.release_day_override or datetime.now(UTC).date().isoformat(),
+                    "release_date": release_day,
                     "release_date_precision": "day",
                     "duration_ms": 902_000,
                 }
