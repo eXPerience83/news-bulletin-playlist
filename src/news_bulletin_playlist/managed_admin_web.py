@@ -423,7 +423,7 @@ def _custom_draft_fields(
     selected_cover = draft.cover_id if draft is not None else CUSTOM_DEFAULT_COVER_ID
     default_option = (
         f'<option value="{CUSTOM_DEFAULT_COVER_ID}"'
-        f'{" selected" if selected_cover == CUSTOM_DEFAULT_COVER_ID else ""}>'
+        f"{' selected' if selected_cover == CUSTOM_DEFAULT_COVER_ID else ''}>"
         "News Bulletin · Custom (default)</option>"
     )
     covers = default_option + "".join(
