@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import urllib.parse
 from collections.abc import Mapping
@@ -22,6 +23,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedSource,
     ManagedState,
     effective_sources,
+    template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
@@ -123,7 +125,13 @@ def render_managed_admin_page(
                 "preserved; affected playlist destinations are suspended without "
                 "modifying Spotify. Other validated playlists remain available. "
                 "Back up /data/managed-state.json before repairing this state.</p>"
-                "</section>"
+                + _quarantine_repair_controls(
+                    state=state,
+                    catalog=catalog,
+                    csrf_token=csrf_token,
+                    provisioning_intent=snapshot.provisioning_intent,
+                )
+                + "</section>"
                 if state.quarantined_templates
                 else ""
             ),
@@ -214,6 +222,44 @@ def playlist_id_from_form(form: Mapping[str, list[str]]) -> PlaylistId:
     return PlaylistId(value)
 
 
+def _quarantine_repair_controls(
+    *,
+    state: ManagedState,
+    catalog: BuiltInCatalog,
+    csrf_token: str,
+    provisioning_intent: ProvisioningIntent | None,
+) -> str:
+    """Show a deliberate local-only operation without exposing damaged raw JSON."""
+    published_blocker = any(
+        template_suspended_by_quarantine(catalog, state, playlist.template_id)
+        for playlist in state.playlists
+    )
+    if published_blocker or provisioning_intent is not None:
+        return (
+            '<p class="muted">Repair is disabled while a published destination '
+            "or pending provisioning references unresolved custom state. "
+            "Preserve the backup and restore or repair the file with operator review.</p>"
+        )
+    rows = []
+    for index, item in enumerate(state.quarantined_templates):
+        fingerprint = hashlib.sha256(item.raw_json.encode("utf-8")).hexdigest()
+        label = item.template_id or f"unidentified record #{index + 1}"
+        rows.append(
+            '<form method="post" action="/admin/playlists/templates/quarantine/discard">'
+            + _hidden_input("csrf_token", csrf_token)
+            + _hidden_input("quarantine_index", str(index))
+            + _hidden_input("quarantine_fingerprint", fingerprint)
+            + f"<p>Record: <code>{html.escape(label[:80])}</code> "
+            + f"({html.escape(item.reason)})</p>"
+            + '<label><input type="checkbox" name="backup_confirmed" value="1" required>'
+            + " I have verified a local backup of managed-state.json</label>"
+            + '<button class="button button-danger" type="submit">'
+            + "Discard this local damaged draft (does not touch Spotify)</button>"
+            + "</form>"
+        )
+    return "".join(rows)
+
+
 def _managed_card(
     playlist: ManagedPlaylist,
     *,
@@ -245,7 +291,7 @@ def _managed_card(
         if playlist.enabled
         else status_badge("Paused", tone="warning")
     )
-    if any(item.template_id == str(playlist.template_id) for item in state.quarantined_templates):
+    if template_suspended_by_quarantine(catalog, state, playlist.template_id):
         return f"""
 <article class="card playlist-card">
   <h3>{html.escape(playlist.display_name)}</h3>

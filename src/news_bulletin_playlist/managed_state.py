@@ -251,6 +251,23 @@ def activate_template(
     )
 
 
+def template_suspended_by_quarantine(
+    catalog: BuiltInCatalog,
+    state: ManagedState,
+    template_id: PlaylistId | str,
+) -> bool:
+    """Fail closed for unknown local references while retaining healthy destinations."""
+    if not state.quarantined_templates:
+        return False
+    if any(item.id == template_id for item in catalog.playlists) or any(
+        item.id == template_id for item in state.templates
+    ):
+        return False
+    # An invalid raw entry may have lost its id entirely. Rather than aborting all
+    # destinations, suspend unresolved custom_ references until operator repair.
+    return str(template_id).startswith("custom_")
+
+
 def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> EngineConfig:
     """Compile immutable catalog knowledge plus local choices into the existing engine model."""
     sources = effective_sources(catalog, state)
@@ -267,16 +284,10 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
     seen_ids: set[PlaylistId] = set()
     seen_destinations: set[tuple[AdapterId, str]] = set()
 
-    quarantined_ids = {
-        item.template_id
-        for item in state.quarantined_templates
-        if item.template_id is not None and item.template_id not in templates
-    }
     for managed in state.playlists:
         # A corrupted custom draft must never reconcile by a made-up/default policy.
-        # Excluding its destination causes zero provider writes, without removing the
-        # managed record or affecting unrelated destinations.
-        if str(managed.template_id) in quarantined_ids:
+        # Keep its managed record and omit *only* its provider destination.
+        if template_suspended_by_quarantine(catalog, state, managed.template_id):
             continue
         if managed.id in seen_ids:
             raise ManagedStateError(f"duplicate managed playlist id: {managed.id}")

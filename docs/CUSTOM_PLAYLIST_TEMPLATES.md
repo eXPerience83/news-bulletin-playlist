@@ -55,9 +55,21 @@ administrative changes for affected published playlists. Custom-source deletion
 is blocked conservatively while any quarantine is present, because malformed
 source references cannot be trusted.
 
-A quarantined draft is never available for activation and must be repaired only
-after a verified local backup. **An explicit operator-safe repair/removal UI,
-further adversarial validation, and candidate rollout acceptance remain required
+A quarantined draft is never available for activation. Admin shows a **Discard
+this local damaged draft** action only if no published playlist or pending
+provisioning depends on unresolved custom state. The form requires an explicit
+verified-backup checkbox, authenticated one-use CSRF and a fingerprint bound to
+the raw entry, and the server rechecks all references under the state lock.
+A stale/forged request or missing backup acknowledgment makes **no change**.
+
+Discard permanently removes that **one local quarantined record** from the
+installation's state file. It does not modify Spotify, active playlists, source
+caches, or other stored drafts. Keep the backup for later manual recovery or
+correction of the original raw data; the recovery control does not attempt to
+guess valid field values. Published destinations with unresolved custom template
+references remain suspended and require an independently reviewed restore.
+
+**Candidate rollout acceptance and backup/rollback verification remain required
 before any TrueNAS deployment.** Never interpret quarantine as permission to
 delete an existing Spotify destination or its episodes.
 

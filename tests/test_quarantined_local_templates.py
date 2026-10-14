@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -207,3 +208,95 @@ def test_quarantined_unreferenced_draft_blocks_automatic_source_reference_loss(
     state = store.load()
     assert state.quarantined_templates
     assert len(serialize_managed_state(state)["quarantined_templates"]) == 1
+
+
+def test_backup_confirmed_repair_discards_only_explicit_unreferenced_record(
+    tmp_path: Path,
+) -> None:
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    store.save(_state())
+    _tamper(store.path)
+    service = ManagedAdminService(store)
+    damaged = store.load().quarantined_templates[0]
+    digest = hashlib.sha256(damaged.raw_json.encode("utf-8")).hexdigest()
+    before = store.path.read_bytes()
+
+    with pytest.raises(ManagedAdminError, match="backup"):
+        service.discard_quarantined_template(0, digest, backup_confirmed=False)
+    with pytest.raises(ManagedAdminError, match="changed"):
+        service.discard_quarantined_template(0, "0" * 64, backup_confirmed=True)
+    with pytest.raises(ManagedAdminError, match="no longer exists"):
+        service.discard_quarantined_template(8, digest, backup_confirmed=True)
+    assert store.path.read_bytes() == before
+
+    service.discard_quarantined_template(0, digest, backup_confirmed=True)
+    after = store.load()
+    assert after.quarantined_templates == ()
+    assert after.templates == (_draft("custom_safe"),)
+    assert after.playlists == _state().playlists
+    assert "DO-NOT-EXPOSE-IN-ADMIN" not in store.path.read_text()
+    assert len(load_effective_config(tmp_path, {}).playlists) == 4
+
+
+def test_cannot_discard_draft_needed_by_suspended_destination(tmp_path: Path) -> None:
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    draft = _draft("custom_broken")
+    playlist = activate_template(draft.as_playlist_template(), "C" * 22)
+    state = replace(_state(), playlists=_state().playlists + (playlist,))
+    store.save(state)
+    original = _tamper(store.path)
+    damaged = store.load().quarantined_templates[0]
+    digest = hashlib.sha256(damaged.raw_json.encode("utf-8")).hexdigest()
+
+    with pytest.raises(ManagedAdminError, match="published custom playlist"):
+        ManagedAdminService(store).discard_quarantined_template(0, digest, backup_confirmed=True)
+    assert store.path.read_bytes() == original
+
+
+def test_missing_draft_id_still_suspends_unresolved_custom_destination(tmp_path: Path) -> None:
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    local = _draft("custom_broken")
+    selected = activate_template(local.as_playlist_template(), "D" * 22)
+    store.save(replace(_state(), playlists=_state().playlists + (selected,)))
+    payload = json.loads(store.path.read_bytes())
+    for draft in payload["templates"]:
+        if draft["id"] == "custom_broken":
+            draft.pop("id")
+    store.path.write_text(json.dumps(payload))
+    state = store.load()
+    assert len(state.quarantined_templates) == 1
+    assert state.quarantined_templates[0].template_id is None
+
+    config = load_effective_config(tmp_path, {})
+    assert config is not None
+    assert len(config.playlists) == 4
+    assert "D" * 22 not in {playlist.destination.external_id for playlist in config.playlists}
+    assert len(store.load().playlists) == 5
+    with pytest.raises(ManagedAdminError, match="quarantined"):
+        ManagedAdminService(store).stop_managing(selected.id)
+
+
+def test_pending_provisioning_blocks_quarantine_discard(tmp_path: Path) -> None:
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    store.save(_state())
+    _tamper(store.path)
+    service = ManagedAdminService(store)
+    item = store.load().quarantined_templates[0]
+    digest = hashlib.sha256(item.raw_json.encode("utf-8")).hexdigest()
+    intent = ProvisioningIntent(
+        state=ProvisioningState.DESTINATION_KNOWN,
+        template_id=PlaylistId("custom_broken"),
+        display_name="Unknown destination",
+        description="Unresolved creation",
+        cover_id="international_spanish_news",
+        source_ids=(SourceId("cnn"),),
+        retention_hours=48,
+        max_episodes=100,
+        max_duration_seconds=1800,
+        destination_id="F" * 22,
+    )
+    service.provisioning_journal.save(intent)
+    with pytest.raises(ManagedAdminError, match="pending Spotify provisioning"):
+        service.discard_quarantined_template(0, digest, backup_confirmed=True)
+    assert service.provisioning_journal.load() == intent
+    assert store.load().quarantined_templates == (item,)

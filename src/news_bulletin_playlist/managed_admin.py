@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import secrets
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -33,6 +35,7 @@ from news_bulletin_playlist.managed_state import (
     activate_template,
     compile_engine_config,
     effective_sources,
+    template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
 from news_bulletin_playlist.spotify.client import (
@@ -332,6 +335,45 @@ class ManagedAdminService:
             )
         )
 
+    def discard_quarantined_template(
+        self,
+        index: int,
+        fingerprint: str,
+        *,
+        backup_confirmed: bool,
+    ) -> None:
+        """Explicitly discard one unreferenced corrupt draft; never touch Spotify."""
+        if not backup_confirmed:
+            raise ManagedAdminError("Confirm a verified backup before discarding the draft")
+        state = self.store.load()
+        if type(index) is not int or not 0 <= index < len(state.quarantined_templates):
+            raise ManagedAdminError("quarantine entry no longer exists")
+        selected = state.quarantined_templates[index]
+        digest = hashlib.sha256(selected.raw_json.encode("utf-8")).hexdigest()
+        if not isinstance(fingerprint, str) or not hmac.compare_digest(fingerprint, digest):
+            raise ManagedAdminError("quarantine entry changed; reload Admin before proceeding")
+        if any(
+            template_suspended_by_quarantine(self.catalog, state, playlist.template_id)
+            for playlist in state.playlists
+        ):
+            raise ManagedAdminError(
+                "Resolve the published custom playlist before discarding quarantined data"
+            )
+        if self.provisioning_journal.load() is not None:
+            raise ManagedAdminError("Resolve pending Spotify provisioning before repair")
+        # Existing live destinations never depend on a quarantined entry here.
+        # A fresh save retains every remaining record verbatim as JSON values.
+        self._save_validated(
+            replace(
+                state,
+                quarantined_templates=tuple(
+                    item
+                    for position, item in enumerate(state.quarantined_templates)
+                    if position != index
+                ),
+            )
+        )
+
     def _local_template(
         self, state: ManagedState, template_id: PlaylistId | str
     ) -> LocalPlaylistTemplate:
@@ -435,8 +477,8 @@ class ManagedAdminService:
                 raise PlaylistProvisioningRecoveryRequired()
             self.provisioning_journal.clear()
             return existing
-        if any(item.template_id == str(intent.template_id) for item in state.quarantined_templates):
-            # Never fabricate an activated destination from a quarantined draft.
+        if template_suspended_by_quarantine(self.catalog, state, intent.template_id):
+            # Never fabricate an activated destination from an unresolved local draft.
             # Keep the journal for explicit operator recovery.
             return None
         template = self._template(intent.template_id, state=state)
@@ -667,10 +709,7 @@ class ManagedAdminService:
     def _managed(self, state: ManagedState, playlist_id: PlaylistId | str) -> ManagedPlaylist:
         for playlist in state.playlists:
             if playlist.id == playlist_id:
-                if any(
-                    item.template_id == str(playlist.template_id)
-                    for item in state.quarantined_templates
-                ):
+                if template_suspended_by_quarantine(self.catalog, state, playlist.template_id):
                     raise ManagedAdminError(
                         "managed playlist has a quarantined template; repair it before editing"
                     )
