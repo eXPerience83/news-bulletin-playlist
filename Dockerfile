@@ -4,7 +4,8 @@ FROM python:3.15.0-slim-trixie@sha256:f48fda6d59b2b3437781d1c3ccf4aa0e26ae871de3
 WORKDIR /build
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
-RUN python -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
+# Wheel every runtime dependency in the builder; runtime stays offline.
+RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 
 FROM python:3.15.0-slim-trixie@sha256:f48fda6d59b2b3437781d1c3ccf4aa0e26ae871de3cdd758b49ab45ee7291619 AS runtime
 
@@ -23,7 +24,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY --from=builder /wheels /wheels
 COPY LICENSE /usr/share/licenses/news-bulletin-playlist/LICENSE
 COPY assets/covers/spotify /opt/news-bulletin-playlist/covers
-RUN python -m pip install --no-cache-dir /wheels/*.whl \
+RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels /wheels/news_bulletin_playlist*.whl \
     && rm -rf /wheels \
     && mkdir -p /data \
     && chown 10001:10001 /data
