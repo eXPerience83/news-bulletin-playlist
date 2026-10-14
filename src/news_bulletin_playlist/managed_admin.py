@@ -192,6 +192,8 @@ class ManagedAdminService:
         self.catalog = catalog
         self.client_factory = client_factory or SpotifyClient
         self.cover_loader = cover_loader
+        # Scoped to the current authenticated POST; never changes persisted destination state.
+        self.last_initial_cover_error: str | None = None
         self.provisioning_journal = provisioning_journal or ProvisioningJournal(
             store.path.with_name(MANAGED_PROVISIONING_FILENAME)
         )
@@ -396,6 +398,7 @@ class ManagedAdminService:
         min_duration_minutes: int | None = None,
         max_duration_minutes: int | None = None,
     ) -> ManagedPlaylist:
+        self.last_initial_cover_error = None
         if self.provisioning_journal.load() is not None:
             raise PlaylistProvisioningRecoveryRequired()
         state = self.store.load()
@@ -426,13 +429,18 @@ class ManagedAdminService:
             max_duration_seconds=duration_max,
             min_duration_seconds=duration_min,
         )
+        # Initial custom playlist attribution belongs to the creation request itself.
+        # Validate *before* the irreversible Spotify POST or durable journal.
+        initial_description = (
+            render_spotify_description(intent.description) if local is not None else ""
+        )
         self.provisioning_journal.save(intent)
 
         client = self.client_factory(access_token)
         try:
-            # Provision only the durable destination identity. Metadata and cover are explicit
-            # follow-up operations so their provider behavior can never block activation.
-            response = client.create_playlist(intent.display_name, public=True)
+            response = client.create_playlist(
+                intent.display_name, public=True, description=initial_description
+            )
         except SpotifyRateLimitSuppressed as exc:
             self.provisioning_journal.clear()
             raise SpotifyAdminCooldownError() from exc
@@ -454,9 +462,21 @@ class ManagedAdminService:
         try:
             managed = self.finalize_known_provisioning()
             assert managed is not None
-            return managed
         except (ManagedStateError, OSError, ProvisioningJournalError) as exc:
             raise SpotifyPlaylistProvisioningError(destination_id) from exc
+
+        # The destination is now durable, so a cover failure cannot undo creation.
+        # No cover attempt is made during a normal local draft save or scheduler cycle.
+        if local is not None and self.cover_loader is not None:
+            try:
+                self._upload_cover_explicit(client, destination_id, managed.cover_id)
+            except SpotifyRateLimitSuppressed:
+                self.last_initial_cover_error = "Spotify API cooldown"
+            except (SpotifyApiError, SpotifyTransportError) as exc:
+                self.last_initial_cover_error = _safe_spotify_operation_error(exc)
+            except (OSError, ValueError):
+                self.last_initial_cover_error = "local cover unavailable"
+        return managed
 
     def finalize_known_provisioning(self) -> ManagedPlaylist | None:
         intent = self.provisioning_journal.load()
