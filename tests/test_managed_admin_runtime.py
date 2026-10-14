@@ -1364,7 +1364,6 @@ def test_custom_draft_explicit_activation_is_separate_from_local_save(
     assert "Create Spotify playlist from draft" not in _response(already_active).payload.decode()
 
 
-
 def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_only(
     tmp_path: Path,
 ) -> None:
@@ -1390,8 +1389,11 @@ def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_onl
     lifecycle = _FakeLifecycle()
     security = LanAdminSecurity(_PASSWORD)
     page = _HandlerHarness(
-        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
-        path="/admin/", security=security,
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/",
+        security=security,
     )
     page.do_GET()
     html_body = _response(page).payload.decode()
@@ -1406,9 +1408,13 @@ def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_onl
         "backup_confirmed": ["1"],
     }
     forbidden = _HandlerHarness(
-        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
         path="/admin/playlists/templates/quarantine/discard",
-        form=form, security=security, password=None,
+        form=form,
+        security=security,
+        password=None,
     )
     forbidden.do_POST()
     assert _response(forbidden).status != HTTPStatus.SEE_OTHER or (
@@ -1417,10 +1423,11 @@ def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_onl
     assert len(service.store.load().quarantined_templates) == 1
 
     missing = _HandlerHarness(
-        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
         path="/admin/playlists/templates/quarantine/discard",
-        form={**form, "csrf_token": [security.issue_csrf_token()],
-              "backup_confirmed": []},
+        form={**form, "csrf_token": [security.issue_csrf_token()], "backup_confirmed": []},
         security=security,
     )
     missing.do_POST()
@@ -1428,9 +1435,12 @@ def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_onl
     assert len(service.store.load().quarantined_templates) == 1
 
     accepted = _HandlerHarness(
-        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
         path="/admin/playlists/templates/quarantine/discard",
-        form=form, security=security,
+        form=form,
+        security=security,
     )
     accepted.do_POST()
     assert _response(accepted).status == HTTPStatus.SEE_OTHER
@@ -1443,9 +1453,12 @@ def test_quarantine_repair_admin_route_is_authenticated_csrf_bound_and_local_onl
     assert lifecycle.reconcile_calls == []
 
     replay = _HandlerHarness(
-        tmp_path=tmp_path, service=service, lifecycle=lifecycle,
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
         path="/admin/playlists/templates/quarantine/discard",
-        form=form, security=security,
+        form=form,
+        security=security,
     )
     replay.do_POST()
     assert _response(replay).status == HTTPStatus.FORBIDDEN
