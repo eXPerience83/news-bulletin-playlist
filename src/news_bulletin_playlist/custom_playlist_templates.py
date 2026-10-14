@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.managed_duration import validate_duration_range
 from news_bulletin_playlist.models import (
     CountryCode,
@@ -180,7 +181,7 @@ def effective_playlist_templates(
         item.__post_init__()
         if item.id in built_in_ids or item.id in seen:
             raise LocalPlaylistTemplateError("duplicate or built-in playlist template id")
-        if item.cover_id not in allowed_covers:
+        if item.cover_id not in allowed_covers and not is_uploaded_cover_id(item.cover_id):
             raise LocalPlaylistTemplateError("unknown bundled playlist cover")
         if any(source_id not in source_ids for source_id in item.default_source_ids):
             raise LocalPlaylistTemplateError("custom playlist references unknown source")
