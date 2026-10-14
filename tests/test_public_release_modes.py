@@ -692,7 +692,7 @@ def test_individual_audit_and_zip_share_mode_outcome_and_request_counts(tmp_path
         store.save(replace(store.load(), sources=(replace(custom, public_release_mode=mode),)))
         service = _Handler.source_admin_service
         now = datetime.now(UTC)
-        client.release_day_override = now.astimezone(custom.timezone).date().isoformat()
+        client.release_day_override = now.astimezone(ZoneInfo(custom.timezone)).date().isoformat()
 
         class Public:
             calls = 0
