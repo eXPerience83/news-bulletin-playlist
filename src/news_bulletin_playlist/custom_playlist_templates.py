@@ -7,8 +7,8 @@ managed-state schema will own storage; Admin will own editing and provisioning.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.managed_duration import validate_duration_range
