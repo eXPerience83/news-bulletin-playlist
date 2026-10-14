@@ -16,6 +16,7 @@ from types import FrameType
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.custom_playlist_templates import CUSTOM_DEFAULT_COVER_ID
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.effective_config import load_effective_config
 from news_bulletin_playlist.engine import (
@@ -685,6 +686,7 @@ class OperationalHealthHandler(LanAdminHandler):
             return
         cover_id = filename[:-4]
         allowed = {template.cover_id for template in BUILTIN_CATALOG.playlists}
+        allowed.add(CUSTOM_DEFAULT_COVER_ID)
         if cover_id not in allowed:
             self._reply(
                 HTTPStatus.NOT_FOUND,
