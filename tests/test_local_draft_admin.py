@@ -176,7 +176,6 @@ def test_invalid_source_or_duration_keeps_previous_draft(tmp_path: Path) -> None
     assert service.store.load().templates == (draft,)
 
 
-
 class _CreateOnlySpotify:
     def __init__(self) -> None:
         self.calls: list[tuple[str, bool]] = []
