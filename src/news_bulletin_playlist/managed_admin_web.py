@@ -349,7 +349,7 @@ def _custom_draft_fields(
     selected_cover = draft.cover_id if draft is not None else "international_spanish_news"
     covers = "".join(
         f'<option value="{html.escape(template.cover_id, quote=True)}"'
-        f'{" selected" if template.cover_id == selected_cover else ""}>'
+        f"{' selected' if template.cover_id == selected_cover else ''}>"
         f"{html.escape(template.display_name)}</option>"
         for template in catalog.playlists
     )
@@ -450,8 +450,10 @@ def _custom_draft_card(
 </form>
 """
     )
-    visibility = status_badge("Hidden", tone="warning") if draft.hidden else status_badge(
-        "Draft", tone="muted"
+    visibility = (
+        status_badge("Hidden", tone="warning")
+        if draft.hidden
+        else status_badge("Draft", tone="muted")
     )
     return f"""
 <article class="card playlist-card">
