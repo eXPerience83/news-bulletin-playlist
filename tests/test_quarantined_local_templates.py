@@ -172,7 +172,9 @@ def test_duplicate_draft_ids_do_not_select_arbitrary_candidate(tmp_path: Path) -
     store = ManagedStateStore(tmp_path / "managed-state.json")
     store.save(_state())
     payload = json.loads(store.path.read_bytes())
-    payload["templates"].append(dict(payload["templates"][0]))
+    payload["templates"].append(
+        dict(next(item for item in payload["templates"] if item["id"] == "custom_safe"))
+    )
     loaded = parse_managed_state(payload)
     assert [item.id for item in loaded.templates] == [PlaylistId("custom_broken")]
     assert len(loaded.quarantined_templates) == 2
