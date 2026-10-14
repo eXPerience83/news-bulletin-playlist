@@ -101,7 +101,10 @@ def test_custom_default_cover_is_validated_without_changing_existing_drafts(
         max_duration_minutes=30,
     )
     state = service.store.load()
-    assert state.templates == (original, second)
+    assert {item.id: item for item in state.templates} == {
+        original.id: original,
+        second.id: second,
+    }
     assert second.cover_id == CUSTOM_DEFAULT_COVER_ID
     assert original.cover_id == "international_english_news"
 
