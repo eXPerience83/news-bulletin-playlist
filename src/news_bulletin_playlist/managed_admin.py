@@ -435,10 +435,7 @@ class ManagedAdminService:
                 raise PlaylistProvisioningRecoveryRequired()
             self.provisioning_journal.clear()
             return existing
-        if any(
-            item.template_id == str(intent.template_id)
-            for item in state.quarantined_templates
-        ):
+        if any(item.template_id == str(intent.template_id) for item in state.quarantined_templates):
             # Never fabricate an activated destination from a quarantined draft.
             # Keep the journal for explicit operator recovery.
             return None
