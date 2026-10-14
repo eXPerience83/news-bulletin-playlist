@@ -587,6 +587,12 @@ def _custom_draft_card(
   <button class="button button-primary" type="submit">Create Spotify playlist from draft</button>
 </form>
 """
+    upload_form = _owner_cover_upload_form(
+        csrf_token=csrf_token,
+        target_kind="draft",
+        target_id=str(draft.id),
+        active_on_spotify=False,
+    )
     return f"""
 <article class="card playlist-card">
   <div class="card-head">
@@ -603,7 +609,7 @@ def _custom_draft_card(
     {fields}
     <button class="button" type="submit">Save draft changes</button>
   </form>
-  {_owner_cover_upload_form(csrf_token=csrf_token, target_kind="draft", target_id=str(draft.id), active_on_spotify=False)}
+  {upload_form}
   {publish}
   {delete_control}
 </article>
