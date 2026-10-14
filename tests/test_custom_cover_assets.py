@@ -23,8 +23,9 @@ def _image_bytes(
     fmt: str = "PNG",
     size: tuple[int, int] = (800, 620),
     metadata: bool = False,
+    color: str = "#38446a",
 ) -> bytes:
-    image = Image.new("RGB", size, "#38446a")
+    image = Image.new("RGB", size, color)
     output = io.BytesIO()
     extras = {}
     if fmt == "PNG" and metadata:
@@ -51,7 +52,9 @@ def test_jpeg_and_png_are_normalized_to_metadata_free_spotify_jpegs(tmp_path: Pa
         assert loaded.getexif() == {}
 
     assert store.save(png) == cover_id  # deterministic and reusable
-    assert store.save(_image_bytes(fmt="JPEG")) != cover_id
+    # Content-addressed identity depends on sanitized pixels, not upload format.
+    assert store.save(_image_bytes(fmt="JPEG")) == cover_id
+    assert store.save(_image_bytes(color="#ac2742")) != cover_id
     assert stat.S_IMODE(store.root.stat().st_mode) & 0o077 == 0
     assert stat.S_IMODE((store.root / f"{cover_id}.jpg").stat().st_mode) & 0o077 == 0
     assert len(list(store.root.iterdir())) == 2
