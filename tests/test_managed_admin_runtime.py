@@ -1168,3 +1168,114 @@ def test_minimum_only_change_blocks_stale_playlist_mutation(tmp_path):
     ):
         writes.append("mutation")
     assert writes == []
+
+
+def test_custom_template_routes_are_authenticated_local_only_and_csrf_protected(
+    tmp_path: Path,
+) -> None:
+    service, factory = _service(tmp_path)
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    create_form = {
+        "csrf_token": [security.issue_csrf_token()],
+        "display_name": ["My local world updates"],
+        "description": ["Independent news sources."],
+        "cover_id": ["international_english_news"],
+        "source_id": ["cnn", "un_news_en"],
+        "retention_hours": ["48"],
+        "max_episodes": ["100"],
+        "min_duration_minutes": ["0"],
+        "max_duration_minutes": ["30"],
+        "language_tags": ["es-ES, en"],
+        "country_codes": ["ES"],
+    }
+    create = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/templates/create",
+        form=create_form,
+        auth_provider=None,
+        spotify_state=AuthorizationState.DISCONNECTED,
+        security=security,
+    )
+    create.do_POST()
+    assert _response(create).status == HTTPStatus.SEE_OTHER
+    assert _response(create).extra_headers["Location"] == "/admin/?notice=local-draft-created"
+    assert factory.tokens == []
+    assert factory.client.create_calls == []
+    assert factory.client.update_calls == []
+    assert lifecycle.reconcile_calls == []
+    assert lifecycle.wake_calls == 0
+
+    draft = service.store.load().templates[0]
+    assert service.store.load().schema_version == 7
+    page = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/",
+        spotify_state=AuthorizationState.DISCONNECTED,
+        security=security,
+    )
+    page.do_GET()
+    body = _response(page).payload.decode()
+    assert "My playlists" in body
+    assert "My local world updates" in body
+    assert "Save local draft" in body
+    assert "/admin/playlists/templates/create" in body
+    assert "/admin/playlists/templates/update" in body
+    assert "/admin/playlists/templates/delete" in body
+
+    # Reusing the one-use CSRF token must not write or create a second draft.
+    replay = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/templates/create",
+        form=create_form,
+        security=security,
+    )
+    replay.do_POST()
+    assert _response(replay).status == HTTPStatus.FORBIDDEN
+    assert len(service.store.load().templates) == 1
+
+    update_form = dict(create_form)
+    update_form["csrf_token"] = [security.issue_csrf_token()]
+    update_form["template_id"] = [str(draft.id)]
+    update_form["display_name"] = ["Renamed local draft"]
+    update_form["hidden"] = ["1"]
+    update = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/templates/update",
+        form=update_form,
+        auth_provider=None,
+        security=security,
+    )
+    update.do_POST()
+    assert _response(update).status == HTTPStatus.SEE_OTHER
+    assert _response(update).extra_headers["Location"] == "/admin/?notice=local-draft-updated"
+    assert service.store.load().templates[0].hidden is True
+    assert service.store.load().templates[0].display_name == "Renamed local draft"
+
+    delete = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/templates/delete",
+        form={
+            "csrf_token": [security.issue_csrf_token()],
+            "template_id": [str(draft.id)],
+        },
+        auth_provider=None,
+        security=security,
+    )
+    delete.do_POST()
+    assert _response(delete).status == HTTPStatus.SEE_OTHER
+    assert _response(delete).extra_headers["Location"] == "/admin/?notice=local-draft-deleted"
+    assert service.store.load().templates == ()
+    assert factory.tokens == []
+    assert factory.client.create_calls == []
+    assert lifecycle.reconcile_calls == []

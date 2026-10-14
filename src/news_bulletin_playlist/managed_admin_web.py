@@ -8,6 +8,7 @@ from collections.abc import Mapping
 
 from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warning
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
 from news_bulletin_playlist.engine import EngineCycleResult
 from news_bulletin_playlist.managed_admin import (
     MAX_PLAYLIST_DESCRIPTION_LENGTH,
@@ -79,6 +80,28 @@ def render_managed_admin_page(
             )
             or '<p class="empty">No additional built-in playlists are available.</p>'
         )
+    custom_sources = frozenset(source.id for source in state.sources)
+    drafts = (
+        "".join(
+            _custom_draft_card(
+                draft,
+                catalog=catalog,
+                csrf_token=csrf_token,
+                sources=sources,
+                custom_source_ids=custom_sources,
+                managed=snapshot.managed,
+                provisioning_intent=snapshot.provisioning_intent,
+            )
+            for draft in snapshot.custom_templates
+        )
+        or '<p class="empty">No custom playlist drafts yet.</p>'
+    )
+    new_draft = _custom_draft_create_form(
+        catalog=catalog,
+        csrf_token=csrf_token,
+        sources=sources,
+        custom_source_ids=custom_sources,
+    )
     spotify_action = "Reconnect Spotify" if spotify_connected else "Connect Spotify"
     actions = f"""
 <form method="post" action="/admin/spotify/connect">
@@ -104,6 +127,18 @@ def render_managed_admin_page(
   <p class="muted">Each playlist keeps its own source selection and duration range. A source
      shared by several playlists is still fetched only once per engine cycle.</p>
   <div class="admin-grid">{managed}</div>
+</section>
+<section class="section admin-section" aria-labelledby="custom-playlists-heading">
+  <div class="section-head">
+    <div>
+      <p class="eyebrow">Local drafts</p>
+      <h2 id="custom-playlists-heading">My playlists</h2>
+    </div>
+  </div>
+  <p class="muted">Save and edit your own playlist templates here. Draft changes stay under
+     /data and do not call Spotify. Publishing a draft will be a separate action.</p>
+  {new_draft}
+  <div class="admin-grid">{drafts}</div>
 </section>
 <section class="section admin-section" aria-labelledby="available-playlists-heading">
   <div class="section-head">
@@ -282,6 +317,161 @@ def _template_card(
     {hint}
     <button class="button" type="submit"{disabled}>Create Spotify playlist</button>
   </form>
+</article>
+"""
+
+
+def _custom_draft_fields(
+    draft: LocalPlaylistTemplate | None,
+    *,
+    catalog: BuiltInCatalog,
+    sources: tuple[SourceDefinition, ...],
+    custom_source_ids: frozenset[SourceId],
+    prefix: str,
+) -> str:
+    if draft is None:
+        name, description, low, high, selected = "", "", 0, 1800, set()
+    else:
+        name, description = draft.display_name, draft.description
+        low, high = draft.min_duration_seconds, draft.max_duration_seconds
+        selected = set(draft.default_source_ids)
+    policy = _playlist_policy_fields(
+        display_name=name,
+        description=description,
+        min_duration_seconds=low,
+        duration_seconds=high,
+        sources=sources,
+        custom_source_ids=custom_source_ids,
+        selected_source_ids=selected,
+        source_prefix=prefix,
+        enabled=None,
+    )
+    selected_cover = draft.cover_id if draft is not None else "international_spanish_news"
+    covers = "".join(
+        f'<option value="{html.escape(template.cover_id, quote=True)}"'
+        f"{' selected' if template.cover_id == selected_cover else ''}>"
+        f"{html.escape(template.display_name)}</option>"
+        for template in catalog.playlists
+    )
+    retention = 48 if draft is None else draft.retention_hours
+    maximum = 100 if draft is None else draft.max_episodes
+    languages = "" if draft is None else ", ".join(str(x) for x in draft.languages)
+    countries = "" if draft is None else ", ".join(str(x) for x in draft.countries)
+    hidden = ""
+    if draft is not None:
+        checked = " checked" if draft.hidden else ""
+        hidden = (
+            f'<label><input type="checkbox" name="hidden" value="1"{checked}>'
+            " Hide draft from future activation choices</label>"
+        )
+    return f"""
+{policy}
+<label>Bundled cover (custom uploads are not yet supported)
+  <select name="cover_id">{covers}</select>
+</label>
+<div class="duration-row">
+  <label>Retention · hours
+    <input type="number" name="retention_hours" min="1" max="720" required
+           value="{retention}">
+  </label>
+  <label>Maximum episodes
+    <input type="number" name="max_episodes" min="1" max="100" required
+           value="{maximum}">
+  </label>
+</div>
+<label>Languages · comma-separated tags (optional)
+  <input type="text" name="language_tags" placeholder="es-ES, en"
+         value="{html.escape(languages, quote=True)}">
+</label>
+<label>Countries · comma-separated ISO codes (optional)
+  <input type="text" name="country_codes" placeholder="ES, FR"
+         value="{html.escape(countries, quote=True)}">
+</label>
+{hidden}
+<p class="muted">Local draft only. No Spotify destination is created, changed or removed.</p>
+"""
+
+
+def _custom_draft_create_form(
+    *,
+    catalog: BuiltInCatalog,
+    csrf_token: str,
+    sources: tuple[SourceDefinition, ...],
+    custom_source_ids: frozenset[SourceId],
+) -> str:
+    fields = _custom_draft_fields(
+        None,
+        catalog=catalog,
+        sources=sources,
+        custom_source_ids=custom_source_ids,
+        prefix="custom-draft-new",
+    )
+    return f"""
+<details class="card playlist-card">
+  <summary>Create new playlist draft</summary>
+  <form method="post" action="/admin/playlists/templates/create">
+    {_hidden_input("csrf_token", csrf_token)}
+    {fields}
+    <button class="button button-primary" type="submit">Save local draft</button>
+  </form>
+</details>
+"""
+
+
+def _custom_draft_card(
+    draft: LocalPlaylistTemplate,
+    *,
+    catalog: BuiltInCatalog,
+    csrf_token: str,
+    sources: tuple[SourceDefinition, ...],
+    custom_source_ids: frozenset[SourceId],
+    managed: tuple[ManagedPlaylist, ...],
+    provisioning_intent: ProvisioningIntent | None,
+) -> str:
+    fields = _custom_draft_fields(
+        draft,
+        catalog=catalog,
+        sources=sources,
+        custom_source_ids=custom_source_ids,
+        prefix=f"custom-draft-{draft.id}",
+    )
+    referenced = any(playlist.template_id == draft.id for playlist in managed) or (
+        provisioning_intent is not None and provisioning_intent.template_id == draft.id
+    )
+    delete_control = (
+        '<p class="muted">Cannot delete while a managed playlist or pending creation uses '
+        "this draft.</p>"
+        if referenced
+        else f"""
+<form method="post" action="/admin/playlists/templates/delete">
+  {_hidden_input("csrf_token", csrf_token)}
+  {_hidden_input("template_id", str(draft.id))}
+  <button class="button button-danger" type="submit">Delete local draft</button>
+</form>
+"""
+    )
+    visibility = (
+        status_badge("Hidden", tone="warning")
+        if draft.hidden
+        else status_badge("Draft", tone="muted")
+    )
+    return f"""
+<article class="card playlist-card">
+  <div class="card-head">
+    {_cover_image(draft.cover_id, draft.display_name)}
+    <div>
+      <h3>{html.escape(draft.display_name)}</h3>
+      <p>{visibility}</p>
+      <p class="muted">Local ID: <code>{html.escape(str(draft.id))}</code></p>
+    </div>
+  </div>
+  <form method="post" action="/admin/playlists/templates/update">
+    {_hidden_input("csrf_token", csrf_token)}
+    {_hidden_input("template_id", str(draft.id))}
+    {fields}
+    <button class="button" type="submit">Save draft changes</button>
+  </form>
+  {delete_control}
 </article>
 """
 

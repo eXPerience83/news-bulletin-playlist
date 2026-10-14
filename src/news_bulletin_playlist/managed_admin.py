@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Protocol
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
 from news_bulletin_playlist.managed_duration import (
     MAX_NEW_MANAGED_DURATION_SECONDS,
     duration_seconds_from_minutes,
@@ -32,7 +34,7 @@ from news_bulletin_playlist.managed_state import (
     compile_engine_config,
     effective_sources,
 )
-from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
     SpotifyClient,
@@ -168,6 +170,7 @@ class ManagedAdminSnapshot:
     managed: tuple[ManagedPlaylist, ...]
     available_templates: tuple[PlaylistTemplate, ...]
     provisioning_intent: ProvisioningIntent | None = None
+    custom_templates: tuple[LocalPlaylistTemplate, ...] = ()
 
 
 class ManagedAdminService:
@@ -201,7 +204,141 @@ class ManagedAdminService:
             managed=state.playlists,
             available_templates=available,
             provisioning_intent=self.provisioning_journal.load(),
+            custom_templates=state.templates,
         )
+
+    def create_local_template(
+        self,
+        *,
+        display_name: str,
+        description: str,
+        cover_id: str,
+        source_ids: Sequence[SourceId | str],
+        retention_hours: int,
+        max_episodes: int,
+        min_duration_minutes: int,
+        max_duration_minutes: int,
+        countries: Sequence[str] = (),
+        languages: Sequence[str] = (),
+    ) -> LocalPlaylistTemplate:
+        """Save a durable local draft; no Spotify authentication or network call."""
+        state = self.store.load()
+        selected = self._source_ids(source_ids, state=state, allow_empty=False)
+        lower, upper = _duration_range_candidate(
+            None,
+            None,
+            min_duration_minutes,
+            max_duration_minutes,
+            current_min=0,
+            current_max=1800,
+            activating=True,
+        )
+        existing = {template.id for template in state.templates}
+        existing.update(template.id for template in self.catalog.playlists)
+        while True:
+            generated = PlaylistId(f"custom_{secrets.token_hex(8)}")
+            if generated not in existing:
+                break
+        draft = LocalPlaylistTemplate(
+            id=generated,
+            display_name=_playlist_name(display_name),
+            description=_playlist_description(description),
+            cover_id=self._cover_id(cover_id),
+            default_source_ids=selected,
+            retention_hours=retention_hours,
+            max_episodes=max_episodes,
+            min_duration_seconds=lower,
+            max_duration_seconds=upper,
+            countries=tuple(CountryCode(value.strip()) for value in countries),
+            languages=tuple(LanguageTag(value.strip()) for value in languages),
+        )
+        self._save_validated(
+            replace(
+                state,
+                schema_version=7,
+                templates=state.templates + (draft,),
+            )
+        )
+        return draft
+
+    def update_local_template(
+        self,
+        template_id: PlaylistId | str,
+        *,
+        display_name: str,
+        description: str,
+        cover_id: str,
+        source_ids: Sequence[SourceId | str],
+        retention_hours: int,
+        max_episodes: int,
+        min_duration_minutes: int,
+        max_duration_minutes: int,
+        hidden: bool,
+        countries: Sequence[str] = (),
+        languages: Sequence[str] = (),
+    ) -> LocalPlaylistTemplate:
+        """Edit the draft's defaults only; active Spotify instances keep snapshots."""
+        state = self.store.load()
+        current = self._local_template(state, template_id)
+        selected = self._source_ids(
+            source_ids, state=state, allow_empty=True, existing=current.default_source_ids
+        )
+        lower, upper = _duration_range_candidate(
+            None,
+            None,
+            min_duration_minutes,
+            max_duration_minutes,
+            current_min=current.min_duration_seconds,
+            current_max=current.max_duration_seconds,
+            activating=False,
+        )
+        updated = replace(
+            current,
+            display_name=_playlist_name(display_name),
+            description=_playlist_description(description),
+            cover_id=self._cover_id(cover_id),
+            default_source_ids=selected,
+            retention_hours=retention_hours,
+            max_episodes=max_episodes,
+            min_duration_seconds=lower,
+            max_duration_seconds=upper,
+            countries=tuple(CountryCode(value.strip()) for value in countries),
+            languages=tuple(LanguageTag(value.strip()) for value in languages),
+            hidden=hidden,
+        )
+        self._save_validated(
+            replace(
+                state,
+                templates=tuple(
+                    updated if draft.id == current.id else draft for draft in state.templates
+                ),
+            )
+        )
+        return updated
+
+    def delete_local_template(self, template_id: PlaylistId | str) -> None:
+        """Only unreferenced drafts can be deleted; never deletes from Spotify."""
+        state = self.store.load()
+        current = self._local_template(state, template_id)
+        if any(playlist.template_id == current.id for playlist in state.playlists):
+            raise ManagedAdminError("Custom template is referenced by a managed playlist")
+        intent = self.provisioning_journal.load()
+        if intent is not None and intent.template_id == current.id:
+            raise ManagedAdminError("Custom template is referenced by pending provisioning")
+        self._save_validated(
+            replace(
+                state,
+                templates=tuple(item for item in state.templates if item.id != current.id),
+            )
+        )
+
+    def _local_template(
+        self, state: ManagedState, template_id: PlaylistId | str
+    ) -> LocalPlaylistTemplate:
+        match = next((item for item in state.templates if item.id == template_id), None)
+        if match is None:
+            raise ManagedAdminError("unknown installation-owned playlist template")
+        return match
 
     def activate(
         self,
