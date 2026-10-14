@@ -29,22 +29,32 @@ def _multipart(
         ("target_id", target_id.encode()),
     ):
         fields.append(
-            b"--" + boundary + b"\r\n"
+            b"--"
+            + boundary
+            + b"\r\n"
             + f'Content-Disposition: form-data; name="{key}"'.encode()
-            + b"\r\n\r\n" + value + b"\r\n"
+            + b"\r\n\r\n"
+            + value
+            + b"\r\n"
         )
     image_field = (
-        b"--" + boundary + b"\r\n"
+        b"--"
+        + boundary
+        + b"\r\n"
         + b'Content-Disposition: form-data; name="image"; filename="image.png"\r\n'
         + f"Content-Type: {image_type}".encode()
-        + b"\r\n\r\n" + image + b"\r\n"
+        + b"\r\n\r\n"
+        + image
+        + b"\r\n"
     )
     fields.append(image_field)
     if repeated_image:
         fields.append(image_field)
     if unknown_field:
         fields.append(
-            b"--" + boundary + b'\r\nContent-Disposition: form-data; name="secret"'
+            b"--"
+            + boundary
+            + b'\r\nContent-Disposition: form-data; name="secret"'
             + b"\r\n\r\nnope\r\n"
         )
     if end:
@@ -55,7 +65,10 @@ def _multipart(
 def test_bounded_owner_cover_multipart_roundtrips_binary_without_filename_usage() -> None:
     kind, data = _multipart(image=b"\xff\xd8\x00\x99\xff\xd9", image_type="image/jpeg")
     assert parse_owner_cover_multipart(kind, data) == (
-        "good-token", "draft", "custom_example", b"\xff\xd8\x00\x99\xff\xd9"
+        "good-token",
+        "draft",
+        "custom_example",
+        b"\xff\xd8\x00\x99\xff\xd9",
     )
 
 
