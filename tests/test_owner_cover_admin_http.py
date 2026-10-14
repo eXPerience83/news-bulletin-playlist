@@ -30,9 +30,7 @@ def _png() -> bytes:
     return output.getvalue()
 
 
-def _binary_form(
-    csrf: str, kind: str, target_id: str, image: bytes
-) -> tuple[str, bytes]:
+def _binary_form(csrf: str, kind: str, target_id: str, image: bytes) -> tuple[str, bytes]:
     boundary = b"owner-cover-test-boundary"
     parts: list[bytes] = []
     for name, value in (
@@ -41,16 +39,23 @@ def _binary_form(
         ("target_id", target_id.encode()),
     ):
         parts.append(
-            b"--" + boundary + b"\r\n"
+            b"--"
+            + boundary
+            + b"\r\n"
             + f'Content-Disposition: form-data; name="{name}"'.encode()
-            + b"\r\n\r\n" + value + b"\r\n"
+            + b"\r\n\r\n"
+            + value
+            + b"\r\n"
         )
     parts.extend(
         [
-            b"--" + boundary + b"\r\n"
+            b"--"
+            + boundary
+            + b"\r\n"
             + b'Content-Disposition: form-data; name="image"; filename="../../secret.png"\r\n'
             + b"Content-Type: image/png\r\n\r\n"
-            + image + b"\r\n",
+            + image
+            + b"\r\n",
             b"--" + boundary + b"--\r\n",
         ]
     )
@@ -128,9 +133,10 @@ def test_authenticated_upload_and_private_preview_do_not_call_spotify(tmp_path: 
         )
         assert status == HTTPStatus.OK
         assert img.startswith(b"\xff\xd8")
-        assert _request(
-            server, "GET", f"/admin/owner-covers/{current.cover_id}.jpg"
-        )[0] != HTTPStatus.OK
+        assert (
+            _request(server, "GET", f"/admin/owner-covers/{current.cover_id}.jpg")[0]
+            != HTTPStatus.OK
+        )
 
         # A consumed CSRF token cannot overwrite the selected image.
         assert _upload_http(server, cookie, kind, body)[0] == HTTPStatus.FORBIDDEN
