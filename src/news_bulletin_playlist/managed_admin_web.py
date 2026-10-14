@@ -9,6 +9,7 @@ from collections.abc import Mapping
 
 from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warning
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.custom_playlist_templates import (
     CUSTOM_DEFAULT_COVER_ID,
     LocalPlaylistTemplate,
@@ -316,6 +317,16 @@ def _managed_card(
         source_prefix=f"edit-{playlist.id}",
         enabled=playlist.enabled,
     )
+    upload_form = (
+        _owner_cover_upload_form(
+            csrf_token=csrf_token,
+            target_kind="managed",
+            target_id=str(playlist.id),
+            active_on_spotify=True,
+        )
+        if str(playlist.template_id).startswith("custom_")
+        else ""
+    )
     return f"""
 <article class="card playlist-card">
   <div class="card-head">
@@ -335,6 +346,7 @@ def _managed_card(
     {fields}
     <button class="button" type="submit">Save playlist</button>
   </form>
+  {upload_form}
   <form method="post" action="/admin/playlists/sync">
     {_hidden_input("csrf_token", csrf_token)}
     {_hidden_input("playlist_id", str(playlist.id))}
@@ -426,7 +438,13 @@ def _custom_draft_fields(
         f"{' selected' if selected_cover == CUSTOM_DEFAULT_COVER_ID else ''}>"
         "News Bulletin · Custom (default)</option>"
     )
-    covers = default_option + "".join(
+    uploaded_option = (
+        f'<option value="{html.escape(selected_cover, quote=True)}" selected>'
+        "My uploaded image</option>"
+        if is_uploaded_cover_id(selected_cover)
+        else ""
+    )
+    covers = uploaded_option + default_option + "".join(
         f'<option value="{html.escape(template.cover_id, quote=True)}"'
         f"{' selected' if template.cover_id == selected_cover else ''}>"
         f"{html.escape(template.display_name)}</option>"
@@ -563,8 +581,9 @@ def _custom_draft_card(
   {_hidden_input("min_duration_minutes", str(draft.min_duration_seconds // 60))}
   {_hidden_input("max_duration_minutes", str(draft.max_duration_seconds // 60))}
   {source_fields}
-  <p class="muted">Creates a public Spotify playlist. Applying its bundled cover and
-     project attribution is a separate, explicit action after creation.</p>
+  <p class="muted">Creates a public Spotify playlist with initial project attribution;
+     attempts to upload the selected cover once. Later image changes require
+     the separate Apply Spotify metadata &amp; cover action.</p>
   <button class="button button-primary" type="submit">Create Spotify playlist from draft</button>
 </form>
 """
@@ -584,6 +603,7 @@ def _custom_draft_card(
     {fields}
     <button class="button" type="submit">Save draft changes</button>
   </form>
+  {_owner_cover_upload_form(csrf_token=csrf_token, target_kind="draft", target_id=str(draft.id), active_on_spotify=False)}
   {publish}
   {delete_control}
 </article>
@@ -751,10 +771,35 @@ def _source_label(source: SourceDefinition) -> str:
     return f"{source.display_name} ({source.origin} · {source.editorial_scope.value} · {language})"
 
 
+def _owner_cover_upload_form(
+    *, csrf_token: str, target_kind: str, target_id: str, active_on_spotify: bool
+) -> str:
+    note = (
+        "This upload only changes the selected local cover. Apply Spotify metadata "
+        "&amp; cover separately to update the published playlist."
+        if active_on_spotify
+        else "This saves the custom image locally; it does not contact Spotify."
+    )
+    return f"""
+<form method="post" action="/admin/owner-covers/upload"
+      enctype="multipart/form-data">
+  {_hidden_input("csrf_token", csrf_token)}
+  {_hidden_input("target_kind", target_kind)}
+  {_hidden_input("target_id", target_id)}
+  <label>My cover image · JPEG or PNG (max 2 MiB)
+    <input type="file" name="image" accept="image/jpeg,image/png" required>
+  </label>
+  <p class="muted">{note}</p>
+  <button class="button" type="submit">Upload and select custom cover</button>
+</form>
+"""
+
+
 def _cover_image(cover_id: str, label: str) -> str:
     safe_id = urllib.parse.quote(cover_id, safe="")
+    route = "/admin/owner-covers/" if is_uploaded_cover_id(cover_id) else "/admin/covers/"
     return (
-        f'<img class="cover" src="/admin/covers/{safe_id}.jpg" '
+        f'<img class="cover" src="{route}{safe_id}.jpg" '
         f'alt="Cover for {html.escape(label, quote=True)}">'
     )
 
