@@ -24,8 +24,15 @@ Spotify destination remains a separate deliberate user action.
   retain their own selected sources and eligibility policies after activation.
 - Custom templates may select built-in or installation-owned sources. A hidden draft
   still owns its source references; deleting such a source must be blocked.
-- Early custom templates select one of the existing bundled covers. Uploading custom
-  artwork and arbitrary editorial filters are separate workstreams.
+- New custom drafts default to the **locale-neutral custom_default** bundled JPEG,
+  rather than an unrelated international or national playlist image. The new
+  choice is installation-owned only and does not create a new built-in template.
+  Previously saved draft and published playlist cover selections remain intact.
+- Custom drafts may also choose a different existing bundled cover and later
+  explicitly sync a managed destination's selected image to Spotify. Uploading
+  arbitrary owner JPG images and editorial filters are separate workstreams.
+  The new neutral image is built into the Docker image under
+  `/opt/news-bulletin-playlist/covers/custom_default.jpg`.
 
 ## Opt-in schema v7 (no migration on boot)
 

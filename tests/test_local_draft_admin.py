@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.custom_playlist_templates import CUSTOM_DEFAULT_COVER_ID
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
     ManagedAdminService,
@@ -81,6 +82,31 @@ def test_local_create_changes_v6_to_v7_without_spotify_or_existing_playlist_chan
     assert draft.default_source_ids == (SourceId("cnn"), SourceId("un_news_en"))
     assert draft.languages == ("es-ES", "en")
     assert service.snapshot().custom_templates == (draft,)
+
+
+def test_custom_default_cover_is_validated_without_changing_existing_drafts(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    original = _create(service)
+    assert original.cover_id == "international_english_news"
+    second = service.create_local_template(
+        display_name="Fresh custom playlist",
+        description="Neutral default artwork",
+        cover_id=CUSTOM_DEFAULT_COVER_ID,
+        source_ids=("cnn",),
+        retention_hours=48,
+        max_episodes=100,
+        min_duration_minutes=0,
+        max_duration_minutes=30,
+    )
+    state = service.store.load()
+    assert {item.id: item for item in state.templates} == {
+        original.id: original,
+        second.id: second,
+    }
+    assert second.cover_id == CUSTOM_DEFAULT_COVER_ID
+    assert original.cover_id == "international_english_news"
 
 
 def test_draft_update_hide_delete_is_local_and_keeps_stable_id(tmp_path: Path) -> None:

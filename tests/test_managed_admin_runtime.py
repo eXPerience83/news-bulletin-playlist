@@ -1225,6 +1225,7 @@ def test_custom_template_routes_are_authenticated_local_only_and_csrf_protected(
     assert "My playlists" in body
     assert "My local world updates" in body
     assert "Save local draft" in body
+    assert '<option value="custom_default" selected>' in body
     assert "/admin/playlists/templates/create" in body
     assert "/admin/playlists/templates/update" in body
     assert "/admin/playlists/templates/delete" in body

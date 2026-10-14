@@ -11,7 +11,10 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
-from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
+from news_bulletin_playlist.custom_playlist_templates import (
+    CUSTOM_DEFAULT_COVER_ID,
+    LocalPlaylistTemplate,
+)
 from news_bulletin_playlist.managed_duration import (
     MAX_NEW_MANAGED_DURATION_SECONDS,
     duration_seconds_from_minutes,
@@ -785,6 +788,7 @@ class ManagedAdminService:
     def _cover_id(self, value: str) -> str:
         cover_id = _required_text(value, "cover id")
         known = {template.cover_id for template in self.catalog.playlists}
+        known.add(CUSTOM_DEFAULT_COVER_ID)
         if cover_id not in known:
             raise ManagedAdminError(f"unknown bundled cover: {cover_id}")
         return cover_id

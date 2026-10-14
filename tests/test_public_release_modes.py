@@ -520,6 +520,9 @@ def test_http_custom_modes_create_edit_and_next_refresh_without_extra_io(tmp_pat
             .replace(tzinfo=UTC)
             .isoformat()
         )
+        # Spotify publishes a *publisher-local* catalogue date. Simulating a UTC
+        # calendar date made this test nondeterministic at Madrid midnight.
+        client.release_day_override = raw[:10]
         observation = PublicEpisodeObservation(
             source.id,
             SHOW,
@@ -689,6 +692,7 @@ def test_individual_audit_and_zip_share_mode_outcome_and_request_counts(tmp_path
         store.save(replace(store.load(), sources=(replace(custom, public_release_mode=mode),)))
         service = _Handler.source_admin_service
         now = datetime.now(UTC)
+        client.release_day_override = now.astimezone(ZoneInfo(custom.timezone)).date().isoformat()
 
         class Public:
             calls = 0
