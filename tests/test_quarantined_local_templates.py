@@ -210,7 +210,6 @@ def test_quarantined_unreferenced_draft_blocks_automatic_source_reference_loss(
     assert len(serialize_managed_state(state)["quarantined_templates"]) == 1
 
 
-
 def test_backup_confirmed_repair_discards_only_explicit_unreferenced_record(
     tmp_path: Path,
 ) -> None:
@@ -250,9 +249,7 @@ def test_cannot_discard_draft_needed_by_suspended_destination(tmp_path: Path) ->
     digest = hashlib.sha256(damaged.raw_json.encode("utf-8")).hexdigest()
 
     with pytest.raises(ManagedAdminError, match="published custom playlist"):
-        ManagedAdminService(store).discard_quarantined_template(
-            0, digest, backup_confirmed=True
-        )
+        ManagedAdminService(store).discard_quarantined_template(0, digest, backup_confirmed=True)
     assert store.path.read_bytes() == original
 
 
