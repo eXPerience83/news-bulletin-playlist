@@ -2,8 +2,11 @@
 
 Issue [#527](https://github.com/eXPerience83/news-bulletin-playlist/issues/527).
 
-This is **backend storage only**, not an Admin upload form. There is no new
-network endpoint and no Spotify provider request in this slice.
+The underlying asset store was introduced in merged PR #532. Admin now
+exposes a separate authenticated upload route and read-only owner preview for
+installation-owned drafts and already managed custom playlists. This local
+operation **never** calls Spotify. After updating an existing public playlist's
+selected cover, use **Apply Spotify metadata & cover** explicitly.
 
 ## Asset flow
 
@@ -24,18 +27,26 @@ network endpoint and no Spotify provider request in this slice.
   bytes. Missing/replaced/truncated/symlinked assets fail closed, with no
   fallback image silently uploaded to Spotify.
 
-## Pending integrations
+## Admin upload and preview
 
-The follow-up Admin PR must add a **dedicated bounded multipart upload
-route** with authenticated one-use CSRF, and a read-only authenticated
-preview route. It must reuse the existing configuration lock, select
-the returned opaque asset ID only after persistent file validation, and
-support uploaded images on both custom **drafts** and already managed
-custom playlists. Draft edit/upload is local-only; use explicit
-**Apply Spotify metadata & cover** to change a live destination.
+- POST `/admin/owner-covers/upload`: authenticated, bounded to a 2 MiB image
+  plus a small multipart framing budget, one-use CSRF, strict field names,
+  transfer-encoding and MIME checks. Only `target_kind=draft|managed` and
+  the matching opaque ID are accepted; custom managed playlists only.
+- GET `/admin/owner-covers/uploaded_<sha256>.jpg`: authenticated, private
+  no-store, returned as `image/jpeg`, opaque SHA256/path validation and
+  stored file-integrity verification. Files are never served by supplied
+  local path or filename.
+- All state modifications happen under the existing configuration lock
+  after canonical asset storage succeeds. A local state failure may leave an
+  unreferenced but harmless JPEG; there is no unsafe background deletion.
+- An uploaded draft image can be changed again, and a managed destination's
+  local selected image can be changed without any Spotify write. For a
+  published destination, explicit **Apply Spotify metadata & cover** is
+  needed to synchronize the new image.
 
-The existing `/admin/` small `application/x-www-form-urlencoded` form
-limit stays at 4096 bytes and must not be relaxed just for image content.
+The original `/admin/` small `application/x-www-form-urlencoded` form
+limit remains 4096 bytes; image bodies use only the dedicated endpoint.
 Reference tracking must include managed playlists, hidden drafts, pending
 provisioning and quarantined entries before any garbage collection;
 **no automatic asset deletion** is permitted in the storage foundation.
