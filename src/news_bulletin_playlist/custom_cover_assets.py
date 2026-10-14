@@ -98,9 +98,7 @@ class CustomCoverAssetStore:
         directory = self._open_dir(create=False)
         try:
             try:
-                fd = os.open(
-                    f"{cover_id}.jpg", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory
-                )
+                fd = os.open(f"{cover_id}.jpg", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
             except OSError as exc:
                 raise CustomCoverAssetError("Selected custom cover is missing") from exc
             try:
