@@ -88,8 +88,15 @@ existing provisioning journal rather than retried blindly. Stop-managing keeps
 the Spotify destination and does not delete the local draft.
 
 Creation is **public** by the current operator-controlled Spotify action.
-**Apply Spotify metadata & cover** is an independent explicit Admin action;
-successful playlist creation does not imply cover/attribution was applied.
+For **new custom playlists**, the initial Spotify create request now includes the
+validated project attribution in its description, with no extra metadata request.
+Once the created destination ID is durably journaled and local managed state is
+saved, Admin makes one best-effort attempt to upload the selected bundled cover.
+A cover error cannot undo the destination, trigger duplicate creation or block
+ordinary news reconciliation: Admin reports **created, cover pending** and the
+existing explicit **Apply Spotify metadata & cover** action can retry later.
+Saving/editing a local draft does not call Spotify. Existing image-owned built-in
+activation keeps its separate manual sync policy until reviewed independently.
 No automatic public README link is generated from a mere local draft.
 
 **Production safety gate:** the remaining invalid-template quarantine/repair
