@@ -118,12 +118,12 @@ def render_managed_admin_page(
             _message("error", error),
             (
                 '<section class="warning" role="alert">'
-                '<h2>Custom playlist drafts require repair</h2>'
-                '<p>One or more saved local drafts are invalid. Their original data is '
-                'preserved; affected playlist destinations are suspended without '
-                'modifying Spotify. Other validated playlists remain available. '
-                'Back up /data/managed-state.json before repairing this state.</p>'
-                '</section>'
+                "<h2>Custom playlist drafts require repair</h2>"
+                "<p>One or more saved local drafts are invalid. Their original data is "
+                "preserved; affected playlist destinations are suspended without "
+                "modifying Spotify. Other validated playlists remain available. "
+                "Back up /data/managed-state.json before repairing this state.</p>"
+                "</section>"
                 if state.quarantined_templates
                 else ""
             ),
@@ -245,10 +245,7 @@ def _managed_card(
         if playlist.enabled
         else status_badge("Paused", tone="warning")
     )
-    if any(
-        item.template_id == str(playlist.template_id)
-        for item in state.quarantined_templates
-    ):
+    if any(item.template_id == str(playlist.template_id) for item in state.quarantined_templates):
         return f"""
 <article class="card playlist-card">
   <h3>{html.escape(playlist.display_name)}</h3>
