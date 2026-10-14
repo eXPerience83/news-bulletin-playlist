@@ -1279,3 +1279,85 @@ def test_custom_template_routes_are_authenticated_local_only_and_csrf_protected(
     assert factory.tokens == []
     assert factory.client.create_calls == []
     assert lifecycle.reconcile_calls == []
+
+
+
+def test_custom_draft_explicit_activation_is_separate_from_local_save(
+    tmp_path: Path,
+) -> None:
+    service, factory = _service(tmp_path)
+    draft = service.create_local_template(
+        display_name="My short news",
+        description="Local-only until explicit publication",
+        cover_id="international_spanish_news",
+        source_ids=("cnn",),
+        retention_hours=48,
+        max_episodes=100,
+        min_duration_minutes=0,
+        max_duration_minutes=30,
+    )
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    disconnected = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/",
+        security=security,
+        spotify_state=AuthorizationState.DISCONNECTED,
+    )
+    disconnected.do_GET()
+    assert "Create Spotify playlist from draft" not in _response(disconnected).payload.decode()
+
+    connected = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/",
+        security=security,
+        spotify_state=AuthorizationState.CONNECTED,
+    )
+    connected.do_GET()
+    assert "Create Spotify playlist from draft" in _response(connected).payload.decode()
+    assert factory.tokens == []
+    assert lifecycle.reconcile_calls == []
+
+    auth = _AccessTokenProvider()
+    form = {
+        "csrf_token": [security.issue_csrf_token()],
+        "template_id": [str(draft.id)],
+        "display_name": [draft.display_name],
+        "description": [draft.description],
+        "cover_id": [draft.cover_id],
+        "source_id": [str(source_id) for source_id in draft.default_source_ids],
+        "min_duration_minutes": ["0"],
+        "max_duration_minutes": ["30"],
+    }
+    publish = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/playlists/activate",
+        form=form,
+        security=security,
+        auth_provider=auth,
+    )
+    publish.do_POST()
+    assert _response(publish).status == HTTPStatus.SEE_OTHER
+    assert _response(publish).extra_headers["Location"] == "/admin/?notice=playlist-activated"
+    assert factory.tokens == ["access-token-sentinel"]
+    assert len(factory.client.create_calls) == 1
+    assert factory.client.update_calls == []
+    assert len(service.store.load().playlists) == 1
+    assert service.store.load().templates == (draft,)
+    assert lifecycle.reconcile_calls == [True]
+
+    already_active = _HandlerHarness(
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=lifecycle,
+        path="/admin/",
+        security=security,
+    )
+    already_active.do_GET()
+    assert "Create Spotify playlist from draft" not in _response(already_active).payload.decode()
