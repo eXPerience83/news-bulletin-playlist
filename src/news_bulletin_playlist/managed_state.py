@@ -135,7 +135,6 @@ def _validate_overrides(
         seen.add(override.source_id)
 
 
-
 @dataclass(frozen=True, slots=True)
 class QuarantinedPlaylistTemplate:
     """Preserve an invalid local draft losslessly as JSON data, never as active config."""
@@ -431,8 +430,12 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     _known_keys(
         root,
         {
-            "schema_version", "playlists", "sources", "source_overrides",
-            "templates", "quarantined_templates",
+            "schema_version",
+            "playlists",
+            "sources",
+            "source_overrides",
+            "templates",
+            "quarantined_templates",
         }
         if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION
         else {"schema_version", "playlists", "sources", "source_overrides"}
@@ -521,16 +524,12 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     template_positions: list[int] = []
     quarantined: list[QuarantinedPlaylistTemplate] = []
     if source_schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION:
-        raw_templates = _sequence(
-            _required(root, "templates", "managed state"), "templates"
-        )
+        raw_templates = _sequence(_required(root, "templates", "managed state"), "templates")
         for index, raw in enumerate(raw_templates):
             try:
                 draft = _parse_local_template(raw, f"templates[{index}]")
-                effective_playlist_templates(
-                    BUILTIN_CATALOG, (draft,), sources=source_definitions
-                )
-            except (ManagedStateError, LocalPlaylistTemplateError):
+                effective_playlist_templates(BUILTIN_CATALOG, (draft,), sources=source_definitions)
+            except ManagedStateError, LocalPlaylistTemplateError:
                 quarantined.append(_quarantined(raw, index, "invalid_definition"))
             else:
                 templates.append(draft)
@@ -538,9 +537,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         raw_quarantine = _sequence(root.get("quarantined_templates", []), "quarantined_templates")
         for index, raw in enumerate(raw_quarantine):
             item = _mapping(raw, f"quarantined_templates[{index}]")
-            _known_keys(
-                item, {"source_index", "reason", "raw"}, f"quarantined_templates[{index}]"
-            )
+            _known_keys(item, {"source_index", "reason", "raw"}, f"quarantined_templates[{index}]")
             source_index = _integer(
                 _required(item, "source_index", f"quarantined_templates[{index}]"),
                 f"quarantined_templates[{index}].source_index",
