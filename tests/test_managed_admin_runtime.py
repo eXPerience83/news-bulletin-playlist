@@ -1281,7 +1281,6 @@ def test_custom_template_routes_are_authenticated_local_only_and_csrf_protected(
     assert lifecycle.reconcile_calls == []
 
 
-
 def test_custom_draft_explicit_activation_is_separate_from_local_save(
     tmp_path: Path,
 ) -> None:
