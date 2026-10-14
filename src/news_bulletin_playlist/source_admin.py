@@ -546,10 +546,7 @@ class SourceAdminService:
                 intent = self.provisioning_journal.load()
                 if (
                     any(source.id in playlist.source_ids for playlist in state.playlists)
-                    or any(
-                        source.id in template.default_source_ids
-                        for template in state.templates
-                    )
+                    or any(source.id in template.default_source_ids for template in state.templates)
                     or (intent is not None and source.id in intent.source_ids)
                 ):
                     raise SourceReferencedError("Unassign this source before deletion")
