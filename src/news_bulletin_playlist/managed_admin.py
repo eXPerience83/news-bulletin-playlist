@@ -326,7 +326,10 @@ class ManagedAdminService:
         if intent is not None and intent.template_id == current.id:
             raise ManagedAdminError("Custom template is referenced by pending provisioning")
         self._save_validated(
-            replace(state, templates=tuple(item for item in state.templates if item.id != current.id))
+            replace(
+                state,
+                templates=tuple(item for item in state.templates if item.id != current.id),
+            )
         )
 
     def _local_template(
