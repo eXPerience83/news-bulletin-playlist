@@ -143,10 +143,10 @@ def test_v7_requires_templates_and_quarantines_broken_draft_without_truncation()
 def test_v7_quarantines_duplicate_or_missing_source_without_accepting_them() -> None:
     draft = _draft()
     # Programmatic writes of non-canonical states still fail closed.
-    with pytest.raises(ManagedStateError, match="non-canonical"):
+    with pytest.raises(ManagedStateError, match="duplicate|non-canonical"):
         serialize_managed_state(ManagedState(schema_version=7, templates=(draft, draft)))
     bad = replace(draft, default_source_ids=(SourceId("uninstalled_source"),))
-    with pytest.raises(ManagedStateError, match="non-canonical"):
+    with pytest.raises(ManagedStateError, match="unknown source|non-canonical"):
         serialize_managed_state(ManagedState(schema_version=7, templates=(bad,)))
 
     payload = serialize_managed_state(ManagedState(schema_version=7, templates=(draft,)))
