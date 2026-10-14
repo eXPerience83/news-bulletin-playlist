@@ -9,7 +9,11 @@ import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
-from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningJournal, ProvisioningState
+from news_bulletin_playlist.managed_provisioning import (
+    ProvisioningIntent,
+    ProvisioningJournal,
+    ProvisioningState,
+)
 from news_bulletin_playlist.managed_state import (
     ManagedState,
     ManagedStateStore,
@@ -52,9 +56,15 @@ def test_local_create_changes_v6_to_v7_without_spotify_or_existing_playlist_chan
     old = ManagedState(
         playlists=(
             activate_template(BUILTIN_CATALOG.playlist("spain_spanish_news"), "destination-1"),
-            activate_template(BUILTIN_CATALOG.playlist("international_english_news"), "destination-2"),
-            activate_template(BUILTIN_CATALOG.playlist("international_polish_news"), "destination-3"),
-            activate_template(BUILTIN_CATALOG.playlist("international_spanish_long_news"), "destination-4"),
+            activate_template(
+                BUILTIN_CATALOG.playlist("international_english_news"), "destination-2"
+            ),
+            activate_template(
+                BUILTIN_CATALOG.playlist("international_polish_news"), "destination-3"
+            ),
+            activate_template(
+                BUILTIN_CATALOG.playlist("international_spanish_long_news"), "destination-4"
+            ),
         )
     )
     service.store.save(old)
