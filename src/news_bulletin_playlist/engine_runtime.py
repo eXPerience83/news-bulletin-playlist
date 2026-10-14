@@ -905,30 +905,41 @@ class OperationalHealthHandler(LanAdminHandler):
         max_episodes = int(single_form_value(form, "max_episodes"))
         langs = single_form_value(form, "language_tags", required=False)
         countries = single_form_value(form, "country_codes", required=False)
-        values = {
-            "display_name": name,
-            "description": description,
-            "cover_id": cover,
-            "source_ids": form.get("source_id", []),
-            "retention_hours": retention,
-            "max_episodes": max_episodes,
-            "min_duration_minutes": minimum,
-            "max_duration_minutes": maximum,
-            "languages": tuple(part.strip() for part in langs.split(",") if part.strip()),
-            "countries": tuple(part.strip() for part in countries.split(",") if part.strip()),
-        }
+        selected_sources = form.get("source_id", [])
+        language_tags = tuple(part.strip() for part in langs.split(",") if part.strip())
+        country_codes = tuple(part.strip() for part in countries.split(",") if part.strip())
         if path == "/admin/playlists/templates/create":
-            return str(service.create_local_template(**values).id)
+            draft = service.create_local_template(
+                display_name=name,
+                description=description,
+                cover_id=cover,
+                source_ids=selected_sources,
+                retention_hours=retention,
+                max_episodes=max_episodes,
+                min_duration_minutes=minimum,
+                max_duration_minutes=maximum,
+                languages=language_tags,
+                countries=country_codes,
+            )
+            return str(draft.id)
         hidden_values = form.get("hidden", [])
         if hidden_values not in ([], ["1"]):
             raise ValueError("hidden must be omitted or set exactly once")
-        return str(
-            service.update_local_template(
-                single_form_value(form, "template_id"),
-                **values,
-                hidden=bool(hidden_values),
-            ).id
+        draft = service.update_local_template(
+            single_form_value(form, "template_id"),
+            display_name=name,
+            description=description,
+            cover_id=cover,
+            source_ids=selected_sources,
+            retention_hours=retention,
+            max_episodes=max_episodes,
+            min_duration_minutes=minimum,
+            max_duration_minutes=maximum,
+            languages=language_tags,
+            countries=country_codes,
+            hidden=bool(hidden_values),
         )
+        return str(draft.id)
 
     def _activate_managed_playlist(
         self,
