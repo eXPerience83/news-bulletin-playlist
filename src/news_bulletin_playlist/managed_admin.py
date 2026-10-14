@@ -828,7 +828,7 @@ class ManagedAdminService:
                 raise ManagedAdminError("custom cover asset storage is unavailable")
             try:
                 self.cover_loader(cover_id)
-            except OSError, ValueError as exc:
+            except (OSError, ValueError) as exc:
                 raise ManagedAdminError("custom cover asset is missing or invalid") from exc
         return cover_id
 
