@@ -124,7 +124,7 @@ def test_schema_v6_never_silently_discards_new_templates() -> None:
         parse_managed_state(payload)
 
 
-def test_v7_requires_templates_and_rejects_broken_draft_without_truncation() -> None:
+def test_v7_requires_templates_and_quarantines_broken_draft_without_truncation() -> None:
     state = ManagedState(schema_version=7, templates=(_draft(),))
     payload = serialize_managed_state(state)
     del payload["templates"]
@@ -133,17 +133,28 @@ def test_v7_requires_templates_and_rejects_broken_draft_without_truncation() -> 
 
     payload = serialize_managed_state(state)
     payload["templates"][0]["max_duration_seconds"] = -1
-    with pytest.raises(ManagedStateError, match="duration"):
-        parse_managed_state(payload)
+    loaded = parse_managed_state(payload)
+    assert loaded.templates == ()
+    assert len(loaded.quarantined_templates) == 1
+    raw = json.loads(loaded.quarantined_templates[0].raw_json)
+    assert raw["max_duration_seconds"] == -1
 
 
-def test_v7_rejects_duplicate_or_missing_template_source() -> None:
+def test_v7_quarantines_duplicate_or_missing_source_without_accepting_them() -> None:
     draft = _draft()
-    with pytest.raises(ManagedStateError, match="duplicate"):
+    # Programmatic writes of non-canonical states still fail closed.
+    with pytest.raises(ManagedStateError, match="duplicate|non-canonical"):
         serialize_managed_state(ManagedState(schema_version=7, templates=(draft, draft)))
     bad = replace(draft, default_source_ids=(SourceId("uninstalled_source"),))
-    with pytest.raises(ManagedStateError, match="unknown source"):
+    with pytest.raises(ManagedStateError, match="unknown source|non-canonical"):
         serialize_managed_state(ManagedState(schema_version=7, templates=(bad,)))
+
+    payload = serialize_managed_state(ManagedState(schema_version=7, templates=(draft,)))
+    payload["templates"].append(dict(payload["templates"][0]))
+    parsed = parse_managed_state(payload)
+    assert parsed.templates == ()
+    assert len(parsed.quarantined_templates) == 2
+    assert all(item.reason == "duplicate_id" for item in parsed.quarantined_templates)
 
 
 def test_explicit_v7_write_failure_keeps_original_v6_bytes(

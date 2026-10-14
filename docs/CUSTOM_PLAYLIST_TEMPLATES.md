@@ -40,11 +40,26 @@ Admin **Save local draft** atomically replaces v6 with v7 **only after**
 the user deliberately creates the first custom draft. Saving/updating or
 stop-managing a playlist must preserve every custom-template definition.
 
-The v7 reader rejects unknown keys, collisions with built-in IDs, duplicate
-draft IDs, references to deleted or unknown sources, unrecognized cover IDs,
-invalid policy ranges and malformed values. Malformed data must not authorize
-a Spotify write. Isolation/repair UX for malformed custom drafts must be
-completed before production activation of draft CRUD.
+The v7 reader strictly rejects corrupt root state, but invalid **individual**
+custom draft definitions are isolated from the effective catalogue. Their original
+JSON values are retained in `quarantined_templates`, with a sanitized reason and
+source-position marker. Normal `load()` does not rewrite the original file;
+subsequent authenticated state changes preserve the quarantined data instead of
+silently dropping it.
+
+A managed destination referencing a quarantined custom template is excluded from
+the engine's effective configuration and **receives no Spotify writes**; its
+managed state and Spotify ID remain on disk. Validated independent destinations
+continue to run. Admin clearly warns about quarantined drafts and disables
+administrative changes for affected published playlists. Custom-source deletion
+is blocked conservatively while any quarantine is present, because malformed
+source references cannot be trusted.
+
+A quarantined draft is never available for activation and must be repaired only
+after a verified local backup. **An explicit operator-safe repair/removal UI,
+further adversarial validation, and candidate rollout acceptance remain required
+before any TrueNAS deployment.** Never interpret quarantine as permission to
+delete an existing Spotify destination or its episodes.
 
 ## Explicit Spotify activation (not a local draft save)
 

@@ -522,6 +522,8 @@ class SourceAdminService:
             )
             intent = self.provisioning_journal.load()
             pending = intent is not None and source.id in intent.source_ids
+            if state.quarantined_templates:
+                used_by += ("Unresolved custom playlist drafts",)
             return source, used_by, pending
 
     def delete(self, source_id: str) -> bool:
@@ -547,6 +549,7 @@ class SourceAdminService:
                 if (
                     any(source.id in playlist.source_ids for playlist in state.playlists)
                     or any(source.id in template.default_source_ids for template in state.templates)
+                    or state.quarantined_templates
                     or (intent is not None and source.id in intent.source_ids)
                 ):
                     raise SourceReferencedError("Unassign this source before deletion")
