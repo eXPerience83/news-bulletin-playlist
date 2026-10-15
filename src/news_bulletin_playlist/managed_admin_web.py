@@ -317,6 +317,7 @@ def _managed_card(
         source_prefix=f"edit-{playlist.id}",
         enabled=playlist.enabled,
     )
+    custom_managed = str(playlist.template_id).startswith("custom_")
     upload_form = (
         _owner_cover_upload_form(
             csrf_token=csrf_token,
@@ -324,8 +325,15 @@ def _managed_card(
             target_id=str(playlist.id),
             active_on_spotify=True,
         )
-        if str(playlist.template_id).startswith("custom_")
+        if custom_managed
         else ""
+    )
+    cover_control = (
+        '<label>Selected cover (local only; apply to Spotify separately)'
+        f'<select name="cover_id">{_custom_cover_options(catalog, playlist.cover_id)}</select>'
+        '</label>'
+        if custom_managed
+        else _hidden_input("cover_id", playlist.cover_id)
     )
     return f"""
 <article class="card playlist-card">
@@ -342,7 +350,7 @@ def _managed_card(
   <form method="post" action="/admin/playlists/update">
     {_hidden_input("csrf_token", csrf_token)}
     {_hidden_input("playlist_id", str(playlist.id))}
-    {_hidden_input("cover_id", playlist.cover_id)}
+    {cover_control}
     {fields}
     <button class="button" type="submit">Save playlist</button>
   </form>
@@ -407,6 +415,31 @@ def _template_card(
 """
 
 
+def _custom_cover_options(catalog: BuiltInCatalog, selected_cover: str) -> str:
+    """Keep draft and managed-custom cover choices consistent."""
+    default_option = (
+        f'<option value="{CUSTOM_DEFAULT_COVER_ID}"'
+        f"{' selected' if selected_cover == CUSTOM_DEFAULT_COVER_ID else ''}>"
+        "News Bulletin · Custom (default)</option>"
+    )
+    uploaded_option = (
+        f'<option value="{html.escape(selected_cover, quote=True)}" selected>'
+        "My uploaded image</option>"
+        if is_uploaded_cover_id(selected_cover)
+        else ""
+    )
+    return (
+        uploaded_option
+        + default_option
+        + "".join(
+            f'<option value="{html.escape(template.cover_id, quote=True)}"'
+            f"{' selected' if template.cover_id == selected_cover else ''}>"
+            f"{html.escape(template.display_name)}</option>"
+            for template in catalog.playlists
+        )
+    )
+
+
 def _custom_draft_fields(
     draft: LocalPlaylistTemplate | None,
     *,
@@ -433,27 +466,7 @@ def _custom_draft_fields(
         enabled=None,
     )
     selected_cover = draft.cover_id if draft is not None else CUSTOM_DEFAULT_COVER_ID
-    default_option = (
-        f'<option value="{CUSTOM_DEFAULT_COVER_ID}"'
-        f"{' selected' if selected_cover == CUSTOM_DEFAULT_COVER_ID else ''}>"
-        "News Bulletin · Custom (default)</option>"
-    )
-    uploaded_option = (
-        f'<option value="{html.escape(selected_cover, quote=True)}" selected>'
-        "My uploaded image</option>"
-        if is_uploaded_cover_id(selected_cover)
-        else ""
-    )
-    covers = (
-        uploaded_option
-        + default_option
-        + "".join(
-            f'<option value="{html.escape(template.cover_id, quote=True)}"'
-            f"{' selected' if template.cover_id == selected_cover else ''}>"
-            f"{html.escape(template.display_name)}</option>"
-            for template in catalog.playlists
-        )
-    )
+    covers = _custom_cover_options(catalog, selected_cover)
     retention = 48 if draft is None else draft.retention_hours
     maximum = 100 if draft is None else draft.max_episodes
     languages = "" if draft is None else ", ".join(str(x) for x in draft.languages)
@@ -467,7 +480,7 @@ def _custom_draft_fields(
         )
     return f"""
 {policy}
-<label>Cover · choose the custom default or another bundled design (uploads coming soon)
+<label>Cover · choose a bundled design (or upload your own after saving the draft)
   <select name="cover_id">{covers}</select>
 </label>
 <div class="duration-row">
