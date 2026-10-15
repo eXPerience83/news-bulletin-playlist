@@ -695,9 +695,7 @@ def test_mode_diagnostics_current_snapshot_counts(tmp_path, mode):
         datetime(2026, 3, 29, 1, 1, tzinfo=UTC),
     ],
 )
-def test_individual_audit_and_zip_share_mode_outcome_and_request_counts(
-    tmp_path, mode, now
-):
+def test_individual_audit_and_zip_share_mode_outcome_and_request_counts(tmp_path, mode, now):
     from test_source_admin_http import OTHER
 
     with _server(tmp_path) as (_server_unused, client, store):
