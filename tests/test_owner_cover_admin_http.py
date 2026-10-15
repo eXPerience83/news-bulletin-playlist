@@ -18,10 +18,12 @@ from news_bulletin_playlist.custom_cover_assets import (
     is_uploaded_cover_id,
 )
 from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
+from news_bulletin_playlist.managed_admin_web import render_managed_admin_page
 from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     activate_template,
 )
+from news_bulletin_playlist.spotify.auth import AuthorizationState
 
 
 def _png() -> bytes:
@@ -180,3 +182,57 @@ def test_managed_upload_changes_only_custom_local_selection(tmp_path: Path) -> N
             target_id=str(draft.id),
             cover_id="uploaded_" + "0" * 64,
         )
+
+
+def test_managed_custom_can_return_to_bundled_cover_without_spotify(
+    tmp_path: Path,
+) -> None:
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    storage = CustomCoverAssetStore(tmp_path / "custom-covers")
+    service = _setup_service(store, tmp_path)
+    draft = _draft(service)
+    original = activate_template(
+        BUILTIN_CATALOG.playlist("spain_spanish_news"), "original-spotify-destination"
+    )
+    custom = activate_template(draft.as_playlist_template(), "new-custom-destination")
+    store.save(replace(store.load(), playlists=(original, custom)))
+    uploaded_id = storage.save(_png())
+    service.select_uploaded_cover(
+        target_kind="managed", target_id=str(custom.id), cover_id=uploaded_id
+    )
+
+    rendered = render_managed_admin_page(
+        snapshot=service.snapshot(),
+        catalog=BUILTIN_CATALOG,
+        spotify_state=AuthorizationState.CONNECTED,
+        csrf_token="csrf-value",
+        last_cycle=None,
+        lan_mode=False,
+        state=store.load(),
+    ).decode()
+    sections = rendered.split('<article class="card playlist-card">')
+    managed_custom = next(s for s in sections if "new-custom-destination" in s)
+    built_in = next(s for s in sections if "original-spotify-destination" in s)
+    assert '<select name="cover_id">' in managed_custom
+    assert f'<option value="{uploaded_id}" selected>' in managed_custom
+    assert '<option value="custom_default">' in managed_custom
+    assert '<option value="international_spanish_news">' in managed_custom
+    assert '<select name="cover_id">' not in built_in
+    assert 'name="cover_id"' in built_in
+    assert "uploads coming soon" not in rendered
+
+    updated = service.update(
+        custom.id,
+        display_name=custom.display_name,
+        description=custom.description,
+        cover_id="custom_default",
+        source_ids=custom.source_ids,
+        enabled=custom.enabled,
+        access_token=None,
+    )
+    assert updated.cover_id == "custom_default"
+    state = store.load()
+    assert state.playlists[0] == original
+    assert state.playlists[1] == updated
+    assert state.templates == (draft,)
+    assert (storage.root / f"{uploaded_id}.jpg").exists()  # no unsafe asset deletion
