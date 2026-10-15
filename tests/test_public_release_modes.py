@@ -493,9 +493,7 @@ def test_public_mode_participates_in_playlist_write_guard():
         datetime(2026, 10, 14, 22, 1, tzinfo=UTC),  # 00:01 Europe/Madrid
     ],
 )
-def test_http_custom_modes_create_edit_and_next_refresh_without_extra_io(
-    tmp_path, mode, observed
-):
+def test_http_custom_modes_create_edit_and_next_refresh_without_extra_io(tmp_path, mode, observed):
     from _html import assert_valid_admin_html
     from test_source_admin_http import OTHER, SHOW
 
