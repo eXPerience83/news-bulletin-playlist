@@ -486,7 +486,16 @@ def test_public_mode_participates_in_playlist_write_guard():
 
 
 @pytest.mark.parametrize("mode", list(Mode))
-def test_http_custom_modes_create_edit_and_next_refresh_without_extra_io(tmp_path, mode):
+@pytest.mark.parametrize(
+    "observed",
+    [
+        datetime(2026, 10, 14, 21, 59, tzinfo=UTC),  # 23:59 Europe/Madrid
+        datetime(2026, 10, 14, 22, 1, tzinfo=UTC),  # 00:01 Europe/Madrid
+    ],
+)
+def test_http_custom_modes_create_edit_and_next_refresh_without_extra_io(
+    tmp_path, mode, observed
+):
     from _html import assert_valid_admin_html
     from test_source_admin_http import OTHER, SHOW
 
@@ -514,7 +523,6 @@ def test_http_custom_modes_create_edit_and_next_refresh_without_extra_io(tmp_pat
         assert source.public_release_mode is changed
         assert source.temporal_strategy is TemporalStrategy.AUTO
         service = _Handler.source_admin_service
-        observed = datetime.now(UTC)
         raw = (
             (observed.astimezone(source.timezone) - timedelta(minutes=1))
             .replace(tzinfo=UTC)
