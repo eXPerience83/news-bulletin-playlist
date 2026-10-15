@@ -329,9 +329,9 @@ def _managed_card(
         else ""
     )
     cover_control = (
-        '<label>Selected cover (local only; apply to Spotify separately)'
+        "<label>Selected cover (local only; apply to Spotify separately)"
         f'<select name="cover_id">{_custom_cover_options(catalog, playlist.cover_id)}</select>'
-        '</label>'
+        "</label>"
         if custom_managed
         else _hidden_input("cover_id", playlist.cover_id)
     )
