@@ -16,7 +16,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: 3.15",
 ]
-dependencies = ["Pillow>=12.3.0,<13"]
+dependencies = ["Pillow>=13,<14"]
 
 [project.scripts]
 news-playlist = "news_bulletin_playlist.cli:main"
