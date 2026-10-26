@@ -133,6 +133,7 @@ class SourceAuditJobs:
             if time.monotonic() - self._started > JOB_MAX_SECONDS:
                 raise _AuditJobDeadline
 
+        result: tuple[str, str | None, bytes | None, str | None]
         try:
             batch = service.audit_all(on_progress=progress)
             if cancel.is_set():
