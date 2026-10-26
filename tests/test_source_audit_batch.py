@@ -271,7 +271,9 @@ def _await_export(
         status, _, page = _request(server, "GET", status_url, cookie=cookie)
         assert status == HTTPStatus.OK
         if b"Status: <strong>succeeded</strong>" in page:
-            return _request(server, "GET", status_url.replace("/status?", "/download?"), cookie=cookie)
+            return _request(
+                server, "GET", status_url.replace("/status?", "/download?"), cookie=cookie
+            )
         if b"Status: <strong>failed</strong>" in page:
             return HTTPStatus.CONFLICT, {}, page
         if b"Status: <strong>cancelled</strong>" in page:
