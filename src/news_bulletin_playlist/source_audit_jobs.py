@@ -11,6 +11,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from news_bulletin_playlist.source_admin import (
@@ -65,7 +66,13 @@ class SourceAuditJobs:
         self._closed = False
         self._worker: threading.Thread | None = None
 
-    def start(self, service: SourceAdminService, *, build_revision: str) -> str:
+    def start(
+        self,
+        service: SourceAdminService,
+        *,
+        build_revision: str,
+        on_event: Callable[[str, int, int], None] | None = None,
+    ) -> str:
         with self._lock:
             if self._closed or (self._job is not None and self._job.status == "running"):
                 raise AuditJobBusyError("A source audit is already running")
@@ -76,7 +83,7 @@ class SourceAuditJobs:
             self._cancel = threading.Event()
             worker = threading.Thread(
                 target=self._run,
-                args=(job_id, service, build_revision, self._cancel),
+                args=(job_id, service, build_revision, self._cancel, on_event),
                 name="source-audit-export",
                 daemon=True,
             )
@@ -120,7 +127,15 @@ class SourceAuditJobs:
         service: SourceAdminService,
         revision: str,
         cancel: threading.Event,
+        on_event: Callable[[str, int, int], None] | None,
     ) -> None:
+        def notify(state: str, completed: int, total: int) -> None:
+            if on_event is not None:
+                try:
+                    on_event(state, completed, total)
+                except Exception:  # noqa: BLE001 - diagnostics must never fail the audit
+                    pass
+
         def progress(completed: int, total: int) -> None:
             with self._lock:
                 current = self._job
@@ -128,11 +143,14 @@ class SourceAuditJobs:
                     self._job = AuditJobSnapshot(
                         job_id, "running", completed, total, None, None, None
                     )
+            if completed:
+                notify("source_completed", completed, total)
             if cancel.is_set():
                 raise _AuditJobCancelled
             if time.monotonic() - self._started > JOB_MAX_SECONDS:
                 raise _AuditJobDeadline
 
+        notify("started", 0, 0)
         result: tuple[str, str | None, bytes | None, str | None]
         try:
             batch = service.audit_all(on_progress=progress)
@@ -173,3 +191,4 @@ class SourceAuditJobs:
                     job_id, status, current.completed, current.total, filename, payload, error
                 )
                 self._finished = time.monotonic()
+                notify(status, current.completed, current.total)
