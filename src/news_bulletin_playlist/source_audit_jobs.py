@@ -10,8 +10,8 @@ from __future__ import annotations
 import secrets
 import threading
 import time
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from news_bulletin_playlist.source_admin import (
@@ -191,4 +191,7 @@ class SourceAuditJobs:
                     job_id, status, current.completed, current.total, filename, payload, error
                 )
                 self._finished = time.monotonic()
-                notify(status, current.completed, current.total)
+                final_completed, final_total = current.completed, current.total
+            else:
+                return
+        notify(status, final_completed, final_total)
