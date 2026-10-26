@@ -75,6 +75,7 @@ from news_bulletin_playlist.runtime import (
 )
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.source_admin import SourceAdminService
+from news_bulletin_playlist.source_audit_jobs import SourceAuditJobs
 from news_bulletin_playlist.spotify.auth import (
     AuthorizationState,
     SpotifyAuthError,
@@ -558,6 +559,7 @@ class OperationalHealthHandler(LanAdminHandler):
     managed_admin_service: ManagedAdminService | None = None
     managed_admin_auth: SpotifyAuthProvider | None = None
     source_admin_service: SourceAdminService | None = None
+    source_audit_jobs: SourceAuditJobs | None = None
     diagnostic_store: DiagnosticEventStore | None = None
     spotify_request_metrics: SpotifyRequestMetrics | None = None
     operational_diagnostics: OperationalDiagnostics | None = None
@@ -1336,6 +1338,7 @@ def serve(
             provisioning_journal=managed_admin_service.provisioning_journal,
         )
     )
+    handler_type.source_audit_jobs = SourceAuditJobs()
     handler_type.diagnostic_store = diagnostic_store
     handler_type.operational_diagnostics = diagnostics
     handler_type.spotify_request_metrics = request_metrics
@@ -1381,6 +1384,9 @@ def serve(
         )
         stopped.set()
         server.server_close()
+        if handler_type.source_audit_jobs is not None:
+            handler_type.source_audit_jobs.close()
+            handler_type.source_audit_jobs = None
         if lifecycle is not None:
             lifecycle.shutdown()
         handler_type.engine_lifecycle = None
