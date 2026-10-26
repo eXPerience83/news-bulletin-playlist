@@ -88,7 +88,10 @@ class SourceAuditJobs:
         with self._lock:
             if self._job is None or not secrets.compare_digest(self._job.job_id, job_id):
                 return None
-            if self._job.status != "running" and time.monotonic() - self._finished > JOB_RESULT_SECONDS:
+            if (
+                self._job.status != "running"
+                and time.monotonic() - self._finished > JOB_RESULT_SECONDS
+            ):
                 self._job = None
                 return None
             return self._job
@@ -122,7 +125,9 @@ class SourceAuditJobs:
             with self._lock:
                 current = self._job
                 if current is not None and current.job_id == job_id and current.status == "running":
-                    self._job = AuditJobSnapshot(job_id, "running", completed, total, None, None, None)
+                    self._job = AuditJobSnapshot(
+                        job_id, "running", completed, total, None, None, None
+                    )
             if cancel.is_set():
                 raise _AuditJobCancelled
             if time.monotonic() - self._started > JOB_MAX_SECONDS:
