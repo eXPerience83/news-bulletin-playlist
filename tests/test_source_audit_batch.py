@@ -729,7 +729,6 @@ def test_batch_null_slots_succeeds_for_17_sources_with_degraded_report_read_only
                 )
 
 
-
 def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
