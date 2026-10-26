@@ -140,10 +140,15 @@ class SourceAuditJobs:
                 raise _AuditJobCancelled
             if time.monotonic() - self._started > JOB_MAX_SECONDS:
                 raise _AuditJobDeadline
-            payload = build_source_audit_bundle(batch, build_revision=revision)
-            if len(payload) > JOB_MAX_ARCHIVE_BYTES:
+            archive_bytes = build_source_audit_bundle(batch, build_revision=revision)
+            if len(archive_bytes) > JOB_MAX_ARCHIVE_BYTES:
                 raise ValueError("Audit result exceeds the bounded archive limit")
-            result = ("succeeded", source_audit_archive_filename(batch.generated_at), payload, None)
+            result = (
+                "succeeded",
+                source_audit_archive_filename(batch.generated_at),
+                archive_bytes,
+                None,
+            )
         except _AuditJobCancelled:
             result = ("cancelled", None, None, "Audit cancelled")
         except _AuditJobDeadline:
