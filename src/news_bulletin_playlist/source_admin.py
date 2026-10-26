@@ -253,8 +253,10 @@ class SourceAdminService:
             public_client=self.public_client,
         )
 
-    def audit_all(self) -> SourceAuditBatch:
-        """Audit one immutable effective-source snapshot through the normal inspection contract."""
+    def audit_all(
+        self, *, on_progress: Callable[[int, int], None] | None = None
+    ) -> SourceAuditBatch:
+        """Audit a snapshot, optionally reporting completed/total to a job worker."""
         state = self.snapshot()
         sources = effective_sources(self.catalog, state)
         if len(sources) > MAX_SOURCE_AUDIT_BATCH_SOURCES:
@@ -278,6 +280,8 @@ class SourceAdminService:
         stop_failure: InspectionFailure | None = None
         public_observation_enabled = True
         public_suppressed_after: SourceId | None = None
+        if on_progress is not None:
+            on_progress(0, len(sources))
         public_client = _BatchPublicClient(
             self.public_client
             if self.public_client is not None
@@ -297,6 +301,8 @@ class SourceAdminService:
                         not_attempted_reason=f"batch_stopped_{stop_failure.value}",
                     )
                 )
+                if on_progress is not None:
+                    on_progress(len(items), len(sources))
                 continue
             try:
                 report = self._audit_from_snapshot(
@@ -320,6 +326,8 @@ class SourceAdminService:
                 )
                 if exc.failure in _GLOBAL_AUDIT_FAILURES:
                     stop_failure = exc.failure
+                if on_progress is not None:
+                    on_progress(len(items), len(sources))
                 continue
 
             items.append(
@@ -335,6 +343,8 @@ class SourceAdminService:
             if public_observation_enabled and public_client.global_failure:
                 public_observation_enabled = False
                 public_suppressed_after = source.id
+            if on_progress is not None:
+                on_progress(len(items), len(sources))
 
         return SourceAuditBatch(
             generated_at=generated_at,
