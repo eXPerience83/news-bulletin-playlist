@@ -11,6 +11,7 @@ import secrets
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -131,10 +132,9 @@ class SourceAuditJobs:
     ) -> None:
         def notify(state: str, completed: int, total: int) -> None:
             if on_event is not None:
-                try:
+                # Diagnostic storage failure never changes audit outcome.
+                with suppress(Exception):
                     on_event(state, completed, total)
-                except Exception:  # noqa: BLE001 - diagnostics must never fail the audit
-                    pass
 
         def progress(completed: int, total: int) -> None:
             with self._lock:
