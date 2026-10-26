@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from news_bulletin_playlist import source_audit_jobs as audit_jobs_module
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.diagnostics_runtime import DiagnosticOperationalHealthHandler
@@ -42,7 +43,6 @@ from news_bulletin_playlist.source_admin import (
     SourceAuditBatchItem,
 )
 from news_bulletin_playlist.source_audit_export import build_source_audit_bundle
-from news_bulletin_playlist import source_audit_jobs as audit_jobs_module
 from news_bulletin_playlist.source_audit_jobs import SourceAuditJobs
 from news_bulletin_playlist.spotify.client import SpotifyApiError
 from news_bulletin_playlist.spotify.public_detector import (
@@ -410,7 +410,12 @@ def test_batch_export_continues_after_source_local_failure(tmp_path: Path) -> No
 
 @pytest.mark.parametrize(
     ("status_code", "expected_failure"),
-    [(401, "authorization"), (429, "rate_limited"), (503, "unavailable"), (504, "unavailable")],
+    [
+        (401, "authorization"),
+        (429, "rate_limited"),
+        (503, "unavailable"),
+        (504, "unavailable"),
+    ],
 )
 def test_batch_export_global_provider_failure_stops_remaining_work(
     tmp_path: Path,
@@ -856,6 +861,12 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
         )
         assert status == HTTPStatus.CONFLICT
 
+        # Single-flight is released once cancellation has reached a terminal state.
+        retry_status, _, retry_payload, _ = _export(server, cookie)
+        assert retry_status == HTTPStatus.OK
+        retry_manifest, retry_archive = _archive(retry_payload)
+        assert retry_manifest["counts"]["total"] == MAX_SOURCE_AUDIT_BATCH_SOURCES
+        retry_archive.close()
 
 
 def test_audit_export_persists_sanitized_job_progress_events(tmp_path: Path) -> None:
@@ -883,7 +894,9 @@ def test_audit_export_persists_sanitized_job_progress_events(tmp_path: Path) -> 
             "admin_source_audit_source_completed",
             "admin_source_audit_succeeded",
         } <= names
-        final = next(event for event in events if event.event_name == "admin_source_audit_succeeded")
+        final = next(
+            event for event in events if event.event_name == "admin_source_audit_succeeded"
+        )
         assert final.details == {
             "operation": "audit_export",
             "completed_sources": len(BUILTIN_CATALOG.sources),
@@ -906,7 +919,9 @@ def test_audit_export_deadline_applies_after_zip_build(
                 jobs._started = time.monotonic() - audit_jobs_module.JOB_MAX_SECONDS - 1
             return payload
 
-        monkeypatch.setattr(audit_jobs_module, "build_source_audit_bundle", expire_during_bundle)
+        monkeypatch.setattr(
+            audit_jobs_module, "build_source_audit_bundle", expire_during_bundle
+        )
         status, _, page, _ = _export(server, _login(server))
         assert status == HTTPStatus.CONFLICT
         assert b"Audit exceeded its time limit" in page
