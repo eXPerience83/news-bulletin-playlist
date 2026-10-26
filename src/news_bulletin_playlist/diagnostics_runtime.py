@@ -13,9 +13,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist import __version__, engine_runtime
-from news_bulletin_playlist.admin_web import render_admin_shell
-from news_bulletin_playlist.source_audit_jobs import AuditJobBusyError, SourceAuditJobs
 from news_bulletin_playlist.admin_session import SourceInspectionContext
+from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
 from news_bulletin_playlist.diagnostics import (
     MAX_DIAGNOSTIC_EXPORT_EVENTS,
@@ -51,6 +50,7 @@ from news_bulletin_playlist.source_admin import (
     SourceMutationError,
     SourceReferencedError,
 )
+from news_bulletin_playlist.source_audit_jobs import AuditJobBusyError, SourceAuditJobs
 from news_bulletin_playlist.source_admin_web import (
     render_new_source_page,
     render_source_review_page,
@@ -517,7 +517,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if len(tokens) != 1 or not security.consume_csrf_token(tokens[0]):
             self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
             return
-        if set(form) != {"csrf_token", "job"}:
+        if set(form) != {"csrf_token", "job"} or len(form["job"]) != 1:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid audit cancellation form")
             return
         job_id = self._audit_job_parameters(urllib.parse.urlencode({"job": form["job"][0]}))
