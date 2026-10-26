@@ -572,9 +572,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             )
 
         try:
-            job_id = jobs.start(
-                service, build_revision=self.build_revision, on_event=on_event
-            )
+            job_id = jobs.start(service, build_revision=self.build_revision, on_event=on_event)
         except AuditJobBusyError:
             self._source_error(HTTPStatus.CONFLICT, "A source audit is already running")
             return
