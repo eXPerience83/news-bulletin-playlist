@@ -465,9 +465,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 HTTPStatus.OK,
                 job.payload,
                 content_type="application/zip",
-                extra_headers={
-                    "Content-Disposition": f'attachment; filename="{job.filename}"'
-                },
+                extra_headers={"Content-Disposition": f'attachment; filename="{job.filename}"'},
             )
             return
         state = html.escape(job.status)
@@ -489,15 +487,17 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         )
         body = (
             '<section class="section admin-section"><h2>Source audit export</h2>'
-            f'<p>Status: <strong>{state}</strong>. Completed {job.completed} of '
-            f'{job.total} sources. The rest of Admin remains available.</p>'
-            + details + cancel
+            f"<p>Status: <strong>{state}</strong>. Completed {job.completed} of "
+            f"{job.total} sources. The rest of Admin remains available.</p>"
+            + details
+            + cancel
             + '<p><a href="/admin/sources">Back to sources</a></p></section>'
         )
         self._reply(
             HTTPStatus.OK,
             render_admin_shell(
-                title="Source audit export", active_tab="sources",
+                title="Source audit export",
+                active_tab="sources",
                 intro="Read-only background source inspection.",
                 body_html=body,
             ),
@@ -526,7 +526,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._source_error(HTTPStatus.NOT_FOUND, "Audit job not found")
             return
         self._reply(
-            HTTPStatus.SEE_OTHER, b"",
+            HTTPStatus.SEE_OTHER,
+            b"",
             extra_headers={"Location": f"/admin/sources/audits/status?job={job_id}"},
         )
 
@@ -557,7 +558,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._source_error(HTTPStatus.CONFLICT, "A source audit is already running")
             return
         self._reply(
-            HTTPStatus.SEE_OTHER, b"",
+            HTTPStatus.SEE_OTHER,
+            b"",
             extra_headers={"Location": f"/admin/sources/audits/status?job={job_id}"},
         )
 
