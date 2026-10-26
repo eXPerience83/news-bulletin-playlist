@@ -919,9 +919,7 @@ def test_audit_export_deadline_applies_after_zip_build(
                 jobs._started = time.monotonic() - audit_jobs_module.JOB_MAX_SECONDS - 1
             return payload
 
-        monkeypatch.setattr(
-            audit_jobs_module, "build_source_audit_bundle", expire_during_bundle
-        )
+        monkeypatch.setattr(audit_jobs_module, "build_source_audit_bundle", expire_during_bundle)
         status, _, page, _ = _export(server, _login(server))
         assert status == HTTPStatus.CONFLICT
         assert b"Audit exceeded its time limit" in page
@@ -946,9 +944,10 @@ def test_audit_result_expiry_releases_zip_and_hides_job(tmp_path: Path) -> None:
         with jobs._lock:
             jobs._finished -= audit_jobs_module.JOB_RESULT_SECONDS + 1
         assert _request(server, "GET", url, cookie=cookie)[0] == HTTPStatus.NOT_FOUND
-        assert _request(
-            server, "GET", url.replace("/status?", "/download?"), cookie=cookie
-        )[0] == HTTPStatus.NOT_FOUND
+        assert (
+            _request(server, "GET", url.replace("/status?", "/download?"), cookie=cookie)[0]
+            == HTTPStatus.NOT_FOUND
+        )
         assert jobs._job is None
 
 
