@@ -729,8 +729,10 @@ def test_batch_null_slots_succeeds_for_17_sources_with_degraded_report_read_only
                 )
 
 
+
 def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with _server(tmp_path) as (server, client, _public, _store):
         gate = threading.Event()
@@ -748,8 +750,11 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
         assert status == HTTPStatus.OK
         token = _csrf(page)
         status, headers, _ = _request(
-            server, "POST", "/admin/sources/audits/export",
-            cookie=cookie, form={"csrf_token": token},
+            server,
+            "POST",
+            "/admin/sources/audits/export",
+            cookie=cookie,
+            form={"csrf_token": token},
         )
         assert status == HTTPStatus.SEE_OTHER
         job_url = headers["Location"]
@@ -764,20 +769,35 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
             assert b"Status: <strong>running</strong>" in progress
             assert b"Refresh" not in progress
             assert _request(server, "GET", job_url)[0] == HTTPStatus.SEE_OTHER
-            assert _request(
-                server, "GET", job_url.replace("/status?", "/download?"), cookie=cookie,
-            )[0] == HTTPStatus.CONFLICT
+            assert (
+                _request(
+                    server,
+                    "GET",
+                    job_url.replace("/status?", "/download?"),
+                    cookie=cookie,
+                )[0]
+                == HTTPStatus.CONFLICT
+            )
             status, _, source_page = _request(server, "GET", "/admin/sources", cookie=cookie)
             assert status == HTTPStatus.OK
-            assert _request(
-                server, "POST", "/admin/sources/audits/export", cookie=cookie,
-                form={"csrf_token": _csrf(source_page)},
-            )[0] == HTTPStatus.CONFLICT
+            assert (
+                _request(
+                    server,
+                    "POST",
+                    "/admin/sources/audits/export",
+                    cookie=cookie,
+                    form={"csrf_token": _csrf(source_page)},
+                )[0]
+                == HTTPStatus.CONFLICT
+            )
             csrf = _csrf(progress)
             job_id = urllib.parse.parse_qs(urllib.parse.urlsplit(job_url).query)["job"][0]
             cancel_status, cancel_headers, _ = _request(
-                server, "POST", "/admin/sources/audits/cancel",
-                cookie=cookie, form={"csrf_token": csrf, "job": job_id},
+                server,
+                "POST",
+                "/admin/sources/audits/cancel",
+                cookie=cookie,
+                form={"csrf_token": csrf, "job": job_id},
             )
             assert cancel_status == HTTPStatus.SEE_OTHER
             assert cancel_headers["Location"] == job_url
@@ -793,7 +813,10 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
             raise AssertionError("cancelled audit did not terminate")
         assert len(client.calls) <= 2
         status, _, _ = _request(
-            server, "GET", job_url.replace("/status?", "/download?"), cookie=cookie,
+            server,
+            "GET",
+            job_url.replace("/status?", "/download?"),
+            cookie=cookie,
         )
         assert status == HTTPStatus.CONFLICT
 
@@ -801,13 +824,31 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
 def test_audit_job_status_invalid_url_and_csrf_enforced(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, _client, _public, _store):
         cookie = _login(server)
-        assert _request(
-            server, "GET", "/admin/sources/audits/status?job=../../bad", cookie=cookie,
-        )[0] == HTTPStatus.NOT_FOUND
-        assert _request(
-            server, "GET", "/admin/sources/audits/status?job=x", cookie=cookie,
-        )[0] == HTTPStatus.NOT_FOUND
-        assert _request(
-            server, "POST", "/admin/sources/audits/cancel", cookie=cookie,
-            form={"csrf_token": "invalid", "job": "any"},
-        )[0] == HTTPStatus.FORBIDDEN
+        assert (
+            _request(
+                server,
+                "GET",
+                "/admin/sources/audits/status?job=../../bad",
+                cookie=cookie,
+            )[0]
+            == HTTPStatus.NOT_FOUND
+        )
+        assert (
+            _request(
+                server,
+                "GET",
+                "/admin/sources/audits/status?job=x",
+                cookie=cookie,
+            )[0]
+            == HTTPStatus.NOT_FOUND
+        )
+        assert (
+            _request(
+                server,
+                "POST",
+                "/admin/sources/audits/cancel",
+                cookie=cookie,
+                form={"csrf_token": "invalid", "job": "any"},
+            )[0]
+            == HTTPStatus.FORBIDDEN
+        )
