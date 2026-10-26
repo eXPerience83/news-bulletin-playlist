@@ -552,8 +552,29 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if set(form) != {"csrf_token"}:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source audit export form")
             return
+        diagnostics = self._admin_diagnostics()
+
+        def on_event(event: str, completed: int, total: int) -> None:
+            diagnostics.emit(
+                occurred_at=datetime.now(UTC),
+                severity=(
+                    DiagnosticSeverity.WARNING
+                    if event in {"failed", "cancelled"}
+                    else DiagnosticSeverity.INFO
+                ),
+                component="admin",
+                event_name=f"admin_source_audit_{event}",
+                details={
+                    "operation": "audit_export",
+                    "completed_sources": completed,
+                    "total_sources": total,
+                },
+            )
+
         try:
-            job_id = jobs.start(service, build_revision=self.build_revision)
+            job_id = jobs.start(
+                service, build_revision=self.build_revision, on_event=on_event
+            )
         except AuditJobBusyError:
             self._source_error(HTTPStatus.CONFLICT, "A source audit is already running")
             return
