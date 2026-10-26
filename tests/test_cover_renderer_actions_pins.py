@@ -9,7 +9,7 @@ WORKFLOW = REPO / ".github/workflows/render-playlist-covers.yml"
 def test_cover_render_uses_immutable_actions() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
-    assert "uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in workflow
+    assert "uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0" in workflow
 
     references = [
         line.split("uses: ", 1)[1].split()[0]
