@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 import threading
+import time
 import urllib.parse
 import zipfile
 from collections.abc import Iterator
@@ -40,6 +41,7 @@ from news_bulletin_playlist.source_admin import (
     SourceAuditBatchItem,
 )
 from news_bulletin_playlist.source_audit_export import build_source_audit_bundle
+from news_bulletin_playlist.source_audit_jobs import SourceAuditJobs
 from news_bulletin_playlist.spotify.client import SpotifyApiError
 from news_bulletin_playlist.spotify.public_detector import (
     PublicEpisodeObservation,
@@ -178,6 +180,7 @@ def _server(
     _Handler.operational_diagnostics = None
     _Handler.spotify_request_metrics = None
     _Handler.build_revision = "test-build"
+    _Handler.source_audit_jobs = SourceAuditJobs()
     _Handler.source_admin_service = SourceAdminService(
         store,
         synchronization,
@@ -194,6 +197,7 @@ def _server(
     try:
         yield server, client, public, store
     finally:
+        _Handler.source_audit_jobs.close()
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
@@ -259,10 +263,30 @@ def _custom_source(service: SourceAdminService, show_id: str = CUSTOM_SHOW) -> M
     )
 
 
-def _export(server: HTTPServer, cookie: str) -> tuple[int, dict[str, str], bytes, str]:
-    status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
-    assert status == HTTPStatus.OK
-    token = _csrf(page)
+def _await_export(
+    server: HTTPServer, cookie: str, status_url: str
+) -> tuple[int, dict[str, str], bytes]:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        status, _, page = _request(server, "GET", status_url, cookie=cookie)
+        assert status == HTTPStatus.OK
+        if b"Status: <strong>succeeded</strong>" in page:
+            return _request(server, "GET", status_url.replace("/status?", "/download?"), cookie=cookie)
+        if b"Status: <strong>failed</strong>" in page:
+            return HTTPStatus.CONFLICT, {}, page
+        if b"Status: <strong>cancelled</strong>" in page:
+            return HTTPStatus.CONFLICT, {}, page
+        time.sleep(0.015)
+    raise AssertionError("background audit did not finish in test deadline")
+
+
+def _export(
+    server: HTTPServer, cookie: str, token: str | None = None
+) -> tuple[int, dict[str, str], bytes, str]:
+    if token is None:
+        status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == HTTPStatus.OK
+        token = _csrf(page)
     status, headers, payload = _request(
         server,
         "POST",
@@ -270,6 +294,8 @@ def _export(server: HTTPServer, cookie: str) -> tuple[int, dict[str, str], bytes
         cookie=cookie,
         form={"csrf_token": token},
     )
+    if status == HTTPStatus.SEE_OTHER:
+        status, headers, payload = _await_export(server, cookie, headers["Location"])
     return status, headers, payload, token
 
 
@@ -306,13 +332,7 @@ def test_batch_export_uses_one_snapshot_and_includes_disabled_custom(tmp_path: P
         token = _csrf(page)
 
         store.loads = 0
-        status, headers, payload = _request(
-            server,
-            "POST",
-            "/admin/sources/audits/export",
-            cookie=cookie,
-            form={"csrf_token": token},
-        )
+        status, headers, payload, _ = _export(server, cookie, token)
         assert store.loads == 1
         assert status == HTTPStatus.OK
         assert headers["Content-Type"] == "application/zip"
