@@ -441,8 +441,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if set(values) != {"job"} or len(values["job"]) != 1:
             return None
         job_id = values["job"][0]
-        if not 12 <= len(job_id) <= 64 or not all(
-            character.isalnum() or character in "-_" for character in job_id
+        if (
+            not 12 <= len(job_id) <= 64
+            or not job_id.isascii()
+            or not all(character.isalnum() or character in "-_" for character in job_id)
         ):
             return None
         return job_id

@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.diagnostics_runtime import DiagnosticOperationalHealthHandler
 from news_bulletin_playlist.engine import OperationalStatus
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
@@ -41,6 +42,7 @@ from news_bulletin_playlist.source_admin import (
     SourceAuditBatchItem,
 )
 from news_bulletin_playlist.source_audit_export import build_source_audit_bundle
+from news_bulletin_playlist import source_audit_jobs as audit_jobs_module
 from news_bulletin_playlist.source_audit_jobs import SourceAuditJobs
 from news_bulletin_playlist.spotify.client import SpotifyApiError
 from news_bulletin_playlist.spotify.public_detector import (
@@ -408,7 +410,7 @@ def test_batch_export_continues_after_source_local_failure(tmp_path: Path) -> No
 
 @pytest.mark.parametrize(
     ("status_code", "expected_failure"),
-    [(401, "authorization"), (429, "rate_limited"), (503, "unavailable")],
+    [(401, "authorization"), (429, "rate_limited"), (503, "unavailable"), (504, "unavailable")],
 )
 def test_batch_export_global_provider_failure_stops_remaining_work(
     tmp_path: Path,
@@ -733,7 +735,18 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with _server(tmp_path) as (server, client, _public, _store):
+    with _server(tmp_path) as (server, client, _public, store):
+        service = _Handler.source_admin_service
+        assert service is not None
+        custom_needed = MAX_SOURCE_AUDIT_BATCH_SOURCES - len(BUILTIN_CATALOG.sources)
+        store.save(
+            ManagedState(
+                sources=tuple(
+                    _custom_source(service, f"{index:022d}")
+                    for index in range(1, custom_needed + 1)
+                )
+            )
+        )
         gate = threading.Event()
         entered = threading.Event()
         original = client.show_details
@@ -759,6 +772,18 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
         job_url = headers["Location"]
         try:
             assert entered.wait(timeout=5)
+            # Unicode can pass str.isalnum(), but compare_digest accepts only ASCII.
+            invalid_job = urllib.parse.quote("é" * 12)
+            for endpoint in ("status", "download"):
+                assert (
+                    _request(
+                        server,
+                        "GET",
+                        f"/admin/sources/audits/{endpoint}?job={invalid_job}",
+                        cookie=cookie,
+                    )[0]
+                    == HTTPStatus.NOT_FOUND
+                )
             start = time.monotonic()
             status, _, _ = _request(server, "GET", "/admin/sources", cookie=cookie)
             assert status == HTTPStatus.OK
@@ -791,6 +816,17 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
             )
             # Each later Admin GET rotates the one-use session CSRF token.
             csrf = _csrf(_request(server, "GET", job_url, cookie=cookie)[2])
+            assert (
+                _request(
+                    server,
+                    "POST",
+                    "/admin/sources/audits/cancel",
+                    cookie=cookie,
+                    form={"csrf_token": csrf, "job": "é" * 12},
+                )[0]
+                == HTTPStatus.NOT_FOUND
+            )
+            csrf = _csrf(_request(server, "GET", job_url, cookie=cookie)[2])
             job_id = urllib.parse.parse_qs(urllib.parse.urlsplit(job_url).query)["job"][0]
             cancel_status, cancel_headers, _ = _request(
                 server,
@@ -819,6 +855,86 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
             cookie=cookie,
         )
         assert status == HTTPStatus.CONFLICT
+
+
+
+def test_audit_export_persists_sanitized_job_progress_events(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, _client, _public, _store):
+        diagnostics = DiagnosticEventStore(tmp_path / "audit-events.sqlite3")
+        diagnostics.initialize()
+        _Handler.diagnostic_store = diagnostics
+        cookie = _login(server)
+
+        status, _, payload, _ = _export(server, cookie)
+        assert status == HTTPStatus.OK
+        assert payload.startswith(b"PK")
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            events = diagnostics.list_events()
+            if any(event.event_name == "admin_source_audit_succeeded" for event in events):
+                break
+            time.sleep(0.015)
+        else:
+            raise AssertionError("audit completion event was not persisted")
+
+        names = {event.event_name for event in events}
+        assert {
+            "admin_source_audit_started",
+            "admin_source_audit_source_completed",
+            "admin_source_audit_succeeded",
+        } <= names
+        final = next(event for event in events if event.event_name == "admin_source_audit_succeeded")
+        assert final.details == {
+            "operation": "audit_export",
+            "completed_sources": len(BUILTIN_CATALOG.sources),
+            "total_sources": len(BUILTIN_CATALOG.sources),
+        }
+        assert "secret-" not in repr(events)
+
+
+def test_audit_export_deadline_applies_after_zip_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _server(tmp_path) as (server, _client, _public, _store):
+        jobs = _Handler.source_audit_jobs
+        assert jobs is not None
+        original = audit_jobs_module.build_source_audit_bundle
+
+        def expire_during_bundle(batch: SourceAuditBatch, *, build_revision: str) -> bytes:
+            payload = original(batch, build_revision=build_revision)
+            with jobs._lock:
+                jobs._started = time.monotonic() - audit_jobs_module.JOB_MAX_SECONDS - 1
+            return payload
+
+        monkeypatch.setattr(audit_jobs_module, "build_source_audit_bundle", expire_during_bundle)
+        status, _, page, _ = _export(server, _login(server))
+        assert status == HTTPStatus.CONFLICT
+        assert b"Audit exceeded its time limit" in page
+
+
+def test_audit_result_expiry_releases_zip_and_hides_job(tmp_path: Path) -> None:
+    with _server(tmp_path) as (server, _client, _public, _store):
+        cookie = _login(server)
+        page = _request(server, "GET", "/admin/sources", cookie=cookie)[2]
+        status, headers, _ = _request(
+            server,
+            "POST",
+            "/admin/sources/audits/export",
+            cookie=cookie,
+            form={"csrf_token": _csrf(page)},
+        )
+        assert status == HTTPStatus.SEE_OTHER
+        url = headers["Location"]
+        assert _await_export(server, cookie, url)[0] == HTTPStatus.OK
+        jobs = _Handler.source_audit_jobs
+        assert jobs is not None
+        with jobs._lock:
+            jobs._finished -= audit_jobs_module.JOB_RESULT_SECONDS + 1
+        assert _request(server, "GET", url, cookie=cookie)[0] == HTTPStatus.NOT_FOUND
+        assert _request(
+            server, "GET", url.replace("/status?", "/download?"), cookie=cookie
+        )[0] == HTTPStatus.NOT_FOUND
+        assert jobs._job is None
 
 
 def test_audit_job_status_invalid_url_and_csrf_enforced(tmp_path: Path) -> None:
