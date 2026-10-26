@@ -789,7 +789,8 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
                 )[0]
                 == HTTPStatus.CONFLICT
             )
-            csrf = _csrf(progress)
+            # Each later Admin GET rotates the one-use session CSRF token.
+            csrf = _csrf(_request(server, "GET", job_url, cookie=cookie)[2])
             job_id = urllib.parse.parse_qs(urllib.parse.urlsplit(job_url).query)["job"][0]
             cancel_status, cancel_headers, _ = _request(
                 server,
