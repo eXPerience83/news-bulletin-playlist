@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist import __version__, engine_runtime
 from news_bulletin_playlist.admin_session import SourceInspectionContext
+from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
 from news_bulletin_playlist.diagnostics import (
     MAX_DIAGNOSTIC_EXPORT_EVENTS,
@@ -44,10 +45,7 @@ from news_bulletin_playlist.runtime import (
     _data_dir_ready,
 )
 from news_bulletin_playlist.source_admin import (
-    MAX_SOURCE_AUDIT_BATCH_SOURCES,
     EngineCycleBusyError,
-    SourceAuditBatchLimitError,
-    SourceAuditBatchStateError,
     SourceDisableError,
     SourceMutationError,
     SourceReferencedError,
@@ -56,10 +54,7 @@ from news_bulletin_playlist.source_admin_web import (
     render_new_source_page,
     render_source_review_page,
 )
-from news_bulletin_playlist.source_audit_export import (
-    build_source_audit_bundle,
-    source_audit_archive_filename,
-)
+from news_bulletin_playlist.source_audit_jobs import AuditJobBusyError, SourceAuditJobs
 from news_bulletin_playlist.source_inspection import (
     InspectionFailure,
     SourceInspectionError,
@@ -87,6 +82,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
     diagnostic_timezone: tzinfo = UTC
     diagnostic_timezone_label = "UTC"
     build_revision = "dev"
+    source_audit_jobs: SourceAuditJobs | None = None
     spotify_request_metrics: SpotifyRequestMetrics | None = None
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
@@ -110,6 +106,12 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         if parsed.path == "/admin/sources/delete":
             self._serve_source_delete(parsed.query)
+            return
+        if parsed.path == "/admin/sources/audits/status":
+            self._serve_audit_job(parsed.query, download=False)
+            return
+        if parsed.path == "/admin/sources/audits/download":
+            self._serve_audit_job(parsed.query, download=True)
             return
         if parsed.path == "/admin/sources/inspection-report.json":
             self._serve_source_report()
@@ -136,6 +138,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         if path == "/admin/sources/audits/export":
             self._handle_source_audit_export()
+            return
+        if path == "/admin/sources/audits/cancel":
+            self._handle_audit_job_cancel()
             return
         if path in {
             "/admin/sources/update",
@@ -431,12 +436,110 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             },
         )
 
+    def _audit_job_parameters(self, query: str) -> str | None:
+        values = urllib.parse.parse_qs(query, keep_blank_values=True)
+        if set(values) != {"job"} or len(values["job"]) != 1:
+            return None
+        job_id = values["job"][0]
+        if (
+            not 12 <= len(job_id) <= 64
+            or not job_id.isascii()
+            or not all(character.isalnum() or character in "-_" for character in job_id)
+        ):
+            return None
+        return job_id
+
+    def _serve_audit_job(self, query: str, *, download: bool) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        job_id = self._audit_job_parameters(query)
+        jobs = self.source_audit_jobs
+        job = jobs.get(job_id) if jobs is not None and job_id is not None else None
+        if job is None:
+            self._source_error(HTTPStatus.NOT_FOUND, "Audit job not found or expired")
+            return
+        if download:
+            if job.status != "succeeded" or job.payload is None or job.filename is None:
+                self._source_error(HTTPStatus.CONFLICT, "Audit ZIP is not ready")
+                return
+            self._reply(
+                HTTPStatus.OK,
+                job.payload,
+                content_type="application/zip",
+                extra_headers={"Content-Disposition": f'attachment; filename="{job.filename}"'},
+            )
+            return
+        state = html.escape(job.status)
+        finished = job.status != "running"
+        details = (
+            f'<p><a class="button button-primary" '
+            f'href="/admin/sources/audits/download?job={job_id}">Download sanitized ZIP</a></p>'
+            if job.status == "succeeded"
+            else f"<p>{html.escape(job.error or 'Awaiting next source result')}</p>"
+        )
+        csrf = html.escape(security.issue_csrf_token(), quote=True)
+        cancel = (
+            f'<form method="post" action="/admin/sources/audits/cancel">'
+            f'<input type="hidden" name="csrf_token" value="{csrf}">'
+            f'<input type="hidden" name="job" value="{job_id}">'
+            '<button class="button" type="submit">Cancel after current source</button></form>'
+            if not finished
+            else ""
+        )
+        body = (
+            '<section class="section admin-section"><h2>Source audit export</h2>'
+            f"<p>Status: <strong>{state}</strong>. Completed {job.completed} of "
+            f"{job.total} sources. The rest of Admin remains available.</p>"
+            + details
+            + cancel
+            + '<p><a href="/admin/sources">Back to sources</a></p></section>'
+        )
+        self._reply(
+            HTTPStatus.OK,
+            render_admin_shell(
+                title="Source audit export",
+                active_tab="sources",
+                intro="Read-only background source inspection.",
+                body_html=body,
+            ),
+            extra_headers={"Refresh": "3"} if not finished else None,
+        )
+
+    def _handle_audit_job_cancel(self) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        try:
+            form = self._read_form()
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid audit cancellation form")
+            return
+        tokens = form.get("csrf_token", [])
+        if len(tokens) != 1 or not security.consume_csrf_token(tokens[0]):
+            self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+            return
+        if set(form) != {"csrf_token", "job"} or len(form["job"]) != 1:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid audit cancellation form")
+            return
+        job_id = self._audit_job_parameters(urllib.parse.urlencode({"job": form["job"][0]}))
+        jobs = self.source_audit_jobs
+        if job_id is None or jobs is None or not jobs.cancel(job_id):
+            self._source_error(HTTPStatus.NOT_FOUND, "Audit job not found")
+            return
+        self._reply(
+            HTTPStatus.SEE_OTHER,
+            b"",
+            extra_headers={"Location": f"/admin/sources/audits/status?job={job_id}"},
+        )
+
     def _handle_source_audit_export(self) -> None:
         security = self._require_admin()
         if security is None:
             return
         service = self.source_admin_service
-        if service is None:
+        jobs = self.source_audit_jobs
+        if service is None or jobs is None:
             self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Source audit is unavailable")
             return
         try:
@@ -451,30 +554,34 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if set(form) != {"csrf_token"}:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source audit export form")
             return
+        diagnostics = self._admin_diagnostics()
+
+        def on_event(event: str, completed: int, total: int) -> None:
+            diagnostics.emit(
+                occurred_at=datetime.now(UTC),
+                severity=(
+                    DiagnosticSeverity.WARNING
+                    if event in {"failed", "cancelled"}
+                    else DiagnosticSeverity.INFO
+                ),
+                component="admin",
+                event_name=f"admin_source_audit_{event}",
+                details={
+                    "operation": "audit_export",
+                    "completed_sources": completed,
+                    "total_sources": total,
+                },
+            )
+
         try:
-            batch = service.audit_all()
-            payload = build_source_audit_bundle(batch, build_revision=self.build_revision)
-        except SourceAuditBatchLimitError:
-            self._source_error(
-                HTTPStatus.CONFLICT,
-                f"Source audit export supports at most {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources",
-            )
-            return
-        except SourceAuditBatchStateError, ManagedStateError, OSError, ValueError:
-            self._source_error(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                "Source audit export could not be built safely",
-            )
+            job_id = jobs.start(service, build_revision=self.build_revision, on_event=on_event)
+        except AuditJobBusyError:
+            self._source_error(HTTPStatus.CONFLICT, "A source audit is already running")
             return
         self._reply(
-            HTTPStatus.OK,
-            payload,
-            content_type="application/zip",
-            extra_headers={
-                "Content-Disposition": (
-                    f'attachment; filename="{source_audit_archive_filename(batch.generated_at)}"'
-                )
-            },
+            HTTPStatus.SEE_OTHER,
+            b"",
+            extra_headers={"Location": f"/admin/sources/audits/status?job={job_id}"},
         )
 
     def _handle_source_audit(self) -> None:

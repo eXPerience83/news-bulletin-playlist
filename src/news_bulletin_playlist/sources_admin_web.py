@@ -57,9 +57,9 @@ def render_sources_page(
     <input type="hidden" name="csrf_token" value="{safe_csrf}">
     <button class="button" type="submit">Export all audits</button>
   </form>
-  <p class="muted">Runs the existing read-only Source Audit sequentially for the current
-     effective source snapshot, up to {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources, and downloads a
-     sanitized ZIP.</p>
+  <p class="muted">Starts a single read-only audit in the background, up to
+     {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources. The progress page stays responsive, and
+     the sanitized ZIP is available when complete. Only one batch may run at a time.</p>
   <p class="muted">Provider origin, editorial scope and language are separate; an institutional
      origin need not be a country.</p>
   {_sources_table(snapshot, catalog, state, last_cycle, csrf_token)}
