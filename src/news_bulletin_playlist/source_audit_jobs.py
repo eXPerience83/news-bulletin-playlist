@@ -11,10 +11,9 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from news_bulletin_playlist.source_admin import SourceAuditBatchLimitError, SourceAuditBatchStateError
+from news_bulletin_playlist.source_admin import SourceAuditBatchLimitError
 from news_bulletin_playlist.source_audit_export import (
     build_source_audit_bundle,
     source_audit_archive_filename,
@@ -142,7 +141,7 @@ class SourceAuditJobs:
             result = ("failed", None, None, "Audit exceeded its time limit")
         except SourceAuditBatchLimitError:
             result = ("failed", None, None, "Too many sources for one audit")
-        except (SourceAuditBatchStateError, ValueError, OSError, Exception):
+        except Exception:  # noqa: BLE001 - deliberately hide provider and archive failures
             # Never expose provider exception messages, raw bodies, or tokens.
             result = ("failed", None, None, "Audit could not be completed")
         with self._lock:
