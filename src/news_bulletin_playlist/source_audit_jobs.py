@@ -149,7 +149,9 @@ class SourceAuditJobs:
             result = ("failed", None, None, "Audit exceeded its time limit")
         except SourceAuditBatchLimitError:
             result = (
-                "failed", None, None,
+                "failed",
+                None,
+                None,
                 f"Source audit export supports at most {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources",
             )
         except Exception:  # noqa: BLE001 - deliberately hide provider and archive failures
