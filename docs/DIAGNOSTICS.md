@@ -168,6 +168,63 @@ health so a source can read **Success / Detector Degraded** while last-known-goo
 being preserved. Detailed failure reason and capture metadata belong in the authenticated
 diagnostics surface.
 
+## Export all Source Audits (read-only)
+
+From authenticated **Admin → Sources** (`/admin/sources`), select **Export all audits**.
+This is separate from the **Download sanitized diagnostics ZIP** action below and from
+the single-source **Audit** action. It inspects the configured built-in and custom sources
+without changing source assignments, managed playlists or Spotify destinations.
+
+1. The form submits an authenticated, CSRF-protected request and redirects immediately to
+   a **Source audit export** status page. The provider inspections run in a background
+   worker rather than holding the HTTP request open. The status page refreshes every
+   three seconds and shows **completed / total** sources; other Admin pages and
+   `/healthz` remain accessible while the worker runs.
+2. When the status becomes **succeeded**, choose **Download sanitized ZIP**. A successful
+   batch job can still contain individual source failures: inspect the manifest's
+   `counts` and each source's `status`, not only the job status.
+3. While it is running, **Cancel after current source** requests cooperative cancellation.
+   It does not forcibly interrupt a provider request already in progress. A failed or
+   cancelled job has no downloadable ZIP; the status page shows a safe, bounded message.
+   Starting another audit while one is running returns HTTP **409 Conflict**.
+
+Each ZIP is named `source-audits-YYYYMMDDTHHMMSSZ.zip` and contains:
+
+- `manifest.json`: schema `news-bulletin-playlist-source-audits-v1`, generation time,
+  application/build revision, ordered source summary and `counts.total`,
+  `counts.attempted`, `counts.succeeded`, `counts.failed`, `counts.not_attempted`;
+- `sources/<source_id>.json`: one sanitized inspection report for **each successful
+  source**. Failed or unattempted sources are represented in the manifest, not as
+  fabricated success reports.
+
+The batch is **single-flight** and bounded to **20 configured sources**, **600 seconds**
+and **16 MiB** of archive data. The time limit is checked between source results and
+after ZIP construction; it does not kill an in-flight provider call at an arbitrary
+instant. The completed ZIP is retained **only in memory**, expires **30 minutes after
+completion**, is replaced by the next job and is lost on process restart. Download it
+promptly. Credentials, OAuth data, raw authenticated provider bodies and the database
+are not included in the archive. Like an individual audit, the batch can consume
+read-only provider requests and is subject to Spotify rate limits.
+
+Progress is recorded in durable sanitized diagnostic events with
+`operation=audit_export`, `completed_sources` and `total_sources`:
+`admin_source_audit_started`, `admin_source_audit_source_completed`, followed by one
+of `admin_source_audit_succeeded`, `admin_source_audit_failed` or
+`admin_source_audit_cancelled`. Diagnostic-store failures are fail-soft and do not
+change the audit outcome.
+
+**Operational verification:** Start an export in one browser tab; while it is running,
+load `/admin/` and `/healthz` separately. Then confirm the completed ZIP opens,
+the manifest counts reconcile with the per-source files and the progress/final events
+appear in Diagnostics. Check normal source/playlist health independently: the audit
+must not be confused with a scheduler cycle or a Spotify playlist update. Issue
+[#541](https://github.com/eXPerience83/news-bulletin-playlist/issues/541) was
+validated on the deployed build `0b943b7acf2f` on **2026-10-27**: all 17 sources
+completed, the ZIP downloaded, and start/progress/completion diagnostics persisted
+(approximately 32 seconds). That evidence does not itself establish that a
+simultaneous Admin GET was timed during the production run; the non-blocking HTTP
+regression is covered by CI.
+
 ## Export diagnostics
 
 The diagnostics page exposes **Download sanitized diagnostics ZIP**. Export uses the same active
