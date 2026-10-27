@@ -29,8 +29,21 @@ after the latest release stay under **Unreleased** until the next stable release
   when the displayed value is unchanged; changing minutes saves an exact whole-minute bound.
 - Below-minimum exclusion diagnostics and minimum-aware configuration write safety.
 
+### Fixed
+
+- **Admin / Sources — Export all audits** no longer runs provider requests synchronously on
+  the HTTP request thread. A single bounded, read-only background job reports per-source
+  progress, supports cooperative cancellation and offers a sanitized ZIP after completion;
+  Admin and `/healthz` remain responsive while it runs. Hardened job-id validation,
+  durable progress diagnostics and the post-ZIP deadline check (#541, PR #543).
+
 ### Compatibility / operations
 
+- Source Audit exports are session-authenticated, limited to 20 sources, 600 seconds and
+  16 MiB per ZIP, and kept in memory for at most 30 minutes after completion (or until
+  another job replaces them). No playlist/Spotify destination writes, schema changes or
+  persistence migration. The deployed #541 fix was validated on 2026-10-27 with 17/17
+  source audits exported successfully in approximately 32 seconds.
 - Managed-state v6 atomically upgrades v1-v5 with minimum 0 and preserves exact maxima.
   Provisioning journal v2 snapshots both bounds and still recovers pending v1 journals with minimum 0.
   SQLite remains database format 3 with unchanged tables/columns.

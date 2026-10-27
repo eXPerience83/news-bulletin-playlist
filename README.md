@@ -31,6 +31,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contrac
 
 - **Available:** activate and manage the playlist templates shipped with the application, adjust their source assignments and duration limits, and manage supported Spotify-first news sources through the authenticated administration UI.
 - **Available:** add your own supported Spotify **show/source** via Admin, then assign it to an existing managed playlist. This is **not** the same as creating a new playlist template.
+- **Available:** use **Admin → Sources → Export all audits** to run a read-only background audit with progress, cancellation and a sanitized per-source ZIP, without blocking the other Admin pages. See [the Source Audit export guide](docs/DIAGNOSTICS.md#export-all-source-audits-read-only).
 - **Not yet available:** define and create an arbitrary new managed playlist type/template from Admin. More national, international and long-form playlists are planned; follow [the playlist catalog roadmap](https://github.com/eXPerience83/news-bulletin-playlist/issues/44). Features, storage migrations and Spotify behavior may evolve before 1.0.
 - **Deployment scope:** experimental, self-hosted operation; protect Admin and credentials on a trusted LAN or through the supported hardened HTTPS/reverse-proxy configuration. Publishing the source under MIT does not grant expanded Spotify API access.
 
