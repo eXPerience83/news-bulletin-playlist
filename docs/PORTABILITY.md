@@ -7,10 +7,11 @@ Decision baseline: 2026-10-27, main
 **Implemented:** a pure source JSON encoder/decoder with strict validation,
 individual/batch export and lossless definition round trips, plus authenticated
 Admin source downloads (#547). Decoding returns data; it does **not** install sources,
-change persistence, or activate anything. CLI, playlist ZIP, import preview/apply and
-empty-default image remain future work. Installed-source persistence is supported through
-explicit schema v8 (#548), without an importer or automatic migration. The later import/bundle/migration sections
-are decisions/proposals, not completed functionality. A portable configuration is
+change persistence, or activate anything. Authenticated source upload, preview and
+explicit apply are implemented in #549. CLI, playlist ZIP and empty-default image
+remain future work. Installed-source persistence uses explicit schema v8 (#548),
+without automatic migration. The later playlist bundle and clean-image migration
+sections are decisions/proposals, not completed functionality. A portable configuration is
 not a production backup.
 
 ## Dependency and risk matrix
@@ -163,7 +164,7 @@ page's provisioning-aware lifecycle is unchanged; this read-only guarantee conce
 the new download endpoint. Tests compare every synthetic persistent file before/after
 and prohibit the operational calls above, including across legacy and failure paths.
 
-## Identity and import decisions (not implemented)
+## Source import preview and apply (#549)
 
 Source identity is the canonical show ID. Compare full configuration independently
 of `original_id` and export provenance. Same show and same config with a different
@@ -174,16 +175,136 @@ different metadata, enabled state, timezone or processing contract means
 a separately guarded decision. Unknown capabilities mean **unsupported**. A batch
 containing duplicate definitions is invalid, not an implicit conflict resolution.
 
-Apply rechecks the preview's configuration fingerprint under the lock and refuses
-stale previews. New IDs can use deterministic `custom_<show>` where available;
-existing built-in and installed IDs remain unchanged. Persist any additional alias
-or portable identity mapping in the same state commit, not a separately committed
-file. Reimport an unchanged document without saves, duplicate sources or activation.
-Do not enable disabled existing sources or remove dormant assignments implicitly.
+`SourceImportService` separates domain planning/apply from the HTTP adapters and
+has no provider, OAuth, episode store or scheduler dependency. Preview inspects the
+original bounded document through `inspect_sources()` (see below), then captures the entire
+managed configuration, effective definitions, catalogue and pending provision under
+`ConfigurationSynchronization`, using `load_readonly()` and the read-only provision
+journal loader. It does not call any mutating/service snapshot.
+
+Rows are sorted by canonical show ID. For missing shows, local IDs are always
+`custom_<show>` (independent of foreign original IDs), with the first free `_2`,
+`_3`, … suffix when that local ID is already occupied by another show. For known
+shows, compare every `SourceDefinition` field except logical ID, using the IANA key
+for timezone and preserving country/language order. Foreign provenance never grants
+permission. Conflicts support only **keep local** or **cancel**; no replacement.
+Well-formed unsupported capabilities appear as inert `unsupported` rows. They never
+participate in reuse or keep-local decisions, even when their show already exists.
+The presence of any unsupported row blocks apply for the entire document.
+
+Apply reloads/replans under the same configuration lock and compares a SHA256
+fingerprint of the immutable full state, effective definitions, image catalogue
+and pending provision with the preview snapshot. Any configuration/reference or
+provision change requires a new preview (409). This uses the existing process-local
+configuration synchronization and lock order; no cycle gate or provider lock is
+acquired. Every conflict requires a deliberate keep-local choice for that row;
+extra or missing choices cannot authorize creation.
+
+New definitions use `InstalledSource.from_definition()` with their allocated local
+IDs. Validate the complete sorted candidate with managed-state serialization and
+engine compilation; pending source/template references and at least one enabled
+pending source must also remain valid. No existing enable/disable setting or
+assignment changes, so no disable transition is authorized. Save once, with explicit
+v8 adoption acknowledgement when upgrading v6/v7. Existing sources, destinations,
+policies, dormant assignments, drafts/quarantine, cover references and journals
+remain intact. No scheduler wake, activation or playlist writes follow apply.
+
+Reimport an unchanged document resolves the same original-to-local mapping by show
+identity without any save, including in v6/v7. Keep-local-only imports are also true
+no-ops. No separate alias file or recovery journal is created. If save reports an
+error, read back under the lock: an exact candidate means the complete configuration
+is visible (report the durability error and do not save again); exact prior state
+means nothing was committed; failed/different readback means uncertain outcome.
+Require a fresh preview before retry, never assert rollback after replacement.
+
+
+### Preview-only compatibility inspection
+
+`inspect_sources(bytes)` is separate from the strict installation decoder
+`parse_sources()`. Both share root decoding, byte/count bounds, duplicate JSON key
+rejection, exact keys/types, canonical source/show identity and metadata validators.
+The inspector validates every capability shape in every row, then rejects duplicate
+logical/show IDs across **all** compatible and incompatible rows. Unknown metadata
+or malformed documents/capabilities still fail the whole preview (400); an earlier
+unsupported capability never masks a later structural error.
+
+Only a **well-formed** unsupported processing contract becomes a diagnostic:
+
+| Valid shape but unavailable contract | Preview reason |
+| --- | --- |
+| Unknown capability ID | Unknown capability |
+| Positive integer capability version other than v1 | Unsupported version |
+| Nonempty parameters object | Unsupported parameters |
+| Known parser/filter missing from the installed registry | Capability not installed |
+
+Each diagnostic carries a fixed category (Parser, Temporal strategy, Public release
+policy or Collection filter) and fixed reason; raw imported capability IDs/parameters
+are not interpolated into messages. Multiple incompatible categories per source are
+reported in a stable order. Metadata, including a printable name and canonical IDs,
+is fully validated even for an unsupported row. Missing capability fields, invalid
+IDs, nonpositive/noninteger versions and parameters of the wrong type remain errors,
+not unsupported rows. Collection filter `null` remains the supported no-filter case.
+
+Compatible inspection records retain the existing `PortableSource` shape and full
+strict validation. An `UnsupportedPortableSource` contains **only** original ID,
+name, canonical show ID and diagnostics. It never constructs a `SourceDefinition`,
+is not a runtime source and has no local installation mapping. It is not a relaxed
+configuration format or permission to execute a capability.
+
+Preview returns HTTP 200 with all rows sorted by show ID, preserving create,
+reuse/identical and conflict results for compatible sources alongside unsupported
+rows. Names/IDs/diagnostics are HTML-escaped. An unsupported row offers no keep-local
+control. A mixed batch shows the entire comparison but prepares no candidate,
+installs nothing and hides Apply/v8-adoption controls. Cancellation still works.
+The session continues to retain the exact original document and configuration
+fingerprint under the same bounded expiry/security rules.
+
+Server enforcement is independent of that presentation: **Apply always calls the
+unchanged strict `parse_sources()` contract on the session's original bytes** before
+reading configuration or saving. Unsupported documents fail with 422, including
+forged confirmations, keep-local decisions, mixed batches and existing-show matches.
+No partial installation, no save, no v8 adoption and no state/provider/scheduler
+side effects occur. `export_sources()` and `serialize_sources()` remain strict;
+inspection diagnostics are not a configuration serialization API.
+
+### Admin source import flow
+
+- `/admin/sources` links **Import sources** to GET `/admin/sources/import`.
+- POST `/admin/sources/import/preview` accepts exactly one JSON `document` file and
+  a one-use CSRF field in multipart form data. Cap HTTP input at 256 KiB + 8192 bytes
+  of framing, then cap the document at 256 KiB / 100 sources with the existing
+  shared document validators. A well-formed unsupported capability is a visible
+  preview diagnosis (200), while direct apply remains rejected (422). Reject
+  missing/duplicate length/type headers, transfer encoding, malformed
+  framing, extra/duplicate fields, unsupported transfer/MIME types and truncation.
+  Filenames never become paths or get written to disk.
+- The preview displays every imported definition, comparisons/differences and
+  deterministic original-to-local IDs. It installs nothing. New v8 adopters see
+  an explicit compatibility/backup warning; portable JSON is not a production backup.
+- Keep one exact upload + fingerprint + random preview reference per authenticated
+  session. At most eight previews per credential manager (at most 2 MiB raw JSON),
+  each expiring after 10 minutes, with replacement/logout/session expiry cleanup.
+  Capacity exhaustion returns 503 with guidance to cancel a preview or retry;
+  malformed documents retain their validation errors. Pending documents never enter
+  logs, files, diagnostics or client hidden fields.
+- POST `/admin/sources/import/apply` uses the existing 4 KiB text form, one-use CSRF,
+  the session-bound preview reference, per-conflict decisions, explicit confirmation
+  and (when needed) v8 acknowledgement. Both session and document must match. The
+  preview is consumed once; replay, expiry, stale or foreign references require a
+  new preview. Indexed decisions fit the existing form limit for 100 sources.
+- Cancellation is a separate authenticated CSRF form, without a state save.
+  Results list created/reused IDs. Existing security/transport checks, escaped
+  server-rendered HTML and private `no-store` responses apply. This works without
+  Spotify/OAuth-backed Admin services.
+
+The existing Sources overview may still use provisioning-aware snapshots for its
+ordinary lifecycle; the dedicated upload/preview/apply routes bypass that behavior.
+Tests forbid provider/OAuth/SQLite/scheduler operations and compare synthetic files
+before/after previews and no-ops, including pending provisioning and quarantine.
 
 The legacy manual-source model cannot persist all portable v1 definitions. The
 #548 implementation chooses option 3 below through explicit v8 installed-source
-persistence; source import preview/apply remains unimplemented. Options considered:
+persistence; #549 builds the explicit importer on it. Options considered:
 
 1. Replace specialized capabilities with generic ones: rejected, lossy.
 2. Expand only the parser allowlist: insufficient; it still loses countries/multiple
@@ -235,10 +356,10 @@ tests of all 13 original definitions without changing production defaults.
 Writing v8 requires a deliberate domain operation to construct a candidate with
 `schema_version=INSTALLED_SOURCES_SCHEMA_VERSION` and save it. Supplying an
 `InstalledSource` in v6/v7 is rejected before writing. No Admin form in #548 opts
-into v8, and ordinary reads, downloads, metadata saves and draft creation never
-upgrade an existing v6/v7 file to v8. #549 must authorize an explicit apply and
-revalidate the entire candidate under the configuration lock before its single save;
-this PR supplies persistence, not that apply operation.
+into v8. The #549 import confirmation is the explicit Admin operation that may opt
+into v8 when adding new sources. Ordinary reads, downloads, metadata saves and draft
+creation never upgrade an existing v6/v7 file to v8. Import apply revalidates the entire
+candidate under the configuration lock before its single save.
 
 Once explicitly v8, ordinary operations retain v8, including creation of a new
 custom playlist draft. No implicit downgrade occurs when its last installed source

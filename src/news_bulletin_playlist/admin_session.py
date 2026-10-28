@@ -12,11 +12,15 @@ from threading import RLock
 from typing import Any
 from weakref import WeakKeyDictionary
 
+from news_bulletin_playlist.portable_sources import MAX_SOURCE_DOCUMENT_BYTES
+
 ADMIN_SESSION_COOKIE = "news_playlist_admin_session"
 ADMIN_SESSION_IDLE_TTL = timedelta(minutes=30)
 ADMIN_SESSION_ABSOLUTE_TTL = timedelta(hours=12)
 ADMIN_SESSION_CSRF_TTL = timedelta(minutes=10)
 ADMIN_SESSION_COOKIE_MAX_AGE = int(ADMIN_SESSION_ABSOLUTE_TTL.total_seconds())
+SOURCE_IMPORT_PREVIEW_TTL = timedelta(minutes=10)
+MAX_SOURCE_IMPORT_PREVIEWS = 8
 _LOGIN_FAILURE_WINDOW = timedelta(minutes=1)
 _LOGIN_FAILURE_DELAY_STEP_SECONDS = 0.1
 _LOGIN_FAILURE_DELAY_MAX_SECONDS = 0.5
@@ -34,6 +38,21 @@ class _AdminSession:
     csrf_token: str | None = None
     csrf_expires_at: datetime | None = None
     source_inspection: SourceInspectionContext | None = None
+    source_import: SourceImportContext | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceImportContext:
+    """One bounded upload bound to a session, document and configuration snapshot."""
+
+    document: bytes
+    fingerprint: str
+    preview_id: str
+    expires_at: datetime
+
+
+class SourceImportCapacityError(ValueError):
+    """The bounded source-preview capacity is exhausted; the operator may retry."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +129,56 @@ class AdminSessionManager:
         if session_id is not None:
             self.invalidate_session(session_id)
 
+    def stage_source_import(
+        self,
+        session_id: str,
+        document: bytes,
+        fingerprint: str,
+        *,
+        now: datetime | None = None,
+    ) -> SourceImportContext:
+        if not isinstance(document, bytes) or not 0 < len(document) <= MAX_SOURCE_DOCUMENT_BYTES:
+            raise ValueError("Invalid source import document size")
+        observed_at = _as_utc(now or datetime.now(UTC))
+        with self._lock:
+            self._prune_sessions_locked(observed_at)
+            session = self._sessions.get(session_id)
+            if session is None:
+                raise ValueError("Source import session is unavailable")
+            staged = sum(item.source_import is not None for item in self._sessions.values())
+            if session.source_import is None and staged >= MAX_SOURCE_IMPORT_PREVIEWS:
+                raise SourceImportCapacityError(
+                    "Too many source previews; cancel an existing preview or try later"
+                )
+            context = SourceImportContext(
+                document,
+                fingerprint,
+                secrets.token_urlsafe(32),
+                observed_at + SOURCE_IMPORT_PREVIEW_TTL,
+            )
+            session.source_import = context
+            return context
+
+    def take_source_import(
+        self,
+        session_id: str,
+        preview_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> SourceImportContext | None:
+        observed_at = _as_utc(now or datetime.now(UTC))
+        with self._lock:
+            self._prune_sessions_locked(observed_at)
+            session = self._sessions.get(session_id)
+            context = None if session is None else session.source_import
+            if context is None or not hmac.compare_digest(
+                context.preview_id.encode("utf-8"), preview_id.encode("utf-8")
+            ):
+                return None
+            assert session is not None
+            session.source_import = None
+            return context
+
     def issue_csrf_token(
         self,
         session_id: str,
@@ -180,6 +249,12 @@ class AdminSessionManager:
             self._login_failures.pop(client_id, None)
 
     def _prune_sessions_locked(self, observed_at: datetime) -> None:
+        for session in self._sessions.values():
+            if (
+                session.source_import is not None
+                and observed_at >= session.source_import.expires_at
+            ):
+                session.source_import = None
         expired = [
             session_id
             for session_id, session in self._sessions.items()

@@ -66,6 +66,7 @@ def render_sources_page(
     <p class="section-note">{len(catalog.sources)} built-in, {len(state.sources)} custom sources</p>
   </div>
   <p><a class="button button-primary" href="/admin/sources/new">Add source</a></p>
+  <p><a class="button" href="/admin/sources/import">Import sources</a></p>
   {export_control}
   <form method="post" action="/admin/sources/audits/export">
     <input type="hidden" name="csrf_token" value="{safe_csrf}">

@@ -104,6 +104,12 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   Never silently upgrade v6/v7 to v8 on read/startup/export/save. New drafts preserve an
   already-v8 schema. Old images cannot read v8: rollback requires a matching data snapshot.
   See `docs/PORTABILITY.md` for the source representation and compatibility matrix.
+- Source import preview/apply uses bounded session-only uploads, `load_readonly()` and
+  the configuration lock; never use provider-backed intake or provisioning snapshots.
+  Canonical show identity determines reuse, conflicts allow keep-local/cancel only,
+  and every apply rechecks full configuration/pending-provision fingerprints. Reuse-only
+  imports never save; only explicit new-source confirmation may opt into v8. On save
+  errors read back before claiming a commit or unchanged state; never retry blindly.
 - One engine can drive multiple playlists, countries and languages.
 - The authoritative production architecture is Spotify-first. Runtime playlist decisions must not
   depend on RSS collection, RSS-native identities, RSS-to-Spotify matching or PENDING/AMBIGUOUS
