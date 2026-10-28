@@ -36,7 +36,11 @@ from news_bulletin_playlist.managed_admin_web import (
     playlist_id_from_form,
     single_form_value,
 )
-from news_bulletin_playlist.managed_provisioning import ProvisioningJournalError
+from news_bulletin_playlist.managed_provisioning import (
+    MANAGED_PROVISIONING_FILENAME,
+    ProvisioningJournal,
+    ProvisioningJournalError,
+)
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     ManagedStateError,
@@ -45,7 +49,7 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.persistence import PersistenceError
-from news_bulletin_playlist.portable_sources import PortableSourceError
+from news_bulletin_playlist.portable_sources import PortableSourceError, UnsupportedSourceCapability
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
@@ -65,6 +69,19 @@ from news_bulletin_playlist.source_admin_web import (
     render_source_review_page,
 )
 from news_bulletin_playlist.source_audit_jobs import AuditJobBusyError, SourceAuditJobs
+from news_bulletin_playlist.source_import import (
+    SourceImportError,
+    SourceImportService,
+    SourceImportWriteError,
+    StaleSourceImport,
+)
+from news_bulletin_playlist.source_import_web import (
+    MAX_SOURCE_IMPORT_MULTIPART_BYTES,
+    parse_source_import_upload,
+    render_source_import_preview,
+    render_source_import_result,
+    render_source_import_upload,
+)
 from news_bulletin_playlist.source_inspection import (
     InspectionFailure,
     SourceInspectionError,
@@ -111,6 +128,20 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if parsed.path == "/admin/sources/export.json":
             self._serve_source_configuration(parsed.query)
             return
+        if parsed.path == "/admin/sources/import":
+            security = self._require_admin()
+            if security is not None:
+                if parsed.query or parsed.fragment:
+                    self._source_error(HTTPStatus.BAD_REQUEST, "Invalid import request")
+                else:
+                    self._reply(
+                        HTTPStatus.OK,
+                        render_source_import_upload(
+                            csrf_token=security.issue_csrf_token(),
+                            lan_mode=self._is_lan_admin_mode(),
+                        ),
+                    )
+            return
         if parsed.path == "/admin/sources/new":
             self._serve_source_new()
             return
@@ -143,6 +174,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except ValueError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid request")
             return
+        if path in {"/admin/sources/import/preview", "/admin/sources/import/apply"}:
+            self._handle_source_import(path)
+            return
         if path in {"/admin/sources/inspect", "/admin/sources/create"}:
             self._handle_source_post(path)
             return
@@ -169,6 +203,145 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
 
     def _source_error(self, status: HTTPStatus, message: str) -> None:
         self._reply(status, message.encode("utf-8"), content_type="text/plain; charset=utf-8")
+
+    def _source_import_service(self) -> SourceImportService:
+        synchronization = self.configuration_synchronization
+        if synchronization is None:
+            raise SourceImportError("Source import is unavailable")
+        service = self.managed_admin_service
+        store = (
+            service.store
+            if service is not None
+            else ManagedStateStore(self.data_dir / MANAGED_STATE_FILENAME)
+        )
+        provisioning = (
+            service.provisioning_journal
+            if service is not None
+            else ProvisioningJournal(store.path.with_name(MANAGED_PROVISIONING_FILENAME))
+        )
+        return SourceImportService(store, synchronization, provisioning)
+
+    def _handle_source_import(self, path: str) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        if self.configuration_synchronization is None:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Source import is unavailable")
+            return
+        try:
+            parsed = urllib.parse.urlsplit(self.path)
+            if parsed.query or parsed.fragment or self.headers.get_all("Transfer-Encoding"):
+                raise ValueError("Invalid import request")
+            lengths = self.headers.get_all("Content-Length", [])
+            types = self.headers.get_all("Content-Type", [])
+            if len(lengths) != 1 or len(types) != 1 or not re.fullmatch(r"[0-9]{1,9}", lengths[0]):
+                raise ValueError("Invalid import request headers")
+            is_preview = path.endswith("/preview")
+            limit = MAX_SOURCE_IMPORT_MULTIPART_BYTES if is_preview else 4096
+            length = int(lengths[0])
+            if not 0 < length <= limit:
+                self.close_connection = True
+                self._source_error(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Source import request is too large"
+                )
+                return
+            service = self._source_import_service()
+            if is_preview:
+                body = self.rfile.read(length)
+                if len(body) != length:
+                    raise ValueError("Incomplete source upload")
+                token, document = parse_source_import_upload(types[0], body)
+                if not security.consume_csrf_token(token):
+                    self._source_error(
+                        HTTPStatus.FORBIDDEN, "Administration form validation failed"
+                    )
+                    return
+                preview = service.preview(document)
+                staged = security.stage_source_import(document, preview.fingerprint)
+                self._reply(
+                    HTTPStatus.OK,
+                    render_source_import_preview(
+                        preview,
+                        preview_id=staged.preview_id,
+                        csrf_token=security.issue_csrf_token(),
+                        lan_mode=self._is_lan_admin_mode(),
+                    ),
+                )
+                return
+            form = self._read_form()
+            token = single_form_value(form, "csrf_token")
+            if re.fullmatch(
+                r"[A-Za-z0-9_-]{20,128}", token
+            ) is None or not security.consume_csrf_token(token):
+                self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+                return
+            # Only decisions are client supplied. The original bytes and fingerprint
+            # live exclusively in this authenticated session's bounded context.
+            preview_id = single_form_value(form, "preview_id")
+            if re.fullmatch(r"[A-Za-z0-9_-]{20,128}", preview_id) is None:
+                raise ValueError("Invalid preview reference")
+            for name, values in form.items():
+                if len(values) != 1 or (
+                    name not in {"csrf_token", "preview_id", "action", "confirm", "ack_v8"}
+                    and re.fullmatch(r"decision_(?:0|[1-9][0-9]?)", name) is None
+                ):
+                    raise ValueError("Invalid import confirmation fields")
+            action = single_form_value(form, "action")
+            if action not in {"apply", "cancel"}:
+                raise ValueError("Invalid import action")
+            context = security.take_source_import(preview_id)
+            if context is None:
+                self._source_error(
+                    HTTPStatus.CONFLICT, "Preview expired or unavailable. Upload a new preview."
+                )
+                return
+            decisions = {
+                int(name.removeprefix("decision_")): values[0]
+                for name, values in form.items()
+                if name.startswith("decision_")
+            }
+            if any(value not in {"keep_local", "cancel"} for value in decisions.values()):
+                raise ValueError("Invalid conflict decision")
+            if action == "cancel" or "cancel" in decisions.values():
+                self._reply(
+                    HTTPStatus.OK,
+                    render_source_import_result(None, lan_mode=self._is_lan_admin_mode()),
+                )
+                return
+            if form.get("confirm") != ["1"] or form.get("ack_v8", ["0"]) not in (["0"], ["1"]):
+                raise ValueError("Explicit import confirmation is required")
+            result = service.apply(
+                context.document,
+                context.fingerprint,
+                keep_local=frozenset(decisions),
+                confirm_v8=form.get("ack_v8") == ["1"],
+            )
+            self._reply(
+                HTTPStatus.OK,
+                render_source_import_result(result, lan_mode=self._is_lan_admin_mode()),
+            )
+        except StaleSourceImport as exc:
+            self._source_error(HTTPStatus.CONFLICT, str(exc))
+        except SourceImportWriteError as exc:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
+        except UnsupportedSourceCapability:
+            self._source_error(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "Source capability is unsupported. Nothing was imported.",
+            )
+        except PortableSourceError:
+            self._source_error(
+                HTTPStatus.BAD_REQUEST, "Invalid portable source JSON. Nothing was imported."
+            )
+        except SourceImportError as exc:
+            self._source_error(HTTPStatus.CONFLICT, str(exc))
+        except ManagedStateError, ProvisioningJournalError, OSError:
+            self._source_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Source configuration is unavailable. No import was confirmed.",
+            )
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source import request")
 
     def _serve_source_configuration(self, query: str) -> None:
         if self._require_admin() is None:

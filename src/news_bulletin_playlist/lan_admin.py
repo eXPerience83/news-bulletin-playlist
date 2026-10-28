@@ -15,6 +15,7 @@ from pathlib import Path
 from news_bulletin_playlist.admin_login_web import render_admin_login_page
 from news_bulletin_playlist.admin_session import (
     AdminSessionManager,
+    SourceImportContext,
     SourceInspectionContext,
     admin_session_manager_for,
     expired_session_cookie_header,
@@ -144,6 +145,12 @@ class _SessionBoundSecurity(AdminSecurity):
 
     def set_source_inspection(self, context: SourceInspectionContext | None) -> None:
         self._manager.set_source_inspection(self._session_id, context)
+
+    def stage_source_import(self, document: bytes, fingerprint: str) -> SourceImportContext:
+        return self._manager.stage_source_import(self._session_id, document, fingerprint)
+
+    def take_source_import(self, preview_id: str) -> SourceImportContext | None:
+        return self._manager.take_source_import(self._session_id, preview_id)
 
 
 def _lan_admin_page(*, spotify_state: AuthorizationState | None, csrf_token: str) -> bytes:
