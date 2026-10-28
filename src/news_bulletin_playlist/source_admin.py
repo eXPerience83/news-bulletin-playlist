@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
+from news_bulletin_playlist.custom_source_policy import custom_strategy_allowed
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.managed_provisioning import (
     MANAGED_PROVISIONING_FILENAME,
@@ -17,6 +18,7 @@ from news_bulletin_playlist.managed_provisioning import (
     ProvisioningJournal,
 )
 from news_bulletin_playlist.managed_state import (
+    InstalledSource,
     ManagedPlaylist,
     ManagedSource,
     ManagedSourceOverride,
@@ -439,6 +441,11 @@ class SourceAdminService:
         return source
 
     def create(self, source: ManagedSource) -> None:
+        # Manual creation never accepts the richer installed-capability representation.
+        if isinstance(source, InstalledSource) or not custom_strategy_allowed(
+            str(source.parser_id), source.collection_filter_id
+        ):
+            raise ValueError("Source strategy is not allowed for manual creation")
         # Cheap local duplicate check before spending provider quota.
         self._check_duplicate(self.snapshot(), source)
         self.inspect(
@@ -514,7 +521,17 @@ class SourceAdminService:
                     if public_release_mode is None
                     else PublicReleaseMode(public_release_mode),
                 )
-                serialize_managed_state(ManagedState(sources=(updated,)))
+                if isinstance(updated, InstalledSource):
+                    updated = replace(updated, languages=(updated.language, *updated.languages[1:]))
+                serialize_managed_state(
+                    replace(
+                        state,
+                        sources=tuple(
+                            updated if item.id == updated.id else item for item in state.sources
+                        ),
+                    ),
+                    catalog=self.catalog,
+                )
             except ValueError as exc:
                 raise ValueError("Source metadata is invalid") from exc
             self._save_replacement(state, updated)

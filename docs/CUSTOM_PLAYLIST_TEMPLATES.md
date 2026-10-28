@@ -49,6 +49,10 @@ The first TrueNAS production installation already opted into **v7** by saving th
 local test draft on 2026-10-14; downgrading it to a v6-only image is not safe
 without restoring a compatible data snapshot.
 
+An installation that explicitly adopted source schema **v8** keeps v8 when creating
+or editing drafts; it is never downgraded to v7. See [installed-source persistence](PORTABILITY.md#installed-source-persistence-548)
+for the opt-in and rollback contract. Reading v6/v7 does not opt into v8.
+
 Schema **v7** introduces one top-level `templates` array of strictly validated
 custom draft definitions. The migration is explicit: authenticated
 Admin **Save local draft** atomically replaces v6 with v7 **only after**
