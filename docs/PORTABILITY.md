@@ -402,8 +402,7 @@ Each managed playlist and local draft has its own nullable `portable_id`, a cano
 lowercase UUIDv4. A draft and its managed destination are separately editable objects
 and therefore have distinct identities. Names, template IDs and Spotify destination
 IDs do not determine identity. UUIDs are generated with OS randomness and checked
-against other accepted local objects. Normal edits retain identity. Future #551 must
-preserve an imported UUID and compare content; matching names do not authorize merging.
+against other accepted local objects. Normal edits retain identity. #551 preserves an imported UUID and compares effective content; matching names do not authorize merging.
 Quarantined drafts remain raw, are not exported, and cannot bypass UUID uniqueness
 when repaired. Identity uniqueness is enforced across all accepted managed/draft records.
 
@@ -479,8 +478,8 @@ Managed objects combine their exact saved name/description/cover/assignment/poli
 with template geography, languages, ordering and applicable duration exceptions.
 An exception applies when its source remains durably assigned (including disabled
 sources) and its ceiling exceeds the managed base ceiling, as in runtime policy.
-Drafts retain all local fields, including hidden status. Current local drafts have
-no exception model, so their exception list is empty. Exports do not use compiled
+Drafts retain all local fields, including hidden status. Ordinary manual drafts export an empty exception list; imported v10 drafts
+export their exact stored exceptions. Exports do not use compiled
 membership, which would drop disabled assignments.
 
 Logical IDs are bounded source-v1-style identifiers (128 characters). Text limits
@@ -488,9 +487,9 @@ are 4096 Unicode characters for names and 65536 for descriptions; policy integer
 are bounded by signed 64-bit maximum; geography/language lists and exceptions by 100.
 These export bounds deliberately exceed editor limits. Values that cannot be represented
 are rejected with a safe explanation, never truncated. Empty assignment exports are
-rejected because source v1 requires at least one definition. #551 must extend draft
-representation explicitly or reject legacy policies it cannot represent; it must not
-round seconds, truncate values or drop exceptions to fit the current editor.
+rejected because source v1 requires at least one definition. #551 uses explicit v10 draft representation for legacy policies and exceptions;
+it rejects unrepresentable values rather than rounding seconds, truncating values
+or dropping exceptions to fit an editor.
 
 All assigned definitions come from `effective_sources()`, including overrides,
 installed specialized capabilities, manual definitions and disabled sources. The
@@ -579,6 +578,10 @@ content is a no-op **without state or artwork writes**, including a matching pre
 v9 draft. Differences produce a blocked UUID conflict. A managed UUID blocks draft
 creation regardless of display name. Equal names with distinct UUIDs are independent.
 
+Exception comparison explicitly includes the DST fold flag; Python time equality
+alone ignores that flag. Readback compares serialized configuration, including typed
+raw quarantine values, rather than relying on dataclass equality.
+
 Comparison preserves ordered mapped source IDs, metadata, regions/languages, exact
 policies/exceptions, hidden status, JPEG bytes and current attribution. Foreign local
 IDs and observational origin kind/enabled are provenance rather than operational
@@ -596,7 +599,10 @@ at 8192 characters per field and 64 KiB encoded provenance overall; unsupported
 provenance or noncanonical/invalid text is rejected, never discarded. Ordinary manual
 draft creation/validation retains its original narrower limits.
 
-The imported-draft editor uses exact second fields, ordered source IDs and strictly
+The imported-draft editor protects initial textarea newlines and preserves original
+name/description bytes when only browser newline normalization differs. Actual text
+edits use LF line endings; untouched values (including CR/CRLF) remain exact.
+It uses exact second fields, ordered source IDs and strictly
 validated JSON duration exceptions (no expressions, regex or code). It preserves
 exceptions unless explicitly edited; removing a referenced source without adjusting
 its exception fails validation. Large imported text/policy values stay editable via

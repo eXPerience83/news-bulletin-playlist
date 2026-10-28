@@ -130,16 +130,13 @@ def imported_draft_editor(draft: LocalPlaylistTemplate, csrf: str) -> str:
     )
     return f'''<form method="post" action="/admin/playlists/imported/update">{fields}
 <label>Name
-<input
-name="display_name"
-maxlength="4096"
-value="{esc(draft.display_name, quote=True)}"
-required>
-</label>
+<textarea name="display_name" maxlength="4096" required>
+{esc(draft.display_name)}</textarea></label>
 <label>Description
 <textarea
 name="description"
-maxlength="65536">{esc(draft.description)}</textarea>
+maxlength="65536">
+{esc(draft.description)}</textarea>
 </label>
 <label>Ordered source IDs · one per line
 <textarea

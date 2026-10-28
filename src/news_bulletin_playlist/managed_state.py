@@ -802,6 +802,19 @@ def serialize_managed_state(
     return payload
 
 
+def same_managed_configuration(
+    left: ManagedState, right: ManagedState, *, catalog: BuiltInCatalog = BUILTIN_CATALOG
+) -> bool:
+    """Compare persisted fields exactly, including time.fold (ignored by time equality)."""
+    try:
+        # JSON text also distinguishes bool/int and int/float inside preserved raw quarantine.
+        return json.dumps(
+            serialize_managed_state(left, catalog=catalog), sort_keys=True
+        ) == json.dumps(serialize_managed_state(right, catalog=catalog), sort_keys=True)
+    except ManagedStateError:
+        return False
+
+
 def _serialize_local_template(
     item: LocalPlaylistTemplate, *, schema_version: int = 7
 ) -> dict[str, object]:

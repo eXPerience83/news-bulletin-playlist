@@ -325,3 +325,116 @@ def test_import_and_edit_page_work_without_oauth_services(tmp_path, monkeypatch)
         assert headers["Cache-Control"] == "no-store"
         assert_valid_admin_html(page.decode())
         assert _files(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    "description",
+    ["\nFirst\nSecond", "\r\nFirst\r\nSecond\r", "Mixed\rline\nnext\r\nlast", "x" * 65534 + "\nx"],
+)
+def test_browser_textarea_roundtrip_preserves_original_text(tmp_path, description):
+    import hashlib
+    from html.parser import HTMLParser
+    from types import SimpleNamespace
+
+    from test_custom_playlist_templates import _draft
+    from test_portable_playlists import UUID
+
+    from news_bulletin_playlist.diagnostics_runtime import DiagnosticOperationalHealthHandler
+    from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
+    from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
+    from news_bulletin_playlist.source_import import SourceImportService
+
+    metadata = canonical_json(
+        {
+            "original_id": "foreign",
+            "kind": "draft",
+            "configuration": {"enabled": None, "hidden": False},
+            "cover_id": "custom_default",
+            "cover_origin": "bundled",
+            "cover_sha256": "0" * 64,
+            "attribution": {
+                "credit": None,
+                "license": None,
+                "provenance": "test",
+                "reference": None,
+            },
+        }
+    ).decode()
+    draft = _draft(
+        portable_id=UUID,
+        portable_metadata=metadata,
+        cover_id="custom_default",
+        description=description,
+        display_name="News\r\nAcross",
+    )
+
+    class MemoryStore(ManagedStateStore):
+        state = ManagedState(schema_version=10, templates=(draft,))
+
+        def load_readonly(self):
+            return self.state
+
+        def load(self):
+            return self.state
+
+        def save(self, state):
+            self.state = state
+
+    store = MemoryStore(tmp_path / "unused.json")
+
+    class Textareas(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.active = None
+            self.values = {}
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "textarea":
+                self.active = dict(attrs).get("name")
+                self.values[self.active] = ""
+
+        def handle_data(self, data):
+            if self.active:
+                self.values[self.active] += data
+
+        def handle_endtag(self, tag):
+            if tag == "textarea":
+                self.active = None
+
+    parser = Textareas()
+    parser.feed(imported_draft_editor(draft, "csrf"))
+    submitted = {}
+    for field in ("display_name", "description"):
+        # HTML parsing normalizes CR/LF, then removes one immediate leading LF in textarea.
+        value = parser.values[field].replace("\r\n", "\n").replace("\r", "\n")
+        if value.startswith("\n"):
+            value = value[1:]
+        original = getattr(draft, field)
+        assert value == original.replace("\r\n", "\n").replace("\r", "\n")
+        submitted[field] = value.replace("\n", "\r\n")  # Browser form serialization.
+    form = {
+        k: [v]
+        for k, v in {
+            "csrf_token": "csrf",
+            "template_id": str(draft.id),
+            "fingerprint": hashlib.sha256(repr(draft).encode()).hexdigest(),
+            **submitted,
+            "source_ids": "\r\n".join(draft.default_source_ids),
+            "countries": ",".join(draft.countries),
+            "languages": ",".join(draft.languages),
+            "retention_hours": str(draft.retention_hours),
+            "max_episodes": str(draft.max_episodes),
+            "min_seconds": str(draft.min_duration_seconds),
+            "max_seconds": str(draft.max_duration_seconds),
+            "exceptions": "[]",
+            "cover_id": draft.cover_id,
+        }.items()
+    }
+    service = SourceImportService(
+        store, ConfigurationSynchronization(), ProvisioningJournal(tmp_path / "absent.json")
+    )
+    DiagnosticOperationalHealthHandler._update_imported_draft(
+        SimpleNamespace(data_dir=tmp_path), service, form
+    )
+    stored = store.load_readonly().templates[0]
+    assert stored.description == draft.description and stored.display_name == draft.display_name

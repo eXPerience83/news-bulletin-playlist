@@ -15,10 +15,12 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     ManagedStateStore,
     effective_sources,
+    same_managed_configuration,
     serialize_managed_state,
 )
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
 from news_bulletin_playlist.playlist_bundle import PlaylistBundle, inspect_playlist_bundle
+from news_bulletin_playlist.portable_playlist_metadata import exception_payload
 from news_bulletin_playlist.portable_playlists import PortableCoverLoader, Synchronization
 from news_bulletin_playlist.portable_sources import (
     PortableSource,
@@ -192,12 +194,19 @@ class PlaylistImportService:
                     "max_episodes",
                     "min_duration_seconds",
                     "max_duration_seconds",
-                    "duration_exceptions",
                     "ordering",
                     "hidden",
                 )
             )
-            if not equal or data != bundle.jpeg or attribution != p["cover"]["attribution"]:
+            same_exceptions = tuple(
+                exception_payload(e) for e in existing.duration_exceptions
+            ) == tuple(exception_payload(e) for e in candidate.duration_exceptions)
+            if (
+                not equal
+                or not same_exceptions
+                or data != bundle.jpeg
+                or attribution != p["cover"]["attribution"]
+            ):
                 return PlaylistImportPreview(
                     bundle,
                     source_preview,
@@ -274,9 +283,9 @@ class PlaylistImportService:
                     raise PlaylistImportError(
                         "Import outcome is uncertain; readback failed. Do not retry blindly"
                     ) from None
-                if observed == candidate:
+                if same_managed_configuration(observed, candidate, catalog=self.store.catalog):
                     return PlaylistImportResult(str(preview.draft.id), creates, True, True)
-                if observed == state:
+                if same_managed_configuration(observed, state, catalog=self.store.catalog):
                     raise PlaylistImportError(
                         "Import was not committed; previous configuration is intact. "
                         "Prepared artwork can be safely reused"

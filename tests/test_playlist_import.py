@@ -908,3 +908,111 @@ def test_compression_rejected_before_any_entry_inflation(tmp_path, monkeypatch):
     monkeypatch.setattr(ZipFile, "open", forbidden)
     with pytest.raises(PlaylistBundleError):
         inspect_playlist_bundle(document)
+
+
+def test_uuid_comparison_distinguishes_exception_dst_fold(tmp_path):
+    from news_bulletin_playlist.portable_playlists import playlist_bundle
+
+    template = BUILTIN_CATALOG.playlists[0]
+    exception = DurationPolicyException(
+        "dst", template.default_source_ids[0], time(2, 30, fold=0), 3600
+    )
+    template = replace(template, duration_policy=DurationPolicy(1800, (exception,)))
+    catalog = BuiltInCatalog(BUILTIN_CATALOG.sources, (template,))
+    p = replace(activate_template(template, "synthetic"), portable_id=UUID)
+    initial = ManagedState(schema_version=9, playlists=(p,))
+    donor_store = ManagedStateStore(tmp_path / "unused-donor.json", catalog=catalog)
+    document = playlist_bundle(
+        initial, donor_store, "managed", str(p.id), PortableCoverLoader(tmp_path)
+    )[1]
+
+    class MemoryStore(ManagedStateStore):
+        state = ManagedState(schema_version=10)
+
+        def load_readonly(self):
+            return self.state
+
+    store = MemoryStore(tmp_path / "unused-recipient.json", catalog=catalog)
+    service = PlaylistImportService(
+        store,
+        ConfigurationSynchronization(),
+        ProvisioningJournal(tmp_path / "absent-journal.json"),
+        PortableCoverLoader(tmp_path),
+    )
+    candidate = service.preview(document).draft
+    store.state = ManagedState(
+        schema_version=10, templates=(replace(candidate, cover_id=p.cover_id),)
+    )
+    assert service.preview(document).status == "identical"
+    changed = rewrite(
+        document,
+        lambda m, d: m["playlist"]["duration_policy"]["exceptions"][0].update(edition_fold=1),
+    )
+    assert service.preview(changed).status == "uuid_conflict"
+
+
+def test_ambiguous_readback_does_not_confirm_different_exception_fold(tmp_path, monkeypatch):
+    from news_bulletin_playlist.managed_state import same_managed_configuration
+    from news_bulletin_playlist.portable_playlists import playlist_bundle
+
+    template = BUILTIN_CATALOG.playlists[0]
+    exception = DurationPolicyException(
+        "dst", template.default_source_ids[0], time(2, 30, fold=0), 3600
+    )
+    template = replace(template, duration_policy=DurationPolicy(1800, (exception,)))
+    catalog = BuiltInCatalog(BUILTIN_CATALOG.sources, (template,))
+    p = replace(activate_template(template, "synthetic"), portable_id=UUID)
+    donor_store = ManagedStateStore(tmp_path / "unused-donor.json", catalog=catalog)
+    document = playlist_bundle(
+        ManagedState(schema_version=9, playlists=(p,)),
+        donor_store,
+        "managed",
+        str(p.id),
+        PortableCoverLoader(tmp_path),
+    )[1]
+
+    class MemoryStore(ManagedStateStore):
+        state = ManagedState(schema_version=10)
+
+        def load_readonly(self):
+            return self.state
+
+        def save(self, candidate):
+            draft = candidate.templates[0]
+            changed = replace(draft.duration_exceptions[0], edition_local_time=time(2, 30, fold=1))
+            self.state = replace(
+                candidate, templates=(replace(draft, duration_exceptions=(changed,)),)
+            )
+            assert self.state == candidate  # Python dataclass/time equality hides this difference.
+            assert not same_managed_configuration(self.state, candidate, catalog=catalog)
+            raise OSError("ambiguous save")
+
+    store = MemoryStore(tmp_path / "unused-recipient.json", catalog=catalog)
+    service = PlaylistImportService(
+        store,
+        ConfigurationSynchronization(),
+        ProvisioningJournal(tmp_path / "absent-journal.json"),
+        PortableCoverLoader(tmp_path),
+    )
+    monkeypatch.setattr(
+        CustomCoverAssetStore,
+        "install_canonical",
+        lambda self, data: "uploaded_" + hashlib.sha256(data).hexdigest(),
+    )
+    with pytest.raises(PlaylistImportError, match="uncertain"):
+        apply(service, document)
+
+
+def test_readback_comparison_preserves_types_inside_quarantine():
+    from news_bulletin_playlist.managed_state import (
+        QuarantinedPlaylistTemplate,
+        same_managed_configuration,
+    )
+
+    a = QuarantinedPlaylistTemplate(
+        0, "invalid_definition", json.dumps({"invalid": True}, sort_keys=True)
+    )
+    b = replace(a, raw_json=json.dumps({"invalid": 1}, sort_keys=True))
+    left = ManagedState(schema_version=10, quarantined_templates=(a,))
+    right = replace(left, quarantined_templates=(b,))
+    assert not same_managed_configuration(left, right)

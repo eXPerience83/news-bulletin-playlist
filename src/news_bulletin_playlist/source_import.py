@@ -18,6 +18,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     compile_engine_config,
     effective_sources,
+    same_managed_configuration,
     serialize_managed_state,
     template_suspended_by_quarantine,
 )
@@ -224,9 +225,9 @@ class SourceImportService:
                         "Import durability is uncertain. Readback failed; "
                         "upload a new preview before retrying."
                     ) from exc
-                if observed == candidate:
+                if same_managed_configuration(observed, candidate, catalog=self.store.catalog):
                     return SourceImportResult(resolved, creates, recovered=True)
-                if observed == state:
+                if same_managed_configuration(observed, state, catalog=self.store.catalog):
                     raise SourceImportWriteError(
                         "Import was not saved; the previous configuration is intact. "
                         "Upload a new preview to retry."

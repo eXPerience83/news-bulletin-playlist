@@ -33,6 +33,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     allocate_portable_id,
     effective_sources,
+    same_managed_configuration,
     serialize_managed_state,
     template_suspended_by_quarantine,
 )
@@ -384,9 +385,9 @@ class PlaylistExportService:
                     raise PlaylistExportError(
                         "Identity save outcome is uncertain; inspect state before retrying"
                     ) from None
-                if written == candidate:
+                if same_managed_configuration(written, candidate, catalog=self.store.catalog):
                     return identity
-                if written == state:
+                if same_managed_configuration(written, state, catalog=self.store.catalog):
                     raise PlaylistExportError(
                         "Identity was not saved; previous configuration is unchanged"
                     ) from None

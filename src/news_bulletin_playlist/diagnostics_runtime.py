@@ -452,6 +452,15 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 != single_form_value(form, "fingerprint")
             ):
                 raise PlaylistImportError("Draft changed or is unavailable; reload before editing")
+
+            def submitted_text(field: str) -> str:
+                supplied = single_form_value(form, field, required=field != "description")
+                current = getattr(draft, field)
+                normalized = supplied.replace("\r\n", "\n").replace("\r", "\n")
+                original = current.replace("\r\n", "\n").replace("\r", "\n")
+                # A browser normalizes textarea newlines even on an unchanged Save.
+                return current if normalized == original else normalized
+
             raw = strict_json(single_form_value(form, "exceptions").encode("utf-8"))
             if not isinstance(raw, list) or len(raw) > 100:
                 raise ValueError("Invalid duration exceptions")
@@ -463,8 +472,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             )
             admin.update_local_template(
                 draft.id,
-                display_name=single_form_value(form, "display_name"),
-                description=single_form_value(form, "description", required=False),
+                display_name=submitted_text("display_name"),
+                description=submitted_text("description"),
                 cover_id=single_form_value(form, "cover_id"),
                 source_ids=single_form_value(form, "source_ids").splitlines(),
                 countries=tuple(
