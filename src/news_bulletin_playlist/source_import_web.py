@@ -19,13 +19,21 @@ from news_bulletin_playlist.source_import import SourceImportPreview, SourceImpo
 MAX_SOURCE_IMPORT_MULTIPART_BYTES = MAX_SOURCE_DOCUMENT_BYTES + 8192
 
 
-def parse_source_import_upload(content_type: str, body: bytes) -> tuple[str, bytes]:
+def parse_source_import_upload(
+    content_type: str,
+    body: bytes,
+    *,
+    document_limit: int = MAX_SOURCE_DOCUMENT_BYTES,
+    content_types: frozenset[str] = frozenset(
+        {"application/json", "application/octet-stream", "text/plain"}
+    ),
+) -> tuple[str, bytes]:
     """Accept exactly one CSRF field and one raw JSON file, never a filesystem path.
 
     Uses the same bounded MIME/framing rules as owner-cover upload, with a separate
     smaller budget and field/MIME policy. Filename is untrusted and never used.
     """
-    if len(content_type) > 180 or not 0 < len(body) <= MAX_SOURCE_IMPORT_MULTIPART_BYTES:
+    if len(content_type) > 180 or not 0 < len(body) <= document_limit + 8192:
         raise ValueError("Invalid source upload size or content type")
     match = re.fullmatch(
         r'multipart/form-data;\s*boundary=(?:"([^"\\]{1,100})"|([^;\s]{1,100}))',
@@ -65,15 +73,11 @@ def parse_source_import_upload(content_type: str, body: bytes) -> tuple[str, byt
         ):
             raise ValueError("Invalid or duplicate source upload field")
         data = part.get_payload(decode=True)
-        limit = MAX_SOURCE_DOCUMENT_BYTES if name == "document" else 128
+        limit = document_limit if name == "document" else 128
         if not isinstance(data, bytes) or not 0 < len(data) <= limit:
             raise ValueError("Invalid source upload field size")
         if name == "document":
-            if part.get_content_type() not in {
-                "application/json",
-                "application/octet-stream",
-                "text/plain",
-            }:
+            if part.get_content_type() not in content_types:
                 raise ValueError("Expected a JSON source document")
         elif part.get_filename() is not None:
             raise ValueError("Invalid source upload CSRF field")
@@ -113,9 +117,7 @@ accept=".json,application/json" required></label>
     )
 
 
-def render_source_import_preview(
-    preview: SourceImportPreview, *, preview_id: str, csrf_token: str, lan_mode: bool
-) -> bytes:
+def render_source_import_rows(preview: SourceImportPreview) -> str:
     esc = html.escape
     rows = []
     for index, row in enumerate(preview.rows):
@@ -152,6 +154,14 @@ def render_source_import_preview(
             f"<td>{esc(row.status)}{differences}</td><td><code>"
             f"{esc(row.local_id) if row.local_id is not None else 'Not available'}</code></td></tr>"
         )
+    return "".join(rows)
+
+
+def render_source_import_preview(
+    preview: SourceImportPreview, *, preview_id: str, csrf_token: str, lan_mode: bool
+) -> bytes:
+    esc = html.escape
+    rows = render_source_import_rows(preview)
     acknowledgement = ""
     if not preview.unsupported and preview.creates and preview.schema_version < 8:
         acknowledgement = """<p class="notice">Creating these sources adopts schema v8.
@@ -185,7 +195,7 @@ never authorize overwriting local configuration.</p>
 <div class="table-wrap"><table><thead><tr><th scope="col">Imported source</th>
 <th scope="col">Spotify show</th>
 <th scope="col">Comparison</th><th scope="col">Local ID</th></tr></thead>
-<tbody>{"".join(rows)}</tbody></table></div>
+<tbody>{rows}</tbody></table></div>
 {confirmation}</form>
 <form method="post" action="/admin/sources/import/apply">
 <input type="hidden" name="csrf_token" value="{esc(csrf_token, quote=True)}">

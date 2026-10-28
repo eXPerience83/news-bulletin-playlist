@@ -16,6 +16,7 @@ from news_bulletin_playlist.managed_duration import validate_duration_range
 from news_bulletin_playlist.models import (
     CountryCode,
     DurationPolicy,
+    DurationPolicyException,
     LanguageTag,
     OrderingPolicy,
     PlaylistId,
@@ -23,6 +24,7 @@ from news_bulletin_playlist.models import (
     SourceId,
 )
 from news_bulletin_playlist.portable_identity import portable_id
+from news_bulletin_playlist.portable_playlist_metadata import validate_metadata
 
 # An explicit namespace makes accidental shadowing of built-in identifiers less likely.
 _LOCAL_ID = re.compile(r"custom_[a-z0-9][a-z0-9_]{0,55}\Z")
@@ -62,29 +64,48 @@ class LocalPlaylistTemplate:
     ordering: OrderingPolicy = OrderingPolicy.EDITION_AT_DESC
     hidden: bool = False
     portable_id: str | None = None
+    portable_metadata: str | None = None
+    duration_exceptions: tuple[DurationPolicyException, ...] = ()
 
     def __post_init__(self) -> None:
         try:
             portable_id(self.portable_id)
         except ValueError as exc:
             raise LocalPlaylistTemplateError(str(exc)) from exc
+        imported = self.portable_metadata is not None
+        if imported:
+            try:
+                validate_metadata(self.portable_metadata or "")
+            except ValueError as exc:
+                raise LocalPlaylistTemplateError("invalid portable draft provenance") from exc
+            if self.portable_id is None:
+                raise LocalPlaylistTemplateError("imported draft requires portable identity")
+        if self.duration_exceptions and not imported:
+            raise LocalPlaylistTemplateError("exceptions require an imported draft")
+        if (
+            not isinstance(self.duration_exceptions, tuple)
+            or len(self.duration_exceptions) > 100
+            or any(e.source_id not in self.default_source_ids for e in self.duration_exceptions)
+        ):
+            raise LocalPlaylistTemplateError("invalid portable draft exceptions")
         if not isinstance(self.id, str) or _LOCAL_ID.fullmatch(self.id) is None:
             raise LocalPlaylistTemplateError("invalid custom playlist template id")
         if (
             not isinstance(self.display_name, str)
             or not self.display_name.strip()
             or self.display_name != self.display_name.strip()
-            or len(self.display_name) > MAX_LOCAL_TEMPLATE_NAME
+            or len(self.display_name) > (4096 if imported else MAX_LOCAL_TEMPLATE_NAME)
         ):
             raise LocalPlaylistTemplateError("invalid custom playlist name")
-        if (
-            not isinstance(self.description, str)
-            or len(self.description) > MAX_LOCAL_TEMPLATE_DESCRIPTION
+        if not isinstance(self.description, str) or len(self.description) > (
+            65536 if imported else MAX_LOCAL_TEMPLATE_DESCRIPTION
         ):
             raise LocalPlaylistTemplateError("invalid custom playlist description")
         if (
             not isinstance(self.default_source_ids, tuple)
-            or not 1 <= len(self.default_source_ids) <= MAX_LOCAL_TEMPLATE_SOURCES
+            or not 1
+            <= len(self.default_source_ids)
+            <= (100 if imported else MAX_LOCAL_TEMPLATE_SOURCES)
             or any(
                 not isinstance(value, str) or not value.strip() or value != value.strip()
                 for value in self.default_source_ids
@@ -96,7 +117,7 @@ class LocalPlaylistTemplate:
             raise LocalPlaylistTemplateError("invalid custom playlist cover")
         if (
             not isinstance(self.countries, tuple)
-            or len(self.countries) > MAX_LOCAL_TEMPLATE_COUNTRIES
+            or len(self.countries) > (100 if imported else MAX_LOCAL_TEMPLATE_COUNTRIES)
             or any(
                 not isinstance(country, str) or _COUNTRY.fullmatch(country) is None
                 for country in self.countries
@@ -106,7 +127,7 @@ class LocalPlaylistTemplate:
             raise LocalPlaylistTemplateError("invalid custom playlist countries")
         if (
             not isinstance(self.languages, tuple)
-            or len(self.languages) > MAX_LOCAL_TEMPLATE_LANGUAGES
+            or len(self.languages) > (100 if imported else MAX_LOCAL_TEMPLATE_LANGUAGES)
             or any(
                 not isinstance(language, str) or _LANGUAGE.fullmatch(language) is None
                 for language in self.languages
@@ -114,27 +135,35 @@ class LocalPlaylistTemplate:
             or len(self.languages) != len(set(self.languages))
         ):
             raise LocalPlaylistTemplateError("invalid custom playlist languages")
-        if (
-            type(self.retention_hours) is not int
-            or not 1 <= self.retention_hours <= MAX_LOCAL_TEMPLATE_RETENTION_HOURS
+        if type(self.retention_hours) is not int or not 1 <= self.retention_hours <= (
+            2**63 - 1 if imported else MAX_LOCAL_TEMPLATE_RETENTION_HOURS
         ):
             raise LocalPlaylistTemplateError("invalid custom playlist retention")
-        if (
-            type(self.max_episodes) is not int
-            or not 1 <= self.max_episodes <= MAX_LOCAL_TEMPLATE_EPISODES
+        if type(self.max_episodes) is not int or not 1 <= self.max_episodes <= (
+            2**63 - 1 if imported else MAX_LOCAL_TEMPLATE_EPISODES
         ):
             raise LocalPlaylistTemplateError("invalid custom playlist episode limit")
         if (
             type(self.min_duration_seconds) is not int
             or type(self.max_duration_seconds) is not int
-            or not 0 <= self.min_duration_seconds <= MAX_LOCAL_TEMPLATE_DURATION_SECONDS
-            or not 0 <= self.max_duration_seconds <= MAX_LOCAL_TEMPLATE_DURATION_SECONDS
+            or not 0
+            <= self.min_duration_seconds
+            <= (2**63 - 1 if imported else MAX_LOCAL_TEMPLATE_DURATION_SECONDS)
+            or not 0
+            <= self.max_duration_seconds
+            <= (2**63 - 1 if imported else MAX_LOCAL_TEMPLATE_DURATION_SECONDS)
         ):
             raise LocalPlaylistTemplateError("invalid custom playlist duration")
         try:
             validate_duration_range(self.min_duration_seconds, self.max_duration_seconds)
         except ValueError as exc:
             raise LocalPlaylistTemplateError("invalid custom playlist duration") from exc
+        try:
+            DurationPolicy(
+                self.max_duration_seconds, self.duration_exceptions, self.min_duration_seconds
+            )
+        except ValueError as exc:
+            raise LocalPlaylistTemplateError("invalid portable duration exceptions") from exc
         if self.ordering is not OrderingPolicy.EDITION_AT_DESC:
             raise LocalPlaylistTemplateError("unsupported custom playlist ordering")
         if type(self.hidden) is not bool:
@@ -156,6 +185,7 @@ class LocalPlaylistTemplate:
             duration_policy=DurationPolicy(
                 default_min_seconds=self.min_duration_seconds,
                 default_max_seconds=self.max_duration_seconds,
+                exceptions=self.duration_exceptions,
             ),
         )
 

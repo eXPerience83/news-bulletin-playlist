@@ -48,6 +48,7 @@ from news_bulletin_playlist.models import (
     TemporalStrategy,
 )
 from news_bulletin_playlist.portable_identity import new_portable_id, portable_id
+from news_bulletin_playlist.portable_playlist_metadata import exception_payload, parse_exception
 from news_bulletin_playlist.portable_sources import (
     PortableSourceError,
     export_sources,
@@ -60,6 +61,7 @@ _MANAGED_STATE_SCHEMA_VERSION = 6
 _CUSTOM_TEMPLATES_SCHEMA_VERSION = 7
 INSTALLED_SOURCES_SCHEMA_VERSION = 8
 PORTABLE_PLAYLIST_SCHEMA_VERSION = 9
+IMPORTED_PLAYLIST_SCHEMA_VERSION = 10
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
 _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
@@ -501,6 +503,7 @@ def _parse_managed_state_with_version(
         _CUSTOM_TEMPLATES_SCHEMA_VERSION,
         INSTALLED_SOURCES_SCHEMA_VERSION,
         PORTABLE_PLAYLIST_SCHEMA_VERSION,
+        IMPORTED_PLAYLIST_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
             f"unsupported managed-state schema version: {source_schema_version}"
@@ -697,6 +700,7 @@ def serialize_managed_state(
         _CUSTOM_TEMPLATES_SCHEMA_VERSION,
         INSTALLED_SOURCES_SCHEMA_VERSION,
         PORTABLE_PLAYLIST_SCHEMA_VERSION,
+        IMPORTED_PLAYLIST_SCHEMA_VERSION,
     }:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
     if state.schema_version == _MANAGED_STATE_SCHEMA_VERSION and (
@@ -705,6 +709,10 @@ def serialize_managed_state(
         raise ManagedStateError("custom playlist templates require managed-state schema v7")
     _validate_overrides(state.source_overrides, catalog)
     _validate_portable_ids(state)
+    if state.schema_version < IMPORTED_PLAYLIST_SCHEMA_VERSION and any(
+        t.portable_metadata is not None or t.duration_exceptions for t in state.templates
+    ):
+        raise ManagedStateError("Imported playlist data requires explicit schema v10")
     if state.schema_version < INSTALLED_SOURCES_SCHEMA_VERSION and any(
         isinstance(source, InstalledSource) for source in state.sources
     ):
@@ -814,6 +822,9 @@ def _serialize_local_template(
     }
     if schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION:
         result["portable_id"] = item.portable_id
+    if schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION:
+        result["portable_metadata"] = item.portable_metadata
+        result["duration_exceptions"] = [exception_payload(e) for e in item.duration_exceptions]
     return result
 
 
@@ -838,7 +849,12 @@ def _parse_local_template(
             "ordering",
             "hidden",
         }
-        | ({"portable_id"} if source_schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION else set()),
+        | ({"portable_id"} if source_schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION else set())
+        | (
+            {"portable_metadata", "duration_exceptions"}
+            if source_schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION
+            else set()
+        ),
         path,
     )
     source_values = _sequence(
@@ -880,9 +896,23 @@ def _parse_local_template(
             ordering=OrderingPolicy.EDITION_AT_DESC,
             hidden=_boolean(_required(data, "hidden", path), f"{path}.hidden"),
             portable_id=_parse_portable_id(data, path, source_schema_version),
+            portable_metadata=(
+                _string(_required(data, "portable_metadata", path), path)
+                if source_schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION
+                and _required(data, "portable_metadata", path) is not None
+                else None
+            ),
+            duration_exceptions=(
+                tuple(
+                    parse_exception(e)
+                    for e in _sequence(_required(data, "duration_exceptions", path), path)
+                )
+                if source_schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION
+                else ()
+            ),
         )
-    except LocalPlaylistTemplateError as exc:
-        raise ManagedStateError(f"{path}: {exc}") from exc
+    except ValueError, KeyError, TypeError:
+        raise ManagedStateError("Invalid local template fields") from None
 
 
 def _serialize_source(source: ManagedSource) -> dict[str, object]:

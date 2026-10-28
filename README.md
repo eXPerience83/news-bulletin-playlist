@@ -222,8 +222,14 @@ explicit managed-state **v9** compatibility change, then choose **Export portabl
 The ZIP includes exact playlist policies, assigned sources (including disabled ones),
 and the selected JPEG. Downloads are read-only and need no Spotify connection.
 Older images cannot read v9; rollback may require restoring a compatible complete backup.
-A portable ZIP is configuration interchange, not a production backup; ZIP import remains
-separate work. See [the portable ZIP contract and compatibility guide](docs/PORTABILITY.md#portable-playlist-zip-v1-550).
+A portable ZIP is configuration interchange, not a production backup.
+Admin **My playlists → Import playlist ZIP** previews and imports it as a local
+draft, retaining UUID, source capabilities and exact JPEG bytes. New-draft imports
+explicitly adopt **v10** to preserve provenance, legacy policies and exceptions;
+older images cannot read v10. Existing UUIDs are compared after remapping; identical
+content is a no-op and conflicts never overwrite local configuration. Imported drafts
+use an exact-second editor and remain edit/export only, with Spotify activation blocked.
+See [the portable ZIP contract and compatibility guide](docs/PORTABILITY.md#portable-playlist-zip-v1-550).
 
 
 The Add Source flow accepts only a canonical 22-character show ID, `spotify:show:<id>`, or `https://open.spotify.com/show/<id>` (optionally with one `si` share parameter). It extracts the ID locally, then uses known Spotify API endpoints for bounded validation; it never fetches the pasted URL. Inspection remains transient and Create performs fresh validation before saving only the canonical source definition. Safe metadata editing, reversible enable/disable, playlist assignment, and explicit deletion of unreferenced custom sources are available.

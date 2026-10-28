@@ -131,3 +131,11 @@ corrupt or unsafe artwork blocks the download. The archive records only availabl
 provenance; unknown credits/licenses remain null. Inclusion does not grant artwork
 redistribution rights. See [PORTABILITY.md](PORTABILITY.md#portable-playlist-zip-v1-550)
 for identity preparation, compatibility and package fields.
+
+Portable ZIP import verifies and installs JPEGs by hash without recompression,
+including bundled assets from another installation. Canonical publication never
+overwrites existing files; assets are synchronized before the single managed-state
+commit. A failed pre-commit import may leave safe unreferenced artwork for verified
+reuse. No automatic asset deletion occurs. Provenance is retained as inert draft
+metadata; it is not evidence of redistribution rights. See the portability guide
+for explicit v10 adoption, retry/readback and operator recovery requirements.

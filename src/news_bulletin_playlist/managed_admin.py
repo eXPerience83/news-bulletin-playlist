@@ -43,7 +43,13 @@ from news_bulletin_playlist.managed_state import (
     effective_sources,
     template_suspended_by_quarantine,
 )
-from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
+from news_bulletin_playlist.models import (
+    CountryCode,
+    DurationPolicyException,
+    LanguageTag,
+    PlaylistId,
+    SourceId,
+)
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
     SpotifyClient,
@@ -285,9 +291,12 @@ class ManagedAdminService:
         source_ids: Sequence[SourceId | str],
         retention_hours: int,
         max_episodes: int,
-        min_duration_minutes: int,
-        max_duration_minutes: int,
+        min_duration_minutes: int | None = None,
+        max_duration_minutes: int | None = None,
         hidden: bool,
+        min_duration_seconds: int | None = None,
+        max_duration_seconds: int | None = None,
+        duration_exceptions: tuple[DurationPolicyException, ...] | None = None,
         countries: Sequence[str] = (),
         languages: Sequence[str] = (),
     ) -> LocalPlaylistTemplate:
@@ -297,19 +306,28 @@ class ManagedAdminService:
         selected = self._source_ids(
             source_ids, state=state, allow_empty=True, existing=current.default_source_ids
         )
-        lower, upper = _duration_range_candidate(
-            None,
-            None,
-            min_duration_minutes,
-            max_duration_minutes,
-            current_min=current.min_duration_seconds,
-            current_max=current.max_duration_seconds,
-            activating=False,
-        )
+        if current.portable_metadata is not None:
+            if min_duration_seconds is None or max_duration_seconds is None:
+                raise ManagedAdminError("Imported drafts require exact duration seconds")
+            lower, upper = min_duration_seconds, max_duration_seconds
+        else:
+            lower, upper = _duration_range_candidate(
+                None,
+                None,
+                min_duration_minutes,
+                max_duration_minutes,
+                current_min=current.min_duration_seconds,
+                current_max=current.max_duration_seconds,
+                activating=False,
+            )
         updated = replace(
             current,
-            display_name=_playlist_name(display_name),
-            description=_playlist_description(description),
+            display_name=display_name
+            if current.portable_metadata is not None
+            else _playlist_name(display_name),
+            description=description
+            if current.portable_metadata is not None
+            else _playlist_description(description),
             cover_id=self._cover_id(cover_id),
             default_source_ids=selected,
             retention_hours=retention_hours,
@@ -319,6 +337,9 @@ class ManagedAdminService:
             countries=tuple(CountryCode(value.strip()) for value in countries),
             languages=tuple(LanguageTag(value.strip()) for value in languages),
             hidden=hidden,
+            duration_exceptions=current.duration_exceptions
+            if duration_exceptions is None
+            else duration_exceptions,
         )
         self._save_validated(
             replace(
@@ -422,6 +443,15 @@ class ManagedAdminService:
             raise ManagedAdminError("unknown installation-owned playlist template")
         return match
 
+    def check_activation_allowed(self, template_id: str) -> None:
+        if any(
+            t.id == template_id and t.portable_metadata is not None
+            for t in self.store.load_readonly().templates
+        ):
+            raise ManagedAdminError(
+                "Imported portable drafts are edit/export only; activation is unavailable"
+            )
+
     def activate(
         self,
         *,
@@ -442,6 +472,10 @@ class ManagedAdminService:
         state = self.store.load()
         template = self._template(template_id, state=state)
         local = next((item for item in state.templates if item.id == template_id), None)
+        if local is not None and local.portable_metadata is not None:
+            raise ManagedAdminError(
+                "Imported portable drafts are edit/export only; activation is unavailable"
+            )
         if local is not None and local.hidden:
             raise ManagedAdminError("hidden custom template cannot be activated")
         if any(playlist.template_id == template.id for playlist in state.playlists):

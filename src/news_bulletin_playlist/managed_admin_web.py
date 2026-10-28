@@ -30,6 +30,7 @@ from news_bulletin_playlist.managed_state import (
     template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
+from news_bulletin_playlist.playlist_import_web import imported_draft_editor
 from news_bulletin_playlist.portable_playlists_web import portable_controls
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
@@ -163,6 +164,7 @@ def render_managed_admin_page(
   </div>
   <p class="muted">Save and edit your own playlist templates here. Draft changes stay under
      /data and do not call Spotify. Publishing a draft will be a separate action.</p>
+  <p><a class="button" href="/admin/playlists/import">Import playlist ZIP</a></p>
   {new_draft}
   <div class="admin-grid">{drafts}</div>
 </section>
@@ -545,13 +547,16 @@ def _custom_draft_card(
     managed: tuple[ManagedPlaylist, ...],
     provisioning_intent: ProvisioningIntent | None,
 ) -> str:
-    fields = _custom_draft_fields(
-        draft,
-        catalog=catalog,
-        sources=sources,
-        custom_source_ids=custom_source_ids,
-        prefix=f"custom-draft-{draft.id}",
-    )
+    if draft.portable_metadata is not None:
+        fields = ""
+    else:
+        fields = _custom_draft_fields(
+            draft,
+            catalog=catalog,
+            sources=sources,
+            custom_source_ids=custom_source_ids,
+            prefix=f"custom-draft-{draft.id}",
+        )
     referenced = any(playlist.template_id == draft.id for playlist in managed) or (
         provisioning_intent is not None and provisioning_intent.template_id == draft.id
     )
@@ -576,7 +581,12 @@ def _custom_draft_card(
     eligible_sources = len(selected_sources) == len(draft.default_source_ids) and all(
         source.enabled for source in selected_sources
     )
-    if referenced:
+    if draft.portable_metadata is not None:
+        publish = (
+            '<p class="notice">Imported portable draft: edit/export only; '
+            "Spotify activation is blocked.</p>"
+        )
+    elif referenced:
         publish = '<p class="muted">This draft already has a managed Spotify destination.</p>'
     elif draft.hidden:
         publish = '<p class="muted">Unhide and save this draft before publishing.</p>'
@@ -612,6 +622,18 @@ def _custom_draft_card(
         target_id=str(draft.id),
         active_on_spotify=False,
     )
+    editor = (
+        imported_draft_editor(draft, csrf_token)
+        if draft.portable_metadata is not None
+        else f"""
+  <form method="post" action="/admin/playlists/templates/update">
+    {_hidden_input("csrf_token", csrf_token)}
+    {_hidden_input("template_id", str(draft.id))}
+    {fields}
+    <button class="button" type="submit">Save draft changes</button>
+  </form>
+"""
+    )
     return f"""
 <article class="card playlist-card">
   <div class="card-head">
@@ -622,12 +644,7 @@ def _custom_draft_card(
       <p class="muted">Local ID: <code>{html.escape(str(draft.id))}</code></p>
     </div>
   </div>
-  <form method="post" action="/admin/playlists/templates/update">
-    {_hidden_input("csrf_token", csrf_token)}
-    {_hidden_input("template_id", str(draft.id))}
-    {fields}
-    <button class="button" type="submit">Save draft changes</button>
-  </form>
+  {editor}
   {portable_controls("draft", str(draft.id), draft.portable_id)}
   {upload_form}
   {publish}
