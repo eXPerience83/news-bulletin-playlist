@@ -47,6 +47,7 @@ from news_bulletin_playlist.models import (
     SourceSelection,
     TemporalStrategy,
 )
+from news_bulletin_playlist.portable_identity import new_portable_id, portable_id
 from news_bulletin_playlist.portable_sources import (
     PortableSourceError,
     export_sources,
@@ -58,6 +59,7 @@ MANAGED_STATE_FILENAME = "managed-state.json"
 _MANAGED_STATE_SCHEMA_VERSION = 6
 _CUSTOM_TEMPLATES_SCHEMA_VERSION = 7
 INSTALLED_SOURCES_SCHEMA_VERSION = 8
+PORTABLE_PLAYLIST_SCHEMA_VERSION = 9
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
 _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
@@ -93,6 +95,7 @@ class ManagedPlaylist:
     max_episodes: int
     max_duration_seconds: int = _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS
     min_duration_seconds: int = 0
+    portable_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -497,6 +500,7 @@ def _parse_managed_state_with_version(
         _MANAGED_STATE_SCHEMA_VERSION,
         _CUSTOM_TEMPLATES_SCHEMA_VERSION,
         INSTALLED_SOURCES_SCHEMA_VERSION,
+        PORTABLE_PLAYLIST_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
             f"unsupported managed-state schema version: {source_schema_version}"
@@ -512,7 +516,7 @@ def _parse_managed_state_with_version(
             "quarantined_templates",
             "installed_sources",
         }
-        if source_schema_version == INSTALLED_SOURCES_SCHEMA_VERSION
+        if source_schema_version >= INSTALLED_SOURCES_SCHEMA_VERSION
         else {
             "schema_version",
             "playlists",
@@ -539,7 +543,7 @@ def _parse_managed_state_with_version(
         if source_schema_version >= 3
         else ()
     )
-    if source_schema_version == INSTALLED_SOURCES_SCHEMA_VERSION:
+    if source_schema_version >= INSTALLED_SOURCES_SCHEMA_VERSION:
         document = _required(root, "installed_sources", "managed state")
         if document is not None:
             try:
@@ -619,7 +623,9 @@ def _parse_managed_state_with_version(
         raw_templates = _sequence(_required(root, "templates", "managed state"), "templates")
         for index, raw in enumerate(raw_templates):
             try:
-                draft = _parse_local_template(raw, f"templates[{index}]")
+                draft = _parse_local_template(
+                    raw, f"templates[{index}]", source_schema_version=source_schema_version
+                )
                 effective_playlist_templates(catalog, (draft,), sources=source_definitions)
             except ManagedStateError, LocalPlaylistTemplateError:
                 quarantined.append(_quarantined(raw, index, "invalid_definition"))
@@ -661,7 +667,11 @@ def _parse_managed_state_with_version(
     for template, index in zip(templates, template_positions, strict=True):
         if id_counts[str(template.id)] > 1:
             quarantined.append(
-                _quarantined(_serialize_local_template(template), index, "duplicate_id")
+                _quarantined(
+                    _serialize_local_template(template, schema_version=source_schema_version),
+                    index,
+                    "duplicate_id",
+                )
             )
         else:
             accepted.append(template)
@@ -675,6 +685,7 @@ def _parse_managed_state_with_version(
         templates=tuple(sorted(accepted, key=lambda item: str(item.id))),
         quarantined_templates=tuple(quarantined),
     )
+    _validate_portable_ids(state)
     return state, migrated_from
 
 
@@ -685,6 +696,7 @@ def serialize_managed_state(
         _MANAGED_STATE_SCHEMA_VERSION,
         _CUSTOM_TEMPLATES_SCHEMA_VERSION,
         INSTALLED_SOURCES_SCHEMA_VERSION,
+        PORTABLE_PLAYLIST_SCHEMA_VERSION,
     }:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
     if state.schema_version == _MANAGED_STATE_SCHEMA_VERSION and (
@@ -692,6 +704,7 @@ def serialize_managed_state(
     ):
         raise ManagedStateError("custom playlist templates require managed-state schema v7")
     _validate_overrides(state.source_overrides, catalog)
+    _validate_portable_ids(state)
     if state.schema_version < INSTALLED_SOURCES_SCHEMA_VERSION and any(
         isinstance(source, InstalledSource) for source in state.sources
     ):
@@ -717,6 +730,8 @@ def serialize_managed_state(
             "max_duration_seconds": playlist.max_duration_seconds,
             "min_duration_seconds": playlist.min_duration_seconds,
         }
+        if state.schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION:
+            item["portable_id"] = playlist.portable_id
         serialized_playlists.append(item)
     sorted_sources = tuple(sorted(state.sources, key=lambda source: str(source.id)))
     payload: dict[str, object] = {
@@ -735,7 +750,7 @@ def serialize_managed_state(
         ],
         "playlists": serialized_playlists,
     }
-    if state.schema_version == INSTALLED_SOURCES_SCHEMA_VERSION:
+    if state.schema_version >= INSTALLED_SOURCES_SCHEMA_VERSION:
         installed = tuple(
             source_definition(item) for item in sorted_sources if isinstance(item, InstalledSource)
         )
@@ -753,7 +768,10 @@ def serialize_managed_state(
             )
         except LocalPlaylistTemplateError as exc:
             raise ManagedStateError(str(exc)) from exc
-        payload["templates"] = [_serialize_local_template(item) for item in sorted_templates]
+        payload["templates"] = [
+            _serialize_local_template(item, schema_version=state.schema_version)
+            for item in sorted_templates
+        ]
         if state.quarantined_templates:
             payload["quarantined_templates"] = [
                 {
@@ -776,8 +794,10 @@ def serialize_managed_state(
     return payload
 
 
-def _serialize_local_template(item: LocalPlaylistTemplate) -> dict[str, object]:
-    return {
+def _serialize_local_template(
+    item: LocalPlaylistTemplate, *, schema_version: int = 7
+) -> dict[str, object]:
+    result: dict[str, object] = {
         "id": str(item.id),
         "display_name": item.display_name,
         "description": item.description,
@@ -792,9 +812,14 @@ def _serialize_local_template(item: LocalPlaylistTemplate) -> dict[str, object]:
         "ordering": item.ordering.value,
         "hidden": item.hidden,
     }
+    if schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION:
+        result["portable_id"] = item.portable_id
+    return result
 
 
-def _parse_local_template(value: object, path: str) -> LocalPlaylistTemplate:
+def _parse_local_template(
+    value: object, path: str, *, source_schema_version: int = 7
+) -> LocalPlaylistTemplate:
     data = _mapping(value, path)
     _known_keys(
         data,
@@ -812,7 +837,8 @@ def _parse_local_template(value: object, path: str) -> LocalPlaylistTemplate:
             "max_duration_seconds",
             "ordering",
             "hidden",
-        },
+        }
+        | ({"portable_id"} if source_schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION else set()),
         path,
     )
     source_values = _sequence(
@@ -853,6 +879,7 @@ def _parse_local_template(value: object, path: str) -> LocalPlaylistTemplate:
             ),
             ordering=OrderingPolicy.EDITION_AT_DESC,
             hidden=_boolean(_required(data, "hidden", path), f"{path}.hidden"),
+            portable_id=_parse_portable_id(data, path, source_schema_version),
         )
     except LocalPlaylistTemplateError as exc:
         raise ManagedStateError(f"{path}: {exc}") from exc
@@ -1010,7 +1037,8 @@ def _parse_playlist(
             "max_episodes",
             "max_duration_seconds",
             "min_duration_seconds",
-        },
+        }
+        | ({"portable_id"} if source_schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION else set()),
         path,
     )
     source_values = _sequence(_required(data, "source_ids", path), f"{path}.source_ids")
@@ -1078,7 +1106,41 @@ def _parse_playlist(
         max_episodes=max_episodes,
         max_duration_seconds=max_duration_seconds,
         min_duration_seconds=min_duration_seconds,
+        portable_id=_parse_portable_id(data, path, source_schema_version),
     )
+
+
+def _parse_portable_id(data: Mapping[str, object], path: str, schema_version: int) -> str | None:
+    if schema_version < PORTABLE_PLAYLIST_SCHEMA_VERSION:
+        return None
+    try:
+        return portable_id(_required(data, "portable_id", path))
+    except ValueError as exc:
+        raise ManagedStateError("Invalid portable playlist identity") from exc
+
+
+def _validate_portable_ids(state: ManagedState) -> None:
+    objects: tuple[ManagedPlaylist | LocalPlaylistTemplate, ...] = (
+        *state.playlists,
+        *state.templates,
+    )
+    try:
+        identities = [portable_id(item.portable_id) for item in objects]
+    except ValueError as exc:
+        raise ManagedStateError("Invalid portable playlist identity") from exc
+    present = [value for value in identities if value is not None]
+    if present and state.schema_version < PORTABLE_PLAYLIST_SCHEMA_VERSION:
+        raise ManagedStateError("Portable playlist identities require explicit schema v9")
+    if len(set(present)) != len(present):
+        raise ManagedStateError("Duplicate portable playlist identity")
+
+
+def allocate_portable_id(state: ManagedState) -> str:
+    objects: tuple[ManagedPlaylist | LocalPlaylistTemplate, ...] = (
+        *state.playlists,
+        *state.templates,
+    )
+    return new_portable_id({item.portable_id for item in objects if item.portable_id is not None})
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

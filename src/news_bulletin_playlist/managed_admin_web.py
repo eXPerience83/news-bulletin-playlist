@@ -30,6 +30,7 @@ from news_bulletin_playlist.managed_state import (
     template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
+from news_bulletin_playlist.portable_playlists_web import portable_controls
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
 from news_bulletin_playlist.web_ui import status_badge
@@ -355,6 +356,7 @@ def _managed_card(
     <button class="button" type="submit">Save playlist</button>
   </form>
   {upload_form}
+  {portable_controls("managed", str(playlist.id), playlist.portable_id)}
   <form method="post" action="/admin/playlists/sync">
     {_hidden_input("csrf_token", csrf_token)}
     {_hidden_input("playlist_id", str(playlist.id))}
@@ -626,6 +628,7 @@ def _custom_draft_card(
     {fields}
     <button class="button" type="submit">Save draft changes</button>
   </form>
+  {portable_controls("draft", str(draft.id), draft.portable_id)}
   {upload_form}
   {publish}
   {delete_control}

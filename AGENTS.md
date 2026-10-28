@@ -110,6 +110,14 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   and every apply rechecks full configuration/pending-provision fingerprints. Reuse-only
   imports never save; only explicit new-source confirmation may opt into v8. On save
   errors read back before claiming a commit or unchanged state; never retry blindly.
+- Portable playlist ZIP v1 exports require persisted per-object UUIDv4 identities in
+  explicit managed-state schema v9. Legacy identity preparation is a separate authenticated,
+  CSRF-protected confirmed mutation with rollback acknowledgement. Never generate identities
+  or migrate on GET/read/startup. Preserve v9 in ordinary saves and source imports. Drafts
+  and managed destinations have distinct identities; edits retain them. Downloads include
+  durable disabled-source assignments and exact selected JPEG bytes under the configuration
+  lock with `load_readonly()`, never provisioning snapshots, provider calls or scheduler wake.
+  Pre-v9 images reject v9; rollback needs a matching complete backup. See `docs/PORTABILITY.md`.
 - One engine can drive multiple playlists, countries and languages.
 - The authoritative production architecture is Spotify-first. Runtime playlist decisions must not
   depend on RSS collection, RSS-native identities, RSS-to-Spotify matching or PENDING/AMBIGUOUS

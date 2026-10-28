@@ -18,6 +18,7 @@ from news_bulletin_playlist.admin_session import SourceImportCapacityError, Sour
 from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetError
 from news_bulletin_playlist.diagnostics import (
     MAX_DIAGNOSTIC_EXPORT_EVENTS,
     DiagnosticEvent,
@@ -49,6 +50,12 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.persistence import PersistenceError
+from news_bulletin_playlist.portable_playlists import (
+    PlaylistExportError,
+    PlaylistExportService,
+    PortableCoverLoader,
+)
+from news_bulletin_playlist.portable_playlists_web import render_identity_confirmation
 from news_bulletin_playlist.portable_sources import PortableSourceError, UnsupportedSourceCapability
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
@@ -122,6 +129,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if parsed.path == "/":
             self._serve_safe_public_status()
             return
+        if parsed.path in {"/admin/playlists/export.zip", "/admin/playlists/portable/prepare"}:
+            self._serve_portable_playlist(parsed.path, parsed.query)
+            return
         if parsed.path == "/admin/sources":
             self._serve_sources(parsed.query)
             return
@@ -174,6 +184,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except ValueError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid request")
             return
+        if path == "/admin/playlists/portable/prepare":
+            self._prepare_portable_playlist()
+            return
         if path in {"/admin/sources/import/preview", "/admin/sources/import/apply"}:
             self._handle_source_import(path)
             return
@@ -200,6 +213,114 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._handle_source_delete()
             return
         super().do_POST()
+
+    def _playlist_export_service(self) -> PlaylistExportService:
+        if self.configuration_synchronization is None:
+            raise PlaylistExportError("Playlist export is unavailable")
+        store = (
+            self.managed_admin_service.store
+            if self.managed_admin_service
+            else ManagedStateStore(self.data_dir / MANAGED_STATE_FILENAME)
+        )
+        return PlaylistExportService(
+            store, self.configuration_synchronization, PortableCoverLoader(self.data_dir)
+        )
+
+    def _serve_portable_playlist(self, path: str, query: str) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        try:
+            if len(query) > 512 or urllib.parse.urlsplit(self.path).fragment:
+                raise ValueError
+            values = urllib.parse.parse_qs(
+                query,
+                strict_parsing=True,
+                keep_blank_values=True,
+                max_num_fields=2,
+                errors="strict",
+            )
+            if set(values) != {"kind", "id"} or any(len(v) != 1 for v in values.values()):
+                raise ValueError
+            kind, object_id = values["kind"][0], values["id"][0]
+            service = self._playlist_export_service()
+            if path.endswith("export.zip"):
+                identity, payload = service.export(kind, object_id)
+                self._reply(
+                    HTTPStatus.OK,
+                    payload,
+                    content_type="application/zip",
+                    extra_headers={
+                        "Content-Disposition": f'attachment; filename="playlist-{identity}-v1.zip"'
+                    },
+                )
+            else:
+                fingerprint, schema, existing_identity = service.preparation(kind, object_id)
+                self._reply(
+                    HTTPStatus.OK,
+                    render_identity_confirmation(
+                        kind,
+                        object_id,
+                        fingerprint,
+                        schema,
+                        existing_identity,
+                        security.issue_csrf_token(),
+                    ),
+                )
+        except PlaylistExportError as exc:
+            self._source_error(HTTPStatus.CONFLICT, str(exc))
+        except ManagedStateError, PortableSourceError, CustomCoverAssetError, OSError:
+            self._source_error(
+                HTTPStatus.CONFLICT, "Playlist configuration or selected cover is unavailable"
+            )
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid playlist export selection")
+
+    def _prepare_portable_playlist(self) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        try:
+            parsed = urllib.parse.urlsplit(self.path)
+            lengths = self.headers.get_all("Content-Length", [])
+            if (
+                parsed.query
+                or parsed.fragment
+                or self.headers.get_all("Transfer-Encoding")
+                or len(lengths) != 1
+                or not re.fullmatch(r"[0-9]{1,4}", lengths[0])
+                or not 0 < int(lengths[0]) <= 4096
+            ):
+                raise ValueError
+            form = self._read_form()
+            token = single_form_value(form, "csrf_token")
+            if not security.consume_csrf_token(token):
+                self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+                return
+            if (
+                set(form) - {"csrf_token", "kind", "id", "fingerprint", "confirm", "ack_v9"}
+                or single_form_value(form, "confirm") != "yes"
+            ):
+                raise ValueError
+            kind, object_id = single_form_value(form, "kind"), single_form_value(form, "id")
+            ack = single_form_value(form, "ack_v9") if "ack_v9" in form else ""
+            if ack not in {"", "yes"}:
+                raise ValueError
+            identity = self._playlist_export_service().prepare(
+                kind, object_id, single_form_value(form, "fingerprint"), acknowledge_v9=ack == "yes"
+            )
+            self._reply(
+                HTTPStatus.OK,
+                render_identity_confirmation(
+                    kind, object_id, "", 9, identity, security.issue_csrf_token()
+                ),
+            )
+        except PlaylistExportError as exc:
+            self._source_error(HTTPStatus.CONFLICT, str(exc))
+        except ManagedStateError, OSError:
+            self._source_error(HTTPStatus.CONFLICT, "Playlist identity preparation is unavailable")
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid identity confirmation")
 
     def _source_error(self, status: HTTPStatus, message: str) -> None:
         self._reply(status, message.encode("utf-8"), content_type="text/plain; charset=utf-8")

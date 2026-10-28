@@ -22,6 +22,7 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
 )
+from news_bulletin_playlist.portable_identity import portable_id
 
 # An explicit namespace makes accidental shadowing of built-in identifiers less likely.
 _LOCAL_ID = re.compile(r"custom_[a-z0-9][a-z0-9_]{0,55}\Z")
@@ -60,8 +61,13 @@ class LocalPlaylistTemplate:
     max_duration_seconds: int = 1800
     ordering: OrderingPolicy = OrderingPolicy.EDITION_AT_DESC
     hidden: bool = False
+    portable_id: str | None = None
 
     def __post_init__(self) -> None:
+        try:
+            portable_id(self.portable_id)
+        except ValueError as exc:
+            raise LocalPlaylistTemplateError(str(exc)) from exc
         if not isinstance(self.id, str) or _LOCAL_ID.fullmatch(self.id) is None:
             raise LocalPlaylistTemplateError("invalid custom playlist template id")
         if (

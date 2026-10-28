@@ -32,11 +32,13 @@ from news_bulletin_playlist.managed_provisioning import (
     ProvisioningState,
 )
 from news_bulletin_playlist.managed_state import (
+    PORTABLE_PLAYLIST_SCHEMA_VERSION,
     ManagedPlaylist,
     ManagedState,
     ManagedStateError,
     ManagedStateStore,
     activate_template,
+    allocate_portable_id,
     compile_engine_config,
     effective_sources,
     template_suspended_by_quarantine,
@@ -250,6 +252,9 @@ class ManagedAdminService:
                 break
         draft = LocalPlaylistTemplate(
             id=generated,
+            portable_id=allocate_portable_id(state)
+            if state.schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION
+            else None,
             display_name=_playlist_name(display_name),
             description=_playlist_description(description),
             cover_id=self._cover_id(cover_id),
@@ -537,6 +542,9 @@ class ManagedAdminService:
         template = self._template(intent.template_id, state=state)
         managed = replace(
             activate_template(template, intent.destination_id),
+            portable_id=allocate_portable_id(state)
+            if state.schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION
+            else None,
             display_name=intent.display_name,
             description=intent.description,
             cover_id=intent.cover_id,

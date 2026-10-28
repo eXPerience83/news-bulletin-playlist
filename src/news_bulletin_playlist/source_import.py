@@ -251,7 +251,7 @@ class SourceImportService:
                 )
         candidate = replace(
             state,
-            schema_version=INSTALLED_SOURCES_SCHEMA_VERSION,
+            schema_version=max(state.schema_version, INSTALLED_SOURCES_SCHEMA_VERSION),
             sources=tuple(sorted((*state.sources, *additions), key=lambda item: item.id)),
         )
         serialize_managed_state(candidate, catalog=self.store.catalog)
