@@ -121,3 +121,13 @@ The public repository URL is now used in generated Spotify description attributi
 the earlier admin-indicator work in [#490](https://github.com/eXPerience83/news-bulletin-playlist/issues/490).
 The existing explicit metadata/cover synchronization contract remains unchanged; existing Spotify
 descriptions are not mass-updated by an application release.
+
+## Portable playlist export
+
+Admin portable ZIP v1 includes the exact selected JPEG bytes, including bundled
+artwork, `custom_default` and uploaded artwork. Export validates bounded local reads,
+SHA256/size and JPEG decoding without recompression or Spotify downloads. Missing,
+corrupt or unsafe artwork blocks the download. The archive records only available
+provenance; unknown credits/licenses remain null. Inclusion does not grant artwork
+redistribution rights. See [PORTABILITY.md](PORTABILITY.md#portable-playlist-zip-v1-550)
+for identity preparation, compatibility and package fields.
