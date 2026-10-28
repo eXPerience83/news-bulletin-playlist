@@ -4,12 +4,13 @@ Decision baseline: 2026-10-27, main
 `5d5256e47b3051e5aa2b5abd3517e080d8276fda`, and the
 [owner's revised priority](https://github.com/eXPerience83/news-bulletin-playlist/issues/542#issuecomment-6447871274).
 
-**Implemented here:** a pure source JSON encoder/decoder with strict validation,
-individual/batch export and lossless definition round trips. Decoding returns data;
-it does **not** install sources, change persistence, or activate anything. No new
-Admin route, CLI, playlist ZIP, import preview/apply or empty-default image is shipped
-by this foundation. The remaining sections are decisions/proposals for later PRs,
-not completed functionality. A portable configuration is not a production backup.
+**Implemented:** a pure source JSON encoder/decoder with strict validation,
+individual/batch export and lossless definition round trips, plus authenticated
+Admin source downloads (#547). Decoding returns data; it does **not** install sources,
+change persistence, or activate anything. CLI, playlist ZIP, import preview/apply and
+empty-default image remain future work. The later import/bundle/migration sections
+are decisions/proposals, not completed functionality. A portable configuration is
+not a production backup.
 
 ## Dependency and risk matrix
 
@@ -119,6 +120,47 @@ newline and sources sorted by show ID then logical ID. No timestamps or host IDs
 make identical exports differ. Classification order is preserved. The current API
 does not install anything, so repeated decoding proves serialization stability,
 **not yet installation idempotence**.
+
+## Authenticated Admin downloads (#547)
+
+On `/admin/sources`, **Export source** accompanies each source's existing actions,
+and **Export all sources** downloads the full effective set, including disabled
+sources. These configuration downloads are separate from **Export all audits**,
+which performs provider-backed diagnostic work.
+
+- GET `/admin/sources/export.json` downloads `sources-v1.json`.
+- GET `/admin/sources/export.json?source_id=ser` downloads `source-ser-v1.json`.
+- Existing Admin session and transport checks apply before reading configuration.
+  GET does not consume a mutation CSRF token; no JavaScript or Spotify connection
+  is needed. Responses use `application/json`, attachment disposition, `no-store`
+  and the existing security headers. Filenames contain only a bounded safe ID.
+- Query length is limited to 512 characters and at most one `source_id` field.
+  Empty, duplicate, malformed or unknown parameters/unsafe IDs return 400; unknown
+  configured source IDs return 404. No query selects all sources.
+- An empty catalogue/state shows an explanation instead of the batch link; a direct
+  batch download returns 409. Codec v1's nonempty requirement remains unchanged.
+  Corrupt/unreadable state or codec incompatibility returns a fixed sanitized 500
+  response, with no attachment or partial JSON. Missing synchronization returns 503.
+
+`source_admin.export_source_configuration` holds the existing configuration lock
+while calling `ManagedStateStore.load_readonly()` exactly once and constructing
+immutable effective definitions. It then calls the existing v1 codec. The read-only
+loader shares path/symlink checks, duplicate-key handling and the legacy parser with
+`load()`, but never saves; older compatible state is upgraded only in memory. Normal
+`load()` still persists its existing legacy migrations. No cycle gate is acquired,
+so this path never reverses the cycle-gate → configuration-lock order.
+
+The handler supplies the managed configuration store/catalogue and synchronization
+directly. Without an OAuth configuration, the runtime has neither source nor managed
+Admin services; the download instead reads the same fixed managed-state path under
+`data_dir` using the built-in catalogue. Constructing that store does not touch disk.
+The download endpoint therefore also works without either Spotify-backed service.
+
+Downloads bypass ordinary service snapshots, provisioning recovery, engine wake,
+OAuth, provider clients, SQLite, diagnostics and request metrics. The existing Sources
+page's provisioning-aware lifecycle is unchanged; this read-only guarantee concerns
+the new download endpoint. Tests compare every synthetic persistent file before/after
+and prohibit the operational calls above, including across legacy and failure paths.
 
 ## Identity and import decisions (not implemented)
 

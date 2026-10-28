@@ -178,21 +178,7 @@ class ManagedStateStore:
         self.path = path
 
     def load(self) -> ManagedState:
-        if self.path.is_symlink():
-            raise ManagedStateError(f"managed state path is not a regular file: {self.path}")
-        if not self.path.exists():
-            return ManagedState()
-        if not self.path.is_file():
-            raise ManagedStateError(f"managed state path is not a regular file: {self.path}")
-        try:
-            payload = json.loads(
-                self.path.read_text(encoding="utf-8"),
-                object_pairs_hook=_unique_object,
-            )
-        except (OSError, json.JSONDecodeError, ManagedStateError) as exc:
-            raise ManagedStateError(f"could not load managed state: {exc}") from exc
-
-        state, migrated_from = _parse_managed_state_with_version(payload)
+        state, migrated_from = self._read()
         if migrated_from is not None:
             try:
                 self.save(state)
@@ -202,6 +188,31 @@ class ManagedStateStore:
                     "original state preserved"
                 ) from exc
         return state
+
+    def load_readonly(self) -> ManagedState:
+        """Validate one file snapshot, upgrading legacy schemas only in memory.
+
+        Callers that coordinate with configuration mutations must hold the existing
+        configuration lock. This method never persists a migration or creates state.
+        """
+        state, _ = self._read()
+        return state
+
+    def _read(self) -> tuple[ManagedState, int | None]:
+        if self.path.is_symlink():
+            raise ManagedStateError(f"managed state path is not a regular file: {self.path}")
+        if not self.path.exists():
+            return ManagedState(), None
+        if not self.path.is_file():
+            raise ManagedStateError(f"managed state path is not a regular file: {self.path}")
+        try:
+            payload = json.loads(
+                self.path.read_text(encoding="utf-8"),
+                object_pairs_hook=_unique_object,
+            )
+        except (OSError, ValueError, RecursionError) as exc:
+            raise ManagedStateError(f"could not load managed state: {exc}") from exc
+        return _parse_managed_state_with_version(payload)
 
     def save(self, state: ManagedState) -> None:
         payload = serialize_managed_state(state)

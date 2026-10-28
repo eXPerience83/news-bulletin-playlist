@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import urllib.parse
 
 from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warning
 from news_bulletin_playlist.catalog import BuiltInCatalog
@@ -39,6 +40,13 @@ def render_sources_page(
 ) -> bytes:
     """Render effective sources, with lifecycle actions only for custom definitions."""
     safe_csrf = html.escape(csrf_token, quote=True)
+    export_control = (
+        '<a class="button" href="/admin/sources/export.json">Export all sources</a>'
+        '<p class="muted">Download portable source configuration, including disabled sources. '
+        "This download does not contact Spotify.</p>"
+        if catalog.sources or state.sources
+        else '<p class="muted">No sources are available to export. Add a source first.</p>'
+    )
     body = "".join(
         (
             render_lan_warning() if lan_mode else "",
@@ -53,6 +61,7 @@ def render_sources_page(
     <p class="section-note">{len(catalog.sources)} built-in, {len(state.sources)} custom sources</p>
   </div>
   <p><a class="button button-primary" href="/admin/sources/new">Add source</a></p>
+  {export_control}
   <form method="post" action="/admin/sources/audits/export">
     <input type="hidden" name="csrf_token" value="{safe_csrf}">
     <button class="button" type="submit">Export all audits</button>
@@ -113,6 +122,8 @@ def _sources_table(
         controls = ""
         safe_id = html.escape(str(source.id), quote=True)
         safe_csrf = html.escape(csrf_token, quote=True)
+        export_query = html.escape(urllib.parse.urlencode({"source_id": source.id}), quote=True)
+        controls += f'<a href="/admin/sources/export.json?{export_query}">Export source</a>'
         controls += (
             '<form method="post" action="/admin/sources/audit">'
             f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'

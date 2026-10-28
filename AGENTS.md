@@ -96,6 +96,8 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   Decoding is not installation. Canonical Spotify show ID governs future deduplication;
   imported provenance/local IDs never authorize overwriting local definitions. See
   `docs/PORTABILITY.md` for the contract and staged #542 migration boundaries.
+  Admin source downloads use `load_readonly()` under the configuration lock; they
+  must not persist legacy migrations, finalize provisioning or require Spotify/OAuth.
 - One engine can drive multiple playlists, countries and languages.
 - The authoritative production architecture is Spotify-first. Runtime playlist decisions must not
   depend on RSS collection, RSS-native identities, RSS-to-Spotify matching or PENDING/AMBIGUOUS
