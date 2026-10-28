@@ -176,8 +176,8 @@ a separately guarded decision. Unknown capabilities mean **unsupported**. A batc
 containing duplicate definitions is invalid, not an implicit conflict resolution.
 
 `SourceImportService` separates domain planning/apply from the HTTP adapters and
-has no provider, OAuth, episode store or scheduler dependency. Preview parses the
-original bounded document through `parse_sources()`, then captures the entire
+has no provider, OAuth, episode store or scheduler dependency. Preview inspects the
+original bounded document through `inspect_sources()` (see below), then captures the entire
 managed configuration, effective definitions, catalogue and pending provision under
 `ConfigurationSynchronization`, using `load_readonly()` and the read-only provision
 journal loader. It does not call any mutating/service snapshot.
@@ -188,8 +188,9 @@ Rows are sorted by canonical show ID. For missing shows, local IDs are always
 shows, compare every `SourceDefinition` field except logical ID, using the IANA key
 for timezone and preserving country/language order. Foreign provenance never grants
 permission. Conflicts support only **keep local** or **cancel**; no replacement.
-Unknown capabilities reject the whole upload with an unsupported result, rather
-than retaining an installable partial batch.
+Well-formed unsupported capabilities appear as inert `unsupported` rows. They never
+participate in reuse or keep-local decisions, even when their show already exists.
+The presence of any unsupported row blocks apply for the entire document.
 
 Apply reloads/replans under the same configuration lock and compares a SHA256
 fingerprint of the immutable full state, effective definitions, image catalogue
@@ -216,13 +217,65 @@ is visible (report the durability error and do not save again); exact prior stat
 means nothing was committed; failed/different readback means uncertain outcome.
 Require a fresh preview before retry, never assert rollback after replacement.
 
+
+### Preview-only compatibility inspection
+
+`inspect_sources(bytes)` is separate from the strict installation decoder
+`parse_sources()`. Both share root decoding, byte/count bounds, duplicate JSON key
+rejection, exact keys/types, canonical source/show identity and metadata validators.
+The inspector validates every capability shape in every row, then rejects duplicate
+logical/show IDs across **all** compatible and incompatible rows. Unknown metadata
+or malformed documents/capabilities still fail the whole preview (400); an earlier
+unsupported capability never masks a later structural error.
+
+Only a **well-formed** unsupported processing contract becomes a diagnostic:
+
+| Valid shape but unavailable contract | Preview reason |
+| --- | --- |
+| Unknown capability ID | Unknown capability |
+| Positive integer capability version other than v1 | Unsupported version |
+| Nonempty parameters object | Unsupported parameters |
+| Known parser/filter missing from the installed registry | Capability not installed |
+
+Each diagnostic carries a fixed category (Parser, Temporal strategy, Public release
+policy or Collection filter) and fixed reason; raw imported capability IDs/parameters
+are not interpolated into messages. Multiple incompatible categories per source are
+reported in a stable order. Metadata, including a printable name and canonical IDs,
+is fully validated even for an unsupported row. Missing capability fields, invalid
+IDs, nonpositive/noninteger versions and parameters of the wrong type remain errors,
+not unsupported rows. Collection filter `null` remains the supported no-filter case.
+
+Compatible inspection records retain the existing `PortableSource` shape and full
+strict validation. An `UnsupportedPortableSource` contains **only** original ID,
+name, canonical show ID and diagnostics. It never constructs a `SourceDefinition`,
+is not a runtime source and has no local installation mapping. It is not a relaxed
+configuration format or permission to execute a capability.
+
+Preview returns HTTP 200 with all rows sorted by show ID, preserving create,
+reuse/identical and conflict results for compatible sources alongside unsupported
+rows. Names/IDs/diagnostics are HTML-escaped. An unsupported row offers no keep-local
+control. A mixed batch shows the entire comparison but prepares no candidate,
+installs nothing and hides Apply/v8-adoption controls. Cancellation still works.
+The session continues to retain the exact original document and configuration
+fingerprint under the same bounded expiry/security rules.
+
+Server enforcement is independent of that presentation: **Apply always calls the
+unchanged strict `parse_sources()` contract on the session's original bytes** before
+reading configuration or saving. Unsupported documents fail with 422, including
+forged confirmations, keep-local decisions, mixed batches and existing-show matches.
+No partial installation, no save, no v8 adoption and no state/provider/scheduler
+side effects occur. `export_sources()` and `serialize_sources()` remain strict;
+inspection diagnostics are not a configuration serialization API.
+
 ### Admin source import flow
 
 - `/admin/sources` links **Import sources** to GET `/admin/sources/import`.
 - POST `/admin/sources/import/preview` accepts exactly one JSON `document` file and
   a one-use CSRF field in multipart form data. Cap HTTP input at 256 KiB + 8192 bytes
   of framing, then cap the document at 256 KiB / 100 sources with the existing
-  codec. Reject missing/duplicate length/type headers, transfer encoding, malformed
+  shared document validators. A well-formed unsupported capability is a visible
+  preview diagnosis (200), while direct apply remains rejected (422). Reject
+  missing/duplicate length/type headers, transfer encoding, malformed
   framing, extra/duplicate fields, unsupported transfer/MIME types and truncation.
   Filenames never become paths or get written to disk.
 - The preview displays every imported definition, comparisons/differences and

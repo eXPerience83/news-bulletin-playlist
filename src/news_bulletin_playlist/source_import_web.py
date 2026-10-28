@@ -10,7 +10,10 @@ from email.parser import BytesParser
 
 from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warning
 from news_bulletin_playlist.models import SourceDefinition
-from news_bulletin_playlist.portable_sources import MAX_SOURCE_DOCUMENT_BYTES
+from news_bulletin_playlist.portable_sources import (
+    MAX_SOURCE_DOCUMENT_BYTES,
+    UnsupportedPortableSource,
+)
 from news_bulletin_playlist.source_import import SourceImportPreview, SourceImportResult
 
 MAX_SOURCE_IMPORT_MULTIPART_BYTES = MAX_SOURCE_DOCUMENT_BYTES + 8192
@@ -117,12 +120,20 @@ def render_source_import_preview(
     rows = []
     for index, row in enumerate(preview.rows):
         source = row.incoming
-        definition = "".join(
-            f"<dt>{esc(field.name)}</dt><dd>{esc(str(getattr(source, field.name)))}</dd>"
-            for field in fields(SourceDefinition)
-            if field.name not in {"id", "external_references"}
-        )
-        details = f"<details><summary>Imported definition</summary><dl>{definition}</dl></details>"
+        if isinstance(source, UnsupportedPortableSource):
+            issues = "".join(
+                f"<li>{esc(issue.category)}: {esc(issue.reason)}</li>" for issue in source.issues
+            )
+            details = f"<ul>{issues}</ul>"
+        else:
+            definition = "".join(
+                f"<dt>{esc(field.name)}</dt><dd>{esc(str(getattr(source, field.name)))}</dd>"
+                for field in fields(SourceDefinition)
+                if field.name not in {"id", "external_references"}
+            )
+            details = (
+                f"<details><summary>Imported definition</summary><dl>{definition}</dl></details>"
+            )
         differences = ""
         if row.local is not None and row.differences:
             changes = "".join(
@@ -137,16 +148,32 @@ def render_source_import_preview(
             )
         rows.append(
             f"<tr><td>{esc(source.display_name)}<br><code>{esc(source.id)}</code>{details}</td>"
-            f"<td><code>{esc(source.external_references[0].external_id)}</code></td>"
-            f"<td>{esc(row.status)}{differences}</td><td><code>{esc(row.local_id)}</code></td></tr>"
+            f"<td><code>{esc(row.spotify_show_id)}</code></td>"
+            f"<td>{esc(row.status)}{differences}</td><td><code>"
+            f"{esc(row.local_id) if row.local_id is not None else 'Not available'}</code></td></tr>"
         )
     acknowledgement = ""
-    if preview.creates and preview.schema_version < 8:
+    if not preview.unsupported and preview.creates and preview.schema_version < 8:
         acknowledgement = """<p class="notice">Creating these sources adopts schema v8.
 Older images cannot
 read v8; rollback may require restoring a compatible pre-v8 backup. A portable JSON export is not
  a complete production backup.</p><label><input type="checkbox" name="ack_v8" value="1" required>
 I understand the schema v8 compatibility and backup requirement.</label>"""
+    if preview.unsupported:
+        confirmation = (
+            '<p class="notice">Apply is blocked: this document contains '
+            f"{preview.unsupported} unsupported source(s). "
+            "No sources from this batch can be installed. "
+            "Use a compatible document or cancel the import.</p>"
+        )
+    else:
+        confirmation = (
+            acknowledgement
+            + """<label>
+<input type="checkbox" name="confirm" value="1" required>Confirm this import</label>
+<p><button class="button button-primary" type="submit" name="action" value="apply">
+Apply import</button></p>"""
+        )
     return _page(
         f'''<h2>Review source import</h2>
 <p>{preview.creates} source(s) to create. Nothing has been installed.</p>
@@ -159,11 +186,7 @@ never authorize overwriting local configuration.</p>
 <th scope="col">Spotify show</th>
 <th scope="col">Comparison</th><th scope="col">Local ID</th></tr></thead>
 <tbody>{"".join(rows)}</tbody></table></div>
-{acknowledgement}<label><input type="checkbox" name="confirm" value="1" required>
-Confirm this import</label>
-<p><button class="button button-primary" type="submit" name="action" value="apply">
-Apply import</button>
-</p></form>
+{confirmation}</form>
 <form method="post" action="/admin/sources/import/apply">
 <input type="hidden" name="csrf_token" value="{esc(csrf_token, quote=True)}">
 <input type="hidden" name="preview_id" value="{esc(preview_id, quote=True)}">
@@ -180,11 +203,14 @@ def render_source_import_result(result: SourceImportResult | None, *, lan_mode: 
             '<p><a href="/admin/sources">Back to sources</a></p>',
             lan_mode=lan_mode,
         )
-    rows = "".join(
-        f"<tr><td><code>{html.escape(row.incoming.id)}</code></td>"
-        f"<td><code>{html.escape(row.local_id)}</code></td><td>{html.escape(row.status)}</td></tr>"
-        for row in result.rows
-    )
+    result_rows = []
+    for row in result.rows:
+        assert row.local_id is not None
+        result_rows.append(
+            f"<tr><td><code>{html.escape(row.incoming.id)}</code></td>"
+            f"<td><code>{html.escape(row.local_id)}</code></td><td>{html.escape(row.status)}</td></tr>"
+        )
+    rows = "".join(result_rows)
     outcome = (
         "No configuration was written."
         if not result.created

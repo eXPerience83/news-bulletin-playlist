@@ -288,7 +288,7 @@ def test_invalid_document_is_rejected_before_configuration_access(
     elif corruption == "version":
         payload["version"] = 2
     elif corruption == "capability":
-        payload["sources"][0]["processing"]["parser"]["id"] = "secret-sentinel"
+        payload["sources"][0]["processing"]["parser"]["version"] = True
     else:
         document = b"\xff"
     if corruption not in {"truncated", "large", "bad_utf8"}:

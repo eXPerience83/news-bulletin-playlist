@@ -22,7 +22,13 @@ from news_bulletin_playlist.managed_state import (
     template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.models import SourceDefinition, SourceId
-from news_bulletin_playlist.portable_sources import PortableSource, parse_sources
+from news_bulletin_playlist.portable_sources import (
+    PortableSource,
+    UnsupportedPortableSource,
+    UnsupportedSourceCapability,
+    inspect_sources,
+    parse_sources,
+)
 
 
 class _Synchronization(Protocol):
@@ -43,11 +49,17 @@ class SourceImportWriteError(SourceImportError):
 
 @dataclass(frozen=True, slots=True)
 class SourceImportRow:
-    incoming: SourceDefinition
-    local_id: SourceId
+    incoming: SourceDefinition | UnsupportedPortableSource
+    local_id: SourceId | None
     status: str
     local: SourceDefinition | None = None
     differences: tuple[str, ...] = ()
+
+    @property
+    def spotify_show_id(self) -> str:
+        if isinstance(self.incoming, UnsupportedPortableSource):
+            return self.incoming.spotify_show_id
+        return self.incoming.external_references[0].external_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +67,10 @@ class SourceImportPreview:
     rows: tuple[SourceImportRow, ...]
     fingerprint: str
     schema_version: int
+
+    @property
+    def unsupported(self) -> int:
+        return sum(row.status == "unsupported" for row in self.rows)
 
     @property
     def creates(self) -> int:
@@ -139,13 +155,23 @@ class SourceImportService:
         self.provisioning = provisioning
 
     def preview(self, document: bytes) -> SourceImportPreview:
-        records = parse_sources(document)
+        inspected = inspect_sources(document)
+        records = tuple(item for item in inspected if isinstance(item, PortableSource))
+        unsupported = tuple(
+            SourceImportRow(item, None, "unsupported")
+            for item in inspected
+            if isinstance(item, UnsupportedPortableSource)
+        )
         with self.synchronization.hold():
             state = self.store.load_readonly()
             pending = self.provisioning.load()
             sources = effective_sources(self.store.catalog, state)
-            rows = _plan(records, sources)
-            if any(row.status == "create" for row in rows):
+            rows = tuple(
+                sorted(
+                    (*_plan(records, sources), *unsupported), key=lambda row: row.spotify_show_id
+                )
+            )
+            if not unsupported and any(row.status == "create" for row in rows):
                 self._candidate(state, rows, pending)
             return SourceImportPreview(
                 rows,
@@ -214,11 +240,15 @@ class SourceImportService:
         rows: tuple[SourceImportRow, ...],
         pending: ProvisioningIntent | None,
     ) -> ManagedState:
-        additions = tuple(
-            InstalledSource.from_definition(replace(row.incoming, id=row.local_id))
-            for row in rows
-            if row.status == "create"
-        )
+        additions = []
+        for row in rows:
+            if isinstance(row.incoming, UnsupportedPortableSource):
+                raise UnsupportedSourceCapability("Unsupported sources cannot be installed")
+            if row.status == "create":
+                assert row.local_id is not None
+                additions.append(
+                    InstalledSource.from_definition(replace(row.incoming, id=row.local_id))
+                )
         candidate = replace(
             state,
             schema_version=INSTALLED_SOURCES_SCHEMA_VERSION,

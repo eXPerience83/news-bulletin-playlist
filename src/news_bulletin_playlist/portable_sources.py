@@ -93,6 +93,38 @@ class PortableSource:
     provenance: str
 
 
+@dataclass(frozen=True, slots=True)
+class UnsupportedCapability:
+    """Allowlisted diagnostic labels, never raw imported capability values."""
+
+    category: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class UnsupportedPortableSource:
+    """Preview identity only; deliberately not an executable SourceDefinition."""
+
+    id: SourceId
+    display_name: str
+    spotify_show_id: str
+    issues: tuple[UnsupportedCapability, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceMetadata:
+    id: SourceId
+    spotify_show_id: str
+    display_name: str
+    provenance: str
+    origin: SourceOrigin
+    editorial_scope: EditorialScope
+    timezone: ZoneInfo
+    countries: tuple[CountryCode, ...]
+    languages: tuple[LanguageTag, ...]
+    enabled: bool
+
+
 def export_sources(
     sources: Sequence[SourceDefinition], *, built_in_ids: Collection[SourceId] = ()
 ) -> bytes:
@@ -133,6 +165,10 @@ def serialize_sources(sources: Sequence[PortableSource]) -> bytes:
 
 def parse_sources(document: bytes) -> tuple[PortableSource, ...]:
     """Validate a complete source document without installing or changing anything."""
+    return _parse_rows(_source_document(document))
+
+
+def _source_document(document: bytes) -> object:
     if not isinstance(document, bytes) or not 0 < len(document) <= MAX_SOURCE_DOCUMENT_BYTES:
         raise PortableSourceError("Expected a UTF-8 source document of at most 256 KiB")
     try:
@@ -146,7 +182,62 @@ def parse_sources(document: bytes) -> tuple[PortableSource, ...]:
         raise PortableSourceError("Unknown source document format")
     if type(root["version"]) is not int or root["version"] != SOURCE_FORMAT_VERSION:
         raise PortableSourceError("Unsupported source document version")
-    return _parse_rows(root["sources"])
+    return root["sources"]
+
+
+def inspect_sources(document: bytes) -> tuple[PortableSource | UnsupportedPortableSource, ...]:
+    """Preview only: validate the whole document and diagnose unsupported capabilities.
+
+    Invalid metadata, shapes/types, identities and duplicates still reject the entire
+    document. Only well-formed unsupported processing contracts become diagnostics.
+    These records cannot authorize installation: apply must always use parse_sources.
+    """
+    rows = _source_rows(_source_document(document))
+    result = tuple(_inspect_source(row) for row in rows)
+    identities = [
+        (item.source.id, item.source.external_references[0].external_id)
+        if isinstance(item, PortableSource)
+        else (item.id, item.spotify_show_id)
+        for item in result
+    ]
+    _unique_identities(identities)
+    return result
+
+
+def _inspect_source(value: object) -> PortableSource | UnsupportedPortableSource:
+    data = _object(value, _SOURCE_KEYS)
+    metadata = _source_metadata(data)
+    processing = _object(data["processing"], _PROCESSING_KEYS)
+    issues: list[UnsupportedCapability] = []
+    for key, category, supported in (
+        ("parser", "Parser", _PARSER_V1),
+        ("temporal_strategy", "Temporal strategy", _TEMPORAL_V1),
+        ("public_release_mode", "Public release policy", _PUBLIC_V1),
+        ("collection_filter", "Collection filter", _FILTER_V1),
+    ):
+        if key == "collection_filter" and processing[key] is None:
+            continue
+        identifier, version, parameters = _capability_shape(processing[key])
+        # Continue validating all remaining capability shapes even after finding an
+        # unsupported one: a later malformed capability must not become a preview row.
+        reason = None
+        if identifier not in supported:
+            reason = "Unknown capability"
+        elif version != 1:
+            reason = "Unsupported version"
+        elif parameters:
+            reason = "Unsupported parameters"
+        elif (key == "parser" and not has_title_parser(identifier)) or (
+            key == "collection_filter" and not has_collection_filter(identifier)
+        ):
+            reason = "Capability not installed"
+        if reason is not None:
+            issues.append(UnsupportedCapability(category, reason))
+    if issues:
+        return UnsupportedPortableSource(
+            metadata.id, metadata.display_name, metadata.spotify_show_id, tuple(issues)
+        )
+    return _parse_source(value)
 
 
 def _source_payload(item: PortableSource) -> dict[str, object]:
@@ -185,19 +276,28 @@ def _capability_payload(identifier: str) -> dict[str, object]:
     return {"id": identifier, "version": 1, "parameters": {}}
 
 
-def _parse_rows(value: object) -> tuple[PortableSource, ...]:
+def _source_rows(value: object) -> list[object]:
     if not isinstance(value, list) or not 1 <= len(value) <= MAX_PORTABLE_SOURCES:
         raise PortableSourceError("Expected between 1 and 100 sources")
-    result = tuple(_parse_source(row) for row in value)
-    ids = [item.source.id for item in result]
-    shows = [item.source.external_references[0].external_id for item in result]
+    return value
+
+
+def _unique_identities(identities: Sequence[tuple[str, str]]) -> None:
+    ids = [identity[0] for identity in identities]
+    shows = [identity[1] for identity in identities]
     if len(set(ids)) != len(ids) or len(set(shows)) != len(shows):
         raise PortableSourceError("Duplicate source logical ID or Spotify show ID")
+
+
+def _parse_rows(value: object) -> tuple[PortableSource, ...]:
+    result = tuple(_parse_source(row) for row in _source_rows(value))
+    _unique_identities(
+        [(item.source.id, item.source.external_references[0].external_id) for item in result]
+    )
     return result
 
 
-def _parse_source(value: object) -> PortableSource:
-    data = _object(value, _SOURCE_KEYS)
+def _source_metadata(data: Mapping[str, object]) -> _SourceMetadata:
     original_id = _text(data["original_id"], 128)
     show_id = _text(data["spotify_show_id"], 22)
     if _ID.fullmatch(original_id) is None or not is_spotify_id(show_id):
@@ -219,6 +319,23 @@ def _parse_source(value: object) -> PortableSource:
         raise PortableSourceError("Invalid source origin, scope or IANA timezone") from None
     countries = tuple(CountryCode(v) for v in _tags(data["countries"], _COUNTRY, minimum=0))
     languages = tuple(LanguageTag(v) for v in _tags(data["languages"], _LANGUAGE, minimum=1))
+    return _SourceMetadata(
+        SourceId(original_id),
+        show_id,
+        name,
+        provenance,
+        origin,
+        scope,
+        timezone,
+        countries,
+        languages,
+        data["enabled"],
+    )
+
+
+def _parse_source(value: object) -> PortableSource:
+    data = _object(value, _SOURCE_KEYS)
+    metadata = _source_metadata(data)
     processing = _object(data["processing"], _PROCESSING_KEYS)
     parser = _capability(processing["parser"], _PARSER_V1)
     temporal = _capability(processing["temporal_strategy"], _TEMPORAL_V1)
@@ -234,32 +351,37 @@ def _parse_source(value: object) -> PortableSource:
         raise UnsupportedSourceCapability("Source processing capability is not installed")
     return PortableSource(
         SourceDefinition(
-            id=SourceId(original_id),
-            display_name=name,
-            origin=origin,
-            countries=countries,
-            languages=languages,
-            timezone=timezone,
-            enabled=data["enabled"],
+            id=metadata.id,
+            display_name=metadata.display_name,
+            origin=metadata.origin,
+            countries=metadata.countries,
+            languages=metadata.languages,
+            timezone=metadata.timezone,
+            enabled=metadata.enabled,
             parser_id=ParserId(parser),
             temporal_strategy=TemporalStrategy(temporal),
             public_release_mode=PublicReleaseMode(public),
             collection_filter_id=filter_id,
-            editorial_scope=scope,
-            external_references=(ExternalReference("spotify", "show", show_id),),
+            editorial_scope=metadata.editorial_scope,
+            external_references=(ExternalReference("spotify", "show", metadata.spotify_show_id),),
         ),
-        provenance,
+        metadata.provenance,
     )
 
 
-def _capability(value: object, supported: frozenset[str]) -> str:
+def _capability_shape(value: object) -> tuple[str, int, dict[str, object]]:
     data = _object(value, {"id", "version", "parameters"})
     identifier = _text(data["id"], 128)
     if type(data["version"]) is not int or data["version"] < 1:
         raise PortableSourceError("Invalid capability version")
     if not isinstance(data["parameters"], dict):
         raise PortableSourceError("Capability parameters must be an object")
-    if identifier not in supported or data["version"] != 1 or data["parameters"]:
+    return identifier, data["version"], data["parameters"]
+
+
+def _capability(value: object, supported: frozenset[str]) -> str:
+    identifier, version, parameters = _capability_shape(value)
+    if identifier not in supported or version != 1 or parameters:
         raise UnsupportedSourceCapability("Unsupported source processing capability or parameters")
     return identifier
 

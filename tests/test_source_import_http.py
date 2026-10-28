@@ -327,13 +327,21 @@ def test_bad_or_oversized_upload_has_no_side_effects(installation, monkeypatch, 
     assert _files(store.path.parent) == before
 
 
-def test_unsupported_capability_returns_sanitized_error(installation, monkeypatch):
+def test_unsupported_capability_is_visible_but_apply_is_rejected(installation, monkeypatch):
     server, cookie, store, service, client, state, page = installation
     _guard(monkeypatch, service)
     payload = json.loads(_document())
     payload["sources"][0]["processing"]["parser"]["id"] = "private-error-sentinel"
+    before = _files(store.path.parent)
     status, _, body = _post(server, cookie, json.dumps(payload).encode(), _csrf(page))
-    assert status == 422 and b"private-error-sentinel" not in body
+    assert status == 200 and b"unsupported" in body and b"Parser: Unknown capability" in body
+    assert b"private-error-sentinel" not in body
+    assert b'value="apply"' not in body
+    assert_valid_admin_html(body.decode())
+    # A forged confirmation cannot bypass the strict installation decoder.
+    status, _, response = _request(server, "POST", ROOT + "/apply", cookie=cookie, form=_form(body))
+    assert status == 422 and b"private-error-sentinel" not in response
+    assert _files(store.path.parent) == before
 
 
 def test_import_escapes_untrusted_names_and_is_available_without_oauth_service(
@@ -445,4 +453,153 @@ def test_preview_capacity_returns_retry_guidance_without_writes(installation, mo
     manager.invalidate_session(occupied[0])
     _, _, page = _request(server, "GET", ROOT, cookie=cookie)
     assert _post(server, cookie, _document(), _csrf(page))[0] == 200
+    assert _files(store.path.parent) == before
+
+
+@pytest.mark.parametrize(
+    "capability", ["parser", "temporal_strategy", "public_release_mode", "collection_filter"]
+)
+@pytest.mark.parametrize("change", ["id", "version", "parameters"])
+def test_preview_diagnoses_each_unsupported_contract_and_blocks_forged_apply(
+    installation, monkeypatch, capability, change
+):
+    server, cookie, store, service, client, state, page = installation
+    before = _files(store.path.parent)
+    _guard(monkeypatch, service)
+    payload = json.loads(_document(display_name="<script>preview-name</script>"))
+    processing = payload["sources"][0]["processing"]
+    if capability == "collection_filter":
+        processing[capability] = {"id": "un_news_es_minutes", "version": 1, "parameters": {}}
+    processing[capability][change] = {
+        "id": "<script>private-capability</script>",
+        "version": 2,
+        "parameters": {"private-parameter": "untrusted-value"},
+    }[change]
+    status, _, body = _post(server, cookie, json.dumps(payload).encode(), _csrf(page))
+    assert status == 200 and b"unsupported" in body and b"Apply is blocked" in body
+    category = {
+        "parser": "Parser",
+        "temporal_strategy": "Temporal strategy",
+        "public_release_mode": "Public release policy",
+        "collection_filter": "Collection filter",
+    }[capability]
+    reason = {
+        "id": "Unknown capability",
+        "version": "Unsupported version",
+        "parameters": "Unsupported parameters",
+    }[change]
+    assert f"{category}: {reason}".encode() in body
+    assert b"foreign_source" in body and ("B" * 22).encode() in body
+    assert b"&lt;script&gt;preview-name&lt;/script&gt;" in body
+    assert b"<script>preview-name</script>" not in body
+    assert b"private-capability" not in body and b"private-parameter" not in body
+    assert b'value="apply"' not in body and b'name="ack_v8"' not in body
+    assert b'name="decision_0"' not in body
+    assert_valid_admin_html(body.decode())
+    form = _form(body)
+    form["decision_0"] = "keep_local"  # no hidden/UI decision can bypass strict apply
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Unsupported apply must fail before local reads")
+
+    monkeypatch.setattr(store, "load_readonly", forbidden)
+    status, _, response = _request(server, "POST", ROOT + "/apply", cookie=cookie, form=form)
+    assert status == 422 and b"private-capability" not in response
+    assert _files(store.path.parent) == before and client.calls == []
+
+
+@pytest.mark.parametrize("category", ["parser", "collection_filter"])
+def test_preview_reports_missing_installed_registry_capability(installation, monkeypatch, category):
+    from news_bulletin_playlist.registry import COLLECTION_FILTERS, TITLE_PARSERS
+
+    server, cookie, store, service, client, state, page = installation
+    # A missing local installed parser makes its state unreadable. Use unchanged
+    # legacy state to isolate the incoming capability's registry availability.
+    store.save(ManagedState())
+    payload = json.loads(_document())
+    if category == "collection_filter":
+        payload["sources"][0]["processing"][category] = {
+            "id": "un_news_es_minutes",
+            "version": 1,
+            "parameters": {},
+        }
+    before = _files(store.path.parent)
+    _guard(monkeypatch, service)
+    monkeypatch.delitem(
+        TITLE_PARSERS if category == "parser" else COLLECTION_FILTERS,
+        "ser" if category == "parser" else "un_news_es_minutes",
+    )
+    status, _, body = _post(server, cookie, json.dumps(payload).encode(), _csrf(page))
+    assert status == 200 and b"Capability not installed" in body
+    assert _request(server, "POST", ROOT + "/apply", cookie=cookie, form=_form(body))[0] == 422
+    assert _files(store.path.parent) == before
+
+
+def test_mixed_preview_renders_all_statuses_and_no_partial_apply(installation, monkeypatch):
+    from test_source_preview_inspection import _mixed_document
+
+    server, cookie, store, service, client, state, page = installation
+    before = _files(store.path.parent)
+    _guard(monkeypatch, service)
+    status, _, body = _post(server, cookie, _mixed_document(), _csrf(page))
+    assert status == 200
+    for status in ("create", "reuse", "identical", "conflict", "unsupported"):
+        assert status.encode() in body
+    assert b'value="apply"' not in body
+    assert_valid_admin_html(body.decode())
+    form = _form(body)
+    form.update({f"decision_{i}": "keep_local" for i in range(5)})
+    assert _request(server, "POST", ROOT + "/apply", cookie=cookie, form=form)[0] == 422
+    assert _files(store.path.parent) == before and client.calls == []
+
+
+def test_multiple_unsupported_rows_remain_deterministic_and_cancellable(installation, monkeypatch):
+    server, cookie, store, service, client, state, page = installation
+    payload = json.loads(_document())
+    second = json.loads(_document())["sources"][0]
+    second.update(original_id="second-source", spotify_show_id="A" * 22)
+    second["processing"]["temporal_strategy"]["version"] = 2
+    payload["sources"][0]["processing"]["parser"]["parameters"] = {"unknown": "value"}
+    payload["sources"].append(second)
+    before = _files(store.path.parent)
+    _guard(monkeypatch, service)
+    status, _, body = _post(server, cookie, json.dumps(payload).encode(), _csrf(page))
+    assert status == 200 and b"2 unsupported source(s)" in body
+    assert body.index(b"second-source") < body.index(b"foreign_source")
+    assert b"Temporal strategy: Unsupported version" in body
+    assert b"Parser: Unsupported parameters" in body
+    form = _form(body)
+    form["action"] = "cancel"
+    form.pop("confirm")
+    assert _request(server, "POST", ROOT + "/apply", cookie=cookie, form=form)[0] == 200
+    assert _files(store.path.parent) == before
+
+
+@pytest.mark.parametrize(
+    "problem", ["metadata", "capability_shape", "duplicate_show", "duplicate_id"]
+)
+def test_unsupported_does_not_mask_invalid_uploaded_batch(installation, monkeypatch, problem):
+    server, cookie, store, service, client, state, page = installation
+    payload = json.loads(_document())
+    payload["sources"][0]["processing"]["parser"]["id"] = "unknown"
+    if problem == "metadata":
+        payload["sources"][0]["enabled"] = "true"
+    elif problem == "capability_shape":
+        payload["sources"][0]["processing"]["public_release_mode"]["version"] = False
+    else:
+        second = json.loads(_document())["sources"][0]
+        if problem == "duplicate_show":
+            second["original_id"] = "other-id"
+        else:
+            second["spotify_show_id"] = "D" * 22
+        payload["sources"].append(second)
+    before = _files(store.path.parent)
+    _guard(monkeypatch, service)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Malformed preview must fail before state reads")
+
+    monkeypatch.setattr(store, "load_readonly", forbidden)
+    status, _, body = _post(server, cookie, json.dumps(payload).encode(), _csrf(page))
+    assert status == 400 and b'value="apply"' not in body
     assert _files(store.path.parent) == before
