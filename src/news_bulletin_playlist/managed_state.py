@@ -47,11 +47,17 @@ from news_bulletin_playlist.models import (
     SourceSelection,
     TemporalStrategy,
 )
+from news_bulletin_playlist.portable_sources import (
+    PortableSourceError,
+    export_sources,
+    parse_sources,
+)
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 MANAGED_STATE_FILENAME = "managed-state.json"
 _MANAGED_STATE_SCHEMA_VERSION = 6
 _CUSTOM_TEMPLATES_SCHEMA_VERSION = 7
+INSTALLED_SOURCES_SCHEMA_VERSION = 8
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
 _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
@@ -103,6 +109,62 @@ class ManagedSource:
     enabled: bool
     temporal_strategy: TemporalStrategy = TemporalStrategy.AUTO
     public_release_mode: PublicReleaseMode = PublicReleaseMode.INSTANT
+
+
+@dataclass(frozen=True, slots=True)
+class InstalledSource(ManagedSource):
+    """Complete supported definition, distinct from restricted manual source intake.
+
+    language remains the primary language for the existing metadata editor; languages
+    stores the complete ordered set and must begin with that primary language.
+    Construction validates through portable v1; it never installs or saves anything.
+    """
+
+    countries: tuple[CountryCode, ...] = ()
+    languages: tuple[LanguageTag, ...] = ()
+
+    @classmethod
+    def from_definition(cls, definition: SourceDefinition) -> InstalledSource:
+        # Reuse the public interchange contract, including installed capability checks.
+        try:
+            validated = parse_sources(export_sources((definition,)))[0].source
+        except PortableSourceError as exc:
+            raise ManagedStateError("Unsupported installed source definition") from exc
+        return cls(
+            id=validated.id,
+            spotify_show_id=validated.external_references[0].external_id,
+            display_name=validated.display_name,
+            origin=validated.origin,
+            language=validated.languages[0],
+            editorial_scope=validated.editorial_scope,
+            timezone=validated.timezone.key,
+            parser_id=validated.parser_id,
+            collection_filter_id=validated.collection_filter_id,
+            enabled=validated.enabled,
+            temporal_strategy=validated.temporal_strategy,
+            public_release_mode=validated.public_release_mode,
+            countries=validated.countries,
+            languages=validated.languages,
+        )
+
+
+def source_definition(source: ManagedSource) -> SourceDefinition:
+    """Reconstruct runtime data without changing any processing capability."""
+    return SourceDefinition(
+        id=source.id,
+        display_name=source.display_name,
+        origin=source.origin,
+        countries=source.countries if isinstance(source, InstalledSource) else (),
+        languages=source.languages if isinstance(source, InstalledSource) else (source.language,),
+        timezone=ZoneInfo(source.timezone),
+        enabled=source.enabled,
+        parser_id=source.parser_id,
+        temporal_strategy=source.temporal_strategy,
+        public_release_mode=source.public_release_mode,
+        collection_filter_id=source.collection_filter_id,
+        editorial_scope=source.editorial_scope,
+        external_references=(ExternalReference("spotify", "show", source.spotify_show_id),),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,8 +236,9 @@ class ManagedState:
 class ManagedStateStore:
     """Load and atomically replace the small installation-owned JSON overlay."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, catalog: BuiltInCatalog = BUILTIN_CATALOG) -> None:
         self.path = path
+        self.catalog = catalog
 
     def load(self) -> ManagedState:
         state, migrated_from = self._read()
@@ -212,10 +275,10 @@ class ManagedStateStore:
             )
         except (OSError, ValueError, RecursionError) as exc:
             raise ManagedStateError(f"could not load managed state: {exc}") from exc
-        return _parse_managed_state_with_version(payload)
+        return _parse_managed_state_with_version(payload, catalog=self.catalog)
 
     def save(self, state: ManagedState) -> None:
-        payload = serialize_managed_state(state)
+        payload = serialize_managed_state(state, catalog=self.catalog)
         document = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         parent = self.path.parent
         parent.mkdir(parents=True, exist_ok=True)
@@ -406,35 +469,21 @@ def effective_sources(catalog: BuiltInCatalog, state: ManagedState) -> tuple[Sou
             raise ManagedStateError(f"{path}.spotify_show_id: conflicts with built-in Spotify show")
         seen_ids.add(managed.id)
         seen_shows.add(managed.spotify_show_id)
-        custom.append(
-            SourceDefinition(
-                id=managed.id,
-                display_name=managed.display_name,
-                origin=managed.origin,
-                countries=(),
-                languages=(managed.language,),
-                timezone=ZoneInfo(managed.timezone),
-                enabled=managed.enabled,
-                parser_id=managed.parser_id,
-                temporal_strategy=managed.temporal_strategy,
-                public_release_mode=managed.public_release_mode,
-                collection_filter_id=managed.collection_filter_id,
-                editorial_scope=managed.editorial_scope,
-                external_references=(
-                    ExternalReference("spotify", "show", managed.spotify_show_id),
-                ),
-            )
-        )
+        custom.append(source_definition(managed))
     return built_ins + tuple(sorted(custom, key=lambda source: str(source.id)))
 
 
-def parse_managed_state(payload: object) -> ManagedState:
+def parse_managed_state(
+    payload: object, *, catalog: BuiltInCatalog = BUILTIN_CATALOG
+) -> ManagedState:
     """Parse current or legacy managed state into the current in-memory schema."""
-    state, _ = _parse_managed_state_with_version(payload)
+    state, _ = _parse_managed_state_with_version(payload, catalog=catalog)
     return state
 
 
-def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, int | None]:
+def _parse_managed_state_with_version(
+    payload: object, *, catalog: BuiltInCatalog = BUILTIN_CATALOG
+) -> tuple[ManagedState, int | None]:
     root = _mapping(payload, "managed state")
     source_schema_version = _integer(
         _required(root, "schema_version", "managed state"), "schema_version"
@@ -447,6 +496,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         5,
         _MANAGED_STATE_SCHEMA_VERSION,
         _CUSTOM_TEMPLATES_SCHEMA_VERSION,
+        INSTALLED_SOURCES_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
             f"unsupported managed-state schema version: {source_schema_version}"
@@ -454,6 +504,16 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     _known_keys(
         root,
         {
+            "schema_version",
+            "playlists",
+            "sources",
+            "source_overrides",
+            "templates",
+            "quarantined_templates",
+            "installed_sources",
+        }
+        if source_schema_version == INSTALLED_SOURCES_SCHEMA_VERSION
+        else {
             "schema_version",
             "playlists",
             "sources",
@@ -479,6 +539,14 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         if source_schema_version >= 3
         else ()
     )
+    if source_schema_version == INSTALLED_SOURCES_SCHEMA_VERSION:
+        document = _required(root, "installed_sources", "managed state")
+        if document is not None:
+            try:
+                records = parse_sources(json.dumps(document, ensure_ascii=False).encode("utf-8"))
+                sources += tuple(InstalledSource.from_definition(item.source) for item in records)
+            except (PortableSourceError, UnicodeError, RecursionError) as exc:
+                raise ManagedStateError("Invalid installed source document") from exc
     overrides = []
     if source_schema_version >= 5:
         for index, value in enumerate(
@@ -494,7 +562,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
                 )
             )
     sorted_overrides = tuple(sorted(overrides, key=lambda item: str(item.source_id)))
-    _validate_overrides(sorted_overrides, BUILTIN_CATALOG)
+    _validate_overrides(sorted_overrides, catalog)
     seen_source_ids: set[SourceId] = set()
     seen_show_ids: set[str] = set()
     for index, source in enumerate(sources):
@@ -541,7 +609,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     )
     sources = tuple(sorted(sources, key=lambda source: str(source.id)))
     source_definitions = effective_sources(
-        BUILTIN_CATALOG,
+        catalog,
         ManagedState(sources=sources, source_overrides=sorted_overrides),
     )
     templates: list[LocalPlaylistTemplate] = []
@@ -552,7 +620,7 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
         for index, raw in enumerate(raw_templates):
             try:
                 draft = _parse_local_template(raw, f"templates[{index}]")
-                effective_playlist_templates(BUILTIN_CATALOG, (draft,), sources=source_definitions)
+                effective_playlist_templates(catalog, (draft,), sources=source_definitions)
             except ManagedStateError, LocalPlaylistTemplateError:
                 quarantined.append(_quarantined(raw, index, "invalid_definition"))
             else:
@@ -610,17 +678,24 @@ def _parse_managed_state_with_version(payload: object) -> tuple[ManagedState, in
     return state, migrated_from
 
 
-def serialize_managed_state(state: ManagedState) -> dict[str, object]:
+def serialize_managed_state(
+    state: ManagedState, *, catalog: BuiltInCatalog = BUILTIN_CATALOG
+) -> dict[str, object]:
     if state.schema_version not in {
         _MANAGED_STATE_SCHEMA_VERSION,
         _CUSTOM_TEMPLATES_SCHEMA_VERSION,
+        INSTALLED_SOURCES_SCHEMA_VERSION,
     }:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
     if state.schema_version == _MANAGED_STATE_SCHEMA_VERSION and (
         state.templates or state.quarantined_templates
     ):
         raise ManagedStateError("custom playlist templates require managed-state schema v7")
-    _validate_overrides(state.source_overrides, BUILTIN_CATALOG)
+    _validate_overrides(state.source_overrides, catalog)
+    if state.schema_version < INSTALLED_SOURCES_SCHEMA_VERSION and any(
+        isinstance(source, InstalledSource) for source in state.sources
+    ):
+        raise ManagedStateError("installed sources require explicit managed-state schema v8")
     for index, source in enumerate(state.sources):
         _validate_source(source, f"sources[{index}]")
     serialized_playlists: list[dict[str, object]] = []
@@ -646,7 +721,11 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
     sorted_sources = tuple(sorted(state.sources, key=lambda source: str(source.id)))
     payload: dict[str, object] = {
         "schema_version": state.schema_version,
-        "sources": [_serialize_source(source) for source in sorted_sources],
+        "sources": [
+            _serialize_source(source)
+            for source in sorted_sources
+            if not isinstance(source, InstalledSource)
+        ],
         "source_overrides": [
             {
                 "source_id": str(item.source_id),
@@ -656,11 +735,21 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
         ],
         "playlists": serialized_playlists,
     }
-    if state.schema_version == _CUSTOM_TEMPLATES_SCHEMA_VERSION:
+    if state.schema_version == INSTALLED_SOURCES_SCHEMA_VERSION:
+        installed = tuple(
+            source_definition(item) for item in sorted_sources if isinstance(item, InstalledSource)
+        )
+        try:
+            payload["installed_sources"] = (
+                json.loads(export_sources(installed)) if installed else None
+            )
+        except PortableSourceError as exc:
+            raise ManagedStateError("Invalid installed source document") from exc
+    if state.schema_version >= _CUSTOM_TEMPLATES_SCHEMA_VERSION:
         sorted_templates = tuple(sorted(state.templates, key=lambda item: str(item.id)))
         try:
             effective_playlist_templates(
-                BUILTIN_CATALOG, sorted_templates, sources=effective_sources(BUILTIN_CATALOG, state)
+                catalog, sorted_templates, sources=effective_sources(catalog, state)
             )
         except LocalPlaylistTemplateError as exc:
             raise ManagedStateError(str(exc)) from exc
@@ -674,7 +763,7 @@ def serialize_managed_state(state: ManagedState) -> dict[str, object]:
                 }
                 for item in state.quarantined_templates
             ]
-    canonical = parse_managed_state(payload)
+    canonical = parse_managed_state(payload, catalog=catalog)
     if canonical != replace(
         state,
         sources=sorted_sources,
@@ -852,6 +941,14 @@ def _parse_source(value: object, path: str, *, source_schema_version: int) -> Ma
 
 
 def _validate_source(source: ManagedSource, path: str) -> None:
+    if isinstance(source, InstalledSource):
+        if not source.languages or source.language != source.languages[0]:
+            raise ManagedStateError("Installed source primary language is inconsistent")
+        try:
+            export_sources((source_definition(source),))
+        except (PortableSourceError, ValueError, TypeError) as exc:
+            raise ManagedStateError("Invalid installed source definition") from exc
+        return
     if not isinstance(source.spotify_show_id, str) or not is_spotify_id(source.spotify_show_id):
         raise ManagedStateError(f"{path}.spotify_show_id: expected a canonical Spotify show ID")
     if source.id != SourceId(f"custom_{source.spotify_show_id}"):

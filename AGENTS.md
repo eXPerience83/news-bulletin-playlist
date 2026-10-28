@@ -98,6 +98,12 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   `docs/PORTABILITY.md` for the contract and staged #542 migration boundaries.
   Admin source downloads use `load_readonly()` under the configuration lock; they
   must not persist legacy migrations, finalize provisioning or require Spotify/OAuth.
+- Installed source definitions use explicit managed-state schema v8 and the portable v1
+  capability contract. Legacy manual `ManagedSource` intake remains restricted; `InstalledSource`
+  persistence does not authorize ordinary Admin creation with specialized parsers/filters.
+  Never silently upgrade v6/v7 to v8 on read/startup/export/save. New drafts preserve an
+  already-v8 schema. Old images cannot read v8: rollback requires a matching data snapshot.
+  See `docs/PORTABILITY.md` for the source representation and compatibility matrix.
 - One engine can drive multiple playlists, countries and languages.
 - The authoritative production architecture is Spotify-first. Runtime playlist decisions must not
   depend on RSS collection, RSS-native identities, RSS-to-Spotify matching or PENDING/AMBIGUOUS

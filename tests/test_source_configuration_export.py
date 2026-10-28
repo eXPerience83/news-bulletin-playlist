@@ -450,3 +450,72 @@ def test_quarantined_draft_is_preserved_and_not_included(installation, monkeypat
     assert len(parse_sources(body)) == 14
     assert b"private-" not in body
     assert _files(store.path.parent) == before
+
+
+def _installed_definition():
+    from news_bulletin_playlist.managed_state import InstalledSource
+    from news_bulletin_playlist.models import ExternalReference
+
+    return InstalledSource.from_definition(
+        replace(
+            BUILTIN_CATALOG.sources[0],
+            id=SourceId("installed_portable_ser"),
+            external_references=(ExternalReference("spotify", "show", "Z" * 22),),
+            countries=(CountryCode("ES"), CountryCode("AR")),
+            languages=(LanguageTag("es-ES"), LanguageTag("en")),
+        )
+    )
+
+
+def test_v8_installed_capabilities_export_over_authenticated_http(installation, monkeypatch):
+    from news_bulletin_playlist.managed_state import source_definition
+
+    server, cookie, store, service, client, state = installation
+    source = _installed_definition()
+    state = replace(state, schema_version=8, sources=(*state.sources, source))
+    store.save(state)
+    before = _files(store.path.parent)
+    _forbid_effects(monkeypatch, service)
+    status, headers, body = _request(
+        server, "GET", EXPORT + "?source_id=" + source.id, cookie=cookie
+    )
+    assert status == HTTPStatus.OK
+    assert headers["Cache-Control"] == "no-store"
+    assert parse_sources(body)[0].source == source_definition(source)
+    assert _files(store.path.parent) == before
+    assert client.calls == []
+
+
+def test_v8_source_http_edit_preserves_languages_countries_and_processing(
+    installation, monkeypatch
+):
+    from test_source_admin_http import _csrf, _update_form
+
+    server, cookie, store, service, client, state = installation
+    source = _installed_definition()
+    store.save(replace(state, schema_version=8, sources=(*state.sources, source)))
+    journal_before = service.provisioning_journal.path.read_bytes()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Metadata edit must not call OAuth or Spotify")
+
+    monkeypatch.setattr(service.auth, "get_access_token", forbidden)
+    monkeypatch.setattr(service, "client_factory", forbidden)
+    status, _, body = _request(
+        server, "GET", "/admin/sources/edit?source_id=" + source.id, cookie=cookie
+    )
+    assert status == HTTPStatus.OK
+    assert b"Additional languages: en; countries: ES, AR" in body
+    assert_valid_admin_html(body.decode("utf-8"))
+    form = {**_update_form(_csrf(body)), "source_id": source.id, "language": "es-MX"}
+    assert _request(server, "POST", "/admin/sources/update", cookie=cookie, form=form)[0] == 303
+    loaded = store.load()
+    revised = next(item for item in loaded.sources if item.id == source.id)
+    assert revised.countries == source.countries
+    assert revised.languages == (LanguageTag("es-MX"), LanguageTag("en"))
+    assert revised.parser_id == source.parser_id
+    assert revised.collection_filter_id == source.collection_filter_id
+    assert loaded.schema_version == 8
+    assert loaded.sources[0] == state.sources[0]
+    assert service.provisioning_journal.path.read_bytes() == journal_before
+    assert client.calls == []

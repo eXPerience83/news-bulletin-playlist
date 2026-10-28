@@ -9,7 +9,12 @@ from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warn
 from news_bulletin_playlist.catalog import BuiltInCatalog
 from news_bulletin_playlist.engine import EngineCycleResult, SourceCycleOutcome
 from news_bulletin_playlist.managed_admin import ManagedAdminSnapshot
-from news_bulletin_playlist.managed_state import ManagedSource, ManagedState, effective_sources
+from news_bulletin_playlist.managed_state import (
+    InstalledSource,
+    ManagedSource,
+    ManagedState,
+    effective_sources,
+)
 from news_bulletin_playlist.models import (
     EditorialScope,
     SourceDefinition,
@@ -221,6 +226,15 @@ def render_edit_source_page(
     def esc(value: object) -> str:
         return html.escape(str(value), quote=True)
 
+    classifications_note = ""
+    if isinstance(source, InstalledSource):
+        classifications_note = (
+            '<p class="muted">Additional languages: '
+            + esc(", ".join(source.languages[1:]) or "none")
+            + "; countries: "
+            + esc(", ".join(source.countries) or "none")
+            + ". These are preserved when saving.</p>"
+        )
     origins = "".join(
         f'<option value="{kind.value}"'
         f"{' selected' if kind is source.origin.kind else ''}>{kind.value.title()}</option>"
@@ -253,7 +267,8 @@ def render_edit_source_page(
     <label>Origin kind <select name="origin_kind">{origins}</select></label>
     <label>Origin code <input name="origin_code" maxlength="12" required
            value="{esc(source.origin.code)}"></label>
-    <label>Language <input name="language" required value="{esc(source.language)}"></label>
+    <label>Primary language <input name="language" required value="{esc(source.language)}"></label>
+    {classifications_note}
     <label>Editorial scope <select name="editorial_scope">{scopes}</select></label>
     {temporal_strategy_selector(source.temporal_strategy)}
     {public_release_selector(source.public_release_mode)}

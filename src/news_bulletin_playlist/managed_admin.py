@@ -264,7 +264,7 @@ class ManagedAdminService:
         self._save_validated(
             replace(
                 state,
-                schema_version=7,
+                schema_version=max(7, state.schema_version),
                 templates=state.templates + (draft,),
             )
         )

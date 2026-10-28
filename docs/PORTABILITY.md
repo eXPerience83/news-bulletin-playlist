@@ -8,7 +8,8 @@ Decision baseline: 2026-10-27, main
 individual/batch export and lossless definition round trips, plus authenticated
 Admin source downloads (#547). Decoding returns data; it does **not** install sources,
 change persistence, or activate anything. CLI, playlist ZIP, import preview/apply and
-empty-default image remain future work. The later import/bundle/migration sections
+empty-default image remain future work. Installed-source persistence is supported through
+explicit schema v8 (#548), without an importer or automatic migration. The later import/bundle/migration sections
 are decisions/proposals, not completed functionality. A portable configuration is
 not a production backup.
 
@@ -21,7 +22,7 @@ This matrix was established before choosing the interchange representation.
 | `catalog.py`: 13 sources, seven templates | Image-owned definitions remain authoritative for built-ins | Keep them intact. Export effective definitions; later examples must be independent from installed copies. |
 | `models.SourceDefinition` | Includes countries and multiple languages, separate origin/scope, timezone, parser, temporal strategy, public mode and filter | Preserve every field, with canonical show identity instead of arbitrary external references. Reuse this immutable domain model for decoded sources. |
 | `managed_state.effective_sources` | Applies public-mode overrides, combines/sorts custom sources and rejects show collisions | Caller supplies one effective snapshot, including disabled sources. Never export only the image defaults when local overrides exist. |
-| `ManagedSource` / `custom_source_policy.py` | Only one language, no countries, `custom_<show>` IDs, only `release_date_title`, no collection filters | **Import blocker**, not a reason to replace specialized parsers. A reviewed persistence change must preserve the larger domain representation before installable round trips can be claimed. |
+| `ManagedSource` / `InstalledSource` / `custom_source_policy.py` | Manual sources retain one language, no countries, `custom_<show>` IDs and restricted processing. Full definitions use the distinct installed representation | Explicit v8 persists complete portable v1 definitions, without widening manual intake. Source import/dedup/apply remains #549. |
 | `registry.py`, `spotify/first_catalogue.py` | Universal temporal inference uses the configured temporal strategy; collection filtering is separate. Parser IDs remain compatibility contracts | Version the installed capabilities explicitly. No dynamic code, arbitrary regex, or dispatch on source identity. Keep AUTO and TITLE/PUBLIC/fallback rules intact. |
 | `ManagedStateStore` | v1–v5 loads can save migrations; v6 remains v6, drafts opt into v7; save uses temp file, fsync, replace, directory fsync | Pure codec receives data, never a store/path. Future read-only export/preview cannot call mutating load paths unchanged. Apply must revalidate under the configuration lock and save the complete candidate once. |
 | `managed_admin.snapshot` / provisioning | Snapshot finalizes a known pending Spotify destination; activation has a separate durable journal | Do not use this snapshot for a side-effect-free portable download/preview. Do not call activation or recovery from import. |
@@ -180,7 +181,9 @@ or portable identity mapping in the same state commit, not a separately committe
 file. Reimport an unchanged document without saves, duplicate sources or activation.
 Do not enable disabled existing sources or remove dormant assignments implicitly.
 
-The current custom-source model cannot persist all portable v1 definitions. Options:
+The legacy manual-source model cannot persist all portable v1 definitions. The
+#548 implementation chooses option 3 below through explicit v8 installed-source
+persistence; source import preview/apply remains unimplemented. Options considered:
 
 1. Replace specialized capabilities with generic ones: rejected, lossy.
 2. Expand only the parser allowlist: insufficient; it still loses countries/multiple
@@ -188,8 +191,81 @@ The current custom-source model cannot persist all portable v1 definitions. Opti
 3. **Recommended:** extend/version installed-source persistence to represent the
    complete domain definition, using the explicit capability contract; migrate
    existing custom records losslessly. Keep ordinary manual intake policy distinct.
-   This needs its own persistence PR before source apply. Unknown capabilities are
-   reported without installing an active source. No new source-specific branching.
+   Implemented below. Unknown capabilities fail closed without rewriting state.
+   No new source-specific branching.
+
+## Installed-source persistence (#548)
+
+`InstalledSource.from_definition(SourceDefinition)` validates a complete definition
+through the existing portable v1 encoder/decoder and returns immutable domain data.
+`source_definition()` reconstructs the exact runtime definition. Neither operation
+reads files, calls Spotify, installs a source, resolves conflicts or activates a
+playlist. `InstalledSource` extends `ManagedSource` so existing reference/lifecycle
+code can handle both without parallel source lists in the runtime model.
+
+The complete ordered `languages` and `countries` tuples are preserved (countries
+may be empty). The inherited `language` is a primary-language alias for the existing
+Admin editor and must equal `languages[0]`; it is not serialized redundantly.
+Metadata editing changes that primary language while preserving additional languages,
+countries and processing. A duplicate resulting language is rejected. Parser,
+filter, identity and timezone remain immutable in that editor. Existing manual
+sources keep their previous representation and validation unchanged.
+
+### Explicit state schema v8
+
+Schema v8 retains all v7 root fields, with these source collections:
+
+- `sources`: unchanged legacy/manual source records, still restricted by
+  `custom_source_policy` and deterministic `custom_<show>` identity.
+- `installed_sources`: a complete **portable source JSON v1 document**, or `null`
+  when there are no full installed records. Its `format`, `version`, capability
+  versions and empty v1 parameters use exactly the existing interchange contract.
+  It inherits the 100-source and 256 KiB envelope bounds. Unsupported IDs/versions,
+  removed registry capabilities and malformed records reject the entire state.
+
+There is no second import schema. The envelope is embedded as JSON, not as an
+escaped string. On disk, installed definitions have local `custom` informational
+provenance; imported/built-in provenance never grants privileges. `ManagedState.sources`
+combines both representations deterministically by logical ID in memory. Duplicate
+logical/show IDs across the two collections fail closed. Existing collisions with
+the image-owned catalogue are still rejected: this PR does not replace built-ins.
+An optional catalogue dependency on parsing/serialization/storage permits isolated
+tests of all 13 original definitions without changing production defaults.
+
+Writing v8 requires a deliberate domain operation to construct a candidate with
+`schema_version=INSTALLED_SOURCES_SCHEMA_VERSION` and save it. Supplying an
+`InstalledSource` in v6/v7 is rejected before writing. No Admin form in #548 opts
+into v8, and ordinary reads, downloads, metadata saves and draft creation never
+upgrade an existing v6/v7 file to v8. #549 must authorize an explicit apply and
+revalidate the entire candidate under the configuration lock before its single save;
+this PR supplies persistence, not that apply operation.
+
+Once explicitly v8, ordinary operations retain v8, including creation of a new
+custom playlist draft. No implicit downgrade occurs when its last installed source
+is removed. Source assignments (including dormant ones), destinations, duration and
+retention settings, overrides, uploaded-cover IDs, drafts and quarantined raw data
+retain existing semantics. The provisioning journal is separate and untouched by
+source serialization/load/save. SQLite, OAuth and history are outside this change.
+
+| Stored state | Read / ordinary save with this implementation | Rollback |
+| --- | --- | --- |
+| v1–v5 | Existing `load()` migrations to v6 remain; `load_readonly()` upgrades only in memory | Existing compatibility contract |
+| v6 | Remains v6; creating a first draft still explicitly opts into v7 | A compatible v6 reader can read it |
+| v7 | Remains v7 | A compatible v7 reader can read it |
+| v8 | Read/load/export do not write; ordinary mutations keep v8 | Old images reject v8; restore a matching pre-v8 data snapshot and compatible image |
+
+Before any future explicit v8 adoption, take an installation backup. Portable exports
+are not rollback backups. Do not edit a version number to downgrade: that would lose
+installed definitions and references. No automatic production migration is included.
+
+The existing temp-file → file fsync → atomic replace → directory fsync save protocol
+is unchanged. Failure before replacement preserves old bytes and removes the temp
+file. Failure after replacement can report an ambiguous durability outcome; recovery
+must read back the complete state, not promise rollback. Tests exercise both points,
+legacy byte preservation, pending journal/quarantine/reference preservation, existing
+HTTP edits/downloads, and real chronology/filter decisions with synthetic catalogues
+for SER, RNE, CNN, RFI, RMF, ONU minutes and the generic custom parser. Network,
+OAuth and real Spotify calls are prohibited in the new domain tests.
 
 ## Playlist bundle direction (not a finalized/shipped ZIP schema)
 
