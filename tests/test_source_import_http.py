@@ -420,3 +420,29 @@ def test_full_hundred_conflict_decisions_fit_existing_confirmation_form_limit(
     form.update({f"decision_{i}": "keep_local" for i in range(100)})
     status, _, result = _request(server, "POST", ROOT + "/apply", cookie=cookie, form=form)
     assert status == 200 and b"No configuration was written" in result
+
+
+def test_preview_capacity_returns_retry_guidance_without_writes(installation, monkeypatch):
+    from news_bulletin_playlist.admin_session import (
+        MAX_SOURCE_IMPORT_PREVIEWS,
+        admin_session_manager_for,
+    )
+
+    server, cookie, store, service, client, state, page = installation
+    manager = admin_session_manager_for(_Handler.admin_security)
+    occupied = []
+    for _ in range(MAX_SOURCE_IMPORT_PREVIEWS):
+        session = manager.create_session()
+        occupied.append(session)
+        manager.stage_source_import(session, _document(), "configuration")
+    before = _files(store.path.parent)
+    _guard(monkeypatch, service)
+    status, _, body = _post(server, cookie, _document(), _csrf(page))
+    assert status == 503
+    assert b"Too many source previews; cancel an existing preview or try later" in body
+    assert _files(store.path.parent) == before
+    # Once a slot is freed, the operator can submit a new preview normally.
+    manager.invalidate_session(occupied[0])
+    _, _, page = _request(server, "GET", ROOT, cookie=cookie)
+    assert _post(server, cookie, _document(), _csrf(page))[0] == 200
+    assert _files(store.path.parent) == before

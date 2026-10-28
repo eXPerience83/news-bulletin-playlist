@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from news_bulletin_playlist import __version__, engine_runtime
-from news_bulletin_playlist.admin_session import SourceInspectionContext
+from news_bulletin_playlist.admin_session import SourceImportCapacityError, SourceInspectionContext
 from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -340,6 +340,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "Source configuration is unavailable. No import was confirmed.",
             )
+        except SourceImportCapacityError as exc:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
         except ValueError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source import request")
 

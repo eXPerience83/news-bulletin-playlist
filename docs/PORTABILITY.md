@@ -231,7 +231,9 @@ Require a fresh preview before retry, never assert rollback after replacement.
 - Keep one exact upload + fingerprint + random preview reference per authenticated
   session. At most eight previews per credential manager (at most 2 MiB raw JSON),
   each expiring after 10 minutes, with replacement/logout/session expiry cleanup.
-  Pending documents never enter logs, files, diagnostics or client hidden fields.
+  Capacity exhaustion returns 503 with guidance to cancel a preview or retry;
+  malformed documents retain their validation errors. Pending documents never enter
+  logs, files, diagnostics or client hidden fields.
 - POST `/admin/sources/import/apply` uses the existing 4 KiB text form, one-use CSRF,
   the session-bound preview reference, per-conflict decisions, explicit confirmation
   and (when needed) v8 acknowledgement. Both session and document must match. The

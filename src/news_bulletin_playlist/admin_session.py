@@ -51,6 +51,10 @@ class SourceImportContext:
     expires_at: datetime
 
 
+class SourceImportCapacityError(ValueError):
+    """The bounded source-preview capacity is exhausted; the operator may retry."""
+
+
 @dataclass(frozen=True, slots=True)
 class SourceInspectionContext:
     """Normalized, ephemeral review binding; never an authorization to persist."""
@@ -143,7 +147,7 @@ class AdminSessionManager:
                 raise ValueError("Source import session is unavailable")
             staged = sum(item.source_import is not None for item in self._sessions.values())
             if session.source_import is None and staged >= MAX_SOURCE_IMPORT_PREVIEWS:
-                raise ValueError(
+                raise SourceImportCapacityError(
                     "Too many source previews; cancel an existing preview or try later"
                 )
             context = SourceImportContext(
