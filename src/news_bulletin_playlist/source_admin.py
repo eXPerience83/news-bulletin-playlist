@@ -37,6 +37,7 @@ from news_bulletin_playlist.models import (
     SourceOriginKind,
     TemporalStrategy,
 )
+from news_bulletin_playlist.portable_sources import export_sources
 from news_bulletin_playlist.source_inspection import (
     InspectionFailure,
     InspectionResponseReason,
@@ -160,6 +161,31 @@ class SourceAuditBatchLimitError(ValueError):
 
 class SourceAuditBatchStateError(ValueError):
     """The effective source set cannot be represented safely in an audit archive."""
+
+
+class NoSourcesToExportError(ValueError):
+    """An empty installation cannot produce a source JSON v1 document."""
+
+
+def export_source_configuration(
+    store: ManagedStateStore,
+    synchronization: _Synchronization,
+    *,
+    catalog: BuiltInCatalog = BUILTIN_CATALOG,
+    source_id: str | None = None,
+) -> bytes:
+    """Export one coherent snapshot using only local configuration dependencies."""
+    with synchronization.hold():
+        state = store.load_readonly()
+        sources = effective_sources(catalog, state)
+        built_in_ids = {source.id for source in catalog.sources}
+    if source_id is not None:
+        sources = tuple(source for source in sources if source.id == source_id)
+        if not sources:
+            raise SourceMutationError("Configured source not found")
+    if not sources:
+        raise NoSourcesToExportError("No sources are available to export")
+    return export_sources(sources, built_in_ids=built_in_ids)
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import os
+import re
 import threading
 import urllib.parse
 from collections.abc import Mapping
@@ -16,6 +17,7 @@ from news_bulletin_playlist import __version__, engine_runtime
 from news_bulletin_playlist.admin_session import SourceInspectionContext
 from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import (
     MAX_DIAGNOSTIC_EXPORT_EVENTS,
     DiagnosticEvent,
@@ -35,9 +37,15 @@ from news_bulletin_playlist.managed_admin_web import (
     single_form_value,
 )
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournalError
-from news_bulletin_playlist.managed_state import ManagedStateError, effective_sources
+from news_bulletin_playlist.managed_state import (
+    MANAGED_STATE_FILENAME,
+    ManagedStateError,
+    ManagedStateStore,
+    effective_sources,
+)
 from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.persistence import PersistenceError
+from news_bulletin_playlist.portable_sources import PortableSourceError
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
@@ -46,9 +54,11 @@ from news_bulletin_playlist.runtime import (
 )
 from news_bulletin_playlist.source_admin import (
     EngineCycleBusyError,
+    NoSourcesToExportError,
     SourceDisableError,
     SourceMutationError,
     SourceReferencedError,
+    export_source_configuration,
 )
 from news_bulletin_playlist.source_admin_web import (
     render_new_source_page,
@@ -97,6 +107,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         if parsed.path == "/admin/sources":
             self._serve_sources(parsed.query)
+            return
+        if parsed.path == "/admin/sources/export.json":
+            self._serve_source_configuration(parsed.query)
             return
         if parsed.path == "/admin/sources/new":
             self._serve_source_new()
@@ -156,6 +169,61 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
 
     def _source_error(self, status: HTTPStatus, message: str) -> None:
         self._reply(status, message.encode("utf-8"), content_type="text/plain; charset=utf-8")
+
+    def _serve_source_configuration(self, query: str) -> None:
+        if self._require_admin() is None:
+            return
+        service = self.managed_admin_service
+        synchronization = self.configuration_synchronization
+        if synchronization is None:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Source export is unavailable")
+            return
+        try:
+            if len(query) > 512:
+                raise ValueError
+            values = urllib.parse.parse_qs(
+                query,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=1,
+                encoding="utf-8",
+                errors="strict",
+            )
+            source_id = None
+            if query:
+                if set(values) != {"source_id"} or len(values["source_id"]) != 1:
+                    raise ValueError
+                source_id = values["source_id"][0]
+                if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", source_id) is None:
+                    raise ValueError
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source export selection")
+            return
+        try:
+            payload = export_source_configuration(
+                service.store
+                if service is not None
+                else ManagedStateStore(self.data_dir / MANAGED_STATE_FILENAME),
+                synchronization,
+                catalog=service.catalog if service is not None else BUILTIN_CATALOG,
+                source_id=source_id,
+            )
+        except SourceMutationError:
+            self._source_error(HTTPStatus.NOT_FOUND, "Configured source not found")
+            return
+        except NoSourcesToExportError:
+            self._source_error(HTTPStatus.CONFLICT, "No sources are available to export")
+            return
+        except ManagedStateError, PortableSourceError, OSError:
+            self._source_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Source export is unavailable")
+            return
+        filename = "sources-v1.json" if source_id is None else f"source-{source_id}-v1.json"
+        self._reply(
+            HTTPStatus.OK,
+            payload,
+            content_type="application/json",
+            extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     def _serve_source_new(self) -> None:
         security = self._require_admin()
