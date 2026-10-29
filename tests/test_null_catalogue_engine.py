@@ -13,13 +13,13 @@ from test_source_refresh_atomic import rows
 
 import news_bulletin_playlist.engine as engine_module
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.engine import EngineRunner
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
-from news_bulletin_playlist.diagnostics import DiagnosticEventStore
-from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
+from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.client import SpotifyApiError
 from news_bulletin_playlist.spotify.first_catalogue import fetch_source_catalogue
 from news_bulletin_playlist.spotify.first_models import RefreshReason
