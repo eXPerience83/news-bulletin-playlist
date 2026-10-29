@@ -323,7 +323,7 @@ def test_mixed_preview_keeps_all_states_and_blocks_every_write(tmp_path, monkeyp
 
     monkeypatch.setattr(service.store, "save", forbidden)
     monkeypatch.setattr(service.store, "load", forbidden)
-    monkeypatch.setattr(service, "_candidate", forbidden)
+    monkeypatch.setattr(service, "build_candidate", forbidden)
     document = _mixed_document()
     preview = service.preview(document)
     assert {row.status for row in preview.rows} == {

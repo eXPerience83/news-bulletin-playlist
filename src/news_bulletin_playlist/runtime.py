@@ -490,7 +490,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             extra_headers={"Location": authorize_url},
         )
 
-    def _read_form(self) -> dict[str, list[str]]:
+    def _read_form(self, *, max_bytes: int = _MAX_FORM_BYTES) -> dict[str, list[str]]:
         content_type = self.headers.get("Content-Type", "").partition(";")[0].strip().lower()
         if content_type != "application/x-www-form-urlencoded":
             raise ValueError("Expected an application/x-www-form-urlencoded form")
@@ -498,9 +498,11 @@ class HealthHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", ""))
         except ValueError as exc:
             raise ValueError("Invalid form length") from exc
-        if length <= 0 or length > _MAX_FORM_BYTES:
+        if length <= 0 or length > max_bytes:
             raise ValueError("Invalid form length")
         payload = self.rfile.read(length)
+        if len(payload) != length:
+            raise ValueError("Incomplete administration form")
         try:
             decoded = payload.decode("utf-8")
             return urllib.parse.parse_qs(

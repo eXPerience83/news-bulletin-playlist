@@ -18,6 +18,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     compile_engine_config,
     effective_sources,
+    same_managed_configuration,
     serialize_managed_state,
     template_suspended_by_quarantine,
 )
@@ -103,7 +104,7 @@ def _differences(left: SourceDefinition, right: SourceDefinition) -> tuple[str, 
     )
 
 
-def _plan(
+def plan_source_import(
     records: tuple[PortableSource, ...], local_sources: tuple[SourceDefinition, ...]
 ) -> tuple[SourceImportRow, ...]:
     by_show = {source.external_references[0].external_id: source for source in local_sources}
@@ -132,7 +133,7 @@ def _plan(
     return tuple(rows)
 
 
-def _fingerprint(
+def source_import_fingerprint(
     state: ManagedState,
     sources: tuple[SourceDefinition, ...],
     pending: ProvisioningIntent | None,
@@ -168,14 +169,15 @@ class SourceImportService:
             sources = effective_sources(self.store.catalog, state)
             rows = tuple(
                 sorted(
-                    (*_plan(records, sources), *unsupported), key=lambda row: row.spotify_show_id
+                    (*plan_source_import(records, sources), *unsupported),
+                    key=lambda row: row.spotify_show_id,
                 )
             )
             if not unsupported and any(row.status == "create" for row in rows):
-                self._candidate(state, rows, pending)
+                self.build_candidate(state, rows, pending)
             return SourceImportPreview(
                 rows,
-                _fingerprint(state, sources, pending, self.store.catalog),
+                source_import_fingerprint(state, sources, pending, self.store.catalog),
                 state.schema_version,
             )
 
@@ -187,8 +189,10 @@ class SourceImportService:
             state = self.store.load_readonly()
             pending = self.provisioning.load()
             sources = effective_sources(self.store.catalog, state)
-            rows = _plan(records, sources)
-            if fingerprint != _fingerprint(state, sources, pending, self.store.catalog):
+            rows = plan_source_import(records, sources)
+            if fingerprint != source_import_fingerprint(
+                state, sources, pending, self.store.catalog
+            ):
                 raise StaleSourceImport(
                     "Configuration or pending activation changed. Upload a new preview."
                 )
@@ -208,7 +212,7 @@ class SourceImportService:
                 raise SourceImportError(
                     "Explicit schema v8 compatibility acknowledgement is required."
                 )
-            candidate = self._candidate(state, rows, pending)
+            candidate = self.build_candidate(state, rows, pending)
             try:
                 self.store.save(candidate)
             except (OSError, ManagedStateError) as exc:
@@ -221,9 +225,9 @@ class SourceImportService:
                         "Import durability is uncertain. Readback failed; "
                         "upload a new preview before retrying."
                     ) from exc
-                if observed == candidate:
+                if same_managed_configuration(observed, candidate, catalog=self.store.catalog):
                     return SourceImportResult(resolved, creates, recovered=True)
-                if observed == state:
+                if same_managed_configuration(observed, state, catalog=self.store.catalog):
                     raise SourceImportWriteError(
                         "Import was not saved; the previous configuration is intact. "
                         "Upload a new preview to retry."
@@ -234,12 +238,16 @@ class SourceImportService:
                 ) from exc
             return SourceImportResult(resolved, creates)
 
-    def _candidate(
+    def build_candidate(
         self,
         state: ManagedState,
         rows: tuple[SourceImportRow, ...],
         pending: ProvisioningIntent | None,
     ) -> ManagedState:
+        """Validate a complete source candidate without loading, saving or provider I/O.
+
+        Playlist import composes its draft into this candidate before one joint save.
+        """
         additions = []
         for row in rows:
             if isinstance(row.incoming, UnsupportedPortableSource):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import os
 import re
@@ -50,7 +51,17 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.persistence import PersistenceError
+from news_bulletin_playlist.playlist_bundle import PlaylistBundleError
+from news_bulletin_playlist.playlist_import import PlaylistImportError, PlaylistImportService
+from news_bulletin_playlist.playlist_import_web import (
+    imported_draft_editor,
+    preview_page,
+    result_page,
+    upload_page,
+)
+from news_bulletin_playlist.portable_playlist_metadata import parse_exception, strict_json
 from news_bulletin_playlist.portable_playlists import (
+    MAX_PLAYLIST_ZIP_BYTES,
     PlaylistExportError,
     PlaylistExportService,
     PortableCoverLoader,
@@ -129,6 +140,54 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if parsed.path == "/":
             self._serve_safe_public_status()
             return
+        if parsed.path == "/admin/playlists/imported/edit":
+            security = self._require_admin()
+            if security is not None:
+                try:
+                    values = urllib.parse.parse_qs(
+                        parsed.query, strict_parsing=True, max_num_fields=1
+                    )
+                    if (
+                        parsed.fragment
+                        or len(parsed.query) > 128
+                        or set(values) != {"id"}
+                        or len(values["id"]) != 1
+                        or re.fullmatch(r"custom_[a-z0-9][a-z0-9_]{0,55}", values["id"][0]) is None
+                    ):
+                        raise ValueError
+                    service = self._source_import_service()
+                    with service.synchronization.hold():
+                        draft = next(
+                            (
+                                t
+                                for t in service.store.load_readonly().templates
+                                if t.id == values["id"][0]
+                            ),
+                            None,
+                        )
+                        if draft is None or draft.portable_metadata is None:
+                            raise ValueError
+                        page = render_admin_shell(
+                            title="Edit imported draft",
+                            active_tab="playlists",
+                            intro="Local portable configuration; activation is blocked.",
+                            body_html=imported_draft_editor(draft, security.issue_csrf_token()),
+                        )
+                    self._reply(HTTPStatus.OK, page)
+                except ValueError, ManagedStateError, OSError:
+                    self._source_error(
+                        HTTPStatus.BAD_REQUEST,
+                        "Imported draft is unavailable or selection is invalid",
+                    )
+            return
+        if parsed.path == "/admin/playlists/import":
+            security = self._require_admin()
+            if security is not None:
+                if parsed.query or parsed.fragment:
+                    self._source_error(HTTPStatus.BAD_REQUEST, "Invalid playlist import request")
+                else:
+                    self._reply(HTTPStatus.OK, upload_page(security.issue_csrf_token()))
+            return
         if parsed.path in {"/admin/playlists/export.zip", "/admin/playlists/portable/prepare"}:
             self._serve_portable_playlist(parsed.path, parsed.query)
             return
@@ -184,6 +243,13 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except ValueError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid request")
             return
+        if path in {
+            "/admin/playlists/import/preview",
+            "/admin/playlists/import/apply",
+            "/admin/playlists/imported/update",
+        }:
+            self._handle_playlist_import(path)
+            return
         if path == "/admin/playlists/portable/prepare":
             self._prepare_portable_playlist()
             return
@@ -213,6 +279,220 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._handle_source_delete()
             return
         super().do_POST()
+
+    def _handle_playlist_import(self, path: str) -> None:
+        security = self._require_admin()
+        if security is None:
+            return
+        try:
+            parsed = urllib.parse.urlsplit(self.path)
+            lengths = self.headers.get_all("Content-Length", [])
+            types = self.headers.get_all("Content-Type", [])
+            if (
+                parsed.query
+                or parsed.fragment
+                or self.headers.get_all("Transfer-Encoding")
+                or len(lengths) != 1
+                or len(types) != 1
+                or re.fullmatch(r"[0-9]{1,9}", lengths[0]) is None
+            ):
+                raise ValueError("Invalid playlist import headers")
+            preview = path.endswith("/preview")
+            edit = path.endswith("/update")
+            limit = MAX_PLAYLIST_ZIP_BYTES + 8192 if preview else 2 * 1024 * 1024 if edit else 4096
+            length = int(lengths[0])
+            if not 0 < length <= limit:
+                self.close_connection = True
+                self._source_error(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Playlist import request exceeds limits"
+                )
+                return
+            source_service = self._source_import_service()
+            service = PlaylistImportService(
+                source_service.store,
+                source_service.synchronization,
+                source_service.provisioning,
+                PortableCoverLoader(self.data_dir),
+            )
+            if preview:
+                body = self.rfile.read(length)
+                if len(body) != length:
+                    raise ValueError("Truncated upload")
+                token, document = parse_source_import_upload(
+                    types[0],
+                    body,
+                    document_limit=MAX_PLAYLIST_ZIP_BYTES,
+                    content_types=frozenset({"application/zip", "application/octet-stream"}),
+                )
+                if not security.consume_csrf_token(token):
+                    self._source_error(
+                        HTTPStatus.FORBIDDEN, "Administration form validation failed"
+                    )
+                    return
+                planned = service.preview(document)
+                staged = security.stage_playlist_import(document, planned.sources.fingerprint)
+                self._reply(
+                    HTTPStatus.OK,
+                    preview_page(planned, staged.preview_id, security.issue_csrf_token()),
+                )
+                return
+            form = self._read_form(max_bytes=limit)
+            if not security.consume_csrf_token(single_form_value(form, "csrf_token")):
+                self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+                return
+            if edit:
+                self._update_imported_draft(source_service, form)
+                self._reply(
+                    HTTPStatus.OK,
+                    render_admin_shell(
+                        title="Draft saved",
+                        active_tab="playlists",
+                        intro="Local configuration saved; Spotify is unchanged.",
+                        body_html='<p><a href="/admin/">Back to playlists</a></p>',
+                    ),
+                )
+                return
+            for name, values in form.items():
+                if len(values) != 1 or (
+                    name not in {"csrf_token", "preview_id", "action", "confirm", "ack_schema"}
+                    and re.fullmatch(r"decision_(?:0|[1-9][0-9]?)", name) is None
+                ):
+                    raise ValueError("Invalid playlist import confirmation")
+            preview_id = single_form_value(form, "preview_id")
+            if re.fullmatch(r"[A-Za-z0-9_-]{20,128}", preview_id) is None:
+                raise ValueError("Invalid preview reference")
+            context = security.take_playlist_import(preview_id)
+            if context is None:
+                raise PlaylistImportError("Preview expired or unavailable; upload a new preview")
+            decisions = {
+                int(k.removeprefix("decision_")): v[0]
+                for k, v in form.items()
+                if k.startswith("decision_")
+            }
+            action = single_form_value(form, "action")
+            if action not in {"apply", "cancel"} or any(
+                v not in {"keep_local", "cancel"} for v in decisions.values()
+            ):
+                raise ValueError("Invalid import decision")
+            if action == "cancel" or "cancel" in decisions.values():
+                self._reply(HTTPStatus.OK, result_page(None))
+                return
+            if form.get("confirm") != ["1"] or form.get("ack_schema", ["0"]) not in (["0"], ["1"]):
+                raise ValueError("Explicit confirmation is required")
+            result = service.apply(
+                context.document,
+                context.fingerprint,
+                keep_local=frozenset(decisions),
+                confirm_schema=form.get("ack_schema") == ["1"],
+            )
+            self._reply(HTTPStatus.OK, result_page(result))
+        except PlaylistBundleError as exc:
+            self._source_error(HTTPStatus.BAD_REQUEST, str(exc) + ". Nothing was installed")
+        except PlaylistImportError as exc:
+            self._source_error(HTTPStatus.CONFLICT, str(exc))
+        except UnsupportedSourceCapability:
+            self._source_error(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "Unsupported capabilities block the entire playlist",
+            )
+        except SourceImportError, ManagedAdminError:
+            self._source_error(
+                HTTPStatus.CONFLICT,
+                "Playlist candidate is incompatible with local references or policy",
+            )
+        except ManagedStateError, ProvisioningJournalError, OSError, CustomCoverAssetError:
+            self._source_error(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "Playlist configuration or artwork persistence is unavailable; "
+                "inspect state before retrying",
+            )
+        except SourceImportCapacityError:
+            self._source_error(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "Too many import previews; cancel one or retry later",
+            )
+        except ValueError, RecursionError, OverflowError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid playlist import or draft fields")
+
+    def _update_imported_draft(
+        self, source_service: SourceImportService, form: Mapping[str, list[str]]
+    ) -> None:
+        allowed = {
+            "csrf_token",
+            "template_id",
+            "fingerprint",
+            "display_name",
+            "description",
+            "source_ids",
+            "countries",
+            "languages",
+            "retention_hours",
+            "max_episodes",
+            "min_seconds",
+            "max_seconds",
+            "exceptions",
+            "cover_id",
+        }
+        if (
+            not allowed <= set(form)
+            or set(form) - allowed - {"hidden"}
+            or any(len(v) != 1 for v in form.values())
+            or form.get("hidden", ["0"]) not in (["0"], ["1"])
+        ):
+            raise ValueError("Invalid imported draft fields")
+        with source_service.synchronization.hold():
+            state = source_service.store.load_readonly()
+            draft = next(
+                (t for t in state.templates if t.id == single_form_value(form, "template_id")), None
+            )
+            if (
+                draft is None
+                or draft.portable_metadata is None
+                or hashlib.sha256(repr(draft).encode()).hexdigest()
+                != single_form_value(form, "fingerprint")
+            ):
+                raise PlaylistImportError("Draft changed or is unavailable; reload before editing")
+
+            def submitted_text(field: str) -> str:
+                supplied = single_form_value(form, field, required=field != "description")
+                current = getattr(draft, field)
+                normalized = supplied.replace("\r\n", "\n").replace("\r", "\n")
+                original = current.replace("\r\n", "\n").replace("\r", "\n")
+                # A browser normalizes textarea newlines even on an unchanged Save.
+                return current if normalized == original else normalized
+
+            raw = strict_json(single_form_value(form, "exceptions").encode("utf-8"))
+            if not isinstance(raw, list) or len(raw) > 100:
+                raise ValueError("Invalid duration exceptions")
+            # This service performs local validation/save only; no operational snapshot.
+            admin = ManagedAdminService(
+                source_service.store,
+                catalog=source_service.store.catalog,
+                cover_loader=PortableCoverLoader(self.data_dir).store.load,
+            )
+            admin.update_local_template(
+                draft.id,
+                display_name=submitted_text("display_name"),
+                description=submitted_text("description"),
+                cover_id=single_form_value(form, "cover_id"),
+                source_ids=single_form_value(form, "source_ids").splitlines(),
+                countries=tuple(
+                    x.strip()
+                    for x in single_form_value(form, "countries", required=False).split(",")
+                    if x.strip()
+                ),
+                languages=tuple(
+                    x.strip()
+                    for x in single_form_value(form, "languages", required=False).split(",")
+                    if x.strip()
+                ),
+                retention_hours=int(single_form_value(form, "retention_hours")),
+                max_episodes=int(single_form_value(form, "max_episodes")),
+                min_duration_seconds=int(single_form_value(form, "min_seconds")),
+                max_duration_seconds=int(single_form_value(form, "max_seconds")),
+                duration_exceptions=tuple(parse_exception(e) for e in raw),
+                hidden=form.get("hidden") == ["1"],
+            )
 
     def _playlist_export_service(self) -> PlaylistExportService:
         if self.configuration_synchronization is None:
@@ -1133,6 +1413,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         service: ManagedAdminService,
         form: Mapping[str, list[str]],
     ) -> str:
+        service.check_activation_allowed(single_form_value(form, "template_id"))
         auth = self.managed_admin_auth
         if auth is None:
             raise ManagedAdminError("Spotify authorization is required to create a playlist")

@@ -9,8 +9,9 @@ individual/batch export and lossless definition round trips, plus authenticated
 Admin source downloads (#547). Decoding returns data; it does **not** install sources,
 change persistence, or activate anything. Authenticated source upload, preview and
 explicit apply are implemented in #549. Playlist ZIP export is implemented in #550.
-CLI, ZIP import and empty-default image remain future work. Installed-source persistence uses explicit schema v8 (#548),
-without automatic migration. ZIP import and clean-image migration remain proposals, not completed functionality. A portable configuration is
+Playlist ZIP preview/import as editable local drafts is implemented in #551.
+CLI and the empty-default image remain future work. Installed-source persistence uses explicit schema v8 (#548),
+without automatic migration. Clean-image migration remains future work. A portable configuration is
 not a production backup.
 
 ## Dependency and risk matrix
@@ -401,8 +402,7 @@ Each managed playlist and local draft has its own nullable `portable_id`, a cano
 lowercase UUIDv4. A draft and its managed destination are separately editable objects
 and therefore have distinct identities. Names, template IDs and Spotify destination
 IDs do not determine identity. UUIDs are generated with OS randomness and checked
-against other accepted local objects. Normal edits retain identity. Future #551 must
-preserve an imported UUID and compare content; matching names do not authorize merging.
+against other accepted local objects. Normal edits retain identity. #551 preserves an imported UUID and compares effective content; matching names do not authorize merging.
 Quarantined drafts remain raw, are not exported, and cannot bypass UUID uniqueness
 when repaired. Identity uniqueness is enforced across all accepted managed/draft records.
 
@@ -413,13 +413,19 @@ are preserved. No sidecar mapping exists. Readers accept v6/v7/v8 unchanged; ord
 reads, startup, source downloads, playlist downloads and ordinary legacy saves never
 adopt v9. Legacy export without identity fails with an explanation.
 
-Only an explicitly confirmed identity preparation may initially adopt v9. Its form
-requires one-use session CSRF, current configuration/catalog/target fingerprint,
-confirmation and (below v9) a separate compatibility acknowledgement. Under the
-configuration lock it re-reads, validates the complete candidate and saves once using
-the existing atomic protocol. Save errors trigger readback: confirmed new state is
-reported as committed, confirmed old state as unchanged, otherwise outcome is uncertain;
-there is no blind retry. Pending provisioning is never finalized by preparation/export.
+Explicit identity preparation may initially adopt v9. The identity preparation
+form requires one-use CSRF, a current configuration/catalog/target fingerprint,
+confirmation and (for states below v9) a separate v9 compatibility acknowledgement.
+Under the configuration lock, identity preparation re-reads, validates the complete
+candidate and saves once using the existing atomic protocol. Save errors trigger
+readback: confirmed new state is reported as committed, confirmed old state as
+unchanged, otherwise outcome is uncertain; there is no blind retry. Pending
+provisioning is never finalized by preparation/export.
+
+Playlist import has its own session-bound form and requires explicit adoption of
+v10 for states below v10 before creating an imported draft. Its separate validation,
+CSRF, fingerprint, confirmation and compatibility rules are documented in the
+**Playlist ZIP import as local drafts (#551)** section below.
 Once v9 is adopted, creation of a new local draft or finalization of an explicitly
 requested managed destination gives that new object a UUID; existing unprepared
 objects still need preparation. Retrying known provisioning preserves the saved UUID.
@@ -477,8 +483,8 @@ Managed objects combine their exact saved name/description/cover/assignment/poli
 with template geography, languages, ordering and applicable duration exceptions.
 An exception applies when its source remains durably assigned (including disabled
 sources) and its ceiling exceeds the managed base ceiling, as in runtime policy.
-Drafts retain all local fields, including hidden status. Current local drafts have
-no exception model, so their exception list is empty. Exports do not use compiled
+Drafts retain all local fields, including hidden status. Ordinary manual drafts export an empty exception list; imported v10 drafts
+export their exact stored exceptions. Exports do not use compiled
 membership, which would drop disabled assignments.
 
 Logical IDs are bounded source-v1-style identifiers (128 characters). Text limits
@@ -486,9 +492,9 @@ are 4096 Unicode characters for names and 65536 for descriptions; policy integer
 are bounded by signed 64-bit maximum; geography/language lists and exceptions by 100.
 These export bounds deliberately exceed editor limits. Values that cannot be represented
 are rejected with a safe explanation, never truncated. Empty assignment exports are
-rejected because source v1 requires at least one definition. #551 must extend draft
-representation explicitly or reject legacy policies it cannot represent; it must not
-round seconds, truncate values or drop exceptions to fit the current editor.
+rejected because source v1 requires at least one definition. #551 uses explicit v10 draft representation for legacy policies and exceptions;
+it rejects unrepresentable values rather than rounding seconds, truncating values
+or dropping exceptions to fit an editor.
 
 All assigned definitions come from `effective_sources()`, including overrides,
 installed specialized capabilities, manual definitions and disabled sources. The
@@ -509,18 +515,166 @@ Spotify, SQLite, scheduler wake or provisioning finalization. Responses are priv
 no-store, have safe UUID-based filenames and existing security headers. They contain
 no destinations, credentials, operational history, journals, diagnostics or host paths.
 
-### Deferred ZIP import (#551)
+## Playlist ZIP import as local drafts (#551)
 
-ZIP parsing, hostile-path/duplicate/bomb validation, UUID/content conflict handling,
-source mapping, editable recipient draft creation and cross-file asset installation
-are not implemented here. The importer must validate the entire package before any
-publication and retain identities and exact configuration. Content-addressed asset
-preparation must use existing atomic storage and define crash recovery; hashes alone
-do not establish trust or grant permission to overwrite local objects.
+Admin **My playlists → Import playlist ZIP** opens the authenticated upload form.
+Submit the ZIP exported by #550, review the playlist/UUID, complete metadata, ordered
+assignments, source definitions, original→local mappings, differences, cover integrity
+and expected result. Every source conflict requires **Keep local** or cancellation.
+The effective comparison uses those local configurations and mapped IDs. Unsupported
+capabilities show inert diagnostics and block the entire document, including forged
+Apply requests. No existing source or playlist is overwritten.
 
-An imported playlist is always an editable local draft. Explicit activation keeps
-using existing #518/#528 provisioning. Do not confuse successful JSON round trips
-with complete, crash-tested cross-file installation.
+Endpoints: GET `/admin/playlists/import`, POST `/admin/playlists/import/preview`,
+POST `/admin/playlists/import/apply`. Upload is bounded to 1 MiB plus 8192 bytes of
+multipart framing. The existing multipart parser and source-row renderer are shared.
+Each upload is held only in the authenticated session, bound to a random preview ID,
+the exact immutable bytes, document kind, expiry (10 minutes), configuration/catalogue
+and pending-provision fingerprint. Source and playlist previews share one slot per
+session and eight slots globally per credential manager (at most 8 MiB of document
+bytes). They cannot be consumed through each other's endpoints. Authentication,
+secure transport, single-use session CSRF, no-store/security headers, strict field
+validation and HTML escaping apply. Cancel/Apply consume the staged document;
+expired, replayed, cross-session and stale confirmations require another preview.
+No files, migrations, provider activity, SQLite or scheduler operations occur in preview.
+
+### Validation of the existing v1 package
+
+The reader never extracts archive paths. It accepts exactly the four ordered entries
+and the normalized stored (uncompressed) ZIP metadata produced by #550: single disk,
+no ZIP64, comments, extras, encryption, data descriptors, prefixes, trailing data,
+symlinks, directories, duplicate/extra names or unsupported flags/versions/modes.
+Central and local headers, offsets, CRC, sizes and filename bytes must agree. Normalized
+fixed dates, Unix regular-file mode 0600 and version 20 are required. Compression
+ratio is exactly 1; other compression methods are rejected before decompression, so
+compressed bombs are not expanded. Reads enforce per-entry and cumulative bounds
+before consuming bytes: 256 KiB manifest, 65-byte manifest digest, 256 KiB sources,
+192 KiB JPEG, 1 MiB archive/expanded budget. Zero/oversized entries are rejected.
+
+Manifest JSON is strict UTF-8 with duplicate keys/nonfinite numbers forbidden and
+exact fields/types/versions at every level. UUIDv4, policy bounds, ordered tags,
+assignments, exception selectors/folds and exact source closure are checked. Image
+path/digest/size, embedded file descriptors and the exact manifest SHA256 must agree.
+Source inspection retains strict source-v1 shapes and metadata; only well-formed
+unsupported capabilities become blocked diagnostic rows. Apply also invokes the
+strict source decoder under the configuration lock. JPEG validation shares the
+exporter's bounded decode (192 KiB, dimensions at most 4096 and 16 million pixels)
+and preserves bytes, including the existing 192-pixel `custom_default`.
+Hashes prove integrity, never authorship or artwork redistribution permission.
+
+### Explicit schema v10: complete imported drafts
+
+v9 cannot represent provenance or duration exceptions without silently changing its
+format. **v10** explicitly adds two required local-template keys:
+
+- `portable_metadata`: null for ordinary manual drafts; otherwise a bounded inert
+  JSON string containing the original logical ID, kind, observational enabled/hidden,
+  original cover ID/origin/SHA256 and `{credit, license, provenance, reference}`.
+  Unknown rights stay null. No provenance value authorizes activation or executable code.
+- `duration_exceptions`: an array using the existing v1 exception fields, including
+  source ID, exact local time/microseconds, fold and maximum seconds.
+
+Imported drafts retain the package UUID; the local logical ID is deterministically
+`custom_<uuid-without-hyphens>` with collision suffixes when necessary. Valid draft
+and managed UUIDs must be globally unique. UUIDs recorded in quarantined raw drafts
+are reserved too: repair those drafts before importing a colliding identity.
+Unknown UUID creates a new draft. Existing UUID plus identical normalized effective
+content is a no-op **without state or artwork writes**, including a matching prepared
+v9 draft. Differences produce a blocked UUID conflict. A managed UUID blocks draft
+creation regardless of display name. Equal names with distinct UUIDs are independent.
+
+Exception comparison explicitly includes the DST fold flag; Python time equality
+alone ignores that flag. Readback compares serialized configuration, including typed
+raw quarantine values, rather than relying on dataclass equality.
+
+Comparison preserves ordered mapped source IDs, metadata, regions/languages, exact
+policies/exceptions, hidden status, JPEG bytes and current attribution. Foreign local
+IDs and observational origin kind/enabled are provenance rather than operational
+identity. Source definitions are compared by the existing show-identity planner;
+keep-local decisions are explicit even on a reuse-only no-op. A managed export's
+`enabled` is recorded only in origin metadata; the recipient is an unactivated draft
+with hidden false. A draft export retains its hidden flag. Original observations
+remain visible in the editor and do not change when editing the new draft.
+
+Imported drafts accept the existing v1 bounds instead of editor truncation: 4096 name
+characters, 65536 description characters, 100 sources/regions/languages/exceptions,
+positive signed-64-bit retention/episode/max-duration values and exact nonnegative
+minimum seconds. Source-v1 bounds remain unchanged. Artwork attribution is bounded
+at 8192 characters per field and 64 KiB encoded provenance overall; unsupported
+provenance or noncanonical/invalid text is rejected, never discarded. Ordinary manual
+draft creation/validation retains its original narrower limits.
+
+The imported-draft editor protects initial textarea newlines and preserves original
+name/description bytes when only browser newline normalization differs. Actual text
+edits use LF line endings; untouched values (including CR/CRLF) remain exact.
+It uses exact second fields, ordered source IDs and strictly
+validated JSON duration exceptions (no expressions, regex or code). It preserves
+exceptions unless explicitly edited; removing a referenced source without adjusting
+its exception fails validation. Large imported text/policy values stay editable via
+a separate authenticated/CSRF/stale-target checked local route,
+POST `/admin/playlists/imported/update`, bounded to 2 MiB. The result links to
+GET `/admin/playlists/imported/edit?id=<local-id>`, a dedicated read-only editor
+that also works when no OAuth/provider-backed Admin services are configured. Origin observations and
+attribution are displayed as escaped inert text. Original attribution is reused on
+re-export only while the JPEG digest matches; replacing artwork retains the original
+provenance record but derives current artwork attribution from the selected asset.
+
+**Imported drafts are edit/export only in this release.** Their activation is blocked
+in the UI, domain service and both HTTP activation handlers before OAuth lookup.
+This deliberately separates representable portable policies from current Spotify
+activation/editor limits. There is no implicit conversion to a managed destination.
+A future reviewed activation policy must handle exact imported values explicitly;
+#551 does not truncate them to make Spotify activation fit.
+
+| On-disk schema | Reads/preview/no-op | Confirmed creation import | Rollback |
+| --- | --- | --- | --- |
+| v6/v7/v8 | Unchanged, no UUID migration | Explicit acknowledgement adopts v10 including v9 identity | Restore a matching complete backup for an older image |
+| v9 | Unchanged; identical existing draft remains v9 | Explicit acknowledgement adopts v10 | Pre-v10 images cannot read v10 |
+| v10 | Remains v10 across all ordinary mutations, source imports and identity preparation | No downgrade; full imported-draft representation | Requires an image supporting v10 or compatible complete backup restoration |
+
+v10 is not written by startup, reads, previews, exports or ordinary legacy editing.
+The operator must explicitly acknowledge v10/backup compatibility during the first
+new-draft import. Root fields, managed destinations, existing sources/overrides,
+quarantines, unrelated drafts and pending-provision journals remain intact.
+
+### Coordinated visibility, durability and recovery
+
+Pure source planning and candidate validation from #549 are reused; source Apply is
+never called. Under `ConfigurationSynchronization`, Apply fully validates the original
+ZIP again, loads state read-only and the pending journal without finalizing it,
+checks the fingerprint, recalculates mappings/conflicts/UUID comparison, constructs
+and validates the complete candidate with sources and draft, then prepares artwork.
+Existing source/show conflicts are never resolved by silent replacement.
+
+`CustomCoverAssetStore.install_canonical()` verifies exact JPEG bytes, writes a private
+exclusive temporary file and fsyncs it, then uses a no-overwrite hard link into the
+content-addressed namespace. Existing assets must pass no-follow/nonblocking regular-file,
+bounded hash/content checks and match byte for byte; corrupt/symlink/nonregular
+objects block import without overwriting them. File/directory/parent fsync precede
+state publication. The owned temporary name is removed; preexisting assets are not
+deleted. Built-in artwork from another image always becomes an uploaded hash-addressed
+local asset, independent of recipient bundled resources.
+
+Only after asset preparation does **one** `ManagedStateStore.save()` publish sources,
+draft, UUID and asset reference atomically. Managed JSON is the visibility point.
+Pre-replace state errors preserve the previous JSON. Post-replace/chmod/directory-fsync
+errors trigger readback: exact candidate means complete state present with a durability
+warning, exact old state means not committed, failed/different readback means uncertain.
+There is no blind retry or claim of full rollback after replacement. Storage health
+must be checked when durability is uncertain.
+
+A crash before JSON commit can leave a safe content-addressed orphan; retries verify,
+reuse and sync it before referencing it. A committed import repeats as a no-op after
+restart. No second journal is needed. Crash-left private temporary files and unrelated
+orphans are ignored by readers; this feature performs no automatic garbage collection.
+Operator cleanup requires separately identifying unreferenced assets/staging files
+from a complete consistent state/backup, never deleting assets merely because import
+failed. Damaged preexisting assets require explicit operator repair, not silent overwrite.
+
+No Spotify destinations, OAuth state, episode histories, SQLite, scheduler or live
+provisioning are mutated. Tests use independent synthetic installations and fake
+catalogue clients, including specialized chronology/filter decisions after remapping.
+No clean-default migration, default removal or deployment is implemented here.
 
 ## Clean image and compatibility strategy (deferred)
 

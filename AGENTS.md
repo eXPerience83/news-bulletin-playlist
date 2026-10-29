@@ -118,6 +118,19 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   durable disabled-source assignments and exact selected JPEG bytes under the configuration
   lock with `load_readonly()`, never provisioning snapshots, provider calls or scheduler wake.
   Pre-v9 images reject v9; rollback needs a matching complete backup. See `docs/PORTABILITY.md`.
+- Portable playlist ZIP import is preview-first and installs only local drafts. Reuse
+  pure source planning, never source Apply (one joint managed-state save only). Under
+  the configuration lock revalidate the exact session-bound ZIP, state/catalog/pending
+  fingerprint, mappings and conflicts; prepare verified byte-preserving content-addressed
+  JPEGs before JSON publication. Never extract ZIP paths, overwrite existing assets,
+  finalize provisioning or call provider/OAuth/SQLite/scheduler. Unknown capabilities
+  block the whole package. UUID/content idempotence is cross draft/managed/quarantine.
+  Imported provenance/exceptions require explicit schema v10 adoption, not a silent v9
+  extension. Reads/exports/previews/legacy saves do not adopt v10; all later mutations
+  preserve it. Pre-v10 images need a matching backup for rollback. Imported drafts keep
+  exact seconds/legacy policies and are edit/export only; activation must be rejected
+  before OAuth. On ambiguous state saves read back once; never retry blindly. Safe
+  unreferenced prepared assets can remain and be verified/reused on a fresh preview.
 - One engine can drive multiple playlists, countries and languages.
 - The authoritative production architecture is Spotify-first. Runtime playlist decisions must not
   depend on RSS collection, RSS-native identities, RSS-to-Spotify matching or PENDING/AMBIGUOUS

@@ -73,6 +73,30 @@ def _canonical_jpeg(raw: bytes) -> bytes:
     raise CustomCoverAssetError("Image cannot fit the Spotify cover-size limit")
 
 
+def validate_canonical_jpeg(data: bytes) -> None:
+    """Verify portable JPEG bytes under decode caps; never transform metadata or pixels."""
+    if (
+        not isinstance(data, bytes)
+        or not 0 < len(data) <= MAX_JPEG_BYTES
+        or not data.startswith(b"\xff\xd8")
+        or not data.endswith(b"\xff\xd9")
+    ):
+        raise CustomCoverAssetError("Invalid canonical JPEG bytes")
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            width, height = image.size
+            if (
+                image.format != "JPEG"
+                or min(width, height) <= 0
+                or max(width, height) > MAX_DIMENSION
+                or width * height > MAX_SOURCE_PIXELS
+            ):
+                raise CustomCoverAssetError("Unsafe canonical JPEG dimensions")
+            image.load()
+    except OSError, ValueError, Image.DecompressionBombError:
+        raise CustomCoverAssetError("Canonical JPEG cannot be decoded safely") from None
+
+
 class CustomCoverAssetStore:
     """Content-addressed owner-only JPEG storage under the /data persistent mount."""
 
@@ -120,6 +144,61 @@ class CustomCoverAssetStore:
                 raise CustomCoverAssetError("Stored custom cover failed integrity verification")
             return data
         finally:
+            os.close(directory)
+
+    def install_canonical(self, jpeg: bytes) -> str:
+        """Durably publish verified exact bytes without overwriting an existing asset.
+
+        Safe orphan files may remain after a failed state commit. A retry verifies and
+        syncs them before referencing them; no new recovery journal or asset GC is used.
+        """
+        from news_bulletin_playlist.file_durability import fsync_directory
+
+        validate_canonical_jpeg(jpeg)
+        cover_id = f"{UPLOAD_COVER_PREFIX}{hashlib.sha256(jpeg).hexdigest()}"
+        directory = self._open_dir(create=True)
+        filename = f"{cover_id}.jpg"
+        temp = f".{secrets.token_hex(16)}.tmp"
+        try:
+            try:
+                fd = os.open(
+                    temp,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=directory,
+                )
+                with os.fdopen(fd, "wb") as output:
+                    output.write(jpeg)
+                    output.flush()
+                    os.fsync(output.fileno())
+                with suppress(FileExistsError):
+                    os.link(
+                        temp,
+                        filename,
+                        src_dir_fd=directory,
+                        dst_dir_fd=directory,
+                        follow_symlinks=False,
+                    )
+                if self.load(cover_id) != jpeg:
+                    raise CustomCoverAssetError("Existing canonical cover content differs")
+                fd = os.open(
+                    filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+                )
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                os.unlink(temp, dir_fd=directory)
+                os.fsync(directory)
+                fsync_directory(self.root.parent)
+                return cover_id
+            except OSError:
+                raise CustomCoverAssetError(
+                    "Canonical cover persistence failed; configuration was not committed"
+                ) from None
+        finally:
+            with suppress(FileNotFoundError):
+                os.unlink(temp, dir_fd=directory)
             os.close(directory)
 
     def save(self, source_bytes: bytes) -> str:

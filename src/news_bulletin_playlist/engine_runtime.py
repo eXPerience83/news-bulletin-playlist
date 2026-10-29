@@ -1077,6 +1077,7 @@ class OperationalHealthHandler(LanAdminHandler):
         service: ManagedAdminService,
         form: Mapping[str, list[str]],
     ) -> str:
+        service.check_activation_allowed(single_form_value(form, "template_id"))
         auth = self.managed_admin_auth
         if auth is None:
             raise ManagedAdminError("Spotify authorization is required to create a playlist")

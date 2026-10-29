@@ -14,14 +14,12 @@ from pathlib import Path
 from typing import Protocol
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
-from PIL import Image
-
 from news_bulletin_playlist.custom_cover_assets import (
-    MAX_DIMENSION,
     MAX_JPEG_BYTES,
-    MAX_SOURCE_PIXELS,
+    CustomCoverAssetError,
     CustomCoverAssetStore,
     is_uploaded_cover_id,
+    validate_canonical_jpeg,
 )
 from news_bulletin_playlist.custom_playlist_templates import (
     LocalPlaylistTemplate,
@@ -35,6 +33,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     allocate_portable_id,
     effective_sources,
+    same_managed_configuration,
     serialize_managed_state,
     template_suspended_by_quarantine,
 )
@@ -126,24 +125,9 @@ class PortableCoverLoader:
             data = self._bundled(cover_id)
         else:
             raise PlaylistExportError("Selected cover is not a supported local asset")
-        if (
-            not 0 < len(data) <= MAX_JPEG_BYTES
-            or not data.startswith(b"\xff\xd8")
-            or not data.endswith(b"\xff\xd9")
-        ):
-            raise PlaylistExportError("Selected cover failed JPEG integrity verification")
         try:
-            with Image.open(io.BytesIO(data)) as image:
-                width, height = image.size
-                if (
-                    image.format != "JPEG"
-                    or min(width, height) <= 0
-                    or max(width, height) > MAX_DIMENSION
-                    or width * height > MAX_SOURCE_PIXELS
-                ):
-                    raise PlaylistExportError("Selected cover dimensions are unsafe")
-                image.load()
-        except OSError, ValueError, Image.DecompressionBombError:
+            validate_canonical_jpeg(data)
+        except CustomCoverAssetError:
             raise PlaylistExportError("Selected cover cannot be decoded safely") from None
         curated = not uploaded and cover_id != "custom_default"
         return data, {
@@ -217,7 +201,7 @@ def playlist_bundle(
         configuration = {"enabled": target.enabled, "hidden": None}
     else:
         source_ids = target.default_source_ids
-        exceptions = ()
+        exceptions = target.duration_exceptions
         countries, languages, ordering = target.countries, target.languages, target.ordering
         configuration = {"enabled": None, "hidden": target.hidden}
     if not source_ids or len(source_ids) > 100 or len(set(source_ids)) != len(source_ids):
@@ -230,6 +214,10 @@ def playlist_bundle(
         built_in_ids={source.id for source in store.catalog.sources},
     )
     cover_bytes, attribution = covers.load(target.cover_id)
+    if not isinstance(target, ManagedPlaylist) and target.portable_metadata is not None:
+        metadata = json.loads(target.portable_metadata)
+        if metadata["cover_sha256"] == hashlib.sha256(cover_bytes).hexdigest():
+            attribution = metadata["attribution"]
     cover_descriptor = _descriptor(cover_bytes)
     cover_path = f"covers/{cover_descriptor['sha256']}.jpg"
     if len(exceptions) > 100:
@@ -373,7 +361,7 @@ class PlaylistExportService:
                 prepared = replace(target, portable_id=identity)
                 candidate = replace(
                     state,
-                    schema_version=PORTABLE_PLAYLIST_SCHEMA_VERSION,
+                    schema_version=max(state.schema_version, PORTABLE_PLAYLIST_SCHEMA_VERSION),
                     playlists=tuple(
                         prepared if item.id == object_id else item for item in state.playlists
                     ),
@@ -382,7 +370,7 @@ class PlaylistExportService:
                 draft = replace(target, portable_id=identity)
                 candidate = replace(
                     state,
-                    schema_version=PORTABLE_PLAYLIST_SCHEMA_VERSION,
+                    schema_version=max(state.schema_version, PORTABLE_PLAYLIST_SCHEMA_VERSION),
                     templates=tuple(
                         draft if item.id == object_id else item for item in state.templates
                     ),
@@ -397,9 +385,9 @@ class PlaylistExportService:
                     raise PlaylistExportError(
                         "Identity save outcome is uncertain; inspect state before retrying"
                     ) from None
-                if written == candidate:
+                if same_managed_configuration(written, candidate, catalog=self.store.catalog):
                     return identity
-                if written == state:
+                if same_managed_configuration(written, state, catalog=self.store.catalog):
                     raise PlaylistExportError(
                         "Identity was not saved; previous configuration is unchanged"
                     ) from None

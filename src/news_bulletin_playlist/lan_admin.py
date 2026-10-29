@@ -149,6 +149,14 @@ class _SessionBoundSecurity(AdminSecurity):
     def stage_source_import(self, document: bytes, fingerprint: str) -> SourceImportContext:
         return self._manager.stage_source_import(self._session_id, document, fingerprint)
 
+    def stage_playlist_import(self, document: bytes, fingerprint: str) -> SourceImportContext:
+        return self._manager.stage_source_import(
+            self._session_id, document, fingerprint, kind="playlist"
+        )
+
+    def take_playlist_import(self, preview_id: str) -> SourceImportContext | None:
+        return self._manager.take_source_import(self._session_id, preview_id, kind="playlist")
+
     def take_source_import(self, preview_id: str) -> SourceImportContext | None:
         return self._manager.take_source_import(self._session_id, preview_id)
 
