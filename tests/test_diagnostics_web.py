@@ -354,6 +354,32 @@ def test_diagnostic_bundle_never_copies_raw_cycle_errors() -> None:
     assert source["last_catalogue_refresh_at"] == "2026-09-02T07:00:00Z"
 
 
+def test_blocked_source_diagnostics_zip_does_not_invent_zero_desired() -> None:
+    cycle = _failed_cycle()
+    blocked = replace(
+        cycle.playlists[0],
+        desired_count=0,
+        error="destination preserved: assigned source coverage unproven",
+        blocked_source_ids=(SourceId("rne"),),
+        block_reason="coverage_unproven_null_slot",
+    )
+    payload = build_diagnostic_bundle(
+        events=(),
+        generated_at=NOW,
+        last_cycle=replace(cycle, playlists=(blocked,)),
+        retention_days=30,
+        max_events=10_000,
+    )
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        status = json.loads(archive.read("status.json"))
+    recorded = status["last_cycle"]["playlists"][0]
+    assert recorded["desired_count"] is None
+    assert recorded["blocked_source_ids"] == ["rne"]
+    assert recorded["block_reason"] == "coverage_unproven_null_slot"
+    assert recorded["last_success_at"] is None
+    assert status["last_cycle"]["sources"][0]["null_item_count"] == 0
+
+
 def test_diagnostic_export_truncation_uses_total_matching_count(tmp_path: Path) -> None:
     store = DiagnosticEventStore(tmp_path / "state.sqlite3")
     store.initialize()
