@@ -186,6 +186,7 @@ class SourceCycleOutcome:
     removed_count: int = 0
     error: str | None = None
     temporal_metrics: TemporalRefreshMetrics | None = None
+    null_item_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +214,8 @@ class PlaylistCycleOutcome:
     unavailable_media_count: int = 0
     unavailable_media_phase: str | None = None
     destination_verification_kind: str | None = None
+    blocked_source_ids: tuple[SourceId, ...] = ()
+    block_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,12 +417,24 @@ class EngineRunner:
             if not playlist.enabled:
                 continue
 
-            if not self._playlist_sources_ready(playlist, now=started_at):
+            blocked_sources = self._playlist_blocking_source_ids(playlist, now=started_at)
+            if blocked_sources:
+                null_observed = any(
+                    source_outcomes[source_id].null_item_count > 0
+                    for source_id in blocked_sources
+                    if source_id in source_outcomes
+                )
                 playlist_outcomes.append(
                     self._preserved_playlist_outcome(
                         playlist,
-                        "destination preserved because Spotify-first source state is incomplete",
+                        "destination preserved: assigned source unavailable or coverage unproven",
                         now=started_at,
+                        blocked_source_ids=blocked_sources,
+                        block_reason=(
+                            "coverage_unproven_null_slot"
+                            if null_observed
+                            else "source_unavailable_or_coverage_unproven"
+                        ),
                     )
                 )
                 continue
@@ -652,10 +667,15 @@ class EngineRunner:
                 filter_rejected_count=snapshot.filter_rejected_count,
                 removed_count=removed,
                 temporal_metrics=TemporalRefreshMetrics.from_snapshot(snapshot),
+                null_item_count=snapshot.null_item_count,
                 error=(
                     None
                     if snapshot.coverage_proven
-                    else "official Spotify catalogue did not prove retention-window coverage"
+                    else (
+                        "coverage_unproven_null_slot"
+                        if snapshot.null_item_count
+                        else "official Spotify catalogue did not prove retention-window coverage"
+                    )
                 ),
             )
         except (
@@ -705,7 +725,15 @@ class EngineRunner:
             last_catalogue_refresh_at=None if state is None else state.last_refresh_at,
             detector_ok=_detector_ok(public, now),
             detector_changed=source_id in detector.changed_source_ids,
-            error=None if state is not None else "Spotify-first source has no persisted catalogue",
+            error=(
+                "Spotify-first source has no persisted catalogue"
+                if state is None
+                else (
+                    "official Spotify catalogue coverage remains unproven"
+                    if not state.coverage_proven
+                    else None
+                )
+            ),
         )
 
     def _source_authorization_failure(
@@ -741,18 +769,21 @@ class EngineRunner:
             )
         return outcomes
 
-    def _playlist_sources_ready(
+    def _playlist_blocking_source_ids(
         self,
         playlist: PlaylistDefinition,
         *,
         now: datetime,
-    ) -> bool:
+    ) -> tuple[SourceId, ...]:
+        """Return assigned sources that cannot prove the destination safe to reconcile."""
         cutoff = now - timedelta(hours=playlist.retention_hours)
         sources = {source.id: source for source in self.config.sources}
+        blocked: list[SourceId] = []
         for source_id in playlist.source_selection.explicit:
             source = sources.get(source_id)
             if source is None or not source.enabled:
-                return False
+                blocked.append(source_id)
+                continue
             state = self.first_journal.get_source_state(source_id)
             if (
                 state is None
@@ -760,8 +791,16 @@ class EngineRunner:
                 or not state.coverage_proven
                 or state.coverage_cutoff_at > cutoff
             ):
-                return False
-        return True
+                blocked.append(source_id)
+        return tuple(blocked)
+
+    def _playlist_sources_ready(
+        self,
+        playlist: PlaylistDefinition,
+        *,
+        now: datetime,
+    ) -> bool:
+        return not self._playlist_blocking_source_ids(playlist, now=now)
 
     def _destination_skip_evidence(
         self,
@@ -1096,6 +1135,8 @@ class EngineRunner:
         build: SpotifyFirstDesiredBuild | None = None,
         fingerprint: str | None = None,
         now: datetime,
+        blocked_source_ids: tuple[SourceId, ...] = (),
+        block_reason: str | None = None,
     ) -> PlaylistCycleOutcome:
         self.store.record_playlist_state(
             playlist.id,
@@ -1116,6 +1157,8 @@ class EngineRunner:
                 error=error,
                 desired_fingerprint=fingerprint,
                 write_outcome=MutationOutcome.NOT_ATTEMPTED.value,
+                blocked_source_ids=blocked_source_ids,
+                block_reason=block_reason,
             )
         return self._playlist_outcome(
             playlist,
