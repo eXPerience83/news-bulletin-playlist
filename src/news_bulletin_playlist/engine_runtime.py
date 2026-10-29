@@ -1612,7 +1612,9 @@ def _playlist_rows(cycle: EngineCycleResult | None) -> str:
         else:
             result = "Success" if playlist.ok else "Failed"
             items = f"{playlist.desired_count} desired / {applied} verified"
-            write = "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
+            write = (
+                "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
+            )
             explanation = playlist.error
         rows.append(
             "<tr>"
