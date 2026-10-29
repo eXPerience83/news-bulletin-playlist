@@ -1608,7 +1608,7 @@ def _playlist_rows(cycle: EngineCycleResult | None) -> str:
             write = "preserved"
             blocked = ", ".join(str(source_id) for source_id in playlist.blocked_source_ids)
             reason = playlist.block_reason or "source_blocked"
-            explanation = f"Blocked by {blocked} ({reason})"
+            explanation: str | None = f"Blocked by {blocked} ({reason})"
         else:
             result = "Success" if playlist.ok else "Failed"
             items = f"{playlist.desired_count} desired / {applied} verified"
