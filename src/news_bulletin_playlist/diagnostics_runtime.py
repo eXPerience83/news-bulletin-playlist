@@ -1904,22 +1904,30 @@ def _safe_playlist_rows(cycle: EngineCycleResult | None) -> str:
         return '<tr><td colspan="5">No playlist cycle data yet.</td></tr>'
     rows = []
     for playlist in cycle.playlists:
-        result = (
-            status_badge("Success", tone="success")
-            if playlist.ok
-            else status_badge("Failed — see admin diagnostics", tone="danger")
-        )
-        applied = "unverified" if playlist.applied_count is None else str(playlist.applied_count)
-        write = "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
-        write_tone: BadgeTone = (
-            "muted" if playlist.wrote is None else ("accent" if playlist.wrote else "success")
-        )
+        if playlist.blocked_source_ids:
+            blocked = ", ".join(str(source_id) for source_id in playlist.blocked_source_ids)
+            result = status_badge(f"Preserved — blocked by {blocked}", tone="warning")
+            items = "not evaluated / unverified"
+            write = "preserved"
+            write_tone: BadgeTone = "warning"
+        else:
+            result = (
+                status_badge("Success", tone="success")
+                if playlist.ok
+                else status_badge("Failed — see admin diagnostics", tone="danger")
+            )
+            applied = "unverified" if playlist.applied_count is None else str(playlist.applied_count)
+            items = f"{playlist.desired_count} desired / {applied} verified"
+            write = "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
+            write_tone = (
+                "muted" if playlist.wrote is None else ("accent" if playlist.wrote else "success")
+            )
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(str(playlist.playlist_id))}</code></td>"
             f"<td>{result}</td>"
             f"<td>{_format_optional_time(playlist.last_success_at)}</td>"
-            f"<td>{playlist.desired_count} desired / {applied} verified</td>"
+            f"<td>{items}</td>"
             f"<td>{status_badge(write, tone=write_tone)}</td>"
             "</tr>"
         )
