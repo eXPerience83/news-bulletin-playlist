@@ -417,8 +417,10 @@ class EngineRunner:
             if not playlist.enabled:
                 continue
 
-            blocked_sources = self._playlist_blocking_source_ids(playlist, now=started_at)
-            if blocked_sources:
+            if not self._playlist_sources_ready(playlist, now=started_at):
+                blocked_sources = self._playlist_blocking_source_ids(
+                    playlist, now=started_at
+                )
                 null_observed = any(
                     source_outcomes[source_id].null_item_count > 0
                     for source_id in blocked_sources
