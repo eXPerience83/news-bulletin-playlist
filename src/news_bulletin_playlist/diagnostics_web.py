@@ -437,6 +437,7 @@ def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
                     "parser_fallback_count": source.parser_fallback_count,
                     "filter_rejected_count": source.filter_rejected_count,
                     "removed_count": source.removed_count,
+                    "null_item_count": source.null_item_count,
                     "last_detector_success_at": _optional_timestamp(
                         source.last_detector_success_at
                     ),
@@ -450,7 +451,13 @@ def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
                 {
                     "playlist_id": str(playlist.playlist_id),
                     "ok": playlist.ok,
-                    "desired_count": playlist.desired_count,
+                    "desired_count": (
+                        None if playlist.blocked_source_ids else playlist.desired_count
+                    ),
+                    "blocked_source_ids": [
+                        str(source_id) for source_id in playlist.blocked_source_ids
+                    ],
+                    "block_reason": playlist.block_reason,
                     "applied_count": playlist.applied_count,
                     "wrote": playlist.wrote,
                     "last_success_at": _optional_timestamp(playlist.last_success_at),
