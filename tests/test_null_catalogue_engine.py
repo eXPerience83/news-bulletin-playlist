@@ -14,6 +14,9 @@ from test_source_refresh_atomic import rows
 import news_bulletin_playlist.engine as engine_module
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.engine import EngineRunner
+from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore
+from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
@@ -155,6 +158,30 @@ def test_rne_shaped_nineteen_slot_catalogue_blocks_without_mutating(tmp_path):
     assert not outcome.playlists[0].ok
     assert not client.reads and not client.writes
     assert client.states["dependent"] == [f"spotify:episode:{1:022d}"]
+
+
+def test_blocked_rne_diagnostic_has_source_reason_and_no_false_zero(tmp_path):
+    show = spotify_show_id(SOURCE)
+    client = Client({show: [_item(1), None]}, {"dependent": [f"spotify:episode:{1:022d}"]})
+    engine = runner(tmp_path, client)
+    store = DiagnosticEventStore(tmp_path / "diagnostics.sqlite3")
+    store.initialize()
+    result = InstrumentedEngineCycleRunner(
+        engine,
+        OperationalDiagnostics(store),
+    ).run_cycle()
+    assert not result.ok
+    events = store.list_events()
+    preserved = next(event for event in events if event.event_name == "destination_preserved")
+    assert preserved.source_id == str(SOURCE.id)
+    assert preserved.playlist_id == "dependent"
+    assert preserved.details["failure_reason"] == "coverage_unproven_null_slot"
+    assert preserved.details["blocked_source_count"] == 1
+    assert preserved.details["write_decision"] == "preserved"
+    assert "desired_count" not in preserved.details
+    source_event = next(event for event in events if event.event_name == "source_state_preserved")
+    assert source_event.details["null_item_count"] == 1
+    assert not client.writes and not client.reads
 
 
 def test_shared_unproven_source_blocks_both_destinations_but_not_independent(tmp_path):
