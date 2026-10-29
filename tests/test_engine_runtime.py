@@ -362,6 +362,37 @@ def test_operational_status_page_reports_cycle_without_secret_material() -> None
         assert secret not in body
 
 
+def test_blocked_source_status_does_not_claim_zero_desired_episodes() -> None:
+    from news_bulletin_playlist.diagnostics_runtime import _safe_playlist_rows
+
+    cycle = EngineCycleResult(
+        started_at=NOW,
+        finished_at=NOW,
+        ok=False,
+        sources=(),
+        playlists=(
+            PlaylistCycleOutcome(
+                playlist_id=PlaylistId("spanish"),
+                ok=False,
+                desired_count=0,  # Skipped evaluation, not an empty authoritative catalogue.
+                applied_count=None,
+                wrote=None,
+                last_success_at=NOW - timedelta(hours=4),
+                block_reason="coverage_unproven_null_slot",
+                blocked_source_ids=(SourceId("rne"),),
+                write_outcome="not_attempted",
+            ),
+        ),
+    )
+    for html_body in (engine_runtime._playlist_rows(cycle), _safe_playlist_rows(cycle)):
+        assert "not evaluated / unverified" in html_body
+        assert "preserved" in html_body.lower()
+        assert "rne" in html_body
+        assert "0 desired" not in html_body
+        assert "2026-08-30T06:00:00Z" in html_body
+    assert "coverage_unproven_null_slot" in engine_runtime._playlist_rows(cycle)
+
+
 def test_operational_callback_and_status_never_expose_oauth_sentinels(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
