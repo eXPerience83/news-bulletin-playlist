@@ -377,7 +377,7 @@ def test_blocked_source_diagnostics_zip_does_not_invent_zero_desired() -> None:
     assert recorded["blocked_source_ids"] == ["rne"]
     assert recorded["block_reason"] == "coverage_unproven_null_slot"
     assert recorded["last_success_at"] is None
-    assert status["last_cycle"]["sources"][0]["null_item_count"] == 0
+    assert status["last_cycle"]["sources"][0]["null_item_count"] is None
 
 
 def test_diagnostic_export_truncation_uses_total_matching_count(tmp_path: Path) -> None:
