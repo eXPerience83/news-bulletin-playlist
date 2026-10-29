@@ -1601,17 +1601,27 @@ def _playlist_rows(cycle: EngineCycleResult | None) -> str:
         return '<tr><td colspan="6">No playlist cycle data yet.</td></tr>'
     rows = []
     for playlist in cycle.playlists:
-        result = "Success" if playlist.ok else "Failed"
         applied = "unverified" if playlist.applied_count is None else str(playlist.applied_count)
-        write = "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
+        if playlist.blocked_source_ids:
+            result = "Preserved — source blocked"
+            items = "not evaluated / unverified"
+            write = "preserved"
+            blocked = ", ".join(str(source_id) for source_id in playlist.blocked_source_ids)
+            reason = playlist.block_reason or "source_blocked"
+            explanation = f"Blocked by {blocked} ({reason})"
+        else:
+            result = "Success" if playlist.ok else "Failed"
+            items = f"{playlist.desired_count} desired / {applied} verified"
+            write = "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
+            explanation = playlist.error
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(str(playlist.playlist_id))}</code></td>"
             f"<td>{result}</td>"
             f"<td>{_format_optional_time(playlist.last_success_at)}</td>"
-            f"<td>{playlist.desired_count} desired / {applied} verified</td>"
+            f"<td>{items}</td>"
             f"<td>{write}</td>"
-            f"<td>{_escape_optional(playlist.error)}</td>"
+            f"<td>{_escape_optional(explanation)}</td>"
             "</tr>"
         )
     return "".join(rows)
