@@ -437,9 +437,7 @@ def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
                     "parser_fallback_count": source.parser_fallback_count,
                     "filter_rejected_count": source.filter_rejected_count,
                     "removed_count": source.removed_count,
-                    "null_item_count": (
-                        source.null_item_count if source.refreshed else None
-                    ),
+                    "null_item_count": (source.null_item_count if source.refreshed else None),
                     "last_detector_success_at": _optional_timestamp(
                         source.last_detector_success_at
                     ),
