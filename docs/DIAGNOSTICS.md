@@ -149,7 +149,9 @@ record `blocked_source_count` and a closed `failure_reason`, omitting
 `desired_count` entirely for skipped builds. When exactly one source blocks
 the playlist (as with RNE), the event uses that source's safe ID in its
 `source_id` field. Source refresh events include a bounded `null_item_count`
-when a null is actually observed in the current cycle.
+when a null is actually observed in the current cycle. The diagnostics ZIP
+`status.json` represents a skipped desired count as JSON `null` and includes
+`blocked_source_ids` / `block_reason` rather than exporting a fictitious zero.
 Audit remains read-only. SQLite stays format 3 with no new tables/columns, and the null count is not
 persisted as source authority.
 
