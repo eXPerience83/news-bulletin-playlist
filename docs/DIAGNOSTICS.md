@@ -144,7 +144,12 @@ episodes. If the affected source was not refreshed in the latest cycle, the stat
 uses the broader `source_unavailable_or_coverage_unproven` reason because the
 null-slot count is not persisted as durable source authority. Existing last-success
 timestamps remain visible. This is observability only: no new provider requests or
-destination writes are introduced.
+destination writes are introduced. Structured `destination_preserved` events
+record `blocked_source_count` and a closed `failure_reason`, omitting
+`desired_count` entirely for skipped builds. When exactly one source blocks
+the playlist (as with RNE), the event uses that source's safe ID in its
+`source_id` field. Source refresh events include a bounded `null_item_count`
+when a null is actually observed in the current cycle.
 Audit remains read-only. SQLite stays format 3 with no new tables/columns, and the null count is not
 persisted as source authority.
 
