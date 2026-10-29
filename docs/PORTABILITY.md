@@ -413,14 +413,19 @@ are preserved. No sidecar mapping exists. Readers accept v6/v7/v8 unchanged; ord
 reads, startup, source downloads, playlist downloads and ordinary legacy saves never
 adopt v9. Legacy export without identity fails with an explanation.
 
-Explicit identity preparation may initially adopt v9. Playlist import instead
-requires separate, explicit adoption of v10 (which includes v9 identities). Its form
-requires one-use session CSRF, current configuration/catalog/target fingerprint,
-confirmation and (below v9) a separate compatibility acknowledgement. Under the
-configuration lock it re-reads, validates the complete candidate and saves once using
-the existing atomic protocol. Save errors trigger readback: confirmed new state is
-reported as committed, confirmed old state as unchanged, otherwise outcome is uncertain;
-there is no blind retry. Pending provisioning is never finalized by preparation/export.
+Explicit identity preparation may initially adopt v9. The identity preparation
+form requires one-use CSRF, a current configuration/catalog/target fingerprint,
+confirmation and (for states below v9) a separate v9 compatibility acknowledgement.
+Under the configuration lock, identity preparation re-reads, validates the complete
+candidate and saves once using the existing atomic protocol. Save errors trigger
+readback: confirmed new state is reported as committed, confirmed old state as
+unchanged, otherwise outcome is uncertain; there is no blind retry. Pending
+provisioning is never finalized by preparation/export.
+
+Playlist import has its own session-bound form and requires explicit adoption of
+v10 for states below v10 before creating an imported draft. Its separate validation,
+CSRF, fingerprint, confirmation and compatibility rules are documented in the
+**Playlist ZIP import as local drafts (#551)** section below.
 Once v9 is adopted, creation of a new local draft or finalization of an explicitly
 requested managed destination gives that new object a UUID; existing unprepared
 objects still need preparation. Retrying known provisioning preserves the saved UUID.
