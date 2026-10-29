@@ -1916,9 +1916,13 @@ def _safe_playlist_rows(cycle: EngineCycleResult | None) -> str:
                 if playlist.ok
                 else status_badge("Failed — see admin diagnostics", tone="danger")
             )
-            applied = "unverified" if playlist.applied_count is None else str(playlist.applied_count)
+            applied = (
+                "unverified" if playlist.applied_count is None else str(playlist.applied_count)
+            )
             items = f"{playlist.desired_count} desired / {applied} verified"
-            write = "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
+            write = (
+                "—" if playlist.wrote is None else ("updated" if playlist.wrote else "unchanged")
+            )
             write_tone = (
                 "muted" if playlist.wrote is None else ("accent" if playlist.wrote else "success")
             )
