@@ -56,7 +56,7 @@ SNAPSHOT_FORMAT = "news-bulletin-playlist.frozen-legacy-catalog"
 SNAPSHOT_SCHEMA_VERSION = 1
 MAX_FROZEN_SNAPSHOT_BYTES = 1024 * 1024
 MAX_MANAGED_STATE_BYTES = 8 * 1024 * 1024
-_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class FrozenLegacySnapshotError(ValueError):
