@@ -23,7 +23,13 @@ def test_projection_preserves_runtime_and_all_destinations(tmp_path: Path, schem
     frozen_bytes = build_legacy_snapshot(preview, state_bytes)
     actual = project_v11_legacy(frozen_bytes, state_bytes)
     assert actual.original_state == preview.original_state
-    assert actual.original_runtime == preview.original_runtime
+    assert actual.projected_runtime.playlists == preview.original_runtime.playlists
+    assert {s.id: s for s in actual.projected_runtime.sources} == {
+        s.id: s for s in preview.original_runtime.sources
+    }
+    # Frozen v1 exports sources in Spotify-show order, not original image order:
+    # no deployment may use this projection to replace runtime config yet.
+    assert actual.source_order_verified is False
     assert actual.managed_destinations == preview.original_state.playlists
     assert len(actual.managed_destinations) == 4
     assert len(actual.installed_sources) == 13
