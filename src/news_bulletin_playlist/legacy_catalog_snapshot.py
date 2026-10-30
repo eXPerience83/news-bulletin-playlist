@@ -107,7 +107,9 @@ def build_legacy_snapshot(preview: LegacyMigrationPreview, state_bytes: bytes) -
     if len(payload) > MAX_FROZEN_SNAPSHOT_BYTES:
         raise FrozenLegacySnapshotError("frozen catalog exceeds size limit")
     loaded = parse_legacy_snapshot(payload)
-    if loaded.sources != preview.source_snapshots or loaded.templates != preview.template_snapshots:
+    expected_sources = {item.installed.id: item for item in preview.source_snapshots}
+    actual_sources = {item.installed.id: item for item in loaded.sources}
+    if expected_sources != actual_sources or loaded.templates != preview.template_snapshots:
         raise FrozenLegacySnapshotError("frozen catalog is not lossless")
     return payload
 
