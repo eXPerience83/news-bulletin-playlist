@@ -107,23 +107,19 @@ def test_explicit_legacy_marker_preserves_legacy_disposition(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     "payload",
     [
-        '{"schema_version":1,"schema_version":1,"installation_id":"' + _ID
-        + '","mode":"opt_in"}',
+        f'{{"schema_version":1,"schema_version":1,"installation_id":"{_ID}","mode":"opt_in"}}',
         "{",
         "[]",
         "{}",
-        '{"schema_version":true,"installation_id":"' + _ID + '","mode":"opt_in"}',
-        '{"schema_version":2,"installation_id":"' + _ID + '","mode":"opt_in"}',
+        f'{{"schema_version":true,"installation_id":"{_ID}","mode":"opt_in"}}',
+        f'{{"schema_version":2,"installation_id":"{_ID}","mode":"opt_in"}}',
         '{"schema_version":1,"installation_id":"abc","mode":"opt_in"}',
-        '{"schema_version":1,"installation_id":"' + _ID.upper() + '","mode":"opt_in"}',
-        '{"schema_version":1,"installation_id":"' + _ID + '","mode":"unknown"}',
-        '{"schema_version":1,"installation_id":"' + _ID
-        + '","mode":"opt_in","extra":true}',
+        f'{{"schema_version":1,"installation_id":"{_ID.upper()}","mode":"opt_in"}}',
+        f'{{"schema_version":1,"installation_id":"{_ID}","mode":"unknown"}}',
+        f'{{"schema_version":1,"installation_id":"{_ID}","mode":"opt_in","extra":true}}',
     ],
 )
-def test_invalid_or_ambiguous_marker_never_selects_opt_in(
-    tmp_path: Path, payload: str
-) -> None:
+def test_invalid_or_ambiguous_marker_never_selects_opt_in(tmp_path: Path, payload: str) -> None:
     marker = tmp_path / INSTALLATION_IDENTITY_FILENAME
     marker.write_text(payload, encoding="utf-8")
     original = marker.read_bytes()
