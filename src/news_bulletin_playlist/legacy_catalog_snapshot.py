@@ -176,8 +176,12 @@ def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
     ):
         raise FrozenLegacySnapshotError("unsupported frozen catalog format")
     keys = {
-        "format", "schema_version", "managed_schema_version",
-        "managed_state_sha256", "sources", "templates",
+        "format",
+        "schema_version",
+        "managed_schema_version",
+        "managed_state_sha256",
+        "sources",
+        "templates",
     }
     if schema == SNAPSHOT_V2_SCHEMA_VERSION:
         keys.add("source_order")
