@@ -1018,7 +1018,6 @@ def test_readback_comparison_preserves_types_inside_quarantine():
     assert not same_managed_configuration(left, right)
 
 
-
 def test_four_public_product_shapes_portable_batch_into_truly_empty_root(tmp_path):
     """Four representative live configurations round-trip without live destinations."""
 
@@ -1044,9 +1043,7 @@ def test_four_public_product_shapes_portable_batch_into_truly_empty_root(tmp_pat
     )
     donor_root = tmp_path / "independent-donor"
     donor_root.mkdir()
-    exporter = export_service(
-        donor_root, ManagedState(schema_version=9, playlists=managed)
-    )
+    exporter = export_service(donor_root, ManagedState(schema_version=9, playlists=managed))
     # Portable artifacts must not copy incidental credentials, journals or history.
     (donor_root / "oauth.json").write_bytes(b"PRIVATE-OAUTH-SENTINEL")
     (donor_root / "provisioning.json").write_bytes(b"PRIVATE-JOURNAL-SENTINEL")
@@ -1054,14 +1051,11 @@ def test_four_public_product_shapes_portable_batch_into_truly_empty_root(tmp_pat
     donor_before = files(donor_root)
 
     archives = {
-        str(playlist.id): exporter.export("managed", str(playlist.id))[1]
-        for playlist in managed
+        str(playlist.id): exporter.export("managed", str(playlist.id))[1] for playlist in managed
     }
     assert set(archives) == set(selected_ids)
     assert files(donor_root) == donor_before
-    bundles = {
-        id_: inspect_playlist_bundle(data) for id_, data in archives.items()
-    }
+    bundles = {id_: inspect_playlist_bundle(data) for id_, data in archives.items()}
     for id_, data in archives.items():
         assert b"PRIVATE-DESTINATION-" not in data
         assert b"PRIVATE-OAUTH-SENTINEL" not in data
@@ -1127,16 +1121,14 @@ def test_four_public_product_shapes_portable_batch_into_truly_empty_root(tmp_pat
             definition = record.source
             show_id = definition.external_references[0].external_id
             assert replace(installed[show_id], id=definition.id) == definition
-        roundtrip_bundle = inspect_playlist_bundle(
-            exported.export("draft", str(draft.id))[1]
-        )
+        roundtrip_bundle = inspect_playlist_bundle(exported.export("draft", str(draft.id))[1])
         assert roundtrip_bundle.jpeg == donor_bundle.jpeg
         assert roundtrip_bundle.playlist["portable_id"] == identity
         assert roundtrip_bundle.playlist["retention_hours"] == original.retention_hours
         assert roundtrip_bundle.playlist["max_episodes"] == original.max_episodes
-        assert roundtrip_bundle.playlist["duration_policy"] == donor_bundle.playlist[
-            "duration_policy"
-        ]
+        assert (
+            roundtrip_bundle.playlist["duration_policy"] == donor_bundle.playlist["duration_policy"]
+        )
 
     # Simulate a process restart; repeated preview and import remain read-only
     # or identical no-ops, with no additional assets or duplicate sources.
