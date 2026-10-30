@@ -46,6 +46,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "backoff_source",
         "backoff_state",
         "blocked_source_count",
+        "partial_added_count",
         "api_request_count",
         "desired_count",
         "duration_ms",
@@ -194,6 +195,10 @@ _ALLOWED_DETAIL_STRING_VALUES = {
         {
             "authorization_context_changed",
             "coverage_unproven_null_slot",
+            "partial_add_only",
+            "partial_add_capacity",
+            "partial_add_pending",
+            "partial_add_unverified",
             "source_unavailable_or_coverage_unproven",
             "configuration_invalid",
             "desired_state_invalid",

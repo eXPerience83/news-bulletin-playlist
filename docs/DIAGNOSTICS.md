@@ -159,6 +159,39 @@ No retry, refetch, episode lookup or extra endpoint is added. Continuing after n
 pages within the existing 50 × 4 prefix; subsequent 429/duplicate/total failures still fail the
 whole fetch under the existing guards. Nulls beyond the observed prefix are not counted.
 
+## Add-only fallback for fresh partial catalogues (#562)
+
+A literal `null` in an official show catalogue is still unknown authority:
+`coverage_proven=false`, no inferred absence and no normal Spotify playlist
+replacement. A dependent destination can instead enter **partial add-only** mode
+only when every assigned incomplete source has a freshly persisted catalogue
+containing positive, known episode IDs, and all other assigned sources have
+valid proven coverage. The source's previously cached rows not present in
+that fresh partial response cannot generate new additions.
+
+The engine applies the normal retention, duration, collection and source
+filters to positively observed evidence, then reads the complete Spotify
+destination and stable snapshots. It inserts only absent verified URIs at
+position zero using the official add-items POST. Existing destination items
+retain their exact order and multiplicity. Add-only mode never replaces,
+deletes, reorders or evicts entries. If adding the proposed set would exceed
+the playlist's configured item limit (at most 100), **all** additions pause.
+
+Before POST, a durable local intent records the exact expected remote
+sequence. If POST times out, returns 5xx or verification fails, the intent
+remains; subsequent cycles cannot blindly repeat the insertion. The intent
+is cleared only after an exact stable remote readback confirms the expected
+sequence, or after a fully trusted normal reconciliation succeeds. HTTP
+429 still uses the global persistent cooldown; an unreadable destination
+or a pending normal snapshot blocks add-only activity.
+
+Success emits `destination_partial_added` with `partial_added_count` and
+`write_decision=applied`, but the playlist remains degraded because its
+full desired state is not proven. Capacity, pending intent and verification
+failures preserve the destination with closed reasons. A later clean source
+refresh restores the existing exact normal reconciliation, including
+authorized retention and ordering.
+
 ## Authenticated diagnostics UI
 
 Open:

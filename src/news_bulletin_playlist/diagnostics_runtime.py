@@ -1904,12 +1904,18 @@ def _safe_playlist_rows(cycle: EngineCycleResult | None) -> str:
         return '<tr><td colspan="5">No playlist cycle data yet.</td></tr>'
     rows = []
     for playlist in cycle.playlists:
-        if playlist.blocked_source_ids:
+        write_tone: BadgeTone
+        if playlist.partial_added_count:
+            result = status_badge("Degraded — additions only", tone="warning")
+            items = "partial / unverified"
+            write = f"added {playlist.partial_added_count} (no removals)"
+            write_tone = "warning"
+        elif playlist.blocked_source_ids:
             blocked = ", ".join(str(source_id) for source_id in playlist.blocked_source_ids)
             result = status_badge(f"Preserved — blocked by {blocked}", tone="warning")
             items = "not evaluated / unverified"
             write = "preserved"
-            write_tone: BadgeTone = "warning"
+            write_tone = "warning"
         else:
             result = (
                 status_badge("Success", tone="success")

@@ -51,6 +51,14 @@ class Client(_FakeSpotify):
         super().__init__(destinations or {})
         self.catalogues = catalogues
         self.calls = []
+        self.additions = []
+
+    def add_playlist_items(self, playlist_id, uris, *, position=0):
+        assert position == 0
+        self.additions.append((playlist_id, list(uris)))
+        self.states[playlist_id] = list(uris) + self.states.get(playlist_id, [])
+        self.snapshot = f"snapshot-add-{len(self.additions)}"
+        return {"snapshot_id": self.snapshot}
 
     def show_episodes(self, show_id, *, limit=50, offset=0):
         assert limit == 50
@@ -119,10 +127,13 @@ def test_null_refresh_persists_known_evidence_blocks_caps_and_recovers(tmp_path,
         assert result.sources[0].error == "coverage_unproven_null_slot"
         assert not result.playlists[0].ok
         assert result.playlists[0].blocked_source_ids == (SOURCE.id,)
-        assert result.playlists[0].block_reason == "coverage_unproven_null_slot"
-        assert result.playlists[0].write_outcome == "not_attempted"
-        assert client.writes == [] and client.reads == []
-        assert client.states["dependent"] == original_destination
+        assert result.playlists[0].block_reason in {
+            "partial_add_only",
+            "coverage_unproven_null_slot",
+        }
+        assert client.writes == []
+        assert client.states["dependent"][-1:] == original_destination
+        assert len(client.additions) <= 1
         state = engine.first_journal.get_source_state(SOURCE.id)
         assert state is not None and not state.coverage_proven and not state.catalogue_complete
         assert state.api_episode_id is None
@@ -132,6 +143,8 @@ def test_null_refresh_persists_known_evidence_blocks_caps_and_recovers(tmp_path,
             assert f"{2:022d}" in ids  # Could be the episode hidden by the unknown slot.
         assert not engine._playlist_sources_ready(engine.config.playlists[0], now=engine.clock())
     assert len(client.calls) == (4 if previous else 3)
+    assert len(client.additions) == 1
+    assert client.additions[0] == ("dependent", [f"spotify:episode:{9:022d}"])
     client.catalogues[show] = [_item(9)]
     engine.clock = lambda: NOW + timedelta(minutes=40)
     recovered = engine.run_cycle()
@@ -154,10 +167,29 @@ def test_rne_shaped_nineteen_slot_catalogue_blocks_without_mutating(tmp_path):
     assert outcome.sources[0].episode_count == 18
     assert outcome.sources[0].null_item_count == 1
     assert outcome.playlists[0].blocked_source_ids == (SOURCE.id,)
-    assert outcome.playlists[0].block_reason == "coverage_unproven_null_slot"
+    assert outcome.playlists[0].block_reason == "partial_add_capacity"
     assert not outcome.playlists[0].ok
-    assert not client.reads and not client.writes
+    assert client.reads and not client.writes and not client.additions
     assert client.states["dependent"] == [f"spotify:episode:{1:022d}"]
+
+
+def test_rne_nineteen_positions_add_only_without_removing_any_old_item(tmp_path):
+    show = spotify_show_id(SOURCE)
+    items = [_item(number) for number in range(1, 20)]
+    items[17] = None
+    existing = [f"spotify:episode:{number:022d}" for number in range(1, 18)]
+    client = Client({show: items}, {"dependent": existing})
+    playlist = replace(_playlist("dependent", source=str(SOURCE.id)), max_episodes=100)
+    engine = runner(tmp_path, client, playlists=(playlist,))
+    result = engine.run_cycle()
+    assert result.sources[0].null_item_count == 1
+    assert not result.sources[0].ok and not result.playlists[0].ok
+    assert result.playlists[0].partial_added_count == 1
+    assert result.playlists[0].block_reason == "partial_add_only"
+    assert client.additions == [("dependent", [f"spotify:episode:{19:022d}"])]
+    assert client.states["dependent"] == [f"spotify:episode:{19:022d}", *existing]
+    assert client.writes == []
+    assert not engine.first_journal.get_source_state(SOURCE.id).coverage_proven
 
 
 def test_blocked_rne_diagnostic_has_source_reason_and_no_false_zero(tmp_path):
@@ -181,7 +213,7 @@ def test_blocked_rne_diagnostic_has_source_reason_and_no_false_zero(tmp_path):
     assert "desired_count" not in preserved.details
     source_event = next(event for event in events if event.event_name == "source_state_preserved")
     assert source_event.details["null_item_count"] == 1
-    assert not client.writes and not client.reads
+    assert not client.writes and not client.additions
 
 
 def test_shared_unproven_source_blocks_both_destinations_but_not_independent(tmp_path):
@@ -206,8 +238,12 @@ def test_shared_unproven_source_blocks_both_destinations_but_not_independent(tmp
         (),
     ]
     assert client.writes == [("independent", [f"spotify:episode:{1:022d}"])]
+    assert client.additions == [
+        ("dependent-a", [f"spotify:episode:{9:022d}"]),
+        ("dependent-b", [f"spotify:episode:{9:022d}"]),
+    ]
+    assert [outcome.partial_added_count for outcome in result.playlists] == [1, 1, 0]
     assert client.calls == [(show, 0), (other_show, 0)]
-    assert all(read[0] == "independent" for read in client.reads)
 
 
 def test_original_split_commit_failure_window_is_closed_in_real_engine(tmp_path, monkeypatch):
@@ -306,9 +342,12 @@ def test_destination_verification_cannot_bypass_unproven_source(
     monkeypatch.setattr(engine, "_destination_skip_evidence", forbidden)
     result = engine.run_cycle()
     assert not result.playlists[0].ok
-    assert client.writes == [] and client.reads == []
+    assert client.writes == []
     if verification == "pending":
+        assert client.additions == [] and client.reads == []
         assert pending.get(playlist.id) is not None
+    else:
+        assert client.additions == [("dependent", [f"spotify:episode:{9:022d}"])]
 
 
 def test_regular_and_stale_paths_use_one_catalogue_refresh_helper(tmp_path, monkeypatch):

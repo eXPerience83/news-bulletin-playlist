@@ -458,6 +458,7 @@ def _safe_status_document(cycle: EngineCycleResult | None) -> dict[str, object]:
                         str(source_id) for source_id in playlist.blocked_source_ids
                     ],
                     "block_reason": playlist.block_reason,
+                    "partial_added_count": playlist.partial_added_count,
                     "applied_count": playlist.applied_count,
                     "wrote": playlist.wrote,
                     "last_success_at": _optional_timestamp(playlist.last_success_at),

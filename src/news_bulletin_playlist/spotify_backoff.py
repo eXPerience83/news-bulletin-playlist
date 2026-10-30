@@ -406,6 +406,13 @@ class SpotifyRateLimitGuardClient:
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, object]:
         return self._call(lambda: self.client.replace_playlist_items(playlist_id, uris))
 
+    def add_playlist_items(
+        self, playlist_id: str, uris: list[str], *, position: int = 0
+    ) -> dict[str, object]:
+        return self._call(
+            lambda: self.client.add_playlist_items(playlist_id, uris, position=position)
+        )
+
     def playlist_snapshot(self, playlist_id: str) -> dict[str, object]:
         return self._call(lambda: self.client.playlist_snapshot(playlist_id))
 

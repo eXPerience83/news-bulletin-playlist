@@ -29,6 +29,7 @@ class SpotifyWebApiOperation(StrEnum):
     CHANGE_PLAYLIST_DETAILS = "change_playlist_details"
     UPLOAD_PLAYLIST_COVER = "upload_playlist_cover"
     REPLACE_PLAYLIST_ITEMS = "replace_playlist_items"
+    ADD_PLAYLIST_ITEMS = "add_playlist_items"
     PLAYLIST_ITEMS = "playlist_items"
     PLAYLIST_SNAPSHOT = "playlist_snapshot"
 

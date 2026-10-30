@@ -34,6 +34,7 @@ def build_spotify_first_desired_state(
     *,
     sources: Mapping[SourceId, SourceDefinition],
     now: datetime,
+    allowed_episode_ids_by_source: Mapping[SourceId, frozenset[str]] | None = None,
 ) -> SpotifyFirstDesiredBuild:
     """Build one complete deterministic playlist from Spotify-first persisted state."""
     observed = as_utc(now)
@@ -56,6 +57,12 @@ def build_spotify_first_desired_state(
         if source is None or episode.source_id not in selected:
             continue
         if episode.spotify_show_id != spotify_show_id(source):
+            continue
+        if (
+            allowed_episode_ids_by_source is not None
+            and episode.source_id in allowed_episode_ids_by_source
+            and episode.spotify_episode_id not in allowed_episode_ids_by_source[episode.source_id]
+        ):
             continue
         if not _retained(episode, cutoff=cutoff, now=observed):
             continue

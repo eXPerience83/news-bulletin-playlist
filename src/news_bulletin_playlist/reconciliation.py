@@ -42,6 +42,10 @@ class SpotifyPlaylistClient(Protocol):
 
     def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> dict[str, Any]: ...
 
+    def add_playlist_items(
+        self, playlist_id: str, uris: list[str], *, position: int = 0
+    ) -> dict[str, Any]: ...
+
     def playlist_snapshot(self, playlist_id: str) -> dict[str, Any]: ...
 
 

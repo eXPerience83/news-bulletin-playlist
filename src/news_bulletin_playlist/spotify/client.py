@@ -155,6 +155,22 @@ class SpotifyClient:
             json_body={"uris": uris},
         )
 
+    def add_playlist_items(
+        self, playlist_id: str, uris: list[str], *, position: int = 0
+    ) -> dict[str, Any]:
+        if not 1 <= len(uris) <= 100:
+            raise ValueError("playlist addition requires 1..100 URIs")
+        if position < 0:
+            raise ValueError("playlist insertion position must be non-negative")
+        if len(set(uris)) != len(uris) or any(not is_spotify_episode_uri(uri) for uri in uris):
+            raise ValueError("playlist addition requires unique canonical episode URIs")
+        return self._request(
+            SpotifyWebApiOperation.ADD_PLAYLIST_ITEMS,
+            "POST",
+            f"/playlists/{playlist_id}/items",
+            json_body={"uris": uris, "position": position},
+        )
+
     def playlist_items(
         self, playlist_id: str, *, limit: int = 50, offset: int = 0
     ) -> dict[str, Any]:
