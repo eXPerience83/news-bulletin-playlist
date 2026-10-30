@@ -30,9 +30,11 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contrac
 ## What works today — and what does not
 
 - **Available:** activate and manage the playlist templates shipped with the application, adjust their source assignments and duration limits, and manage supported Spotify-first news sources through the authenticated administration UI.
-- **Available:** add your own supported Spotify **show/source** via Admin, then assign it to an existing managed playlist. This is **not** the same as creating a new playlist template.
+- **Available:** add supported Spotify **shows/sources** through Admin and assign them to managed playlists.
+- **Available in integrated `main`:** create, edit, hide and delete installation-owned **playlist drafts** in Admin, with deliberate Spotify activation and independent metadata/cover sync. Saving a draft does not create a Spotify playlist.
+- **Available in integrated `main`:** export/import source definitions using portable JSON v1 (with preview and conflict resolution) and export/import playlist bundles as self-contained ZIP v1, importing them as editable drafts. These portable formats **are not a backup** of Spotify destinations, OAuth credentials, SQLite history or production data. See [portability documentation](docs/PORTABILITY.md).
 - **Available:** use **Admin → Sources → Export all audits** to run a read-only background audit with progress, cancellation and a sanitized per-source ZIP, without blocking the other Admin pages. See [the Source Audit export guide](docs/DIAGNOSTICS.md#export-all-source-audits-read-only).
-- **Not yet available:** define and create an arbitrary new managed playlist type/template from Admin. More national, international and long-form playlists are planned; follow [the playlist catalog roadmap](https://github.com/eXPerience83/news-bulletin-playlist/issues/44). Features, storage migrations and Spotify behavior may evolve before 1.0.
+- **Still planned:** fully optional starter presets and a new-install empty-default model, together with non-destructive legacy migration (#552) and isolated empty-install acceptance (#553). Existing live destinations and built-in IDs are retained. These are not yet shipped as a completed migration. More international sources and editorial filtering remain separate product work.
 - **Deployment scope:** experimental, self-hosted operation; protect Admin and credentials on a trusted LAN or through the supported hardened HTTPS/reverse-proxy configuration. Publishing the source under MIT does not grant expanded Spotify API access.
 
 ## Playlists
@@ -84,9 +86,11 @@ but does **not** guarantee a minimum number of playable episodes. The deployment
 initial four entries expanded to five in verified subsequent cycles without repeated
 unnecessary playlist writes; ongoing freshness/coverage remains subject to monitoring.
 
-Hoy en EL PAÍS is **not** included: the latest reviewed source audit observed a null
-catalogue slot and unproven coverage. It must not be used as reconciliation authority
-for any dependent destination until a fresh audit proves safe coverage.
+Hoy en EL PAÍS is **not** included: the previously reviewed source audit observed a null
+catalogue slot and unproven coverage. Such a source must not authorize **full replacement**
+until a clean refresh proves coverage. The add-only fallback can use positively observed,
+eligible episodes without inferring removals, subject to destination capacity and
+readback safeguards; this is not a claim that Hoy en EL PAÍS was enabled.
 
 Admin exposes both bounds in whole minutes. Eligibility uses the inclusive range
 `min_duration_seconds <= duration_seconds <= max_duration_seconds`; unknown duration remains
@@ -97,8 +101,11 @@ raise only the upper bound and never bypass the minimum. Save is local and wakes
 reconciliation; Spotify metadata/cover synchronization remains a separate action.
 
 Activation snapshots both bounds in provisioning journal v2; pending v1 journals recover with
-minimum 0. Managed-state upgrades use schema v6; SQLite stays at database format 3 with unchanged
-episode/history tables. Duration eligibility remains per playlist over the shared persisted catalogue.
+minimum 0. The current managed-state document supports schema v10 for portable imports,
+custom drafts and installed source definitions while retaining reviewed legacy upgrade paths.
+SQLite remains database format 3 for episode/history state; the partial-addition
+fallback has a separate durable intent fence. Duration eligibility remains per playlist
+over the shared persisted catalogue.
 
 ## Editorial independence
 
