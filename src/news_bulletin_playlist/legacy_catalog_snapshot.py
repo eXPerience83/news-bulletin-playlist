@@ -14,9 +14,9 @@ import json
 import os
 import re
 import stat
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Callable
 from datetime import time
 from pathlib import Path
 from typing import Any, cast
@@ -170,7 +170,10 @@ def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
     if not isinstance(document, dict):
         raise FrozenLegacySnapshotError("invalid frozen catalog root")
     schema = document.get("schema_version")
-    if type(schema) is not int or schema not in (SNAPSHOT_SCHEMA_VERSION, SNAPSHOT_V2_SCHEMA_VERSION):
+    if type(schema) is not int or schema not in (
+        SNAPSHOT_SCHEMA_VERSION,
+        SNAPSHOT_V2_SCHEMA_VERSION,
+    ):
         raise FrozenLegacySnapshotError("unsupported frozen catalog format")
     keys = {
         "format", "schema_version", "managed_schema_version",
