@@ -349,14 +349,20 @@ def _parse_template(value: object) -> FrozenLegacyTemplate:
             raise ValueError("invalid source selection")
         if any(type(item[key]) is not int for key in ("retention_hours", "max_episodes")):
             raise ValueError("invalid integer policy")
-        policy = _record(item["duration_policy"], {"min_seconds", "max_seconds", "exceptions"})
+        policy = cast(
+            dict[str, Any],
+            _record(item["duration_policy"], {"min_seconds", "max_seconds", "exceptions"}),
+        )
         if any(type(policy[key]) is not int for key in ("min_seconds", "max_seconds")):
             raise ValueError("invalid duration policy")
         if not isinstance(policy["exceptions"], list) or len(policy["exceptions"]) > 100:
             raise ValueError("invalid duration exceptions")
         exceptions = []
         for raw in policy["exceptions"]:
-            e = _record(raw, {"id", "source_id", "local_time", "fold", "max_seconds"})
+            e = cast(
+                dict[str, Any],
+                _record(raw, {"id", "source_id", "local_time", "fold", "max_seconds"}),
+            )
             if not all(isinstance(e[k], str) for k in ("id", "source_id", "local_time")):
                 raise ValueError("invalid duration exception")
             if type(e["fold"]) is not int or e["fold"] not in (0, 1):
