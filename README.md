@@ -25,7 +25,7 @@ Core architectural invariant:
 
 A source is independent from a playlist and may feed several playlists. Public Spotify observation is used only to decide whether a source catalogue needs refreshing. The official Spotify Web API show catalogue supplies episode IDs, URIs and metadata; unchanged sources reuse durable local state, then every configured destination playlist is evaluated and reconciled independently.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contract and invariants. Notable product/runtime changes are tracked in [`CHANGELOG.md`](CHANGELOG.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contract and invariants. Notable product/runtime changes are tracked in [`CHANGELOG.md`](CHANGELOG.md). For a controlled recovery deployment of the Spotify null-catalogue incident, see [the 0.2.3b1 TrueNAS beta acceptance plan](docs/BETA_TRUENAS_RECOVERY.md).
 
 ## What works today — and what does not
 
@@ -176,7 +176,7 @@ See [`docs/P0_FINDINGS.md`](docs/P0_FINDINGS.md), [`docs/SOURCE_CATALOG.md`](doc
 
 ## Container runtime
 
-The supported runtime is a hardened Python 3.14 container. One long-lived process owns the HTTP status/admin surface and one sequential engine scheduler; it does **not** create one cron, worker or container per playlist.
+The supported runtime is a hardened Python 3.15 container. One long-lived process owns the HTTP status/admin surface and one sequential engine scheduler; it does **not** create one cron, worker or container per playlist.
 
 The container uses a read-only root filesystem, runs as a non-root numeric UID/GID, keeps `/data` as its only persistent writable path and drops Linux capabilities. `/healthz` validates persistent storage. The read-only `/` page reports runtime/Spotify state plus last cycle, next run, source outcomes and playlist outcomes when the engine is configured.
 
@@ -197,7 +197,7 @@ Production `/admin/` and the Spotify callback are intentionally fail-closed. Whe
 
 ## Development
 
-Development and GitHub CI now target **Python 3.15 only**. The distributed Docker runtime remains pinned to **Python 3.14.8** pending separate image validation (#494), so package metadata still permits Python 3.14 without claiming it is covered by current CI. The project has no third-party runtime dependencies; development checks use pytest, Ruff and mypy.
+Development and GitHub CI target **Python 3.15**, and the current Docker runtime is pinned to **Python 3.15.2**. Package metadata also permits Python 3.14, but the current CI is not a Python 3.14 compatibility run. Runtime dependencies and development checks are declared in pyproject.toml; the development suite uses pytest, Ruff and mypy.
 
 ```bash
 python3.15 -m venv .venv

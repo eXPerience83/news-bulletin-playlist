@@ -4,6 +4,8 @@ The GHCR package is:
 
 `ghcr.io/experience83/news-bulletin-playlist`
 
+For the narrowly scoped **0.2.3b1 null-catalogue recovery beta**, follow [the controlled TrueNAS acceptance and rollback checklist](BETA_TRUENAS_RECOVERY.md). Preparing a Python beta version or merging a PR does not publish a container; only the deliberately authorized candidate or edge workflow does. Do not promote stable/latest while #562 production acceptance remains pending.
+
 Publication channels deliberately represent different trust levels:
 
 `dev -> edge -> stable = latest`
