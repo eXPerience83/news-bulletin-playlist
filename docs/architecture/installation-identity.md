@@ -105,6 +105,35 @@ without allowing ordinary installed sources to collide with existing built-in
 IDs. Existing open tasks still include actual v11 storage, schema migration,
 old-image rollback and any startup/UI opt-in behavior.
 
+## Stage 4: explicit frozen legacy sidecar (no runtime integration)
+
+The standalone `legacy_catalog_snapshot.py` module serializes the **effective**
+v6–v10 source definitions, distinct origin flags (image preset vs local install)
+and full playlist-template metadata, including source memberships, time bounds,
+duration exceptions and fold bits, into a deterministic UTF-8 document:
+`frozen-legacy-catalog.json`, schema v1. A SHA-256 of the exact original
+`managed-state.json` bytes binds the sidecar to the source document; the
+original parsed managed state is revalidated against the preview before
+serialization. The strict decoder checks schema, capability support,
+provenance, source identity, references and duplicate template IDs. It does
+not grant runtime authority or set new-install opt-in mode.
+
+The **explicit**, separately invoked writer obtains a Linux advisory directory
+lock, checks the original state, creates a restricted mode-0600 staging file,
+fsyncs the bytes, rechecks state, then publishes through an exclusive hard
+link (no replacement) and directory fsync. Repeated writes are allowed only
+if byte-identical; corrupted or divergent existing sidecars fail closed.
+An interrupted/uncertain publish must be inspected and must never trigger
+a blind overwrite or a Spotify operation. The service has **no caller** in
+runtime/startup, Admin or automated migration paths.
+
+The sidecar contains **definitions only**, not Spotify destination IDs, OAuth,
+SQLite history, pending journals or cover JPEG bytes. It is intentionally
+**not a backup**, not a live migration to v11, and not sufficient by itself
+to allow retiring the legacy built-ins. A full rollback still requires a
+consistent snapshot of the existing /data volume and image digest. No image
+publication/TrueNAS operation is part of this stage.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
@@ -131,8 +160,10 @@ old-image rollback and any startup/UI opt-in behavior.
 
 Stage 1 covers read-only empty/legacy/symlink/identity recognition. Stage 2 adds
 the separately invoked marker writer and isolated failure/concurrency tests.
-Stage 3 adds only a pure v6–v10 materialization preview and synthetic fixtures.
-No stage yet changes startup, on-disk managed-state or effective catalog behavior.
+Stage 3 adds a pure v6–v10 materialization preview and synthetic fixtures.
+Stage 4 adds an explicit standalone frozen-catalog sidecar store, never
+invoked by startup. No stage yet changes managed-state or runtime catalog
+compilation behavior.
 
 Follow-up PRs under #552: versioned persistent legacy provenance and
 rollback fixtures; guarded pre-storage startup integration only after those
