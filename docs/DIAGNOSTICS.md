@@ -136,6 +136,22 @@ Known rows and accepted history merge without deletion by absence. Their source 
 fields commit together in one SQLite transaction; failure rolls the entire refresh back. Every
 playlist depending on an unproven source remains blocked from all reconciliation, including
 additions, cap eviction, replacement and reorder. A later clean refresh recovers normal semantics.
+Blocked destination outcomes now identify the assigned source IDs and, when a null was
+observed in the same cycle, the fixed `coverage_unproven_null_slot` reason. Public and
+authenticated status pages show the destination as preserved, with desired state
+**not evaluated**, instead of misrepresenting a skipped build as zero eligible
+episodes. If the affected source was not refreshed in the latest cycle, the status
+uses the broader `source_unavailable_or_coverage_unproven` reason because the
+null-slot count is not persisted as durable source authority. Existing last-success
+timestamps remain visible. This is observability only: no new provider requests or
+destination writes are introduced. Structured `destination_preserved` events
+record `blocked_source_count` and a closed `failure_reason`, omitting
+`desired_count` entirely for skipped builds. When exactly one source blocks
+the playlist (as with RNE), the event uses that source's safe ID in its
+`source_id` field. Source refresh events include a bounded `null_item_count`
+when a null is actually observed in the current cycle. The diagnostics ZIP
+`status.json` represents a skipped desired count as JSON `null` and includes
+`blocked_source_ids` / `block_reason` rather than exporting a fictitious zero.
 Audit remains read-only. SQLite stays format 3 with no new tables/columns, and the null count is not
 persisted as source authority.
 

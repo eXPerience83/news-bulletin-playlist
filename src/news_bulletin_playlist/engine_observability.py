@@ -207,6 +207,8 @@ class InstrumentedEngineCycleRunner:
         }
         if source.refresh_reason is not None:
             details["refresh_reason"] = source.refresh_reason
+        if source.null_item_count:
+            details["null_item_count"] = source.null_item_count
         if source.refreshed and source.temporal_metrics is not None:
             details.update(asdict(source.temporal_metrics))
             details["temporal_strategy"] = source.temporal_metrics.temporal_strategy.value
@@ -229,11 +231,17 @@ class InstrumentedEngineCycleRunner:
         cycle_id: str,
     ) -> None:
         details: dict[str, str | int | bool | None] = {
-            "desired_count": playlist.desired_count,
             "duration_unavailable_count": playlist.duration_unavailable_count,
             "local_skip": playlist.local_skip,
             "stale_escalation": playlist.stale_escalation,
         }
+        if playlist.blocked_source_ids:
+            # No desired state was built; zero would falsely suggest an empty catalogue.
+            details["blocked_source_count"] = len(playlist.blocked_source_ids)
+            if playlist.block_reason is not None:
+                details["failure_reason"] = playlist.block_reason
+        else:
+            details["desired_count"] = playlist.desired_count
         optional = {
             "applied_count": playlist.applied_count,
             "request_item_count": playlist.request_item_count,
@@ -284,6 +292,11 @@ class InstrumentedEngineCycleRunner:
             component="playlist",
             event_name=event_name,
             cycle_id=cycle_id,
+            source_id=(
+                str(playlist.blocked_source_ids[0])
+                if len(playlist.blocked_source_ids) == 1
+                else None
+            ),
             playlist_id=str(playlist.playlist_id),
             details=details,
         )

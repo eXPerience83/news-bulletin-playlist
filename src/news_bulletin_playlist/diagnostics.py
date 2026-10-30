@@ -45,6 +45,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "applied_count",
         "backoff_source",
         "backoff_state",
+        "blocked_source_count",
         "api_request_count",
         "desired_count",
         "duration_ms",
@@ -192,6 +193,8 @@ _ALLOWED_DETAIL_STRING_VALUES = {
     "failure_reason": frozenset(
         {
             "authorization_context_changed",
+            "coverage_unproven_null_slot",
+            "source_unavailable_or_coverage_unproven",
             "configuration_invalid",
             "desired_state_invalid",
             "local_skip_authority_changed",

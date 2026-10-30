@@ -13,10 +13,13 @@ from test_source_refresh_atomic import rows
 
 import news_bulletin_playlist.engine as engine_module
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.engine import EngineRunner
+from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
 from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
+from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 from news_bulletin_playlist.spotify.client import SpotifyApiError
 from news_bulletin_playlist.spotify.first_catalogue import fetch_source_catalogue
 from news_bulletin_playlist.spotify.first_models import RefreshReason
@@ -112,7 +115,12 @@ def test_null_refresh_persists_known_evidence_blocks_caps_and_recovers(tmp_path,
         engine.clock = lambda cycle=cycle: NOW + timedelta(minutes=10 * cycle)
         result = engine.run_cycle()
         assert not result.sources[0].ok and result.sources[0].refreshed
+        assert result.sources[0].null_item_count == 1
+        assert result.sources[0].error == "coverage_unproven_null_slot"
         assert not result.playlists[0].ok
+        assert result.playlists[0].blocked_source_ids == (SOURCE.id,)
+        assert result.playlists[0].block_reason == "coverage_unproven_null_slot"
+        assert result.playlists[0].write_outcome == "not_attempted"
         assert client.writes == [] and client.reads == []
         assert client.states["dependent"] == original_destination
         state = engine.first_journal.get_source_state(SOURCE.id)
@@ -128,9 +136,52 @@ def test_null_refresh_persists_known_evidence_blocks_caps_and_recovers(tmp_path,
     engine.clock = lambda: NOW + timedelta(minutes=40)
     recovered = engine.run_cycle()
     assert recovered.sources[0].ok and recovered.playlists[0].ok
+    assert recovered.playlists[0].blocked_source_ids == ()
+    assert recovered.playlists[0].block_reason is None
     assert client.writes == [("dependent", [f"spotify:episode:{9:022d}"])]
     assert engine._playlist_sources_ready(engine.config.playlists[0], now=engine.clock())
     assert {row.spotify_episode_id for row in engine.first_journal.list_episodes()} == {f"{9:022d}"}
+
+
+def test_rne_shaped_nineteen_slot_catalogue_blocks_without_mutating(tmp_path):
+    show = spotify_show_id(SOURCE)
+    items = [_item(number) for number in range(1, 20)]
+    items[17] = None  # The observed RNE shape: one-based provider position 18.
+    client = Client({show: items}, {"dependent": [f"spotify:episode:{1:022d}"]})
+    engine = runner(tmp_path, client)
+    outcome = engine.run_cycle()
+    assert client.calls == [(show, 0)]
+    assert outcome.sources[0].episode_count == 18
+    assert outcome.sources[0].null_item_count == 1
+    assert outcome.playlists[0].blocked_source_ids == (SOURCE.id,)
+    assert outcome.playlists[0].block_reason == "coverage_unproven_null_slot"
+    assert not outcome.playlists[0].ok
+    assert not client.reads and not client.writes
+    assert client.states["dependent"] == [f"spotify:episode:{1:022d}"]
+
+
+def test_blocked_rne_diagnostic_has_source_reason_and_no_false_zero(tmp_path):
+    show = spotify_show_id(SOURCE)
+    client = Client({show: [_item(1), None]}, {"dependent": [f"spotify:episode:{1:022d}"]})
+    engine = runner(tmp_path, client)
+    store = DiagnosticEventStore(tmp_path / "diagnostics.sqlite3")
+    store.initialize()
+    result = InstrumentedEngineCycleRunner(
+        engine,
+        OperationalDiagnostics(store),
+    ).run_cycle()
+    assert not result.ok
+    events = store.list_events()
+    preserved = next(event for event in events if event.event_name == "destination_preserved")
+    assert preserved.source_id == str(SOURCE.id)
+    assert preserved.playlist_id == "dependent"
+    assert preserved.details["failure_reason"] == "coverage_unproven_null_slot"
+    assert preserved.details["blocked_source_count"] == 1
+    assert preserved.details["write_decision"] == "preserved"
+    assert "desired_count" not in preserved.details
+    source_event = next(event for event in events if event.event_name == "source_state_preserved")
+    assert source_event.details["null_item_count"] == 1
+    assert not client.writes and not client.reads
 
 
 def test_shared_unproven_source_blocks_both_destinations_but_not_independent(tmp_path):
@@ -149,6 +200,11 @@ def test_shared_unproven_source_blocks_both_destinations_but_not_independent(tmp
     engine = runner(tmp_path, client, sources=(SOURCE, independent), playlists=playlists)
     result = engine.run_cycle()
     assert [outcome.ok for outcome in result.playlists] == [False, False, True]
+    assert [outcome.blocked_source_ids for outcome in result.playlists] == [
+        (SOURCE.id,),
+        (SOURCE.id,),
+        (),
+    ]
     assert client.writes == [("independent", [f"spotify:episode:{1:022d}"])]
     assert client.calls == [(show, 0), (other_show, 0)]
     assert all(read[0] == "independent" for read in client.reads)
