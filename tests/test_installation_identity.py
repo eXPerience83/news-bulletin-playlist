@@ -14,8 +14,8 @@ from news_bulletin_playlist.installation_identity import (
     InstallationInspection,
     inspect_installation_root,
 )
-from news_bulletin_playlist.managed_state import MANAGED_STATE_FILENAME
 from news_bulletin_playlist.managed_provisioning import MANAGED_PROVISIONING_FILENAME
+from news_bulletin_playlist.managed_state import MANAGED_STATE_FILENAME
 from news_bulletin_playlist.persistence import DEFAULT_DB_FILENAME
 from news_bulletin_playlist.spotify.auth import SPOTIFY_AUTH_FILENAME
 
