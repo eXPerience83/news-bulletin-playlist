@@ -83,9 +83,7 @@ def test_frozen_sidecar_exact_sources_and_templates_without_state_changes(
     assert {s.installed.id for s in decoded.sources} == {
         s.installed.id for s in preview.source_snapshots
     }
-    assert {s.installed for s in decoded.sources} == {
-        s.installed for s in preview.source_snapshots
-    }
+    assert {s.installed for s in decoded.sources} == {s.installed for s in preview.source_snapshots}
     assert decoded.templates == preview.template_snapshots
     assert b"secret-oauth" not in payload
     assert b"secret-history" not in payload
