@@ -106,7 +106,7 @@ def _legacy_state(version: int, catalog: BuiltInCatalog) -> ManagedState:
         source_overrides=(ManagedSourceOverride(SourceId("rne"), PublicReleaseMode.DISABLED),),
         templates=(_draft(),) if version >= 7 else (),
         quarantined_templates=(
-            QuarantinedPlaylistTemplate(0, "invalid_definition", '{"id":"custom_bad"}'),
+            QuarantinedPlaylistTemplate(0, "invalid_definition", '{"id": "custom_bad"}'),
         )
         if version >= 7
         else (),
