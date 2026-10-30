@@ -18,6 +18,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
@@ -40,6 +41,7 @@ from news_bulletin_playlist.models import (
     LanguageTag,
     OrderingPolicy,
     PlaylistId,
+    SourceDefinition,
     SourceId,
 )
 from news_bulletin_playlist.portable_sources import (
@@ -311,7 +313,7 @@ def _template_record(item: FrozenLegacyTemplate) -> dict[str, object]:
 
 
 def _parse_template(value: object) -> FrozenLegacyTemplate:
-    item = _record(
+    item = cast(dict[str, Any], _record(
         value,
         {
             "provenance",
@@ -327,7 +329,7 @@ def _parse_template(value: object) -> FrozenLegacyTemplate:
             "ordering",
             "duration_policy",
         },
-    )
+    ))
     try:
         provenance = LegacyProvenance(item["provenance"])
         if any(
@@ -400,7 +402,7 @@ def _parse_template(value: object) -> FrozenLegacyTemplate:
         raise FrozenLegacySnapshotError("invalid frozen catalog template") from exc
 
 
-def _installed(source: object) -> InstalledSource:
+def _installed(source: SourceDefinition) -> InstalledSource:
     return InstalledSource.from_definition(source)
 
 
