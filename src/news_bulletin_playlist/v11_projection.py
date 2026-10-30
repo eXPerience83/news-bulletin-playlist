@@ -55,11 +55,11 @@ class V11LegacyProjection:
 def project_v11_legacy(
     frozen_catalog_bytes: bytes, original_managed_state_bytes: bytes
 ) -> V11LegacyProjection:
-    """Require matching old data; source iteration order needs a later v2 snapshot.
+    """Reconstruct v2 in historical order; v1 remains explicitly unverified.
 
-    Frozen sidecar v1 canonicalizes sources by Spotify show ID, discarding
-    their original image order. This projection therefore cannot authorize a
-    runtime switch, even if source definitions and destinations match exactly.
+    Source order in v1 is canonical Spotify-show order, not historical image
+    iteration order. Only a complete, separately validated v2 order can
+    support exact projected runtime equivalence.
     """
     snapshot = parse_legacy_snapshot(frozen_catalog_bytes)
     if not isinstance(original_managed_state_bytes, bytes):
@@ -68,9 +68,13 @@ def project_v11_legacy(
     if digest != snapshot.managed_state_sha256:
         raise FrozenLegacySnapshotError("frozen catalog does not match managed state")
 
+    ordered_records = snapshot.sources
+    if snapshot.source_order is not None:
+        by_id = {item.installed.id: item for item in snapshot.sources}
+        ordered_records = tuple(by_id[source_id] for source_id in snapshot.source_order)
     image_sources: tuple[SourceDefinition, ...] = tuple(
         replace(source_definition(item.installed), enabled=True)
-        for item in snapshot.sources
+        for item in ordered_records
         if item.provenance is LegacyProvenance.IMAGE_PRESET
     )
     image_templates = tuple(
@@ -105,18 +109,23 @@ def project_v11_legacy(
     show_ids = [item.spotify_show_id for item in frozen.values()]
     if len(set(show_ids)) != len(show_ids):
         raise FrozenLegacySnapshotError("frozen sources contain duplicate Spotify shows")
+    source_order_verified = snapshot.source_order is not None
+    if source_order_verified and tuple(source.id for source in runtime.sources) != (
+        snapshot.source_order
+    ):
+        raise FrozenLegacySnapshotError("frozen source order differs from reconstructed runtime")
 
     return V11LegacyProjection(
         original_state=state,
-        installed_sources=tuple(item.installed for item in snapshot.sources),
-        source_provenance=tuple(item.provenance for item in snapshot.sources),
+        installed_sources=tuple(item.installed for item in ordered_records),
+        source_provenance=tuple(item.provenance for item in ordered_records),
         playlist_examples=templates,
         example_provenance=tuple(item.provenance for item in snapshot.templates),
         local_drafts=state.templates,
         managed_destinations=state.playlists,
         quarantined_drafts=state.quarantined_templates,
         projected_runtime=runtime,
-        source_order_verified=False,
+        source_order_verified=source_order_verified,
         original_state_sha256=digest,
     )
 

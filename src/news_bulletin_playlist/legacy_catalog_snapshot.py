@@ -14,6 +14,7 @@ import json
 import os
 import re
 import stat
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import time
@@ -52,8 +53,10 @@ from news_bulletin_playlist.portable_sources import (
 )
 
 FROZEN_LEGACY_SNAPSHOT_FILENAME = "frozen-legacy-catalog.json"
+FROZEN_LEGACY_SNAPSHOT_V2_FILENAME = "frozen-legacy-catalog.v2.json"
 SNAPSHOT_FORMAT = "news-bulletin-playlist.frozen-legacy-catalog"
 SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_V2_SCHEMA_VERSION = 2
 MAX_FROZEN_SNAPSHOT_BYTES = 1024 * 1024
 MAX_MANAGED_STATE_BYTES = 8 * 1024 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -69,6 +72,7 @@ class FrozenLegacyCatalogSnapshot:
     managed_state_sha256: str
     sources: tuple[FrozenLegacySource, ...]
     templates: tuple[FrozenLegacyTemplate, ...]
+    source_order: tuple[SourceId, ...] | None = None
 
 
 def build_legacy_snapshot(preview: LegacyMigrationPreview, state_bytes: bytes) -> bytes:
@@ -138,6 +142,23 @@ def build_legacy_snapshot(preview: LegacyMigrationPreview, state_bytes: bytes) -
     return payload
 
 
+def build_legacy_snapshot_v2(preview: LegacyMigrationPreview, state_bytes: bytes) -> bytes:
+    """Record the precise historic effective source order without changing v1."""
+    baseline = json.loads(build_legacy_snapshot(preview, state_bytes))
+    ordered_ids = tuple(str(item.installed.id) for item in preview.source_snapshots)
+    if ordered_ids != tuple(str(item.id) for item in preview.original_runtime.sources):
+        raise FrozenLegacySnapshotError("legacy source order differs from runtime")
+    baseline["schema_version"] = SNAPSHOT_V2_SCHEMA_VERSION
+    baseline["source_order"] = list(ordered_ids)
+    payload = _canonical(baseline)
+    if len(payload) > MAX_FROZEN_SNAPSHOT_BYTES:
+        raise FrozenLegacySnapshotError("frozen catalog exceeds size limit")
+    parsed = parse_legacy_snapshot(payload)
+    if parsed.source_order != tuple(item.installed.id for item in preview.source_snapshots):
+        raise FrozenLegacySnapshotError("frozen source order cannot be verified")
+    return payload
+
+
 def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
     """Strict read-only decode: no trust in unverified provenance or file names."""
     if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_FROZEN_SNAPSHOT_BYTES:
@@ -146,20 +167,26 @@ def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
         document = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_object)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise FrozenLegacySnapshotError("invalid frozen catalog JSON") from exc
-    root = _record(
-        document,
-        {
-            "format",
-            "schema_version",
-            "managed_schema_version",
-            "managed_state_sha256",
-            "sources",
-            "templates",
-        },
-    )
-    if root["format"] != SNAPSHOT_FORMAT or (
-        type(root["schema_version"]) is not int or root["schema_version"] != SNAPSHOT_SCHEMA_VERSION
+    if not isinstance(document, dict):
+        raise FrozenLegacySnapshotError("invalid frozen catalog root")
+    schema = document.get("schema_version")
+    if type(schema) is not int or schema not in (
+        SNAPSHOT_SCHEMA_VERSION,
+        SNAPSHOT_V2_SCHEMA_VERSION,
     ):
+        raise FrozenLegacySnapshotError("unsupported frozen catalog format")
+    keys = {
+        "format",
+        "schema_version",
+        "managed_schema_version",
+        "managed_state_sha256",
+        "sources",
+        "templates",
+    }
+    if schema == SNAPSHOT_V2_SCHEMA_VERSION:
+        keys.add("source_order")
+    root = _record(document, keys)
+    if root["format"] != SNAPSHOT_FORMAT:
         raise FrozenLegacySnapshotError("unsupported frozen catalog format")
     version = root["managed_schema_version"]
     if type(version) is not int or version not in (6, 7, 8, 9, 10):
@@ -187,7 +214,22 @@ def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
         raise FrozenLegacySnapshotError("invalid frozen catalog templates")
     templates = tuple(_parse_template(item) for item in raw_templates)
     template_ids = [item.definition.id for item in templates]
-    source_ids = {item.installed.id for item in sources}
+    ids = [item.installed.id for item in sources]
+    source_ids = set(ids)
+    if len(source_ids) != len(ids):
+        raise FrozenLegacySnapshotError("duplicate frozen source IDs")
+    source_order: tuple[SourceId, ...] | None = None
+    if schema == SNAPSHOT_V2_SCHEMA_VERSION:
+        raw_order = root["source_order"]
+        if (
+            not isinstance(raw_order, list)
+            or len(raw_order) != len(ids)
+            or any(type(item) is not str or not item for item in raw_order)
+            or len(set(raw_order)) != len(raw_order)
+            or set(raw_order) != {str(item) for item in ids}
+        ):
+            raise FrozenLegacySnapshotError("invalid frozen catalog source order")
+        source_order = tuple(SourceId(item) for item in raw_order)
     if len(template_ids) != len(set(template_ids)):
         raise FrozenLegacySnapshotError("duplicate frozen template IDs")
     if any(
@@ -196,17 +238,30 @@ def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
         for source_id in item.definition.default_source_ids
     ):
         raise FrozenLegacySnapshotError("frozen template references missing source")
-    return FrozenLegacyCatalogSnapshot(version, digest, sources, templates)
+    return FrozenLegacyCatalogSnapshot(version, digest, sources, templates, source_order)
 
 
 def write_legacy_snapshot(data_dir: Path, preview: LegacyMigrationPreview) -> bytes:
-    """Explicit one-time, non-overwriting sidecar write; no startup caller.
+    """Write the original v1 sidecar, never overwriting an existing file."""
+    return _write_frozen_sidecar(
+        data_dir, preview, FROZEN_LEGACY_SNAPSHOT_FILENAME, build_legacy_snapshot
+    )
 
-    Under an advisory directory lock, re-read the exact legacy state bytes,
-    build the frozen snapshot and check the source file before publication.
-    Existing sidecars must be byte-identical; conflicts fail closed. An error
-    after publication is intentionally ambiguous, never blindly overwritten.
-    """
+
+def write_legacy_snapshot_v2(data_dir: Path, preview: LegacyMigrationPreview) -> bytes:
+    """Write v2 to a separate path, preserving any existing v1 evidence."""
+    return _write_frozen_sidecar(
+        data_dir, preview, FROZEN_LEGACY_SNAPSHOT_V2_FILENAME, build_legacy_snapshot_v2
+    )
+
+
+def _write_frozen_sidecar(
+    data_dir: Path,
+    preview: LegacyMigrationPreview,
+    filename: str,
+    builder: Callable[[LegacyMigrationPreview, bytes], bytes],
+) -> bytes:
+    """One-time, directory-locked, atomic, no-overwrite publication."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     try:
         root_fd = os.open(data_dir, flags)
@@ -215,11 +270,31 @@ def write_legacy_snapshot(data_dir: Path, preview: LegacyMigrationPreview) -> by
     try:
         fcntl.flock(root_fd, fcntl.LOCK_EX)
         original = _read_regular(root_fd, "managed-state.json", MAX_MANAGED_STATE_BYTES)
-        payload = build_legacy_snapshot(preview, original)
+        payload = builder(preview, original)
+        if filename == FROZEN_LEGACY_SNAPSHOT_V2_FILENAME:
+            try:
+                prior_v1_bytes = _read_regular(
+                    root_fd, FROZEN_LEGACY_SNAPSHOT_FILENAME, MAX_FROZEN_SNAPSHOT_BYTES
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                prior = parse_legacy_snapshot(prior_v1_bytes)
+                current = parse_legacy_snapshot(payload)
+                prior_sources = {item.installed.id: item for item in prior.sources}
+                current_sources = {item.installed.id: item for item in current.sources}
+                if (
+                    prior.source_order is not None
+                    or prior.managed_schema_version != current.managed_schema_version
+                    or prior.managed_state_sha256 != current.managed_state_sha256
+                    or prior_sources != current_sources
+                    or prior.templates != current.templates
+                ):
+                    raise FrozenLegacySnapshotError(
+                        "existing v1 snapshot conflicts with requested v2; no overwrite"
+                    )
         try:
-            previous = _read_regular(
-                root_fd, FROZEN_LEGACY_SNAPSHOT_FILENAME, MAX_FROZEN_SNAPSHOT_BYTES
-            )
+            previous = _read_regular(root_fd, filename, MAX_FROZEN_SNAPSHOT_BYTES)
         except FileNotFoundError:
             previous = None
         if previous is not None:
@@ -244,7 +319,7 @@ def write_legacy_snapshot(data_dir: Path, preview: LegacyMigrationPreview) -> by
                 raise FrozenLegacySnapshotError("managed state changed during snapshot")
             os.link(
                 temporary,
-                FROZEN_LEGACY_SNAPSHOT_FILENAME,
+                filename,
                 src_dir_fd=root_fd,
                 dst_dir_fd=root_fd,
                 follow_symlinks=False,

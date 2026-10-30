@@ -155,6 +155,31 @@ This is not a schema-v11 serializer or runtime change. It does not write files,
 activate playlists or change legacy startup. Migration transactions, rollback
 and opt-in new installations remain separately gated.
 
+## Stage 6: source-order-preserving frozen sidecar v2
+
+Sidecar **v1** (`frozen-legacy-catalog.json`) remains readable and its
+original bytes immutable. Portable source serialization sorted definitions
+by Spotify show ID, so it **cannot prove** legacy source iteration order.
+Reading v1 continues to report `source_order_verified=False`.
+
+Sidecar **v2** (`frozen-legacy-catalog.v2.json`) adds a strict
+`source_order` array of logical source IDs from the *original effective
+runtime*, before any source export sorting. The v2 decoder checks exact
+membership, uniqueness and type, and the pure v11 projection reconstructs
+the **historical built-in catalog order** independently of current image
+presets. It fails closed unless the reconstructed runtime order matches
+the v2 field. Tests compare full ordered `EngineConfig` objects, including
+all four destinations, across synthetic v6–v10 states.
+
+The explicit v2 writer publishes a separate, exclusively created file,
+never upgrades or replaces a v1 sidecar, and checks any existing v1 evidence
+for exact original-state digest, source definitions, provenance and templates.
+Corrupt or conflicting v1/v2 artifacts are blockers, not invitations to
+repair or overwrite. Versioning and verified provenance still **do not**
+create a v11 on-disk managed-state codec, startup integration, rollback
+transaction or permission to deploy. A matching full /data snapshot is
+still required for later recovery.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
