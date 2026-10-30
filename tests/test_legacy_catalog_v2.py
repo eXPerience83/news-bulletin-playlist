@@ -45,9 +45,7 @@ def test_v2_restores_exact_order_and_four_destinations(tmp_path: Path, schema: i
     parsed_old = parse_legacy_snapshot(v1)
     parsed_new = parse_legacy_snapshot(v2)
     assert parsed_old.source_order is None
-    assert parsed_new.source_order == tuple(
-        item.id for item in preview.original_runtime.sources
-    )
+    assert parsed_new.source_order == tuple(item.id for item in preview.original_runtime.sources)
     assert parsed_new.sources == parsed_old.sources
     assert parsed_new.templates == parsed_old.templates
     assert project_v11_legacy(v1, state_bytes).source_order_verified is False
@@ -65,9 +63,11 @@ def test_v2_restores_exact_order_and_four_destinations(tmp_path: Path, schema: i
     after = _files(root)
     assert after[FROZEN_LEGACY_SNAPSHOT_FILENAME] == v1
     assert after[FROZEN_LEGACY_SNAPSHOT_V2_FILENAME] == v2
-    assert {k: v for k, v in after.items() if k not in {
-        FROZEN_LEGACY_SNAPSHOT_FILENAME, FROZEN_LEGACY_SNAPSHOT_V2_FILENAME
-    }} == before
+    assert {
+        k: v
+        for k, v in after.items()
+        if k not in {FROZEN_LEGACY_SNAPSHOT_FILENAME, FROZEN_LEGACY_SNAPSHOT_V2_FILENAME}
+    } == before
     assert not any(name.endswith(".tmp") for name in after)
 
 
