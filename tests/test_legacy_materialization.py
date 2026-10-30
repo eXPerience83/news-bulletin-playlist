@@ -191,7 +191,9 @@ def test_catalog_snapshot_does_not_follow_subsequent_image_preset_changes() -> N
     state = _legacy_state(10, catalog)
     preview = preview_legacy_materialization(catalog, state)
     first = preview.source_snapshots[0].installed
-    spain = next(x.definition for x in preview.template_snapshots if str(x.definition.id) == PRODUCTS[0])
+    spain = next(
+        x.definition for x in preview.template_snapshots if str(x.definition.id) == PRODUCTS[0]
+    )
     changed_source = replace(catalog.sources[0], display_name="changed next release")
     changed_template = replace(catalog.playlist(PRODUCTS[0]), description="changed in image")
     changed = BuiltInCatalog(
