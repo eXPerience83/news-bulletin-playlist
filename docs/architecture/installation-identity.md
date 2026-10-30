@@ -1,4 +1,4 @@
-# Installation identity and optional presets — design record (#552, stage 1)
+# Installation identity and optional presets — staged design record (#552)
 
 Status: **read-only preflight plus isolated Linux opt-in marker writer**. Neither
 is connected to startup. No runtime source compilation, managed-state
@@ -39,18 +39,17 @@ The read-only inspect_installation_root() returns:
 
 | Pre-bootstrap evidence | Disposition | Meaning |
 | --- | --- | --- |
-| Missing or empty real directory, no marker | empty_unclaimed | Candidate only; future bootstrap must reserve atomically |
+| Missing or empty real directory, no marker | empty_unclaimed | Candidate only; writer requires an existing real empty directory |
 | Any entries without marker, even hidden/unknown or broken symlink | legacy_compatible | Preserve legacy behavior and durable state |
 | Valid legacy_compatible marker | claimed_legacy | Existing installation retains legacy mode |
 | Valid opt_in marker | claimed_opt_in | Future runtime may use optional presets after schema gates |
 | Corrupt marker, unsupported schema, symlink marker or unsafe root | Error | Fail closed; never silently switch mode |
 
-A preflight observation is **not a lock**. A later PR must arrange a single
-guarded bootstrap operation, recheck the root before any SQLite, OAuth, temporary
-health probe, journal or Admin write, and create the marker exclusively with
-file+directory fsync. Handle concurrency, interrupted and ambiguous writes. No
-existing directory containing durable evidence may be assigned opt-in merely
-because its managed-state.json is missing or empty.
+A preflight observation is **not a lock**. The isolated stage-2 writer handles
+cooperating bootstrap concurrency and exclusive marker publication, but **it is
+not yet called by startup**: a later PR must sequence its use before SQLite,
+OAuth, health, journal or Admin writes. No existing directory containing durable
+evidence may be assigned opt-in merely because its managed-state.json is missing.
 
 ### Stage 2: explicit guarded claiming primitive (not enabled in startup)
 
@@ -107,12 +106,13 @@ Do not retrofit opt-in markers onto old installations manually.
 
 ## Review gates
 
-This stage covers empty candidates, legacy evidence without managed state,
-symlinks, valid identity/restart and invalid identity, all without writes.
-Startup and effective catalog behavior remain unchanged by this PR.
+Stage 1 covers read-only empty/legacy/symlink/identity recognition. Stage 2 adds
+only the separately invoked marker writer and isolated failure/concurrency tests.
+Neither stage changes startup or effective catalog behavior.
 
 Follow-up PRs under #552: gated pre-storage startup integration (only after full
 legacy-migration gates), versioned frozen legacy snapshot migration and rollback
 fixtures, fresh opt-in configuration and explicit preset import, and runtime/Admin
-separation. The guarded marker-writing primitive alone does not change defaults. #553 is independent
-empty-install round-trip acceptance; #565 remains the beta release gate.
+separation. The guarded marker-writing primitive alone does not change defaults.
+#553 is independent empty-install round-trip acceptance; #565 remains the beta
+release gate.
