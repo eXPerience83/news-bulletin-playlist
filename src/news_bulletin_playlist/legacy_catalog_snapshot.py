@@ -218,7 +218,9 @@ def write_legacy_snapshot(data_dir: Path, preview: LegacyMigrationPreview) -> by
         original = _read_regular(root_fd, "managed-state.json", MAX_MANAGED_STATE_BYTES)
         payload = build_legacy_snapshot(preview, original)
         try:
-            previous = _read_regular(root_fd, FROZEN_LEGACY_SNAPSHOT_FILENAME, MAX_FROZEN_SNAPSHOT_BYTES)
+            previous = _read_regular(
+                root_fd, FROZEN_LEGACY_SNAPSHOT_FILENAME, MAX_FROZEN_SNAPSHOT_BYTES
+            )
         except FileNotFoundError:
             previous = None
         if previous is not None:
@@ -322,7 +324,10 @@ def _parse_template(value: object) -> FrozenLegacyTemplate:
     )
     try:
         provenance = LegacyProvenance(item["provenance"])
-        if any(not isinstance(item[key], str) for key in ("id", "display_name", "description", "cover_id")):
+        if any(
+            not isinstance(item[key], str)
+            for key in ("id", "display_name", "description", "cover_id")
+        ):
             raise ValueError("invalid text")
         if not all(isinstance(item[key], list) and all(isinstance(v, str) for v in item[key])
                    for key in ("countries", "languages", "source_ids")):
@@ -403,4 +408,6 @@ def _record(value: object, keys: set[str]) -> dict[str, object]:
 
 
 def _canonical(data: object) -> bytes:
-    return (json.dumps(data, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
+    return (
+        json.dumps(data, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+    ).encode("utf-8")
