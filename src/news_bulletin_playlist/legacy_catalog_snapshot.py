@@ -20,14 +20,19 @@ from datetime import time
 from pathlib import Path
 from uuid import uuid4
 
-from news_bulletin_playlist.catalog import PlaylistTemplate
+from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.legacy_materialization import (
     FrozenLegacySource,
     FrozenLegacyTemplate,
     LegacyMigrationPreview,
     LegacyProvenance,
 )
-from news_bulletin_playlist.managed_state import source_definition
+from news_bulletin_playlist.managed_state import (
+    InstalledSource,
+    ManagedStateError,
+    parse_managed_state,
+    source_definition,
+)
 from news_bulletin_playlist.models import (
     CountryCode,
     DurationPolicy,
@@ -80,6 +85,25 @@ def build_legacy_snapshot(preview: LegacyMigrationPreview, state_bytes: bytes) -
         or state["schema_version"] != preview.original_state.schema_version
     ):
         raise FrozenLegacySnapshotError("original state schema mismatch")
+
+    try:
+        source_catalog = BuiltInCatalog(
+            sources=tuple(
+                source_definition(item.installed)
+                for item in preview.source_snapshots
+                if item.provenance is LegacyProvenance.IMAGE_PRESET
+            ),
+            playlists=tuple(
+                item.definition
+                for item in preview.template_snapshots
+                if item.provenance is LegacyProvenance.IMAGE_PRESET
+            ),
+        )
+        recovered = parse_managed_state(state, catalog=source_catalog)
+    except (ManagedStateError, ValueError) as exc:
+        raise FrozenLegacySnapshotError("original state cannot be revalidated") from exc
+    if recovered != preview.original_state:
+        raise FrozenLegacySnapshotError("original state differs from materialization preview")
 
     source_records = tuple(
         PortableSource(
@@ -359,9 +383,7 @@ def _parse_template(value: object) -> FrozenLegacyTemplate:
         raise FrozenLegacySnapshotError("invalid frozen catalog template") from exc
 
 
-def _installed(source: object):
-    from news_bulletin_playlist.managed_state import InstalledSource
-
+def _installed(source: object) -> InstalledSource:
     return InstalledSource.from_definition(source)
 
 
