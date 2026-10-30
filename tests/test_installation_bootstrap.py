@@ -66,7 +66,9 @@ def test_missing_and_symlink_roots_fail_without_creation(tmp_path: Path) -> None
         ".installation-identity-stranded.tmp",
     ],
 )
-def test_preexisting_data_and_missing_managed_state_remain_legacy(tmp_path: Path, entry: str) -> None:
+def test_preexisting_data_and_missing_managed_state_remain_legacy(
+    tmp_path: Path, entry: str
+) -> None:
     path = tmp_path / entry
     if entry == "custom-covers":
         path.mkdir()
