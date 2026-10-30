@@ -9,9 +9,9 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Protocol
@@ -25,6 +25,10 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
     TemporalStrategy,
+)
+from news_bulletin_playlist.partial_reconciliation import (
+    clear_partial_add_intent,
+    reconcile_partial_additions,
 )
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import (
@@ -54,7 +58,12 @@ from news_bulletin_playlist.spotify.first_desired import (
     build_spotify_first_desired_state,
     desired_fingerprint,
 )
-from news_bulletin_playlist.spotify.first_models import RefreshReason, TimestampSource, as_utc
+from news_bulletin_playlist.spotify.first_models import (
+    RefreshReason,
+    SpotifyFirstEpisode,
+    TimestampSource,
+    as_utc,
+)
 from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
 from news_bulletin_playlist.spotify.public_detector import (
     PublicDetector,
@@ -187,6 +196,7 @@ class SourceCycleOutcome:
     error: str | None = None
     temporal_metrics: TemporalRefreshMetrics | None = None
     null_item_count: int = 0
+    partial_episode_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +226,7 @@ class PlaylistCycleOutcome:
     destination_verification_kind: str | None = None
     blocked_source_ids: tuple[SourceId, ...] = ()
     block_reason: str | None = None
+    partial_added_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,6 +429,34 @@ class EngineRunner:
                 continue
 
             if not self._playlist_sources_ready(playlist, now=started_at):
+                partial_evidence = self._partial_catalogue_evidence(
+                    playlist, source_outcomes, now=started_at
+                )
+                if partial_evidence is not None:
+                    if session is None or client is None:
+                        try:
+                            session = self.auth.acquire_provider_session(now=started_at)
+                            client = self.client_factory(session.access_token)
+                        except (
+                            SpotifyAuthError,
+                            PersistenceError,
+                            SpotifyRateLimitBackoffActive,
+                            SpotifyRateLimitStateUnavailable,
+                        ):
+                            partial_evidence = None
+                    if partial_evidence is not None and session is not None and client is not None:
+                        partial_outcome = self._partial_reconcile_playlist(
+                            playlist,
+                            partial_evidence,
+                            episodes,
+                            sources,
+                            client,
+                            session,
+                            now=started_at,
+                        )
+                        if partial_outcome is not None:
+                            playlist_outcomes.append(partial_outcome)
+                            continue
                 blocked_sources = self._playlist_blocking_source_ids(playlist, now=started_at)
                 null_observed = any(
                     source_outcomes[source_id].null_item_count > 0
@@ -668,6 +707,9 @@ class EngineRunner:
                 removed_count=removed,
                 temporal_metrics=TemporalRefreshMetrics.from_snapshot(snapshot),
                 null_item_count=snapshot.null_item_count,
+                partial_episode_ids=frozenset(
+                    episode.spotify_episode_id for episode in snapshot.episodes
+                ),
                 error=(
                     None
                     if snapshot.coverage_proven
@@ -801,6 +843,125 @@ class EngineRunner:
         now: datetime,
     ) -> bool:
         return not self._playlist_blocking_source_ids(playlist, now=now)
+
+    def _partial_catalogue_evidence(
+        self,
+        playlist: PlaylistDefinition,
+        source_outcomes: dict[SourceId, SourceCycleOutcome],
+        *,
+        now: datetime,
+    ) -> dict[SourceId, frozenset[str]] | None:
+        """Only fresh, persisted null-bearing catalogue rows qualify for partial additions."""
+        cutoff = now - timedelta(hours=playlist.retention_hours)
+        sources = {source.id: source for source in self.config.sources}
+        allowed: dict[SourceId, frozenset[str]] = {}
+        for source_id in playlist.source_selection.explicit:
+            source = sources.get(source_id)
+            if source is None or not source.enabled:
+                return None
+            state = self.first_journal.get_source_state(source_id)
+            if state is None or state.spotify_show_id != spotify_show_id(source):
+                return None
+            if state.coverage_proven and state.coverage_cutoff_at <= cutoff:
+                continue
+            outcome = source_outcomes.get(source_id)
+            if (
+                outcome is None
+                or not outcome.refreshed
+                or not outcome.null_item_count
+                or not outcome.partial_episode_ids
+                or state.last_refresh_at != now
+                or state.coverage_cutoff_at > cutoff
+            ):
+                return None
+            allowed[source_id] = outcome.partial_episode_ids
+        return allowed or None
+
+    def _partial_reconcile_playlist(
+        self,
+        playlist: PlaylistDefinition,
+        allowed: dict[SourceId, frozenset[str]],
+        episodes: Sequence[SpotifyFirstEpisode],
+        sources: dict[SourceId, SourceDefinition],
+        client: SpotifyEngineClient,
+        session: ProviderAuthorizationSession,
+        *,
+        now: datetime,
+    ) -> PlaylistCycleOutcome | None:
+        """Insert verified new items without evictions/replacement when a source is partial."""
+        blocked_sources = tuple(allowed)
+        try:
+            if PendingSnapshotJournal(self.store).get(playlist.id) is not None:
+                return None
+            partial_build = build_spotify_first_desired_state(
+                playlist,
+                episodes,
+                sources=sources,
+                now=now,
+                allowed_episode_ids_by_source=allowed,
+            )
+            if not partial_build.desired.uris:
+                return None
+            result = reconcile_partial_additions(
+                client,
+                playlist_id=playlist.id,
+                destination_id=playlist.destination.external_id,
+                candidate_uris=partial_build.desired.uris,
+                max_items=playlist.max_episodes,
+                store=self.store,
+                mutation_guard=partial(
+                    self._provider_mutation_guard,
+                    playlist,
+                    session.authorization_context,
+                ),
+            )
+        except (
+            SpotifyReconciliationError,
+            SpotifyApiError,
+            SpotifyTransportError,
+            SpotifyRateLimitSuppressed,
+            PersistenceError,
+            ValueError,
+        ):
+            return self._preserved_playlist_outcome(
+                playlist,
+                "destination preserved: partial Spotify addition could not be verified",
+                now=now,
+                blocked_source_ids=blocked_sources,
+                block_reason="partial_add_unverified",
+            )
+
+        if result.status == "unchanged":
+            return None
+        if result.status in {"capacity", "pending"}:
+            return self._preserved_playlist_outcome(
+                playlist,
+                "destination preserved: partial add-only mode paused",
+                now=now,
+                blocked_source_ids=blocked_sources,
+                block_reason=(
+                    "partial_add_capacity" if result.status == "capacity" else "partial_add_pending"
+                ),
+            )
+        # A verified additive mutation advances the remote snapshot; previous exact
+        # desired-state attestations no longer describe the destination.
+        with suppress(PersistenceError):
+            self.first_journal.clear_destination_verification(playlist.id)
+            self.first_journal.clear_degraded_destination_verification(playlist.id)
+        base = self._preserved_playlist_outcome(
+            playlist,
+            "destination partially updated with verified additions; full coverage unproven",
+            now=now,
+            blocked_source_ids=blocked_sources,
+            block_reason="partial_add_only",
+        )
+        return replace(
+            base,
+            wrote=True,
+            applied_count=result.remote_count,
+            write_outcome=MutationOutcome.VERIFIED.value,
+            partial_added_count=result.added_count,
+        )
 
     def _destination_skip_evidence(
         self,
@@ -937,6 +1098,8 @@ class EngineRunner:
             ok=True,
             error=result.warning,
         )
+        with suppress(PersistenceError):
+            clear_partial_add_intent(self.store, playlist.id)
         state = self.store.get_playlist_state(playlist.id)
         return self._playlist_outcome(
             playlist,
