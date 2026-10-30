@@ -91,9 +91,7 @@ def _legacy_state(version: int, catalog: BuiltInCatalog) -> ManagedState:
         # A dormant, disabled installed source must stay referenced, not be
         # dropped from the authoritative selection in a legacy migration.
         destinations = tuple(
-            replace(p, source_ids=p.source_ids + (SourceId("installed_news"),))
-            if index == 3
-            else p
+            replace(p, source_ids=p.source_ids + (SourceId("installed_news"),)) if index == 3 else p
             for index, p in enumerate(destinations)
         )
     if version >= 9:
@@ -141,14 +139,20 @@ def test_legacy_catalog_preview_freezes_all_records_without_mutating_root(
     assert preview.original_runtime == compile_engine_config(catalog, restored)
     assert len(preview.source_snapshots) == len(catalog.sources) + len(original.sources)
     assert len(preview.template_snapshots) == len(catalog.playlists) + len(original.templates)
-    assert sum(
-        record.provenance is LegacyProvenance.IMAGE_PRESET
-        for record in preview.source_snapshots
-    ) == 13
-    assert sum(
-        record.provenance is LegacyProvenance.IMAGE_PRESET
-        for record in preview.template_snapshots
-    ) == 7
+    assert (
+        sum(
+            record.provenance is LegacyProvenance.IMAGE_PRESET
+            for record in preview.source_snapshots
+        )
+        == 13
+    )
+    assert (
+        sum(
+            record.provenance is LegacyProvenance.IMAGE_PRESET
+            for record in preview.template_snapshots
+        )
+        == 7
+    )
 
     expected = effective_sources(catalog, restored)
     assert tuple(source_definition(record.installed) for record in preview.source_snapshots) == (
@@ -203,10 +207,14 @@ def test_catalog_snapshot_does_not_follow_subsequent_image_preset_changes() -> N
     assert preview_legacy_materialization(changed, state).source_snapshots[0].installed != first
     assert first.display_name == catalog.sources[0].display_name
     assert spain.description == catalog.playlist(PRODUCTS[0]).description
-    assert next(
-        x.definition for x in preview_legacy_materialization(changed, state).template_snapshots
-        if str(x.definition.id) == PRODUCTS[0]
-    ).description != spain.description
+    assert (
+        next(
+            x.definition
+            for x in preview_legacy_materialization(changed, state).template_snapshots
+            if str(x.definition.id) == PRODUCTS[0]
+        ).description
+        != spain.description
+    )
 
 
 def test_missing_managed_state_with_existing_sqlite_is_never_fresh(tmp_path: Path) -> None:
