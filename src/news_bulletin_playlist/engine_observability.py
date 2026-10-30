@@ -236,10 +236,12 @@ class InstrumentedEngineCycleRunner:
             "stale_escalation": playlist.stale_escalation,
         }
         if playlist.blocked_source_ids:
-            # No desired state was built; zero would falsely suggest an empty catalogue.
+            # No complete desired state was built; avoid an invented zero.
             details["blocked_source_count"] = len(playlist.blocked_source_ids)
             if playlist.block_reason is not None:
                 details["failure_reason"] = playlist.block_reason
+            if playlist.partial_added_count:
+                details["partial_added_count"] = playlist.partial_added_count
         else:
             details["desired_count"] = playlist.desired_count
         optional = {
@@ -277,6 +279,10 @@ class InstrumentedEngineCycleRunner:
                 warning = classify_reconciliation_warning(playlist.error)
                 if warning is not None:
                     details["failure_reason"] = warning
+        elif playlist.partial_added_count:
+            severity = DiagnosticSeverity.WARNING
+            event_name = "destination_partial_added"
+            details["write_decision"] = "applied"
         elif _destination_was_preserved(playlist.error):
             severity = DiagnosticSeverity.WARNING
             event_name = "destination_preserved"
