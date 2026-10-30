@@ -134,6 +134,27 @@ to allow retiring the legacy built-ins. A full rollback still requires a
 consistent snapshot of the existing /data volume and image digest. No image
 publication/TrueNAS operation is part of this stage.
 
+## Stage 5: read-only v11 ownership projection
+
+The pure `project_v11_legacy` function requires both a frozen catalog sidecar
+and the matching original managed-state bytes. It reconstructs a historical
+catalog from **frozen** image presets, never from the current image. It checks
+the exact SHA-256, effective sources, examples and references, and separates
+installed sources, example provenance, local drafts, quarantined drafts and
+managed Spotify destinations into an immutable candidate.
+
+**New blocking discovery:** frozen sidecar v1 canonicalizes sources by
+Spotify show ID and therefore discards the original built-in source iteration
+order. The projection verifies identical source objects by logical ID and
+playlist ordering, but exposes `source_order_verified=False`. It cannot
+authorize an exact runtime cutover. A separately versioned sidecar update
+must preserve original effective source order and acceptance must compare
+ordered runtime configurations before v11 migration is permitted.
+
+This is not a schema-v11 serializer or runtime change. It does not write files,
+activate playlists or change legacy startup. Migration transactions, rollback
+and opt-in new installations remain separately gated.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
