@@ -69,7 +69,8 @@ def test_any_unclaimed_durable_entry_keeps_legacy_compatibility(
 
 def test_broken_symlink_is_not_mistaken_for_empty_root(tmp_path: Path) -> None:
     (tmp_path / "old-oauth").symlink_to(tmp_path / "missing")
-    assert inspect_installation_root(tmp_path).disposition is InstallationDisposition.LEGACY_COMPATIBLE
+    result = inspect_installation_root(tmp_path)
+    assert result.disposition is InstallationDisposition.LEGACY_COMPATIBLE
 
 
 def test_symlink_root_and_symlink_marker_fail_closed(tmp_path: Path) -> None:
