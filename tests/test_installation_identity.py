@@ -52,9 +52,7 @@ def test_nonexistent_and_empty_root_are_only_unclaimed_candidates(tmp_path: Path
         "unexpected-journal.tmp",
     ],
 )
-def test_any_unclaimed_durable_entry_keeps_legacy_compatibility(
-    tmp_path: Path, entry: str
-) -> None:
+def test_any_unclaimed_durable_entry_keeps_legacy_compatibility(tmp_path: Path, entry: str) -> None:
     path = tmp_path / entry
     if entry == "custom-covers":
         path.mkdir()
