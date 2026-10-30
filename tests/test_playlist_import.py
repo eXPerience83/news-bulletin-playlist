@@ -1016,3 +1016,140 @@ def test_readback_comparison_preserves_types_inside_quarantine():
     left = ManagedState(schema_version=10, quarantined_templates=(a,))
     right = replace(left, quarantined_templates=(b,))
     assert not same_managed_configuration(left, right)
+
+
+
+def test_four_public_product_shapes_portable_batch_into_truly_empty_root(tmp_path):
+    """Four representative live configurations round-trip without live destinations."""
+
+    selected_ids = (
+        "spain_spanish_news",
+        "international_english_news",
+        "international_polish_news",
+        "international_spanish_long_news",
+    )
+    identities = (
+        "b96ab2b3-6568-459c-a391-3a993280e174",
+        "abb9730d-d6eb-4235-b9b4-1ea1c127d67c",
+        "dd11d0e9-f8d3-4695-8e78-746cda90432d",
+        "ea7410ec-f7ef-49ad-a17d-12d7e9da16ca",
+    )
+    chosen = tuple(
+        next(template for template in BUILTIN_CATALOG.playlists if str(template.id) == id_)
+        for id_ in selected_ids
+    )
+    managed = tuple(
+        replace(activate_template(template, f"PRIVATE-DESTINATION-{i}"), portable_id=identity)
+        for i, (template, identity) in enumerate(zip(chosen, identities, strict=True))
+    )
+    donor_root = tmp_path / "independent-donor"
+    donor_root.mkdir()
+    exporter = export_service(
+        donor_root, ManagedState(schema_version=9, playlists=managed)
+    )
+    # Portable artifacts must not copy incidental credentials, journals or history.
+    (donor_root / "oauth.json").write_bytes(b"PRIVATE-OAUTH-SENTINEL")
+    (donor_root / "provisioning.json").write_bytes(b"PRIVATE-JOURNAL-SENTINEL")
+    (donor_root / "history.sqlite3").write_bytes(b"PRIVATE-HISTORY-SENTINEL")
+    donor_before = files(donor_root)
+
+    archives = {
+        str(playlist.id): exporter.export("managed", str(playlist.id))[1]
+        for playlist in managed
+    }
+    assert set(archives) == set(selected_ids)
+    assert files(donor_root) == donor_before
+    bundles = {
+        id_: inspect_playlist_bundle(data) for id_, data in archives.items()
+    }
+    for id_, data in archives.items():
+        assert b"PRIVATE-DESTINATION-" not in data
+        assert b"PRIVATE-OAUTH-SENTINEL" not in data
+        assert b"PRIVATE-JOURNAL-SENTINEL" not in data
+        assert b"PRIVATE-HISTORY-SENTINEL" not in data
+        assert bundles[id_].playlist["portable_id"] == managed[selected_ids.index(id_)].portable_id
+
+    recipient_root = tmp_path / "truly-empty-recipient"
+    recipient_root.mkdir()
+    store = ManagedStateStore(recipient_root / "managed-state.json", catalog=EMPTY)
+    recipient = PlaylistImportService(
+        store,
+        ConfigurationSynchronization(),
+        ProvisioningJournal(recipient_root / "provisioning.json"),
+        PortableCoverLoader(recipient_root),
+    )
+    assert files(recipient_root) == {}
+    assert store.load_readonly().playlists == ()
+
+    for id_ in selected_ids:
+        original = files(recipient_root)
+        preview = recipient.preview(archives[id_])
+        assert preview.status == "create" and not preview.blocked
+        assert files(recipient_root) == original
+        assert apply(recipient, archives[id_]).created_draft
+
+    imported_state = store.load_readonly()
+    assert imported_state.schema_version == 10
+    assert not imported_state.playlists  # No Spotify destination may be activated.
+    assert len(imported_state.templates) == 4
+    drafts = {template.portable_id: template for template in imported_state.templates}
+    assert set(drafts) == set(identities)
+
+    installed = {
+        source.external_references[0].external_id: source
+        for source in effective_sources(EMPTY, imported_state)
+    }
+    expected_shows = {
+        definition.external_references[0].external_id
+        for bundle in bundles.values()
+        for definition in (record.source for record in bundle.sources)
+    }
+    assert set(installed) == expected_shows
+    exported = export_service(recipient_root, catalog=EMPTY)
+    for id_, identity in zip(selected_ids, identities, strict=True):
+        donor_bundle = bundles[id_]
+        draft = drafts[identity]
+        original = managed[selected_ids.index(id_)]
+        assert draft.display_name == original.display_name
+        assert draft.description == original.description
+        assert draft.retention_hours == original.retention_hours
+        assert draft.max_episodes == original.max_episodes
+        assert draft.min_duration_seconds == original.min_duration_seconds
+        assert draft.max_duration_seconds == original.max_duration_seconds
+        assert draft.countries == original.countries
+        assert draft.languages == original.languages
+        assert draft.hidden is False
+        assert (
+            CustomCoverAssetStore(recipient_root / "custom-covers").load(draft.cover_id)
+            == donor_bundle.jpeg
+        )
+        for record in donor_bundle.sources:
+            definition = record.source
+            show_id = definition.external_references[0].external_id
+            assert replace(installed[show_id], id=definition.id) == definition
+        roundtrip_bundle = inspect_playlist_bundle(
+            exported.export("draft", str(draft.id))[1]
+        )
+        assert roundtrip_bundle.jpeg == donor_bundle.jpeg
+        assert roundtrip_bundle.playlist["portable_id"] == identity
+        assert roundtrip_bundle.playlist["retention_hours"] == original.retention_hours
+        assert roundtrip_bundle.playlist["max_episodes"] == original.max_episodes
+        assert roundtrip_bundle.playlist["duration_policy"] == donor_bundle.playlist[
+            "duration_policy"
+        ]
+
+    # Simulate a process restart; repeated preview and import remain read-only
+    # or identical no-ops, with no additional assets or duplicate sources.
+    restarted = PlaylistImportService(
+        ManagedStateStore(store.path, catalog=EMPTY),
+        ConfigurationSynchronization(),
+        ProvisioningJournal(recipient_root / "provisioning.json"),
+        PortableCoverLoader(recipient_root),
+    )
+    snapshot = files(recipient_root)
+    for id_ in selected_ids:
+        preview = restarted.preview(archives[id_])
+        assert preview.status == "identical"
+        assert not apply(restarted, archives[id_]).created_draft
+    assert files(recipient_root) == snapshot
+    assert files(donor_root) == donor_before
