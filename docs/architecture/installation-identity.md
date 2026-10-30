@@ -180,6 +180,33 @@ create a v11 on-disk managed-state codec, startup integration, rollback
 transaction or permission to deploy. A matching full /data snapshot is
 still required for later recovery.
 
+## Stage 7: strictly validated, self-contained v11 candidate envelope
+
+`v11_candidate.py` defines a **pure schema-v11 migration-candidate codec**,
+not a replacement for the existing `managed-state.json` v6–v10 reader.
+It requires an exact, ordered frozen-v2 catalog and the matching raw legacy
+state bytes; the pure projection must reproduce the historical ordered
+`EngineConfig`. The candidate's distinct sections contain installed
+sources (with their source provenance), ordered source IDs, playlist examples,
+installation-owned drafts, quarantined drafts, source overrides and existing
+managed destinations. It also encloses the exact old managed-state bytes and
+frozen-v2 bytes as bounded base64, with independent SHA-256 checks.
+
+The strict reader reconstructs all sections from those original bytes, rejects
+duplicate/unknown fields, malformed base64, version ambiguity, corrupt,
+noncanonical or partially edited payloads, and returns the exact old bytes for
+a future byte-for-byte rollback. The envelope is **not an authentication
+signature**, full /data backup, or source of authority for live Spotify calls.
+It contains private configuration and destination IDs and must be treated
+as sensitive.
+
+**Not wired into startup or written automatically**: a later PR must add a
+separately tested, locked, crash-safe disk publication transaction, its rollback
+procedure, and a genuinely versioned v11 `ManagedStateStore` reader with
+explicit rollback compatibility before any production migration. Until that
+gate passes, old-image rollback relies on the corresponding matching /data
+snapshot, including SQLite, OAuth, covers and journals.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
