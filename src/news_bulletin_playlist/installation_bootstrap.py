@@ -41,7 +41,9 @@ def claim_pristine_installation_root(data_dir: Path) -> InstallationInspection:
     try:
         root_fd = os.open(data_dir, flags)
     except OSError as exc:
-        raise InstallationIdentityError("installation root must be an existing real directory") from exc
+        raise InstallationIdentityError(
+            "installation root must be an existing real directory"
+        ) from exc
 
     try:
         try:
@@ -115,7 +117,9 @@ def claim_pristine_installation_root(data_dir: Path) -> InstallationInspection:
                 os.fsync(root_fd)
                 os.unlink(temporary_name, dir_fd=root_fd)
                 os.fsync(root_fd)
-                return InstallationInspection(InstallationDisposition.CLAIMED_OPT_IN, installation_id)
+                return InstallationInspection(
+                    InstallationDisposition.CLAIMED_OPT_IN, installation_id
+                )
             finally:
                 if created and not linked:
                     try:
