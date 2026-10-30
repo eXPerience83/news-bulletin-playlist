@@ -5,9 +5,23 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
-The next release is intended as a **beta**, not a stable image promotion. This section
-documents code already merged into `main`; optional preset migration and clean-install
-acceptance (#552/#553) remain separate release gates, not completed features.
+**Staged candidate: 0.2.3b1 (not yet published).** This is a recovery-focused
+prerelease candidate intended to replace an older TrueNAS image blocked by
+Spotify catalogue `null` slots. It retains existing built-in sources, playlist
+templates, managed destinations, SQLite format 3 and managed-state v10. PR #567
+only adds a read-only installation identity inspector and design tests; it does
+not change startup, initialize a marker or activate optional presets.
+
+A successful candidate CI/Container check **does not prove the live RNE
+incident is resolved**. The null-bearing source permits only add-only
+reconciliation with positively observed eligible episodes. If the destination
+is at its configured cap, writes pause without evictions. Production acceptance
+and actual deployment are separately tracked in #562 and #565.
+
+This section documents changes already integrated or staged for the candidate.
+Optional preset migration and clean-install acceptance (#552/#553), plus
+initial-cover automation (#528), remain unfinished and must not be represented
+as released features. This candidate is **not a stable image promotion**.
 
 ### Changed
 
