@@ -108,9 +108,7 @@ def build_legacy_snapshot(preview: LegacyMigrationPreview, state_bytes: bytes) -
     source_records = tuple(
         PortableSource(
             source_definition(record.installed),
-            "built_in"
-            if record.provenance is LegacyProvenance.IMAGE_PRESET
-            else "custom",
+            "built_in" if record.provenance is LegacyProvenance.IMAGE_PRESET else "custom",
         )
         for record in preview.source_snapshots
     )
@@ -158,8 +156,7 @@ def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
         },
     )
     if root["format"] != SNAPSHOT_FORMAT or (
-        type(root["schema_version"]) is not int
-        or root["schema_version"] != SNAPSHOT_SCHEMA_VERSION
+        type(root["schema_version"]) is not int or root["schema_version"] != SNAPSHOT_SCHEMA_VERSION
     ):
         raise FrozenLegacySnapshotError("unsupported frozen catalog format")
     version = root["managed_schema_version"]
@@ -317,8 +314,17 @@ def _parse_template(value: object) -> FrozenLegacyTemplate:
     item = _record(
         value,
         {
-            "provenance", "id", "display_name", "description", "countries", "languages",
-            "source_ids", "cover_id", "retention_hours", "max_episodes", "ordering",
+            "provenance",
+            "id",
+            "display_name",
+            "description",
+            "countries",
+            "languages",
+            "source_ids",
+            "cover_id",
+            "retention_hours",
+            "max_episodes",
+            "ordering",
             "duration_policy",
         },
     )
@@ -329,8 +335,10 @@ def _parse_template(value: object) -> FrozenLegacyTemplate:
             for key in ("id", "display_name", "description", "cover_id")
         ):
             raise ValueError("invalid text")
-        if not all(isinstance(item[key], list) and all(isinstance(v, str) for v in item[key])
-                   for key in ("countries", "languages", "source_ids")):
+        if not all(
+            isinstance(item[key], list) and all(isinstance(v, str) for v in item[key])
+            for key in ("countries", "languages", "source_ids")
+        ):
             raise ValueError("invalid sequence")
         if len(set(item["source_ids"])) != len(item["source_ids"]) or not item["source_ids"]:
             raise ValueError("invalid source selection")
@@ -353,10 +361,14 @@ def _parse_template(value: object) -> FrozenLegacyTemplate:
             local_time = time.fromisoformat(e["local_time"])
             if local_time.tzinfo is not None:
                 raise ValueError("time with timezone")
-            exceptions.append(DurationPolicyException(
-                e["id"], SourceId(e["source_id"]),
-                local_time.replace(fold=e["fold"]), e["max_seconds"]
-            ))
+            exceptions.append(
+                DurationPolicyException(
+                    e["id"],
+                    SourceId(e["source_id"]),
+                    local_time.replace(fold=e["fold"]),
+                    e["max_seconds"],
+                )
+            )
         ordering = OrderingPolicy(item["ordering"])
         if not item["id"] or not item["cover_id"] or not item["display_name"]:
             raise ValueError("missing template text")
