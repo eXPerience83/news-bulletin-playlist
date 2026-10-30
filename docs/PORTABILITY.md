@@ -11,8 +11,9 @@ change persistence, or activate anything. Authenticated source upload, preview a
 explicit apply are implemented in #549. Playlist ZIP export is implemented in #550.
 Playlist ZIP preview/import as editable local drafts is implemented in #551.
 CLI and the empty-default image remain future work. Installed-source persistence uses explicit schema v8 (#548),
-without automatic migration. Clean-image migration remains future work. A portable configuration is
-not a production backup.
+without automatic migration. Clean-image migration remains future work under #552,
+with isolated round-trip/rollback acceptance under #553. Next beta release gates are tracked
+in #565. A portable configuration is not a production backup.
 
 ## Dependency and risk matrix
 
