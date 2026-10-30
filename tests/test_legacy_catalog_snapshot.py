@@ -96,7 +96,9 @@ def test_frozen_sidecar_exact_sources_and_templates_without_state_changes(
     assert write_legacy_snapshot(root, preview) == payload
     assert write_legacy_snapshot(root, preview) == payload
     after = _files(root)
-    assert {key: value for key, value in after.items() if key != FROZEN_LEGACY_SNAPSHOT_FILENAME} == before
+    assert {
+        key: value for key, value in after.items() if key != FROZEN_LEGACY_SNAPSHOT_FILENAME
+    } == before
     assert after[FROZEN_LEGACY_SNAPSHOT_FILENAME] == payload
     assert not any(".tmp" in x.name for x in root.iterdir())
 
