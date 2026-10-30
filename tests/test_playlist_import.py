@@ -1110,8 +1110,9 @@ def test_four_public_product_shapes_portable_batch_into_truly_empty_root(tmp_pat
         assert draft.max_episodes == original.max_episodes
         assert draft.min_duration_seconds == original.min_duration_seconds
         assert draft.max_duration_seconds == original.max_duration_seconds
-        assert draft.countries == original.countries
-        assert draft.languages == original.languages
+        template = chosen[selected_ids.index(id_)]
+        assert draft.countries == template.countries
+        assert draft.languages == template.languages
         assert draft.hidden is False
         assert (
             CustomCoverAssetStore(recipient_root / "custom-covers").load(draft.cover_id)
