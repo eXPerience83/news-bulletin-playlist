@@ -1602,13 +1602,19 @@ def _playlist_rows(cycle: EngineCycleResult | None) -> str:
     rows = []
     for playlist in cycle.playlists:
         applied = "unverified" if playlist.applied_count is None else str(playlist.applied_count)
-        if playlist.blocked_source_ids:
+        explanation: str | None
+        if playlist.partial_added_count:
+            result = "Degraded — additions only"
+            items = "partial / unverified"
+            write = f"added {playlist.partial_added_count} (no removals)"
+            explanation = "Catalogue incomplete; only verified additions inserted"
+        elif playlist.blocked_source_ids:
             result = "Preserved — source blocked"
             items = "not evaluated / unverified"
             write = "preserved"
             blocked = ", ".join(str(source_id) for source_id in playlist.blocked_source_ids)
             reason = playlist.block_reason or "source_blocked"
-            explanation: str | None = f"Blocked by {blocked} ({reason})"
+            explanation = f"Blocked by {blocked} ({reason})"
         else:
             result = "Success" if playlist.ok else "Failed"
             items = f"{playlist.desired_count} desired / {applied} verified"
