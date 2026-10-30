@@ -107,6 +107,8 @@ def _candidate_document(frozen_v2: bytes, original_state: bytes) -> dict[str, ob
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
         )
+    except V11CandidateError:
+        raise
     except (FrozenLegacySnapshotError, ValueError, UnicodeError, RecursionError) as exc:
         raise V11CandidateError("candidate does not reproduce a valid legacy state") from exc
     if not isinstance(frozen_doc, dict) or not isinstance(legacy_doc, dict):
