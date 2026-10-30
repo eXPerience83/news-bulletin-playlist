@@ -47,14 +47,20 @@ class V11LegacyProjection:
     local_drafts: tuple[LocalPlaylistTemplate, ...]
     managed_destinations: tuple[ManagedPlaylist, ...]
     quarantined_drafts: tuple[QuarantinedPlaylistTemplate, ...]
-    original_runtime: EngineConfig
+    projected_runtime: EngineConfig
+    source_order_verified: bool
     original_state_sha256: str
 
 
 def project_v11_legacy(
     frozen_catalog_bytes: bytes, original_managed_state_bytes: bytes
 ) -> V11LegacyProjection:
-    """Demand a bit-for-bit matching old state and independent catalog closure."""
+    """Require matching old data; source iteration order needs a later v2 snapshot.
+
+    Frozen sidecar v1 canonicalizes sources by Spotify show ID, discarding
+    their original image order. This projection therefore cannot authorize a
+    runtime switch, even if source definitions and destinations match exactly.
+    """
     snapshot = parse_legacy_snapshot(frozen_catalog_bytes)
     if not isinstance(original_managed_state_bytes, bytes):
         raise FrozenLegacySnapshotError("invalid legacy state bytes")
@@ -109,7 +115,8 @@ def project_v11_legacy(
         local_drafts=state.templates,
         managed_destinations=state.playlists,
         quarantined_drafts=state.quarantined_templates,
-        original_runtime=runtime,
+        projected_runtime=runtime,
+        source_order_verified=False,
         original_state_sha256=digest,
     )
 
