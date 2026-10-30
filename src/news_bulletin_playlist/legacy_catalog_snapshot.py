@@ -313,23 +313,26 @@ def _template_record(item: FrozenLegacyTemplate) -> dict[str, object]:
 
 
 def _parse_template(value: object) -> FrozenLegacyTemplate:
-    item = cast(dict[str, Any], _record(
-        value,
-        {
-            "provenance",
-            "id",
-            "display_name",
-            "description",
-            "countries",
-            "languages",
-            "source_ids",
-            "cover_id",
-            "retention_hours",
-            "max_episodes",
-            "ordering",
-            "duration_policy",
-        },
-    ))
+    item = cast(
+        dict[str, Any],
+        _record(
+            value,
+            {
+                "provenance",
+                "id",
+                "display_name",
+                "description",
+                "countries",
+                "languages",
+                "source_ids",
+                "cover_id",
+                "retention_hours",
+                "max_episodes",
+                "ordering",
+                "duration_policy",
+            },
+        ),
+    )
     try:
         provenance = LegacyProvenance(item["provenance"])
         if any(
