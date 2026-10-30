@@ -24,7 +24,11 @@ from news_bulletin_playlist.v11_candidate import (
 
 
 def _file_bytes(root: Path) -> dict[str, bytes]:
-    return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
 
 
 @pytest.mark.parametrize("schema", [6, 7, 8, 9, 10])
