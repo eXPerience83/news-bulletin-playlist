@@ -235,13 +235,26 @@ def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
 
 
 def write_legacy_snapshot(data_dir: Path, preview: LegacyMigrationPreview) -> bytes:
-    """Explicit one-time, non-overwriting sidecar write; no startup caller.
+    """Write the original v1 sidecar, never overwriting an existing file."""
+    return _write_frozen_sidecar(
+        data_dir, preview, FROZEN_LEGACY_SNAPSHOT_FILENAME, build_legacy_snapshot
+    )
 
-    Under an advisory directory lock, re-read the exact legacy state bytes,
-    build the frozen snapshot and check the source file before publication.
-    Existing sidecars must be byte-identical; conflicts fail closed. An error
-    after publication is intentionally ambiguous, never blindly overwritten.
-    """
+
+def write_legacy_snapshot_v2(data_dir: Path, preview: LegacyMigrationPreview) -> bytes:
+    """Write v2 to a separate path, preserving any existing v1 evidence."""
+    return _write_frozen_sidecar(
+        data_dir, preview, FROZEN_LEGACY_SNAPSHOT_V2_FILENAME, build_legacy_snapshot_v2
+    )
+
+
+def _write_frozen_sidecar(
+    data_dir: Path,
+    preview: LegacyMigrationPreview,
+    filename: str,
+    builder: Callable[[LegacyMigrationPreview, bytes], bytes],
+) -> bytes:
+    """One-time, directory-locked, atomic, no-overwrite publication."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     try:
         root_fd = os.open(data_dir, flags)
@@ -250,11 +263,31 @@ def write_legacy_snapshot(data_dir: Path, preview: LegacyMigrationPreview) -> by
     try:
         fcntl.flock(root_fd, fcntl.LOCK_EX)
         original = _read_regular(root_fd, "managed-state.json", MAX_MANAGED_STATE_BYTES)
-        payload = build_legacy_snapshot(preview, original)
+        payload = builder(preview, original)
+        if filename == FROZEN_LEGACY_SNAPSHOT_V2_FILENAME:
+            try:
+                prior_v1_bytes = _read_regular(
+                    root_fd, FROZEN_LEGACY_SNAPSHOT_FILENAME, MAX_FROZEN_SNAPSHOT_BYTES
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                prior = parse_legacy_snapshot(prior_v1_bytes)
+                current = parse_legacy_snapshot(payload)
+                prior_sources = {item.installed.id: item for item in prior.sources}
+                current_sources = {item.installed.id: item for item in current.sources}
+                if (
+                    prior.source_order is not None
+                    or prior.managed_schema_version != current.managed_schema_version
+                    or prior.managed_state_sha256 != current.managed_state_sha256
+                    or prior_sources != current_sources
+                    or prior.templates != current.templates
+                ):
+                    raise FrozenLegacySnapshotError(
+                        "existing v1 snapshot conflicts with requested v2; no overwrite"
+                    )
         try:
-            previous = _read_regular(
-                root_fd, FROZEN_LEGACY_SNAPSHOT_FILENAME, MAX_FROZEN_SNAPSHOT_BYTES
-            )
+            previous = _read_regular(root_fd, filename, MAX_FROZEN_SNAPSHOT_BYTES)
         except FileNotFoundError:
             previous = None
         if previous is not None:
@@ -279,7 +312,7 @@ def write_legacy_snapshot(data_dir: Path, preview: LegacyMigrationPreview) -> by
                 raise FrozenLegacySnapshotError("managed state changed during snapshot")
             os.link(
                 temporary,
-                FROZEN_LEGACY_SNAPSHOT_FILENAME,
+                filename,
                 src_dir_fd=root_fd,
                 dst_dir_fd=root_fd,
                 follow_symlinks=False,
