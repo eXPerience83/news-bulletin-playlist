@@ -82,6 +82,29 @@ The marker is authoritative only if created by this guarded protocol.
 This helper is neither a broad security boundary nor a migration executor.
 Do not retrofit opt-in markers onto old installations manually.
 
+## Stage 3: in-memory legacy materialization preview
+
+The pure `preview_legacy_materialization(catalog, state)` helper explicitly
+models the next stage without mutating a data directory. Given a parsed legacy
+managed-state v6–v10 and the currently running image's catalog, it snapshots
+the **effective** 13 image presets with their per-installation source overrides,
+plus all installation-owned sources, preserving complete parser, temporal,
+filter, language, country, enabled and Spotify show identity metadata. Each
+source is round-tripped through the existing installed-source v1 capability
+contract and compared byte-for-byte at the semantic object level. The preview
+also freezes the seven image templates and surviving local drafts with separate
+provenance, together with the original unmodified managed state and compiled
+runtime view.
+
+No output is persisted: the preview deliberately keeps existing destination
+IDs, journal/OAuth/SQLite paths, cover asset bytes, disabled or dormant selections,
+quarantine, and previously accepted writes outside its reach. A frozen in-memory
+plan is **not** a migration, a backup, a usable opt-in catalog, or a new v11
+format. It is a gate for designing explicit persistent provenance and rollback
+without allowing ordinary installed sources to collide with existing built-in
+IDs. Existing open tasks still include actual v11 storage, schema migration,
+old-image rollback and any startup/UI opt-in behavior.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
@@ -107,12 +130,13 @@ Do not retrofit opt-in markers onto old installations manually.
 ## Review gates
 
 Stage 1 covers read-only empty/legacy/symlink/identity recognition. Stage 2 adds
-only the separately invoked marker writer and isolated failure/concurrency tests.
-Neither stage changes startup or effective catalog behavior.
+the separately invoked marker writer and isolated failure/concurrency tests.
+Stage 3 adds only a pure v6–v10 materialization preview and synthetic fixtures.
+No stage yet changes startup, on-disk managed-state or effective catalog behavior.
 
-Follow-up PRs under #552: gated pre-storage startup integration (only after full
-legacy-migration gates), versioned frozen legacy snapshot migration and rollback
-fixtures, fresh opt-in configuration and explicit preset import, and runtime/Admin
-separation. The guarded marker-writing primitive alone does not change defaults.
+Follow-up PRs under #552: versioned persistent legacy provenance and
+rollback fixtures; guarded pre-storage startup integration only after those
+migration gates; fresh opt-in configuration and explicit preset import; and
+runtime/Admin separation. The guarded marker-writing primitive alone does not change defaults.
 #553 is independent empty-install round-trip acceptance; #565 remains the beta
 release gate.
