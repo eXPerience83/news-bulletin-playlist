@@ -5,22 +5,49 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
+The next release is intended as a **beta**, not a stable image promotion. This section
+documents code already merged into `main`; optional preset migration and clean-install
+acceptance (#552/#553) remain separate release gates, not completed features.
+
 ### Changed
 
 - Prepared MIT software licensing under `Copyright (c) 2026 Roberto Ribes`,
   updated package/image license metadata and the public/admin copyright notices.
-- Clarified the pre-release built-in-template limitations and the uncertainty of
-  automated undocumented Spotify Embed change detection, without altering
-  the detector, playlist descriptions or Spotify API behavior.
+- Clarified the pre-release support boundaries, ownership of built-in versus
+  installation-owned playlist drafts, and uncertainty around undocumented Spotify
+  Embed change detection. No additional Spotify API entitlement is implied.
 
-- Tolerate literal null Spotify catalogue slots as incomplete/unproven evidence, preserving original
-  positions and a bounded null count in Source Audit. Dependent playlists cannot reconcile until a
-  clean refresh proves coverage; no retry, new endpoint or database migration is introduced.
+- Preserve known episode identities when Spotify show catalogues contain literal `null`
+  slots; the unknown slot still makes full catalogue coverage unproven. Eligible,
+  positively observed new episodes may now be inserted by a strictly **add-only** path
+  without deleting, reordering or replacing existing playlist entries (#560/#562,
+  PRs #561/#563). Incomplete sources never authorize full reconciliation.
+- An incomplete destination pauses additions rather than evicting when the configured
+  item cap would be exceeded. A durable local pending-add intent protects against
+  duplicate retries after uncertain POST/transport outcomes or restarts; normal
+  exact reconciliation resumes after complete source coverage.
 - Commit source episodes, accepted history and refresh trust atomically, rolling back the whole
   refresh on failure instead of certifying partial new rows with old coverage.
 
 ### Added
 
+- Installation-owned custom playlist templates and drafts through Admin, with
+  deliberate Spotify activation, bounded editing, safe deletion/reference checks,
+  optional uploaded artwork and an installation-neutral default cover (#259, #527).
+  Local editing and importing do not automatically create a Spotify destination.
+- **Portable source JSON v1** export/download and authenticated import with read-only
+  preview, stable show-ID identity matching, deduplication, explicit conflict handling,
+  capability checks, one-use CSRF and atomic installation-owned apply (#546–#549,
+  PRs #554–#557).
+- **Portable playlist ZIP v1** deterministic export with source closure, manifest,
+  SHA-256 integrity records and self-contained cover bytes. Authenticated ZIP import
+  validates contents and imports editable local drafts, without Spotify activation
+  or destination credentials (#550/#551, PRs #558/#559). Portable exports are not
+  backups of database, OAuth or Spotify state.
+- Status pages and sanitized diagnostics identify specific blocked sources, explain
+  coverage-unproven `null` slots and distinguish skipped desired-state evaluation
+  from an actual empty playlist. Add-only outcomes report inserted item counts and
+  preserved/paused conditions (#560/#562).
 - Closed `item_value_kind` diagnostics for rejected non-object catalogue items, without retaining
   their contents or changing Source Audit acceptance, pagination or request counts.
 
@@ -39,6 +66,19 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ### Compatibility / operations
 
+- Managed-state serialization now supports schema **v10**, including v7 custom
+  drafts, v8 installed-source capabilities, v9 persistent portable playlist UUID
+  and v10 imported ZIP metadata/identities, while retaining validated legacy
+  upgrade paths. SQLite remains database format **3**; add-only recovery uses
+  an isolated, lazily created SQLite intent table for uncertain Spotify POSTs.
+- Python package metadata supports **3.14 and 3.15**, GitHub CI tests **3.15**,
+  and the current image uses pinned **Python 3.15.2**. This is a change from the
+  historical 0.2.2 Python 3.14.8 image; keep old-version changelog sections as
+  historical facts.
+- Source and playlist import/export actions are local-only and authenticated.
+  They do not include or migrate live Spotify destinations, secrets, history,
+  pending provider journals or production `/data`. Legacy source/template
+  preset separation and clean-install acceptance remain tracked in #552/#553.
 - Source Audit exports are session-authenticated, limited to 20 sources, 600 seconds and
   16 MiB per ZIP, and kept in memory for at most 30 minutes after completion (or until
   another job replaces them). No playlist/Spotify destination writes, schema changes or
