@@ -25,9 +25,7 @@ from news_bulletin_playlist.v11_candidate import (
 
 def _file_bytes(root: Path) -> dict[str, bytes]:
     return {
-        str(path.relative_to(root)): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
+        str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()
     }
 
 
@@ -58,9 +56,10 @@ def test_v11_candidate_is_lossless_reversible_and_readonly(tmp_path: Path, schem
     assert decoded.projection.projected_runtime == preview.original_runtime
     assert decoded.projection.managed_destinations == preview.original_state.playlists
     assert decoded.projection.original_state == preview.original_state
-    assert build_v11_candidate(
-        decoded.frozen_catalog_v2_bytes, decoded.original_managed_state_bytes
-    ) == first
+    assert (
+        build_v11_candidate(decoded.frozen_catalog_v2_bytes, decoded.original_managed_state_bytes)
+        == first
+    )
     assert _file_bytes(root) == original
 
 
@@ -86,9 +85,7 @@ def test_v11_candidate_retains_drafts_quarantine_dormant_sources_and_dst_fold(
     assert result.projection.quarantined_drafts == preview.original_state.quarantined_templates
     assert result.projection.managed_destinations[-1].source_ids == state.playlists[-1].source_ids
     noon = next(
-        item
-        for item in result.projection.playlist_examples
-        if str(item.id) == "spain_spanish_news"
+        item for item in result.projection.playlist_examples if str(item.id) == "spain_spanish_news"
     )
     assert noon.duration_policy.exceptions[0].edition_local_time.fold == 1
     assert _file_bytes(root) == original
