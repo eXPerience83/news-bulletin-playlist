@@ -26,6 +26,12 @@ from news_bulletin_playlist.models import (
     SourceId,
     SourceOrigin,
 )
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_storage import (
+    V11_AUTHORITY_FILENAME,
+    V11_OPERATIONAL_FILENAME,
+    V11OperationalStore,
+)
 
 
 def _managed_state(tmp_path: Path, *, enabled: bool = True) -> ManagedState:
@@ -72,7 +78,11 @@ def test_empty_or_all_paused_managed_state_has_no_active_engine(tmp_path: Path) 
     ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME).save(ManagedState())
     assert load_effective_config(tmp_path, {}) is None
 
-    _managed_state(tmp_path, enabled=False)
+    playlist = replace(
+        activate_template(BUILTIN_CATALOG.playlist("spain_spanish_news"), "managed-destination"),
+        enabled=False,
+    )
+    open_managed_state_store(tmp_path).save(ManagedState(playlists=(playlist,)))
     assert load_effective_config(tmp_path, {}) is None
 
 
@@ -118,7 +128,8 @@ def test_managed_state_changes_are_observed_on_each_load(tmp_path: Path) -> None
     assert first.playlists[0].enabled is True
 
     paused = replace(state.playlists[0], enabled=False)
-    ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME).save(ManagedState(playlists=(paused,)))
+    owner = open_managed_state_store(tmp_path)
+    owner.save(replace(owner.load(), playlists=(paused,)))
 
     assert load_effective_config(tmp_path, {}) is None
 
@@ -156,22 +167,24 @@ def test_runtime_load_atomically_pauses_legacy_active_playlist_with_only_disable
     with pytest.raises(ManagedStateError, match="at least one enabled source"):
         compile_engine_config(BUILTIN_CATALOG, legacy)
 
+    original_bytes = store.path.read_bytes()
     assert _load_runtime_config(tmp_path, {}) is None
-    recovered = store.load()
+    recovered = open_managed_state_store(tmp_path).load()
+    assert store.path.read_bytes() == original_bytes
     assert recovered == replace(legacy, playlists=(replace(legacy.playlists[0], enabled=False),))
     assert recovered.schema_version == legacy.schema_version == 6
     assert (
         compile_engine_config(BUILTIN_CATALOG, recovered).playlists[0].source_selection.explicit
         == ()
     )
-    before = store.path.read_bytes()
+    before = (tmp_path / V11_OPERATIONAL_FILENAME).read_bytes()
 
-    def no_repeated_write(self: ManagedStateStore, state: ManagedState) -> None:
+    def no_repeated_write(self: V11OperationalStore, *args: object, **kwargs: object) -> None:
         raise AssertionError("recovery must persist once, not on every runtime load")
 
-    monkeypatch.setattr(ManagedStateStore, "save", no_repeated_write)
+    monkeypatch.setattr(V11OperationalStore, "save", no_repeated_write)
     assert _load_runtime_config(tmp_path, {}) is None
-    assert store.path.read_bytes() == before  # Idempotent across cycles and restarts.
+    assert (tmp_path / V11_OPERATIONAL_FILENAME).read_bytes() == before
 
 
 def test_legacy_dormant_recovery_keeps_independent_active_playlist(tmp_path: Path) -> None:
@@ -191,12 +204,13 @@ def test_legacy_dormant_recovery_keeps_independent_active_playlist(tmp_path: Pat
     assert not config.playlists[0].enabled
     assert config.playlists[0].source_selection.explicit == ()
     assert not config.playlists[1].enabled
-    assert store.load().playlists[:2] == tuple(
+    assert open_managed_state_store(tmp_path).load().playlists[:2] == tuple(
         replace(playlist, enabled=False) for playlist in (legacy.playlists[0], other_dormant)
     )
     assert config.playlists[2].enabled
     assert config.playlists[2].source_selection.explicit == healthy.source_ids
-    assert store.load().playlists[2] == healthy
+    assert open_managed_state_store(tmp_path).load().playlists[2] == healthy
+    assert store.path.exists()
 
 
 def test_legacy_dormant_recovery_replace_failure_preserves_original_state(
@@ -207,15 +221,24 @@ def test_legacy_dormant_recovery_replace_failure_preserves_original_state(
     store.save(_legacy_dormant_state())
     before = store.path.read_bytes()
 
-    def fail_replace(*args: object) -> None:
-        raise OSError("private-path-sentinel")
+    import os
 
-    monkeypatch.setattr("news_bulletin_playlist.managed_state.os.replace", fail_replace)
-    with pytest.raises(RuntimeError, match="recovery could not be persisted safely") as caught:
+    real_link = os.link
+
+    def fail_publication(source: str, target: str, **kwargs: object) -> None:
+        if target == V11_OPERATIONAL_FILENAME:
+            raise OSError("private-path-sentinel")
+        real_link(source, target, **kwargs)
+
+    monkeypatch.setattr("news_bulletin_playlist.v11_operational_storage.os.link", fail_publication)
+    with pytest.raises(RuntimeError, match="invalid managed configuration") as caught:
         load_effective_config(tmp_path, {})
     assert "private-path-sentinel" not in str(caught.value)
     assert store.path.read_bytes() == before
-    assert list(tmp_path.iterdir()) == [store.path]
+    assert (tmp_path / V11_AUTHORITY_FILENAME).is_file()
+    assert not (tmp_path / V11_OPERATIONAL_FILENAME).exists()
+    with pytest.raises(RuntimeError, match="invalid managed configuration"):
+        load_effective_config(tmp_path, {})
 
 
 def test_legacy_dormant_recovery_does_not_mask_unknown_source_or_template(tmp_path: Path) -> None:
@@ -229,6 +252,6 @@ def test_legacy_dormant_recovery_does_not_mask_unknown_source_or_template(tmp_pa
     ):
         store.save(replace(legacy, playlists=(playlist,)))
         before = store.path.read_bytes()
-        with pytest.raises(RuntimeError, match="references unknown"):
+        with pytest.raises(RuntimeError, match="invalid managed configuration"):
             load_effective_config(tmp_path, {})
         assert store.path.read_bytes() == before

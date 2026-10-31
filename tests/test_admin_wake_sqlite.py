@@ -55,6 +55,7 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestOutcome,
     SpotifyWebApiOperation,
 )
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 
 PASSWORD = "long-enough-admin-password"
 SHOW = "A" * 22
@@ -345,6 +346,7 @@ def _exercise_admin_wake(
         source_ids=(SourceId("abc"),) if mutation == "assignment" else (SourceId("abc"), CUSTOM_ID),
     )
     managed_store.save(ManagedState(sources=(custom,), playlists=(playlist,)))
+    managed_store = open_managed_state_store(tmp_path)
     progress = threading.Event()
     providers = _Providers(metrics, progress)
     detector = PublicDetector(detector_journal, diagnostics, client=providers)
@@ -464,7 +466,7 @@ def _exercise_admin_wake(
         handler.do_POST()
         assert captured_response(handler).status == HTTPStatus.SEE_OTHER
         assert progress.wait(10), "woken cycle reached neither provider work nor failure"
-        durable = ManagedStateStore(managed_store.path).load()
+        durable = open_managed_state_store(tmp_path).load()
         assert durable.sources[0].enabled is (mutation != "disable")
         assert durable.playlists[0].source_ids == (SourceId("abc"), CUSTOM_ID)
         assert len(providers.calls) == provider_count
@@ -522,7 +524,7 @@ def _exercise_admin_wake(
             assert {source.source_id for source in result.sources} == expected
             assert result.playlists[0].desired_count == len(expected)
         assert len(providers.uris) == len(expected)
-        assert ManagedStateStore(managed_store.path).load() == durable
+        assert open_managed_state_store(tmp_path).load() == durable
         events = event_store.list_events()
         assert not any(event.event_name == "cycle_unexpected_failure" for event in events)
         assert sum(event.event_name == "cycle_completed" for event in events) == 4

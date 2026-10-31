@@ -20,7 +20,10 @@ from news_bulletin_playlist.legacy_catalog_snapshot import (
     FrozenLegacySnapshotError,
     parse_legacy_snapshot,
 )
-from news_bulletin_playlist.legacy_materialization import LegacyProvenance
+from news_bulletin_playlist.legacy_materialization import (
+    LegacyProvenance,
+    pause_dormant_legacy_playlists,
+)
 from news_bulletin_playlist.managed_state import (
     InstalledSource,
     ManagedPlaylist,
@@ -94,7 +97,9 @@ def project_v11_legacy(
         templates = effective_playlist_templates(
             historical_catalog, state.templates, sources=sources
         )
-        runtime = compile_engine_config(historical_catalog, state)
+        runtime = compile_engine_config(
+            historical_catalog, pause_dormant_legacy_playlists(historical_catalog, state)
+        )
         reconstructed = {item.id: InstalledSource.from_definition(item) for item in sources}
     except (ValueError, TypeError, UnicodeError, RecursionError, ManagedStateError) as exc:
         raise FrozenLegacySnapshotError("legacy snapshot cannot be reconstructed safely") from exc

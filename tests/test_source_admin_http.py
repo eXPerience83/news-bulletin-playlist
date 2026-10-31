@@ -61,6 +61,7 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicShowDetectorError,
 )
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 
 SHOW = "A" * 22
 OTHER = "B" * 22
@@ -2194,11 +2195,11 @@ def test_real_startup_recovers_supported_legacy_dormant_state_and_allows_admin_r
         assert b"Paused" in page and b"Inactive assignments" in page
         assert b"This playlist has no enabled sources" in page
         assert b"Enable an assigned source or select another enabled source" in page
-        recovered_json = json.loads(store.path.read_text())
-        old_json["playlists"][0]["enabled"] = False
-        assert recovered_json == old_json  # Only the local active flag changes.
-        assert store.load().playlists[0].source_ids == playlist.source_ids
-        assert store.load().playlists[0].destination == playlist.destination
+        assert json.loads(store.path.read_text()) == old_json
+        owner = open_managed_state_store(tmp_path)
+        assert not owner.load().playlists[0].enabled
+        assert owner.load().playlists[0].source_ids == playlist.source_ids
+        assert owner.load().playlists[0].destination == playlist.destination
         assert not scheduler_started.is_set()
         assert Handler.engine_lifecycle.scheduler is None
         # Even an explicit cycle cannot reach Spotify while the installation is paused.
@@ -2227,7 +2228,7 @@ def test_real_startup_recovers_supported_legacy_dormant_state_and_allows_admin_r
                 )[0]
                 == 303
             )
-            assert store.load().playlists[0].source_ids == playlist.source_ids
+            assert owner.load().playlists[0].source_ids == playlist.source_ids
         _, _, page = _request(server, "GET", "/admin/", cookie=cookie)
         selected = ["ser", str(source.id)] if repair == "add_source" else [str(source.id)]
         form = _playlist_form(_csrf(page), selected)
@@ -2236,7 +2237,7 @@ def test_real_startup_recovers_supported_legacy_dormant_state_and_allows_admin_r
         assert (
             _request(server, "POST", "/admin/playlists/update", cookie=cookie, form=form)[0] == 303
         )
-        final = store.load()
+        final = owner.load()
         compiled = compile_engine_config(BUILTIN_CATALOG, final)
         assert final.playlists[0].destination == playlist.destination
         if repair == "keep_paused":

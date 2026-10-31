@@ -7,6 +7,7 @@ missing or invalid v11 file. Caller integration must prevent legacy writes.
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import suppress
 from pathlib import Path
@@ -15,7 +16,11 @@ from uuid import uuid4
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.legacy_catalog_snapshot import build_legacy_snapshot_v2
 from news_bulletin_playlist.legacy_materialization import preview_legacy_materialization
-from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
+from news_bulletin_playlist.managed_state import (
+    ManagedState,
+    ManagedStateStore,
+    serialize_managed_state,
+)
 from news_bulletin_playlist.v11_candidate import build_v11_candidate
 from news_bulletin_playlist.v11_candidate_storage import _locked_root, _read_regular
 from news_bulletin_playlist.v11_operational_codec import (
@@ -28,6 +33,8 @@ from news_bulletin_playlist.v11_operational_codec import (
 )
 
 V11_OPERATIONAL_FILENAME = "managed-state-v11.json"
+V11_AUTHORITY_FILENAME = ".managed-state-v11.authority"
+_AUTHORITY_BYTES = b"news-bulletin-playlist:managed-state-v11\n"
 _LEGACY_FILENAME = "managed-state.json"
 
 
@@ -68,6 +75,41 @@ def _write_temporary(root_fd: int, payload: bytes) -> str:
         raise
 
 
+def _authority_exists(root_fd: int) -> bool:
+    """Distinguish a virgin root from a damaged or interrupted migration."""
+    try:
+        os.stat(V11_AUTHORITY_FILENAME, dir_fd=root_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    try:
+        raw = _read_regular(root_fd, V11_AUTHORITY_FILENAME, 128)
+    except (OSError, ValueError) as exc:
+        raise V11StoreError("invalid v11 authority marker") from exc
+    if raw != _AUTHORITY_BYTES:
+        raise V11StoreError("invalid v11 authority marker")
+    return True
+
+
+def _record_authority(root_fd: int) -> None:
+    """Durably publish the irreversible gate before publishing operational v11."""
+    if _authority_exists(root_fd):
+        return
+    temporary = _write_temporary(root_fd, _AUTHORITY_BYTES)
+    try:
+        os.link(
+            temporary,
+            V11_AUTHORITY_FILENAME,
+            src_dir_fd=root_fd,
+            dst_dir_fd=root_fd,
+            follow_symlinks=False,
+        )
+        os.fsync(root_fd)
+    finally:
+        with suppress(FileNotFoundError):
+            os.unlink(temporary, dir_fd=root_fd)
+        os.fsync(root_fd)
+
+
 class V11OperationalStore:
     """A deliberate forward-only authority, independent of image catalog drift."""
 
@@ -94,7 +136,10 @@ class V11OperationalStore:
         with _locked_root(self.root) as dir_fd:
             prior = _read_existing(dir_fd)
             if prior is not None:
+                _record_authority(dir_fd)
                 return parse_v11_operational(prior)
+            if _authority_exists(dir_fd):
+                raise V11StoreError("v11 authority exists but its document is missing")
             try:
                 original = _read_regular(dir_fd, _LEGACY_FILENAME, 12 * 1024 * 1024)
                 legacy = ManagedStateStore(
@@ -107,6 +152,7 @@ class V11OperationalStore:
                 )
                 if _read_regular(dir_fd, _LEGACY_FILENAME, 12 * 1024 * 1024) != original:
                     raise V11StoreError("legacy state changed during forward migration")
+                _record_authority(dir_fd)
                 temporary = _write_temporary(dir_fd, next_bytes)
                 try:
                     # Publish only if the new authority does not already exist.
@@ -125,6 +171,59 @@ class V11OperationalStore:
                 raise V11StoreError(
                     "forward-only v11 initialization failed; inspect both state files"
                 ) from exc
+            return parse_v11_operational(next_bytes)
+
+    def initialize_fresh(self, *, catalog: BuiltInCatalog = BUILTIN_CATALOG) -> V11OperationalState:
+        """Explicit v11 authority on first run, with zero managed destinations.
+
+        Preset catalog entries are available for manual selection, never
+        auto-activated on Spotify. Fresh-install preset UX is separate.
+        """
+        with _locked_root(self.root) as dir_fd:
+            prior = _read_existing(dir_fd)
+            if prior is not None:
+                _record_authority(dir_fd)
+                return parse_v11_operational(prior)
+            if _authority_exists(dir_fd):
+                raise V11StoreError("v11 authority exists but its document is missing")
+            try:
+                os.stat(_LEGACY_FILENAME, dir_fd=dir_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise V11StoreError("legacy installation requires forward migration")
+            try:
+                empty = ManagedState(schema_version=10)
+                original = (
+                    json.dumps(
+                        serialize_managed_state(empty, catalog=catalog),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
+                    )
+                    + "\n"
+                ).encode("utf-8")
+                preview = preview_legacy_materialization(catalog, empty)
+                frozen = build_legacy_snapshot_v2(preview, original)
+                next_bytes = build_v11_operational_from_candidate(
+                    build_v11_candidate(frozen, original)
+                )
+                _record_authority(dir_fd)
+                temporary = _write_temporary(dir_fd, next_bytes)
+                try:
+                    os.link(
+                        temporary,
+                        V11_OPERATIONAL_FILENAME,
+                        src_dir_fd=dir_fd,
+                        dst_dir_fd=dir_fd,
+                        follow_symlinks=False,
+                    )
+                    os.fsync(dir_fd)
+                finally:
+                    os.unlink(temporary, dir_fd=dir_fd)
+                    os.fsync(dir_fd)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise V11StoreError("v11 fresh initialization failed") from exc
             return parse_v11_operational(next_bytes)
 
     def save(self, state: ManagedState, *, expected_bytes: bytes) -> bytes:

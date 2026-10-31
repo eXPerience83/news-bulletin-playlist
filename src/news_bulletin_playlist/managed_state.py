@@ -266,7 +266,16 @@ class ManagedStateStore:
         state, _ = self._read()
         return state
 
+    def _reject_retired_legacy(self) -> None:
+        if self.path.name != MANAGED_STATE_FILENAME:
+            return
+        for name in ("managed-state-v11.json", ".managed-state-v11.authority"):
+            witness = self.path.parent / name
+            if witness.exists() or witness.is_symlink():
+                raise ManagedStateError("legacy managed state is retired; use v11 authority")
+
     def _read(self) -> tuple[ManagedState, int | None]:
+        self._reject_retired_legacy()
         if self.path.is_symlink():
             raise ManagedStateError(f"managed state path is not a regular file: {self.path}")
         if not self.path.exists():
@@ -283,6 +292,7 @@ class ManagedStateStore:
         return _parse_managed_state_with_version(payload, catalog=self.catalog)
 
     def save(self, state: ManagedState) -> None:
+        self._reject_retired_legacy()
         payload = serialize_managed_state(state, catalog=self.catalog)
         document = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         parent = self.path.parent
@@ -296,6 +306,7 @@ class ManagedStateStore:
                 stream.write(document)
                 stream.flush()
                 os.fsync(stream.fileno())
+            self._reject_retired_legacy()
             os.replace(temp_path, self.path)
             os.chmod(self.path, 0o600)
             fsync_directory(parent)

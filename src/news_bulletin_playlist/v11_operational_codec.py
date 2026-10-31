@@ -23,7 +23,10 @@ from news_bulletin_playlist.legacy_catalog_snapshot import (
     FrozenLegacySnapshotError,
     parse_legacy_snapshot,
 )
-from news_bulletin_playlist.legacy_materialization import LegacyProvenance
+from news_bulletin_playlist.legacy_materialization import (
+    LegacyProvenance,
+    pause_dormant_legacy_playlists,
+)
 from news_bulletin_playlist.managed_state import (
     InstalledSource,
     ManagedState,
@@ -73,7 +76,8 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
         if snapshot.source_order is None:
             raise V11OperationalError("ordered frozen-v2 source evidence is required")
         catalog = _historical_catalog(snapshot)
-        overlay = serialize_managed_state(candidate.projection.original_state, catalog=catalog)
+        normalized = pause_dormant_legacy_playlists(catalog, candidate.projection.original_state)
+        overlay = serialize_managed_state(normalized, catalog=catalog)
         encoded_catalog = json.loads(candidate.frozen_catalog_v2_bytes)
         document = {
             "format": OPERATIONAL_FORMAT,
@@ -90,7 +94,7 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
         raise V11OperationalError("cannot build a lossless operational state") from exc
     if result.runtime != candidate.projection.projected_runtime:
         raise V11OperationalError("v11 operational state changes original runtime")
-    if result.managed_overlay != candidate.projection.original_state:
+    if result.managed_overlay != normalized:
         raise V11OperationalError("v11 operational state changes original records")
     return payload
 

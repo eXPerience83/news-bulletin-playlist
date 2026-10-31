@@ -357,6 +357,11 @@ def test_import_escapes_untrusted_names_and_is_available_without_oauth_service(
     assert name.encode() not in body and b"&lt;script&gt;" in body
     assert_valid_admin_html(body.decode())
     flags["allow_save"] = True
+    status, _, result = _request(server, "POST", ROOT + "/apply", cookie=cookie, form=_form(body))
+    assert status == 409 and b"Upload a new preview" in result
+    page = _request(server, "GET", ROOT, cookie=cookie)[2]
+    status, _, body = _post(server, cookie, _document(display_name=name), _csrf(page))
+    assert status == 200
     status, _, body = _request(server, "POST", ROOT + "/apply", cookie=cookie, form=_form(body))
     assert status == 200 and client.calls == []
 

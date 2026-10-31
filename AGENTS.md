@@ -209,6 +209,8 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 
 - Owner decision 2026-10-31: migration to v11 is forward-only and BREAKING (no supported downgrade); old-image rollback and full ACL snapshot rehearsal are not release gates. Keep v11 atomic, retain legacy bytes inert, fail closed on corrupt/newer state, test preservation of all installed destinations and provider-free upgrade. The isolated v11 writer must not be wired into startup until all legacy reads/writes are replaced consistently. Never touch deployed TrueNAS or Spotify without explicit operator deployment authorization.
 
+- Once the v11 runtime adapter is active, use only `managed-state-v11.json` for runtime/Admin edits and compile against the frozen per-installation catalog. Never silently read/write old legacy state if v11 exists. No downgrade support; preserve old bytes for incident diagnosis. For genuinely fresh installs, do not implicitly provision Spotify playlists or auto-run provider operations.
+
 ## Documentation and external contracts
 
 - For Spotify endpoint/scopes/limits/response-contract claims, verify current official Spotify documentation before treating a claim as a defect.

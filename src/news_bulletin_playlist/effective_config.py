@@ -6,15 +6,18 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     ManagedStateError,
-    ManagedStateStore,
     compile_engine_config,
     effective_sources,
 )
 from news_bulletin_playlist.models import EngineConfig
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_storage import (
+    V11_AUTHORITY_FILENAME,
+    V11_OPERATIONAL_FILENAME,
+)
 
 _OBSOLETE_CONFIG_FILENAME = "news-bulletin-playlist.yaml"
 _OBSOLETE_CONFIG_PATH_ENV = "NEWS_PLAYLIST_CONFIG"
@@ -28,14 +31,21 @@ def load_effective_config(
     _reject_obsolete_configuration(data_dir, environ)
 
     managed_path = data_dir / MANAGED_STATE_FILENAME
-    if not _path_present(managed_path):
+    if not any(
+        _path_present(path)
+        for path in (
+            managed_path,
+            data_dir / V11_OPERATIONAL_FILENAME,
+            data_dir / V11_AUTHORITY_FILENAME,
+        )
+    ):
         return None
 
     try:
-        store = ManagedStateStore(managed_path)
+        store = open_managed_state_store(data_dir)
         state = store.load()
         disabled = {
-            source.id for source in effective_sources(BUILTIN_CATALOG, state) if not source.enabled
+            source.id for source in effective_sources(store.catalog, state) if not source.enabled
         }
         # Before dormant membership, an active playlist with only disabled assignments was
         # valid and preserved Spotify. Pause it durably so startup and Admin remain available
@@ -51,7 +61,7 @@ def load_effective_config(
                 for playlist in state.playlists
             ),
         )
-        config = compile_engine_config(BUILTIN_CATALOG, recovered)
+        config = compile_engine_config(store.catalog, recovered)
         if recovered != state:
             try:
                 store.save(recovered)

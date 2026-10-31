@@ -57,6 +57,7 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicDetector,
     PublicDetectorJournal,
 )
+from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
 
 NOW = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
 
@@ -218,7 +219,10 @@ def test_reloading_runner_revalidates_managed_config_each_cycle(tmp_path: Path) 
 
     auth = _NeverAuth()
     runner = _reloading_runner(tmp_path, auth)
-    config_path.write_text('{"schema_version":999,"playlists":[]}', encoding="utf-8")
+    assert config_path.exists()
+    (tmp_path / V11_OPERATIONAL_FILENAME).write_text(
+        '{"schema_version":999,"playlists":[]}', encoding="utf-8"
+    )
 
     result = runner.run_cycle()
 
@@ -228,15 +232,16 @@ def test_reloading_runner_revalidates_managed_config_each_cycle(tmp_path: Path) 
 
 
 def test_reloading_runner_fails_closed_if_managed_config_disappears(tmp_path: Path) -> None:
-    config_path = _write_managed_config(tmp_path)
+    _write_managed_config(tmp_path)
+    assert _load_runtime_config(tmp_path, {}) is not None
     auth = _NeverAuth()
     runner = _reloading_runner(tmp_path, auth)
-    config_path.unlink()
+    (tmp_path / V11_OPERATIONAL_FILENAME).unlink()
 
     result = runner.run_cycle()
 
     assert not result.ok
-    assert result.error == "production engine configuration is no longer available"
+    assert "invalid managed configuration" in (result.error or "")
     assert auth.calls == 0
 
 
