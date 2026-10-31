@@ -11,9 +11,9 @@ from __future__ import annotations
 import fcntl
 import os
 import stat
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Iterator
 from uuid import uuid4
 
 from news_bulletin_playlist.legacy_catalog_snapshot import (
