@@ -136,5 +136,7 @@ def test_invalid_v11_input_cannot_fall_back_to_legacy_defaults(tmp_path: Path) -
     raw = (root / "managed-state.json").read_bytes()
     before = _files(root)
     with pytest.raises(V11CandidateError):
-        parse_v11_readonly_state(build_v11_candidate(build_legacy_snapshot_v2(preview, raw), raw) + b" ")
+        parse_v11_readonly_state(
+            build_v11_candidate(build_legacy_snapshot_v2(preview, raw), raw) + b" "
+        )
     assert _files(root) == before
