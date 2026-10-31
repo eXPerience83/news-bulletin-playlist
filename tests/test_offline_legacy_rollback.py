@@ -45,17 +45,13 @@ def test_restored_legacy_runtime_and_destinations_survive_without_writes(
         raise AssertionError("provider activity forbidden during isolated restore")
 
     monkeypatch.setattr(socket, "socket", no_socket)
-    result = rehearse_offline_legacy_rollback(
-        root, backup, restored, operator_asserts_offline=True
-    )
+    result = rehearse_offline_legacy_rollback(root, backup, restored, operator_asserts_offline=True)
     assert result.managed_schema_version == schema
     assert result.destination_count == 4
     assert result.sqlite_table_count == 1
     assert result.proves_old_image_compatibility is False
     assert result.permits_cutover is False
-    assert tuple(inventory_offline_dataset(path) for path in (root, backup, restored)) == (
-        baseline
-    )
+    assert tuple(inventory_offline_dataset(path) for path in (root, backup, restored)) == (baseline)
 
 
 def test_missing_offline_assertion_rejected_without_mutation(tmp_path: Path) -> None:
@@ -67,9 +63,7 @@ def test_missing_offline_assertion_rejected_without_mutation(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize("fault", ["cover", "oauth", "sqlite", "state", "journal"])
-def test_restored_dataset_tampering_blocks_legacy_rehearsal(
-    tmp_path: Path, fault: str
-) -> None:
+def test_restored_dataset_tampering_blocks_legacy_rehearsal(tmp_path: Path, fault: str) -> None:
     root, backup, restored = _three_roots(tmp_path)
     target = {
         "cover": restored / "custom-covers" / "image.jpg",
