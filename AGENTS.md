@@ -205,6 +205,8 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 
 - Offline SQLite backup validation is an isolated, opt-in verification step only. Open SQLite exclusively on a disposable, verified copy of the independent backup, not production /data or the backup itself. A successful integrity_check does not certify complete WAL capture, service quiescence or TrueNAS ACL restore. Preserve the old-image full-dataset rollback requirement and keep v11 cutover disabled.
 
+- Synthetic legacy rollback rehearsals may inspect restored /data with the read-only old-schema parser and a frozen historical catalog, but must compare full backup contents first. They are **not** evidence that an older published container/image can boot after schema v11; that requires a separately pinned, disconnected old-image rehearsal. Do not infer cutover permission from a passing test.
+
 ## Documentation and external contracts
 
 - For Spotify endpoint/scopes/limits/response-contract claims, verify current official Spotify documentation before treating a claim as a defect.
