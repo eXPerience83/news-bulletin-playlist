@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from news_bulletin_playlist.managed_state import (\nfrom news_bulletin_playlist.models import EngineConfig
+from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     ManagedStateError,
     compile_engine_config,
