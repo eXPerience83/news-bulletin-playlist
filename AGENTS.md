@@ -207,6 +207,8 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 
 - Synthetic legacy rollback rehearsals may inspect restored /data with the read-only old-schema parser and a frozen historical catalog, but must compare full backup contents first. They are **not** evidence that an older published container/image can boot after schema v11; that requires a separately pinned, disconnected old-image rehearsal. Do not infer cutover permission from a passing test.
 
+- Owner decision 2026-10-31: migration to v11 is forward-only and BREAKING (no supported downgrade); old-image rollback and full ACL snapshot rehearsal are not release gates. Keep v11 atomic, retain legacy bytes inert, fail closed on corrupt/newer state, test preservation of all installed destinations and provider-free upgrade. The isolated v11 writer must not be wired into startup until all legacy reads/writes are replaced consistently. Never touch deployed TrueNAS or Spotify without explicit operator deployment authorization.
+
 ## Documentation and external contracts
 
 - For Spotify endpoint/scopes/limits/response-contract claims, verify current official Spotify documentation before treating a claim as a defect.

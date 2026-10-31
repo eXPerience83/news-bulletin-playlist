@@ -1,8 +1,9 @@
-"""Standalone schema-v11 ownership document; never a live migration executor.
+"""Standalone schema-v11 owned configuration document.
 
-Unlike the v11 *candidate*, this document can be decoded without the old
-managed-state bytes, the original data directory or the current image presets.
-It remains read-only until a separately reviewed, reversible cutover exists.
+The historical catalog and origin digest are frozen on first migration.
+The installation-owned overlay may be edited without consulting the old
+managed-state bytes, the original directory or changing image presets.
+Live startup migration is a separate integration decision.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ from news_bulletin_playlist.managed_state import (
     ManagedState,
     ManagedStateError,
     compile_engine_config,
-    effective_sources,
     parse_managed_state,
     serialize_managed_state,
     source_definition,
@@ -136,26 +136,21 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
             raise V11OperationalError("v11 historical origin digest mismatch")
         catalog = _historical_catalog(snapshot)
         overlay = parse_managed_state(document["managed_overlay"], catalog=catalog)
-        if overlay.schema_version != snapshot.managed_schema_version:
-            raise V11OperationalError("v11 overlay historical schema mismatch")
+        if overlay.schema_version < snapshot.managed_schema_version:
+            raise V11OperationalError("v11 overlay cannot downgrade its original schema")
         if serialize_managed_state(overlay, catalog=catalog) != document["managed_overlay"]:
             raise V11OperationalError("noncanonical v11 managed overlay")
         runtime = compile_engine_config(catalog, overlay)
-        ordered = tuple(snapshot.source_order)
-        if tuple(item.id for item in runtime.sources) != ordered:
-            raise V11OperationalError("v11 source processing order changed")
-        frozen_sources = {item.installed.id: item.installed for item in snapshot.sources}
-        actual_sources = {
-            source.id: InstalledSource.from_definition(source)
-            for source in effective_sources(catalog, overlay)
-        }
-        if frozen_sources != actual_sources:
-            raise V11OperationalError("v11 effective source definition drift")
+        # The original historical order is frozen, not a constraint on later
+        # installation-owned source/template edits. Only image-preset sources
+        # remain fixed in their original relative order; newly installed
+        # sources may be added or removed through the validated overlay.
+        image_ids = tuple(source.id for source in catalog.sources)
+        if tuple(item.id for item in runtime.sources[: len(image_ids)]) != image_ids:
+            raise V11OperationalError("v11 installed catalog source order changed")
         templates = effective_playlist_templates(
             catalog, overlay.templates, sources=runtime.sources
         )
-        if templates != tuple(item.definition for item in snapshot.templates):
-            raise V11OperationalError("v11 playlist example definition drift")
         if payload != _canonical(document):
             raise V11OperationalError("noncanonical v11 operational JSON")
     except (FrozenLegacySnapshotError, ManagedStateError, LocalPlaylistTemplateError) as exc:
@@ -174,6 +169,35 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         example_provenance=tuple(item.provenance for item in snapshot.templates),
         migration_origin_sha256=digest,
     )
+
+
+def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
+    """Serialize a validated owner edit without replacing the historical catalog.
+
+    This is a pure transformation; the caller must perform the durable
+    compare-and-swap publication and prevent legacy writers separately.
+    """
+    current = parse_v11_operational(payload)
+    if not isinstance(overlay, ManagedState):
+        raise V11OperationalError("invalid v11 managed overlay")
+    if overlay.schema_version < current.managed_overlay.schema_version:
+        raise V11OperationalError("v11 managed overlay schema cannot downgrade")
+    try:
+        document = json.loads(payload)
+        document["managed_overlay"] = serialize_managed_state(
+            overlay, catalog=current.historical_catalog
+        )
+        next_payload = _canonical(document)
+        verified = parse_v11_operational(next_payload)
+    except (ManagedStateError, ValueError, TypeError, RecursionError) as exc:
+        raise V11OperationalError("v11 edit cannot be represented losslessly") from exc
+    if verified.managed_overlay != overlay:
+        raise V11OperationalError("v11 edit changed managed state")
+    if verified.historical_catalog != current.historical_catalog:
+        raise V11OperationalError("v11 edit changed historical catalog")
+    if verified.migration_origin_sha256 != current.migration_origin_sha256:
+        raise V11OperationalError("v11 edit changed migration origin")
+    return next_payload
 
 
 def _historical_catalog(snapshot: FrozenLegacyCatalogSnapshot) -> BuiltInCatalog:

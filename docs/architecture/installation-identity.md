@@ -460,3 +460,30 @@ a production backup, and always returns both
 Remaining blockers: operator-controlled quiescence, coherent ZFS snapshot with
 native ACLs and all data, isolated boot of an exact pinned previous image
 without provider access, and then a reviewed journaled migration transaction.
+
+
+## Forward-only v11 implementation — first writable owner-store slice (#552)
+
+Owner decision on 31 October 2026 supersedes old-image downgrade/rollback gates:
+**breaking upgrade, no supported downgrade**. The first functional increment is
+`V11OperationalStore`, using `managed-state-v11.json` as a separately invoked
+authoritative file. `initialize_from_legacy` freezes the exact installed
+legacy catalog and builds schema v11 directly from managed-state v6–v10 in
+memory, then publishes the new file with an exclusive link, fsync and no
+overwrite. The original `managed-state.json` is retained unchanged as inert
+migration evidence. Source order, disabled assignments, four destination IDs,
+portability metadata and local drafts are checked during serialization.
+
+The first schema-v11 managed-overlay writer supports validated source/template
+and playlist changes through immutable historical image definitions, with
+an exact-byte optimistic concurrency check, private temporary file and atomic
+replacement. A malformed or missing v11 state is an error; no silent fallback
+to legacy. OAuth, SQLite, cover files, and reconciliation journals are untouched.
+
+**Not yet wired to runtime or Admin.** The old runtime keeps its original file
+until the separate integration PR replaces all readers and writers together.
+This isolated PR does not migrate the NAS, activate providers, publish GHCR or
+allow a production deploy. The next change must connect v11 as *the sole*
+authority across startup, scheduler and Admin, with an explicit one-way
+upgrade gate and integration tests. The old rollback checklist is historical,
+not a prerequisite.
