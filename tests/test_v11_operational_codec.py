@@ -112,9 +112,7 @@ def test_custom_drafts_disabled_selections_quarantine_and_dst_fold(tmp_path: Pat
         lambda doc: doc["managed_overlay"].update(unknown=True),
     ],
 )
-def test_mutated_v11_document_is_rejected_without_file_writes(
-    tmp_path: Path, change
-) -> None:
+def test_mutated_v11_document_is_rejected_without_file_writes(tmp_path: Path, change) -> None:
     root, preview = _root(tmp_path)
     before = _files(root)
     document = json.loads(_operational(root, preview))
