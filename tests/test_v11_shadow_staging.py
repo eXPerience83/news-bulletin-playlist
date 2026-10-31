@@ -177,3 +177,15 @@ def test_verify_fails_after_backup_or_shadow_mutation_without_writes(tmp_path: P
     with pytest.raises(V11ShadowStageError):
         inspect_v11_shadow_state(root, backup)
     assert _files(root) == before
+
+
+def test_offline_shadow_rejects_backup_with_identical_bytes_but_different_mode(
+    tmp_path: Path,
+) -> None:
+    root, backup = _two_roots(tmp_path)
+    copied_cover = backup / "custom-covers" / "image.jpg"
+    copied_cover.chmod(copied_cover.stat().st_mode ^ 0o100)
+    assert copied_cover.read_bytes() == (root / "custom-covers" / "image.jpg").read_bytes()
+    with pytest.raises(V11ShadowStageError, match="differs"):
+        stage_v11_shadow_state(root, backup, operator_asserts_offline=True)
+    assert not (root / V11_SHADOW_FILENAME).exists()

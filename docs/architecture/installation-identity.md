@@ -390,3 +390,20 @@ migration gates; fresh opt-in configuration and explicit preset import; and
 runtime/Admin separation. The guarded marker-writing primitive alone does not change defaults.
 #553 is independent empty-install round-trip acceptance; #565 remains the beta
 release gate.
+
+## Stage 13: offline backup filesystem-metadata fidelity (not cutover)
+
+The whole-/data inventory now includes file and directory UID/GID, POSIX
+permissions, and hashes of extended-attribute values (never their private
+contents), plus file hardlink counts. It detects ctime/owner/mode changes
+during file hashing. The offline v11 shadow stage therefore refuses a
+backup even when all JSON, database, OAuth and cover bytes match if metadata
+differs. Isolated tests compare copied/restored roots and deliberate file,
+directory and extended-attribute corruption.
+
+**Still not authorization for migration:** ZFS/NFSv4 ACLs or other platform
+metadata may not be represented by POSIX xattrs, so a matching comparison
+is not a complete filesystem snapshot. It cannot prove service quiescence,
+SQLite WAL coherency, a restorable NAS backup, or old-image compatibility.
+`authorizes_migration=False`, `permits_cutover=False`; no startup/TrueNAS,
+GHCR or Spotify change is introduced.
