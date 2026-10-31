@@ -114,9 +114,7 @@ def _scan(root: Path, device: int, inode: int) -> OfflineDatasetInventory:
                         or before.st_mtime_ns != after.st_mtime_ns
                     ):
                         raise DatasetInventoryError("dataset file changed while hashing")
-                    name_in_root = (
-                        name if relative == "." else f"{relative}/{name}"
-                    )
+                    name_in_root = name if relative == "." else f"{relative}/{name}"
                     files.append(
                         DatasetFileEvidence(
                             name_in_root,
