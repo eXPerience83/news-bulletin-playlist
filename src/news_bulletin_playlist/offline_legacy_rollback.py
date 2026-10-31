@@ -23,6 +23,7 @@ from news_bulletin_playlist.offline_sqlite_backup import (
     OfflineSQLiteBackupError,
     inspect_offline_sqlite_backup,
 )
+from news_bulletin_playlist.v11_candidate import V11CandidateError
 from news_bulletin_playlist.v11_shadow_staging import (
     V11ShadowStageError,
     _require_independent_backup,
@@ -108,6 +109,7 @@ def rehearse_offline_legacy_rollback(
         ManagedStateError,
         OfflineSQLiteBackupError,
         V11ShadowStageError,
+        V11CandidateError,
         OSError,
     ) as exc:
         raise OfflineLegacyRollbackError("offline legacy rollback evidence is invalid") from exc

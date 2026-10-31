@@ -437,9 +437,10 @@ against the fully restored data tree. No provider writes or release involved.
 ## Stage 15: complete legacy-read rollback rehearsal on synthetic roots (not image validation)
 
 The independently invoked `offline_legacy_rollback.py` requires three
-physically separate root directories: the unchanged legacy + v11 shadow source,
+distinct root directories: the unchanged legacy + v11 shadow source,
 an original independent backup and a disposable restored tree. It refuses
-nested, linked or discrepant roots. It checks the backup against the shadow
+nested, linked or discrepant roots. They may share a physical storage device:
+this check is not evidence of off-device backup durability. It checks the backup against the shadow
 evidence and the restored tree against the *complete* backup inventory,
 including managed state, OAuth, journals, covers and file metadata. The
 standalone Stage 14 SQLite/WAL integrity check runs against yet another
