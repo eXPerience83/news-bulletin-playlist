@@ -323,6 +323,36 @@ a rehearsed rollback of the *actual* application dataset require explicit
 operator control and separate acceptance before migration. This tool must
 not be run against a running application's production /data.
 
+## Stage 12: offline-only operational v11 shadow staging (no cutover)
+
+`v11_shadow_staging.py` is an isolated staging **research primitive**,
+not a migration executor. It requires a caller to explicitly assert the
+application is offline and to supply a **separate fully inventoried backup
+directory** whose contents match the source before staging. It rejects
+the source as its own backup, backup paths nested inside source (or vice
+versa), source/backup hardlinks, unsafe file types, symlinks, changed
+source/backup file bytes and mismatched destination/journal/cover evidence.
+
+Only after verifying original `managed-state.json`, ordered frozen-v2
+snapshot and candidate does it create
+`managed-state-v11.shadow.json` with a Linux directory lock,
+0600 exclusive staging, file fsync, second complete inventory scan and
+exclusive hardlink publication. It never replaces or renames the
+legacy state, deletes old evidence, selects the new state in runtime,
+or alters any Spotify destination. Existing shadows must be bit-identical;
+post-link durability uncertainty preserves the marker and temp evidence for
+manual inspection, with no blind repair.
+
+The read-only inspector compares the shadow against the independently
+reconstructed operational v11 document and the untouched backup
+inventory. **Both results always deny cutover.** A boolean caller assertion,
+two matching inventories and a dry-run of synthetic restoration **cannot**
+prove true process quiescence, WAL/SQLite checkpoint consistency, ownership
+and ACL preservation, crash safety of an actual data-volume switch, or
+old-image rollback in production. The helper is **not authorized to
+run against live TrueNAS /data**. That requires a separately developed
+whole-dataset snapshot protocol and explicit operator acceptance.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
