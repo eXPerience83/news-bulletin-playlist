@@ -243,6 +243,32 @@ rollback transaction, or a migration cutover. It does not capture OAuth,
 journals, SQLite history or cover JPEGs; those need independent consistent
 dataset snapshots and rollback tests. No startup path invokes this module.
 
+## Stage 9: independent, read-only v11 owned-state reader
+
+`v11_state_reader.py` introduces an **isolated read-only interface** for
+the persisted, separately published `managed-state-v11.candidate.json`.
+It accepts only the fully verified schema-11 candidate and re-compiles the
+runtime from its **owned sources and provenance**, frozen image-owned
+examples, local drafts, managed destinations, quarantine and source
+overrides. It does not consult `BUILTIN_CATALOG` from the running image.
+It fails closed if the independently reconstructed runtime differs from
+the exact historically validated projection, including source order.
+
+`load_v11_readonly_state` normally checks the unchanged legacy
+`managed-state.json` and exact frozen-v2 evidence through the candidate
+storage reader. A deliberately requested recovery inspection permits
+reading the verified original bytes after the legacy file changes, but
+**never writes those bytes back or activates any Spotify destination**.
+The returned state always reports `is_live_migration_authorized=False`.
+
+This is a v11 candidate **read path**, not a replacement for
+`ManagedStateStore`, not a general-purpose v11 persisted state editor,
+and not the cutover itself. The current v6–v10 path remains unchanged.
+Before production opt-in, separate PRs must provide an independently
+versioned v11 state transaction, consistent whole-/data rollback, old-image
+compatibility and startup/Admin integration. No normal startup calls
+this reader.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
