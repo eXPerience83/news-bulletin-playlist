@@ -29,7 +29,6 @@ from news_bulletin_playlist.managed_state import (
     ManagedState,
     ManagedStateError,
     compile_engine_config,
-    effective_sources,
     parse_managed_state,
     serialize_managed_state,
     source_definition,

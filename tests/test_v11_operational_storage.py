@@ -47,10 +47,18 @@ def test_one_shot_forward_upgrade_then_edit_restart_and_preserve_legacy(
     assert first.managed_overlay == preview.original_state
     assert len(first.managed_overlay.playlists) == 4
     assert (root / V11_OPERATIONAL_FILENAME).stat().st_mode & 0o777 == 0o600
-    assert {p.name: p.read_bytes() for p in root.iterdir() if p.is_file() if p.name != V11_OPERATIONAL_FILENAME} == before
+    assert {
+        p.name: p.read_bytes()
+        for p in root.iterdir()
+        if p.is_file() and p.name != V11_OPERATIONAL_FILENAME
+    } == before
     previous = store.load_bytes()
     playlists = (
-        replace(first.managed_overlay.playlists[0], display_name="Updated v11 title", max_episodes=19),
+        replace(
+            first.managed_overlay.playlists[0],
+            display_name="Updated v11 title",
+            max_episodes=19,
+        ),
         *first.managed_overlay.playlists[1:],
     )
     revised = replace(first.managed_overlay, playlists=playlists)
@@ -126,7 +134,10 @@ def test_write_failure_retains_existing_v11_and_rejects_unsafe_edit(
     baseline = store.load_bytes()
     changed = replace(
         old.managed_overlay,
-        playlists=(replace(old.managed_overlay.playlists[0], description="fresh"), *old.managed_overlay.playlists[1:]),
+        playlists=(
+            replace(old.managed_overlay.playlists[0], description="fresh"),
+            *old.managed_overlay.playlists[1:],
+        ),
     )
     original_replace = os.replace
 

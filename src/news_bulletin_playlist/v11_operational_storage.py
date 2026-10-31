@@ -7,10 +7,7 @@ missing or invalid v11 file. Caller integration must prevent legacy writes.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import stat
 from contextlib import suppress
 from pathlib import Path
 from uuid import uuid4
@@ -54,7 +51,9 @@ def _read_existing(root_fd: int) -> bytes | None:
 def _write_temporary(root_fd: int, payload: bytes) -> str:
     name = f".managed-state-v11-{uuid4().hex}.tmp"
     fd = os.open(
-        name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+        name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
         dir_fd=root_fd,
     )
     try:
@@ -112,8 +111,11 @@ class V11OperationalStore:
                 try:
                     # Publish only if the new authority does not already exist.
                     os.link(
-                        temporary, V11_OPERATIONAL_FILENAME,
-                        src_dir_fd=dir_fd, dst_dir_fd=dir_fd, follow_symlinks=False,
+                        temporary,
+                        V11_OPERATIONAL_FILENAME,
+                        src_dir_fd=dir_fd,
+                        dst_dir_fd=dir_fd,
+                        follow_symlinks=False,
                     )
                     os.fsync(dir_fd)
                 finally:
@@ -149,8 +151,10 @@ class V11OperationalStore:
                     if _read_existing(dir_fd) != current:
                         raise V11StoreError("v11 changed before atomic save")
                     os.replace(
-                        temporary, V11_OPERATIONAL_FILENAME,
-                        src_dir_fd=dir_fd, dst_dir_fd=dir_fd,
+                        temporary,
+                        V11_OPERATIONAL_FILENAME,
+                        src_dir_fd=dir_fd,
+                        dst_dir_fd=dir_fd,
                     )
                     os.fsync(dir_fd)
                 finally:
