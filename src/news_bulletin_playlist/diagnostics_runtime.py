@@ -18,7 +18,6 @@ from news_bulletin_playlist import __version__, engine_runtime
 from news_bulletin_playlist.admin_session import SourceImportCapacityError, SourceInspectionContext
 from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
-from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetError
 from news_bulletin_playlist.diagnostics import (
     MAX_DIAGNOSTIC_EXPORT_EVENTS,

@@ -232,7 +232,7 @@ def test_reloading_runner_revalidates_managed_config_each_cycle(tmp_path: Path) 
 
 
 def test_reloading_runner_fails_closed_if_managed_config_disappears(tmp_path: Path) -> None:
-    config_path = _write_managed_config(tmp_path)
+    _write_managed_config(tmp_path)
     assert _load_runtime_config(tmp_path, {}) is not None
     auth = _NeverAuth()
     runner = _reloading_runner(tmp_path, auth)
