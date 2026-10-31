@@ -113,10 +113,11 @@ from news_bulletin_playlist.sources_admin_web import (
 )
 from news_bulletin_playlist.spotify.auth import AuthorizationState
 from news_bulletin_playlist.spotify.authorization_display import authorization_state_label
-from news_bulletin_playlist.spotify_metrics import (
+from news_bulletin_playlist.spotify_metrics import (\nfrom news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
     SpotifyRequestMetrics,
     SpotifyRequestMetricsSnapshot,
 )
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.web_ui import WEB_UI_STYLES, BadgeTone, status_badge
 
 

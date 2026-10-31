@@ -6,12 +6,13 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from news_bulletin_playlist.managed_state import (
+from news_bulletin_playlist.managed_state import (\nfrom news_bulletin_playlist.models import EngineConfig
     MANAGED_STATE_FILENAME,
     ManagedStateError,
     compile_engine_config,
     effective_sources,
 )
+from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
 from news_bulletin_playlist.models import EngineConfig

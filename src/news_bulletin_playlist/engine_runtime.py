@@ -100,7 +100,7 @@ from news_bulletin_playlist.spotify_backoff import (
     SpotifyRateLimitJournal,
     SpotifyRateLimitStateUnavailable,
 )
-from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
+from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics\nfrom news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 
 _INTERVAL_SECONDS_ENV = "NEWS_PLAYLIST_INTERVAL_SECONDS"
 _SPOTIFY_INACTIVITY_HOURS_ENV = "NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS"
