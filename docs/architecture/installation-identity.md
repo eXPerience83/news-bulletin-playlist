@@ -269,6 +269,37 @@ versioned v11 state transaction, consistent whole-/data rollback, old-image
 compatibility and startup/Admin integration. No normal startup calls
 this reader.
 
+## Stage 10: self-contained schema-v11 owned-state codec (not active)
+
+The pure `v11_operational_codec.py` is the first standalone **operational
+read-model document** that can reconstruct historical sources, templates,
+managed playlists and policies without opening the original
+`managed-state.json`, looking up any preset from the **current image**, or
+using SQLite/OAuth/Spotify. It is **not yet a writable runtime store**.
+A strict schema-11 document contains the fully validated ordered frozen-v2
+catalog plus a canonical managed overlay and a migration-origin digest.
+Ownership and source order are self-contained rather than inferred from
+whatever presets happen to ship with a newer container image.
+
+`build_v11_operational_from_candidate` accepts **only** a verified
+historical candidate, serializes the old state into its canonical supported
+overlay version, and requires the resulting standalone runtime to match the
+full historical `EngineConfig` exactly. `parse_v11_operational` decodes
+without original legacy files; it rejects duplicate/unknown fields, malformed
+schemas, noncanonical JSON, missing/duplicate/unordered sources, unsupported
+capabilities or references, and any mismatch between frozen effective source
+definitions and reconstructed runtime. The embedded origin SHA-256 detects
+cross-file confusion but **is not a signature or backup**. Valid documents
+can include private playlist destinations; do not publish them publicly.
+
+**Cutover remains explicitly forbidden.** The new reader is neither wired
+to `ManagedStateStore` nor responsible for saving local edits. Existing
+installations still need a reviewed one-shot transaction, consistent /data
+snapshot (SQLite/OAuth/covers/journals), crash-safe resume/rollback protocol,
+and old-image compatibility acceptance before schema v11 can be activated.
+The codec never writes files or contacts Spotify; a valid result always
+reports `is_live_migration_authorized=False`.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
