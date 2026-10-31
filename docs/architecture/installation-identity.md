@@ -407,3 +407,29 @@ is not a complete filesystem snapshot. It cannot prove service quiescence,
 SQLite WAL coherency, a restorable NAS backup, or old-image compatibility.
 `authorizes_migration=False`, `permits_cutover=False`; no startup/TrueNAS,
 GHCR or Spotify change is introduced.
+
+
+## Stage 14: read-only SQLite/WAL recovery acceptance (still no cutover)
+
+The independent \`offline_sqlite_backup.py\` helper requires an explicit
+offline-operator assertion and a matching complete /data backup under the Stage
+13 file/metadata gate. It securely copies only the known runtime database
+\`news-bulletin-playlist-v1.sqlite3\` and its optional \`-wal\` into a private
+temporary directory, checking copied SHA-256 evidence. SQLite's
+\`PRAGMA integrity_check\` and schema inspection operate **on the scratch
+copy only**: -shm regeneration or WAL recovery never writes original /data
+or backup files. A missing/corrupt database, unresolved rollback journal,
+orphan -shm, mismatching backup or changed source evidence fails closed.
+Tests include a real uncheckpointed committed WAL, checkpointed SQLite,
+independent restored dataset, missing/corrupted evidence and refusal to run
+without the offline assertion. No startup/ManagedStateStore/TrueNAS caller;
+\`permits_cutover=False\` is unconditional.
+
+**Boundaries:** reading the copied SQLite database is *not* proof that the app
+was actually stopped, a complete WAL tail was captured, that a ZFS snapshot
+was atomic, or that native NFSv4 ACLs have been restored. The old pre-0.1
+database is merely inventoried and is not opened by this helper. Before
+activating v11, an operator must independently establish application
+quiescence, snapshot the whole data volume including ACLs and ownership,
+retain the old image digest, and rehearse a disconnected old-image rollback
+against the fully restored data tree. No provider writes or release involved.
