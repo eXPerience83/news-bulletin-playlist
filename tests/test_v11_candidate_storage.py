@@ -53,9 +53,10 @@ def test_two_cooperating_publishers_share_one_candidate(tmp_path: Path) -> None:
     with ThreadPoolExecutor(max_workers=2) as pool:
         first, second = tuple(pool.map(publish_v11_candidate, (root, root)))
     assert first == second
-    assert read_v11_candidate(root).original_managed_state_bytes == (
-        root / "managed-state.json"
-    ).read_bytes()
+    assert (
+        read_v11_candidate(root).original_managed_state_bytes
+        == (root / "managed-state.json").read_bytes()
+    )
     assert len([p for p in root.iterdir() if "candidate" in p.name]) == 1
 
 
