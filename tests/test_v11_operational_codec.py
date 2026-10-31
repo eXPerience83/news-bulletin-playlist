@@ -14,7 +14,10 @@ from test_legacy_materialization import _catalog_with_duration_exception, _legac
 from news_bulletin_playlist.legacy_catalog_snapshot import (
     build_legacy_snapshot_v2,
 )
-from news_bulletin_playlist.legacy_materialization import preview_legacy_materialization
+from news_bulletin_playlist.legacy_materialization import (
+    LegacyMigrationPreview,
+    preview_legacy_materialization,
+)
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.v11_candidate import build_v11_candidate
 from news_bulletin_playlist.v11_operational_codec import (
@@ -41,7 +44,7 @@ def _files(root: Path) -> dict[str, bytes]:
     }
 
 
-def _operational(root: Path, preview: object) -> bytes:
+def _operational(root: Path, preview: LegacyMigrationPreview) -> bytes:
     original = (root / "managed-state.json").read_bytes()
     return build_v11_operational_from_candidate(
         build_v11_candidate(build_legacy_snapshot_v2(preview, original), original)
@@ -105,7 +108,7 @@ def test_custom_drafts_disabled_selections_quarantine_and_dst_fold(tmp_path: Pat
         lambda doc: doc.update(migration_origin_sha256="0" * 64),
         lambda doc: doc["installed_catalog"].update(source_order=[]),
         lambda doc: doc["installed_catalog"].update(schema_version=1),
-        lambda doc: doc["managed_overlay"].update(playlists=[]),
+        lambda doc: doc["managed_overlay"].update(playlists=[{"id": "corrupt"}]),
         lambda doc: doc["managed_overlay"].update(unknown=True),
     ],
 )
