@@ -160,9 +160,10 @@ def stage_v11_shadow_state(
                 os.fsync(handle.fileno())
             # The extra temporary file is the *only* permitted inventory delta.
             _verified_offline_inventory(root, backup, extra_name=tmp_name)
-            if _read_regular(
-                root_fd, "managed-state-v11.candidate.json", MAX_CANDIDATE_BYTES
-            ) != candidate_before:
+            if (
+                _read_regular(root_fd, "managed-state-v11.candidate.json", MAX_CANDIDATE_BYTES)
+                != candidate_before
+            ):
                 raise V11ShadowStageError("candidate changed during staging")
             os.link(
                 tmp_name,
