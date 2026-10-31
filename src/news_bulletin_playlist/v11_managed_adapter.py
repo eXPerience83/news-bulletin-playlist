@@ -1,8 +1,8 @@
 """Forward-only managed-state adapter shared by runtime and Admin.
 
 Existing installation state upgrades once from v6-v10 to owner-controlled v11.
-Legacy managed-state.json remains inert. Fresh installations retain the
-existing explicit activation workflow until empty preset UX is implemented.
+Legacy managed-state.json remains inert. Fresh installations start directly
+in v11, without creating any Spotify managed destination automatically.
 """
 
 from __future__ import annotations
@@ -28,8 +28,18 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
     def __init__(self, data_dir: Path) -> None:
         super().__init__(data_dir / MANAGED_STATE_FILENAME)
         self._owner = V11OperationalStore(data_dir)
+        legacy = data_dir / MANAGED_STATE_FILENAME
+        owned_path = data_dir / V11_OPERATIONAL_FILENAME
         try:
-            owned = self._owner.initialize_from_legacy(catalog=self.catalog)
+            if (
+                legacy.exists()
+                or legacy.is_symlink()
+                or owned_path.exists()
+                or owned_path.is_symlink()
+            ):
+                owned = self._owner.initialize_from_legacy(catalog=self.catalog)
+            else:
+                owned = self._owner.initialize_fresh(catalog=self.catalog)
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("forward-only v11 conversion failed") from exc
         self.catalog = owned.historical_catalog
@@ -52,9 +62,5 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
 
 
 def open_managed_state_store(data_dir: Path) -> ManagedStateStore:
-    """Use schema-v11 for any existing installation, never fall back after upgrade."""
-    legacy = data_dir / MANAGED_STATE_FILENAME
-    owned = data_dir / V11_OPERATIONAL_FILENAME
-    if legacy.exists() or legacy.is_symlink() or owned.exists() or owned.is_symlink():
-        return ForwardOnlyManagedStateStore(data_dir)
-    return ManagedStateStore(legacy)
+    """Use schema-v11 on fresh and existing installations alike."""
+    return ForwardOnlyManagedStateStore(data_dir)

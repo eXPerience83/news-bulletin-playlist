@@ -504,6 +504,8 @@ This is a **breaking, one-way upgrade**. After a v11 authority exists, even
 if corrupted, the application fails closed instead of reading legacy state.
 No old Docker image downgrade is supported. A one-off independent /data
 backup before operator deployment remains prudent; no ZFS rollback project
-is required. Fresh data directories continue to use the existing explicit
-activation path until the genuinely empty opt-in preset UI is implemented.
+is required. Fresh data directories now start directly with a v11 authority and **zero**
+managed Spotify destinations; the image's preset catalog is still available
+to Admin for explicit manual template activation. Separating catalog examples
+from installed sources and the final opt-in preset UI remains planned.
 This integration does not release a new image or change production TrueNAS.

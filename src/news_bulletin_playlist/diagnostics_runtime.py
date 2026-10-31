@@ -45,9 +45,7 @@ from news_bulletin_playlist.managed_provisioning import (
 )
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.managed_state import (
-    MANAGED_STATE_FILENAME,
     ManagedStateError,
-    ManagedStateStore,
     effective_sources,
 )
 from news_bulletin_playlist.models import ParserId

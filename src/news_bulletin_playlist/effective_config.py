@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     ManagedStateError,

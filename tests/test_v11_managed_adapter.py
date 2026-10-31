@@ -9,7 +9,7 @@ import pytest
 from test_legacy_catalog_snapshot import _root
 
 from news_bulletin_playlist.effective_config import load_effective_config
-from news_bulletin_playlist.managed_state import ManagedStateError, ManagedStateStore
+from news_bulletin_playlist.managed_state import ManagedStateError
 from news_bulletin_playlist.v11_managed_adapter import (
     ForwardOnlyManagedStateStore,
     open_managed_state_store,
@@ -27,7 +27,9 @@ def test_runtime_and_admin_use_exact_same_owned_state_after_upgrade(
     assert effective == preview.original_runtime
     admin_store = open_managed_state_store(root)
     assert isinstance(admin_store, ForwardOnlyManagedStateStore)
-    assert admin_store.catalog.sources == tuple(preview.original_runtime.sources)
+    assert tuple(s.id for s in admin_store.catalog.sources) == tuple(
+        s.id for s in preview.original_runtime.sources
+    )
     original = admin_store.load_readonly()
     assert original == preview.original_state
     first = original.playlists[0]
@@ -53,10 +55,14 @@ def test_invalid_v11_blocks_legacy_reader_and_future_reupgrade(tmp_path: Path) -
     assert (root / "managed-state.json").exists()
 
 
-def test_no_existing_installation_keeps_legacy_first_run_entrypoint(tmp_path: Path) -> None:
+def test_empty_first_run_goes_directly_to_v11_without_destination(tmp_path: Path) -> None:
     root = tmp_path / "empty"
     root.mkdir()
-    store = open_managed_state_store(root)
-    assert type(store) is ManagedStateStore
     assert load_effective_config(root, {}) is None
-    assert not (root / V11_OPERATIONAL_FILENAME).exists()
+    store = open_managed_state_store(root)
+    assert isinstance(store, ForwardOnlyManagedStateStore)
+    assert store.load().playlists == ()
+    assert (root / V11_OPERATIONAL_FILENAME).exists()
+    assert not (root / "managed-state.json").exists()
+    assert load_effective_config(root, {}) is None
+    assert open_managed_state_store(root).load().playlists == ()

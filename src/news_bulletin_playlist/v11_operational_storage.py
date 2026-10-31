@@ -7,6 +7,7 @@ missing or invalid v11 file. Caller integration must prevent legacy writes.
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import suppress
 from pathlib import Path
@@ -15,7 +16,11 @@ from uuid import uuid4
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.legacy_catalog_snapshot import build_legacy_snapshot_v2
 from news_bulletin_playlist.legacy_materialization import preview_legacy_materialization
-from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
+from news_bulletin_playlist.managed_state import (
+    ManagedState,
+    ManagedStateStore,
+    serialize_managed_state,
+)
 from news_bulletin_playlist.v11_candidate import build_v11_candidate
 from news_bulletin_playlist.v11_candidate_storage import _locked_root, _read_regular
 from news_bulletin_playlist.v11_operational_codec import (
@@ -125,6 +130,56 @@ class V11OperationalStore:
                 raise V11StoreError(
                     "forward-only v11 initialization failed; inspect both state files"
                 ) from exc
+            return parse_v11_operational(next_bytes)
+
+    def initialize_fresh(
+        self, *, catalog: BuiltInCatalog = BUILTIN_CATALOG
+    ) -> V11OperationalState:
+        """Explicit v11 authority on first run, with zero managed destinations.
+
+        Preset catalog entries are available for manual selection, never
+        auto-activated on Spotify. Fresh-install preset UX is separate.
+        """
+        with _locked_root(self.root) as dir_fd:
+            prior = _read_existing(dir_fd)
+            if prior is not None:
+                return parse_v11_operational(prior)
+            try:
+                os.stat(_LEGACY_FILENAME, dir_fd=dir_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise V11StoreError("legacy installation requires forward migration")
+            try:
+                empty = ManagedState(schema_version=10)
+                original = (
+                    json.dumps(
+                        serialize_managed_state(empty, catalog=catalog),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
+                    ) + "\n"
+                ).encode("utf-8")
+                preview = preview_legacy_materialization(catalog, empty)
+                frozen = build_legacy_snapshot_v2(preview, original)
+                next_bytes = build_v11_operational_from_candidate(
+                    build_v11_candidate(frozen, original)
+                )
+                temporary = _write_temporary(dir_fd, next_bytes)
+                try:
+                    os.link(
+                        temporary,
+                        V11_OPERATIONAL_FILENAME,
+                        src_dir_fd=dir_fd,
+                        dst_dir_fd=dir_fd,
+                        follow_symlinks=False,
+                    )
+                    os.fsync(dir_fd)
+                finally:
+                    os.unlink(temporary, dir_fd=dir_fd)
+                    os.fsync(dir_fd)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise V11StoreError("v11 fresh initialization failed") from exc
             return parse_v11_operational(next_bytes)
 
     def save(self, state: ManagedState, *, expected_bytes: bytes) -> bytes:
