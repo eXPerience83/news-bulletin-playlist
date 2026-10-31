@@ -105,15 +105,12 @@ def _scan(root: Path, device: int, inode: int) -> OfflineDatasetInventory:
                 raise DatasetInventoryError("dataset directory identity changed")
             attrs = _xattrs(dirfd)
             after_dir = os.fstat(dirfd)
-            if (
-                (here.st_mode, here.st_uid, here.st_gid, here.st_ctime_ns, here.st_mtime_ns)
-                != (
-                    after_dir.st_mode,
-                    after_dir.st_uid,
-                    after_dir.st_gid,
-                    after_dir.st_ctime_ns,
-                    after_dir.st_mtime_ns,
-                )
+            if (here.st_mode, here.st_uid, here.st_gid, here.st_ctime_ns, here.st_mtime_ns) != (
+                after_dir.st_mode,
+                after_dir.st_uid,
+                after_dir.st_gid,
+                after_dir.st_ctime_ns,
+                after_dir.st_mtime_ns,
             ):
                 raise DatasetInventoryError("dataset directory metadata changed")
             directories.append(
@@ -147,10 +144,19 @@ def _scan(root: Path, device: int, inode: int) -> OfflineDatasetInventory:
                         not stat.S_ISREG(before.st_mode)
                         or (metadata.st_dev, metadata.st_ino) != (before.st_dev, before.st_ino)
                         or before.st_size != metadata.st_size
-                        or (before.st_mode, before.st_uid, before.st_gid, before.st_nlink,
-                            before.st_ctime_ns) != (
-                            metadata.st_mode, metadata.st_uid, metadata.st_gid,
-                            metadata.st_nlink, metadata.st_ctime_ns
+                        or (
+                            before.st_mode,
+                            before.st_uid,
+                            before.st_gid,
+                            before.st_nlink,
+                            before.st_ctime_ns,
+                        )
+                        != (
+                            metadata.st_mode,
+                            metadata.st_uid,
+                            metadata.st_gid,
+                            metadata.st_nlink,
+                            metadata.st_ctime_ns,
                         )
                     ):
                         raise DatasetInventoryError("dataset file changed before hashing")

@@ -140,7 +140,7 @@ def test_backup_with_equal_bytes_but_different_file_or_directory_mode(
     shutil.rmtree(backup)
     shutil.copytree(root, backup)
     directory = backup / "custom-covers"
-    directory.chmod(directory.stat().st_mode ^ 0o100)
+    directory.chmod(directory.stat().st_mode ^ 0o001)
     assert inventory_offline_dataset(backup) != original
 
 
