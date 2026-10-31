@@ -300,6 +300,29 @@ and old-image compatibility acceptance before schema v11 can be activated.
 The codec never writes files or contacts Spotify; a valid result always
 reports `is_live_migration_authorized=False`.
 
+## Stage 11: offline whole-dataset inventory and rollback acceptance (read-only)
+
+The new independent `offline_dataset_inventory.py` is a **read-only
+integrity inventory** for a separately copied, stopped synthetic /data root.
+It hashes all regular files (including SQLite and WAL/SHM, private OAuth,
+pending journals, custom cover files, old managed state, frozen catalog and
+candidate), records paths/sizes/modes, and verifies a second scan matches
+the first. It fails closed on missing roots, symlinks, FIFOs/sockets/devices,
+unexpected mounted subdirectories, inode/size/mtime races and changed files.
+It does not write a manifest, copy files, provide backup credentials or
+access any provider. The inventory itself is **not** a full backup, a
+transaction log, a proof of database consistency or a cutover token;
+`authorizes_migration=False` always.
+
+Synthetic acceptance copies a complete test dataset to independent roots,
+compares inventories, corrupts a disposable source tree, then verifies the
+original backup and a new restored copy still match their original contents.
+This verifies an **offline fixture**, not the ability to restore a live NAS.
+External quiescence, coherent SQLite snapshot/stop, permissions/ownership and
+a rehearsed rollback of the *actual* application dataset require explicit
+operator control and separate acceptance before migration. This tool must
+not be run against a running application's production /data.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
