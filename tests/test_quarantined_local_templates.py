@@ -29,6 +29,8 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
 from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
 
 
 def _draft(id_value: str) -> LocalPlaylistTemplate:
@@ -93,21 +95,24 @@ def test_invalid_unreferenced_draft_does_not_stop_four_existing_destinations(
         item.destination.external_id for item in original.playlists
     }
 
-    # A routine local save must retain the invalid data (in quarantine), not drop it.
-    ManagedAdminService(store).stop_managing("spain_spanish_news")
-    after = store.load()
+    # V11 is authoritative after first runtime load; preserve the original
+    # tampered bytes as inert evidence while retaining quarantined data.
+    owner = open_managed_state_store(tmp_path)
+    ManagedAdminService(owner).stop_managing("spain_spanish_news")
+    after = owner.load()
+    assert store.path.read_bytes() == tampered_bytes
     assert len(after.quarantined_templates) == 1
     assert json.loads(after.quarantined_templates[0].raw_json)["description"] == (
         "DO-NOT-EXPOSE-IN-ADMIN"
     )
     assert len(after.playlists) == 3
     assert (
-        json.loads(store.path.read_bytes())["quarantined_templates"][0]["raw"][
-            "max_duration_seconds"
-        ]
+        json.loads((tmp_path / V11_OPERATIONAL_FILENAME).read_bytes())["managed_overlay"][
+            "quarantined_templates"
+        ][0]["raw"]["max_duration_seconds"]
         == -123
     )
-    assert store.load() == after
+    assert owner.load() == after
 
 
 def test_invalid_referenced_custom_draft_suspends_only_its_destination(tmp_path: Path) -> None:
@@ -124,13 +129,14 @@ def test_invalid_referenced_custom_draft_suspends_only_its_destination(tmp_path:
     assert config is not None
     assert len(config.playlists) == 4
     assert "A" * 22 not in {item.destination.external_id for item in config.playlists}
-    assert len(store.load().playlists) == 5  # never removes managed destination
+    owner = open_managed_state_store(tmp_path)
+    assert len(owner.load().playlists) == 5  # never removes managed destination
 
-    service = ManagedAdminService(store)
+    service = ManagedAdminService(owner)
     with pytest.raises(ManagedAdminError, match="quarantined"):
         service.stop_managing(existing.id)
     with pytest.raises(ManagedAdminError, match="quarantined"):
-        service._managed(store.load(), existing.id)
+        service._managed(owner.load(), existing.id)
 
     page = render_managed_admin_page(
         snapshot=service.snapshot(),
@@ -139,7 +145,7 @@ def test_invalid_referenced_custom_draft_suspends_only_its_destination(tmp_path:
         csrf_token="token",
         last_cycle=None,
         lan_mode=False,
-        state=store.load(),
+        state=owner.load(),
     ).decode()
     assert "Custom playlist drafts require repair" in page
     assert "Suspended" in page
@@ -271,9 +277,10 @@ def test_missing_draft_id_still_suspends_unresolved_custom_destination(tmp_path:
     assert config is not None
     assert len(config.playlists) == 4
     assert "D" * 22 not in {playlist.destination.external_id for playlist in config.playlists}
-    assert len(store.load().playlists) == 5
+    owner = open_managed_state_store(tmp_path)
+    assert len(owner.load().playlists) == 5
     with pytest.raises(ManagedAdminError, match="quarantined"):
-        ManagedAdminService(store).stop_managing(selected.id)
+        ManagedAdminService(owner).stop_managing(selected.id)
 
 
 def test_pending_provisioning_blocks_quarantine_discard(tmp_path: Path) -> None:

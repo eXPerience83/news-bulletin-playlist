@@ -786,7 +786,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             payload = export_source_configuration(
                 store,
                 synchronization,
-                catalog=store.catalog,
+                catalog=service.catalog if service is not None else store.catalog,
                 source_id=source_id,
             )
         except SourceMutationError:

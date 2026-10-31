@@ -466,7 +466,7 @@ def _exercise_admin_wake(
         handler.do_POST()
         assert captured_response(handler).status == HTTPStatus.SEE_OTHER
         assert progress.wait(10), "woken cycle reached neither provider work nor failure"
-        durable = ManagedStateStore(managed_store.path).load()
+        durable = open_managed_state_store(tmp_path).load()
         assert durable.sources[0].enabled is (mutation != "disable")
         assert durable.playlists[0].source_ids == (SourceId("abc"), CUSTOM_ID)
         assert len(providers.calls) == provider_count
