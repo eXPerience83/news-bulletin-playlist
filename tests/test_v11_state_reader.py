@@ -40,9 +40,7 @@ def no_network_or_database(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _files(root: Path) -> dict[str, bytes]:
     return {
-        str(path.relative_to(root)): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
+        str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()
     }
 
 
