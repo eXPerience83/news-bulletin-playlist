@@ -524,7 +524,7 @@ def _exercise_admin_wake(
             assert {source.source_id for source in result.sources} == expected
             assert result.playlists[0].desired_count == len(expected)
         assert len(providers.uris) == len(expected)
-        assert ManagedStateStore(managed_store.path).load() == durable
+        assert open_managed_state_store(tmp_path).load() == durable
         events = event_store.list_events()
         assert not any(event.event_name == "cycle_unexpected_failure" for event in events)
         assert sum(event.event_name == "cycle_completed" for event in events) == 4
