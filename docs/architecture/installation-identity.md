@@ -433,3 +433,30 @@ activating v11, an operator must independently establish application
 quiescence, snapshot the whole data volume including ACLs and ownership,
 retain the old image digest, and rehearse a disconnected old-image rollback
 against the fully restored data tree. No provider writes or release involved.
+
+## Stage 15: complete legacy-read rollback rehearsal on synthetic roots (not image validation)
+
+The independently invoked `offline_legacy_rollback.py` requires three
+distinct root directories: the unchanged legacy + v11 shadow source,
+an original independent backup and a disposable restored tree. It refuses
+nested, linked or discrepant roots. They may share a physical storage device:
+this check is not evidence of off-device backup durability. It checks the backup against the shadow
+evidence and the restored tree against the *complete* backup inventory,
+including managed state, OAuth, journals, covers and file metadata. The
+standalone Stage 14 SQLite/WAL integrity check runs against yet another
+temporary copy. A read-only legacy `ManagedStateStore` is then instantiated
+using the frozen historical catalog, not the current image defaults; its parsed
+v6–v10 state, complete ordered runtime and exact managed destination IDs must
+match the verified v11 shadow. Rechecks ensure none of the three input trees
+changed. Synthetic tests cover all five schemas, all four destination records,
+corruption, missing shadow, path aliasing and zero network activity.
+
+This is **not** an old-container execution test: `ManagedStateStore` here is
+the project's current legacy read implementation. It does not prove that a
+deployed older image will accept a future schema, or that NAS ACL/ZFS
+properties survive physical restoration. The helper cannot create or restore
+a production backup, and always returns both
+`proves_old_image_compatibility=False` and `permits_cutover=False`.
+Remaining blockers: operator-controlled quiescence, coherent ZFS snapshot with
+native ACLs and all data, isolated boot of an exact pinned previous image
+without provider access, and then a reviewed journaled migration transaction.
