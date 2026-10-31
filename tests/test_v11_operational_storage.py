@@ -68,7 +68,11 @@ def test_one_shot_forward_upgrade_then_edit_restart_and_preserve_legacy(
     assert store.load().historical_catalog == first.historical_catalog
     assert store.load().migration_origin_sha256 == first.migration_origin_sha256
     assert store.save(revised, expected_bytes=fresh) == fresh
-    assert {p.name: p.read_bytes() for p in root.iterdir() if p.is_file() if p.name != V11_OPERATIONAL_FILENAME} == before
+    assert {
+        p.name: p.read_bytes()
+        for p in root.iterdir()
+        if p.is_file() and p.name != V11_OPERATIONAL_FILENAME
+    } == before
     with pytest.raises(V11StoreError, match="stale"):
         store.save(first.managed_overlay, expected_bytes=previous)
 
