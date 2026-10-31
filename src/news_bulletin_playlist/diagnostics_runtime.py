@@ -609,11 +609,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if synchronization is None:
             raise SourceImportError("Source import is unavailable")
         service = self.managed_admin_service
-        store = (
-            service.store
-            if service is not None
-            else open_managed_state_store(self.data_dir)
-        )
+        store = service.store if service is not None else open_managed_state_store(self.data_dir)
         provisioning = (
             service.provisioning_journal
             if service is not None
@@ -776,9 +772,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         try:
             payload = export_source_configuration(
-                service.store
-                if service is not None
-                else open_managed_state_store(self.data_dir),
+                service.store if service is not None else open_managed_state_store(self.data_dir),
                 synchronization,
                 catalog=service.catalog if service is not None else BUILTIN_CATALOG,
                 source_id=source_id,

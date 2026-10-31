@@ -28,9 +28,7 @@ def load_effective_config(
     _reject_obsolete_configuration(data_dir, environ)
 
     managed_path = data_dir / MANAGED_STATE_FILENAME
-    if not _path_present(managed_path) and not _path_present(
-        data_dir / V11_OPERATIONAL_FILENAME
-    ):
+    if not _path_present(managed_path) and not _path_present(data_dir / V11_OPERATIONAL_FILENAME):
         return None
 
     try:

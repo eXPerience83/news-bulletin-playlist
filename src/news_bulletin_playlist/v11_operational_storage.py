@@ -132,9 +132,7 @@ class V11OperationalStore:
                 ) from exc
             return parse_v11_operational(next_bytes)
 
-    def initialize_fresh(
-        self, *, catalog: BuiltInCatalog = BUILTIN_CATALOG
-    ) -> V11OperationalState:
+    def initialize_fresh(self, *, catalog: BuiltInCatalog = BUILTIN_CATALOG) -> V11OperationalState:
         """Explicit v11 authority on first run, with zero managed destinations.
 
         Preset catalog entries are available for manual selection, never
@@ -158,7 +156,8 @@ class V11OperationalStore:
                         ensure_ascii=False,
                         sort_keys=True,
                         indent=2,
-                    ) + "\n"
+                    )
+                    + "\n"
                 ).encode("utf-8")
                 preview = preview_legacy_materialization(catalog, empty)
                 frozen = build_legacy_snapshot_v2(preview, original)
