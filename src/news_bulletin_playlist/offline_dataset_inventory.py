@@ -130,4 +130,8 @@ def _scan(root: Path, device: int, inode: int) -> OfflineDatasetInventory:
                     os.close(fd)
     except OSError as exc:
         raise DatasetInventoryError("dataset inventory could not be completed safely") from exc
-    return OfflineDatasetInventory(tuple(sorted(directories)), tuple(sorted(files, key=lambda f: f.path)), total)
+    return OfflineDatasetInventory(
+        tuple(sorted(directories)),
+        tuple(sorted(files, key=lambda item: item.path)),
+        total,
+    )
