@@ -207,6 +207,42 @@ explicit rollback compatibility before any production migration. Until that
 gate passes, old-image rollback relies on the corresponding matching /data
 snapshot, including SQLite, OAuth, covers and journals.
 
+## Stage 8: isolated, no-overwrite candidate publication and recovery
+
+The **explicit** `v11_candidate_storage.py` component stages the already
+validated v11 candidate into `managed-state-v11.candidate.json` (0600)
+in an existing real Linux data directory. It requires a matching on-disk
+legacy `managed-state.json` and `frozen-legacy-catalog.v2.json`.
+It obtains an advisory directory `flock`, rejects symlinks/nonregular
+evidence, builds/validates the candidate, writes to an exclusive staging
+file, fsyncs bytes, **rechecks both original input files**, and publishes
+the candidate using an exclusive hard link (never `os.replace`). It
+fsyncs the directory after publication and again after removing the
+staging name. An existing candidate may be reused only if *byte-identical*.
+
+A pre-link failure does not replace/create a managed-state or candidate
+file; best-effort cleanup may leave a staging artifact. If an error occurs
+**after the hard link succeeds**, the marker can already exist but its
+durability is uncertain; the code fails closed and **retains evidence**,
+never fabricates success. On a subsequent explicit inspection, a valid
+matching marker can be examined without changing any original file.
+Other independent writers that ignore directory `flock` remain outside
+its transactional guarantee: this helper is not ready to run concurrently
+with a live application's ordinary state writes.
+
+`read_v11_candidate` is read-only and returns the verified candidate,
+including original managed-state bytes. In normal mode it also checks that
+the live legacy managed-state still matches. In explicit recovery mode,
+it can read the preserved old bytes if the live state has subsequently
+changed, **without modifying the changed state**; the on-disk frozen-v2
+sidecar must still match the candidate exactly. No recovery routine
+automatically writes files, touches Spotify or operates on production.
+
+This is **not** a v11 `ManagedStateStore`, a complete /data backup, a
+rollback transaction, or a migration cutover. It does not capture OAuth,
+journals, SQLite history or cover JPEGs; those need independent consistent
+dataset snapshots and rollback tests. No startup path invokes this module.
+
 ## Pending migration decisions and guardrails
 
 1. Freeze effective built-in source definitions, parser/filter capabilities and
