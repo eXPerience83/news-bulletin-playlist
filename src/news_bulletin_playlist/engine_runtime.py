@@ -56,7 +56,6 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     effective_sources,
 )
-from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.owner_cover_upload import (
     MAX_MULTIPART_BYTES,
@@ -100,7 +99,8 @@ from news_bulletin_playlist.spotify_backoff import (
     SpotifyRateLimitJournal,
     SpotifyRateLimitStateUnavailable,
 )
-from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics\nfrom news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 
 _INTERVAL_SECONDS_ENV = "NEWS_PLAYLIST_INTERVAL_SECONDS"
 _SPOTIFY_INACTIVITY_HOURS_ENV = "NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS"
