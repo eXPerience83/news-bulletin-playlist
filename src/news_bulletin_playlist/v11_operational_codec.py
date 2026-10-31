@@ -17,9 +17,9 @@ from news_bulletin_playlist.custom_playlist_templates import (
     effective_playlist_templates,
 )
 from news_bulletin_playlist.legacy_catalog_snapshot import (
-    FrozenLegacySnapshotError,
-    FrozenLegacyCatalogSnapshot,
     MAX_FROZEN_SNAPSHOT_BYTES,
+    FrozenLegacyCatalogSnapshot,
+    FrozenLegacySnapshotError,
     parse_legacy_snapshot,
 )
 from news_bulletin_playlist.legacy_materialization import LegacyProvenance
