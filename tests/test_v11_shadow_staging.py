@@ -38,9 +38,7 @@ def _two_roots(tmp_path: Path, version: int = 10) -> tuple[Path, Path]:
 
 
 def _files(root: Path) -> dict[str, bytes]:
-    return {
-        str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()
-    }
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
 @pytest.mark.parametrize("version", [6, 7, 8, 9, 10])
@@ -75,9 +73,7 @@ def test_explicit_ack_is_required_and_does_not_assert_quiescence(tmp_path: Path)
 
 
 @pytest.mark.parametrize("kind", ["same", "nested", "hardlink", "changed"])
-def test_untrustworthy_or_nonindependent_backup_is_rejected(
-    tmp_path: Path, kind: str
-) -> None:
+def test_untrustworthy_or_nonindependent_backup_is_rejected(tmp_path: Path, kind: str) -> None:
     root, backup = _two_roots(tmp_path)
     if kind == "same":
         backup = root
