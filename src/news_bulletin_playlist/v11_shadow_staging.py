@@ -13,12 +13,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from news_bulletin_playlist.legacy_catalog_snapshot import (
+    MAX_FROZEN_SNAPSHOT_BYTES,
+    MAX_MANAGED_STATE_BYTES,
+)
 from news_bulletin_playlist.offline_dataset_inventory import (
     DatasetInventoryError,
     OfflineDatasetInventory,
     inventory_offline_dataset,
 )
-from news_bulletin_playlist.v11_candidate import MAX_CANDIDATE_BYTES, parse_v11_candidate
+from news_bulletin_playlist.v11_candidate import (
+    MAX_CANDIDATE_BYTES,
+    V11CandidateError,
+    parse_v11_candidate,
+)
 from news_bulletin_playlist.v11_candidate_storage import (
     _locked_root,
     _read_regular,
@@ -93,11 +101,11 @@ def _verified_offline_inventory(
 def _shadow_evidence(dir_fd: int, root: Path, backup: Path) -> bytes:
     candidate_bytes = _read_regular(dir_fd, "managed-state-v11.candidate.json", MAX_CANDIDATE_BYTES)
     parsed_candidate = parse_v11_candidate(candidate_bytes)
-    if _read_regular(dir_fd, "managed-state.json", MAX_CANDIDATE_BYTES) != (
+    if _read_regular(dir_fd, "managed-state.json", MAX_MANAGED_STATE_BYTES) != (
         parsed_candidate.original_managed_state_bytes
     ):
         raise V11ShadowStageError("legacy state changed after candidate preparation")
-    if _read_regular(dir_fd, "frozen-legacy-catalog.v2.json", MAX_CANDIDATE_BYTES) != (
+    if _read_regular(dir_fd, "frozen-legacy-catalog.v2.json", MAX_FROZEN_SNAPSHOT_BYTES) != (
         parsed_candidate.frozen_catalog_v2_bytes
     ):
         raise V11ShadowStageError("frozen historical catalog has changed")
@@ -121,20 +129,22 @@ def stage_v11_shadow_state(
     with _locked_root(root) as root_fd:
         shadow = _shadow_evidence(root_fd, root, backup)
         try:
-            current = _read_regular(root_fd, V11_SHADOW_FILENAME, MAX_OPERATIONAL_BYTES)
-        except V11ShadowStageError:
-            raise
+            os.stat(V11_SHADOW_FILENAME, dir_fd=root_fd, follow_symlinks=False)
         except FileNotFoundError:
             current = None
-        except Exception as exc:
-            if isinstance(exc, OSError):
+        else:
+            try:
+                current = _read_regular(root_fd, V11_SHADOW_FILENAME, MAX_OPERATIONAL_BYTES)
+            except V11CandidateError as exc:
                 raise V11ShadowStageError("unsafe existing v11 shadow evidence") from exc
-            raise
         if current is not None:
             if current != shadow:
                 raise V11ShadowStageError("existing v11 shadow conflicts; no overwrite")
             return current
 
+        candidate_before = _read_regular(
+            root_fd, "managed-state-v11.candidate.json", MAX_CANDIDATE_BYTES
+        )
         tmp_name = f".managed-state-v11-shadow-{uuid4().hex}.tmp"
         linked = False
         fd = os.open(
@@ -150,9 +160,9 @@ def stage_v11_shadow_state(
                 os.fsync(handle.fileno())
             # The extra temporary file is the *only* permitted inventory delta.
             _verified_offline_inventory(root, backup, extra_name=tmp_name)
-            if _read_regular(root_fd, "managed-state-v11.candidate.json", MAX_CANDIDATE_BYTES) != (
-                _read_regular(root_fd, "managed-state-v11.candidate.json", MAX_CANDIDATE_BYTES)
-            ):
+            if _read_regular(
+                root_fd, "managed-state-v11.candidate.json", MAX_CANDIDATE_BYTES
+            ) != candidate_before:
                 raise V11ShadowStageError("candidate changed during staging")
             os.link(
                 tmp_name,
