@@ -44,9 +44,7 @@ from news_bulletin_playlist.managed_provisioning import (
     ProvisioningJournalError,
 )
 from news_bulletin_playlist.managed_state import (
-    MANAGED_STATE_FILENAME,
     ManagedStateError,
-    ManagedStateStore,
     effective_sources,
 )
 from news_bulletin_playlist.models import ParserId
@@ -118,6 +116,7 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestMetrics,
     SpotifyRequestMetricsSnapshot,
 )
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.web_ui import WEB_UI_STYLES, BadgeTone, status_badge
 
 
@@ -500,7 +499,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         store = (
             self.managed_admin_service.store
             if self.managed_admin_service
-            else ManagedStateStore(self.data_dir / MANAGED_STATE_FILENAME)
+            else open_managed_state_store(self.data_dir)
         )
         return PlaylistExportService(
             store, self.configuration_synchronization, PortableCoverLoader(self.data_dir)
@@ -610,11 +609,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if synchronization is None:
             raise SourceImportError("Source import is unavailable")
         service = self.managed_admin_service
-        store = (
-            service.store
-            if service is not None
-            else ManagedStateStore(self.data_dir / MANAGED_STATE_FILENAME)
-        )
+        store = service.store if service is not None else open_managed_state_store(self.data_dir)
         provisioning = (
             service.provisioning_journal
             if service is not None
@@ -777,9 +772,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         try:
             payload = export_source_configuration(
-                service.store
-                if service is not None
-                else ManagedStateStore(self.data_dir / MANAGED_STATE_FILENAME),
+                service.store if service is not None else open_managed_state_store(self.data_dir),
                 synchronization,
                 catalog=service.catalog if service is not None else BUILTIN_CATALOG,
                 source_id=source_id,

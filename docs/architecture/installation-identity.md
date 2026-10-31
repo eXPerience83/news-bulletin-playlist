@@ -487,3 +487,25 @@ allow a production deploy. The next change must connect v11 as *the sole*
 authority across startup, scheduler and Admin, with an explicit one-way
 upgrade gate and integration tests. The old rollback checklist is historical,
 not a prerequisite.
+
+
+## Forward-only v11 runtime and Admin activation (#552)
+
+The runtime and Admin integration now opens existing installations using
+`ForwardOnlyManagedStateStore`: the existing `managed-state.json` is converted
+once to `managed-state-v11.json`, then only the v11 document is read and
+written. The frozen, installation-owned historical catalog is injected into
+configuration compilation, managed playlist and source administration.
+Import/export fallbacks use the shared resolver so there is no silent old
+state writer. Source/playlist edits persist through the atomic v11 owner store;
+legacy bytes remain as inert evidence.
+
+This is a **breaking, one-way upgrade**. After a v11 authority exists, even
+if corrupted, the application fails closed instead of reading legacy state.
+No old Docker image downgrade is supported. A one-off independent /data
+backup before operator deployment remains prudent; no ZFS rollback project
+is required. Fresh data directories now start directly with a v11 authority and **zero**
+managed Spotify destinations; the image's preset catalog is still available
+to Admin for explicit manual template activation. Separating catalog examples
+from installed sources and the final opt-in preset UI remains planned.
+This integration does not release a new image or change production TrueNAS.
