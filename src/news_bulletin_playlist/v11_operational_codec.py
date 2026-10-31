@@ -171,7 +171,6 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
     )
 
 
-
 def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
     """Serialize a validated owner edit without replacing the historical catalog.
 
@@ -199,6 +198,7 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
     if verified.migration_origin_sha256 != current.migration_origin_sha256:
         raise V11OperationalError("v11 edit changed migration origin")
     return next_payload
+
 
 def _historical_catalog(snapshot: FrozenLegacyCatalogSnapshot) -> BuiltInCatalog:
     if snapshot.source_order is None:
