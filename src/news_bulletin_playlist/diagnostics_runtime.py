@@ -116,7 +116,10 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestMetrics,
     SpotifyRequestMetricsSnapshot,
 )
-from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_managed_adapter import (
+    open_managed_state_store,
+    open_managed_state_store_readonly,
+)
 from news_bulletin_playlist.web_ui import WEB_UI_STYLES, BadgeTone, status_badge
 
 
@@ -154,7 +157,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                         or re.fullmatch(r"custom_[a-z0-9][a-z0-9_]{0,55}", values["id"][0]) is None
                     ):
                         raise ValueError
-                    service = self._source_import_service()
+                    service = self._source_import_service(readonly=True)
                     with service.synchronization.hold():
                         draft = next(
                             (
@@ -306,7 +309,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Playlist import request exceeds limits"
                 )
                 return
-            source_service = self._source_import_service()
+            source_service = self._source_import_service(readonly=preview)
             service = PlaylistImportService(
                 source_service.store,
                 source_service.synchronization,
@@ -499,7 +502,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         store = (
             self.managed_admin_service.store
             if self.managed_admin_service
-            else open_managed_state_store(self.data_dir)
+            else open_managed_state_store_readonly(self.data_dir)
         )
         return PlaylistExportService(
             store, self.configuration_synchronization, PortableCoverLoader(self.data_dir)
@@ -604,12 +607,17 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
     def _source_error(self, status: HTTPStatus, message: str) -> None:
         self._reply(status, message.encode("utf-8"), content_type="text/plain; charset=utf-8")
 
-    def _source_import_service(self) -> SourceImportService:
+    def _source_import_service(self, *, readonly: bool = False) -> SourceImportService:
         synchronization = self.configuration_synchronization
         if synchronization is None:
             raise SourceImportError("Source import is unavailable")
         service = self.managed_admin_service
-        store = service.store if service is not None else open_managed_state_store(self.data_dir)
+        if service is not None:
+            store = service.store
+        elif readonly:
+            store = open_managed_state_store_readonly(self.data_dir)
+        else:
+            store = open_managed_state_store(self.data_dir)
         provisioning = (
             service.provisioning_journal
             if service is not None
@@ -641,7 +649,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Source import request is too large"
                 )
                 return
-            service = self._source_import_service()
+            service = self._source_import_service(readonly=is_preview)
             if is_preview:
                 body = self.rfile.read(length)
                 if len(body) != length:
@@ -771,10 +779,15 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source export selection")
             return
         try:
+            store = (
+                service.store
+                if service is not None
+                else open_managed_state_store_readonly(self.data_dir)
+            )
             payload = export_source_configuration(
-                service.store if service is not None else open_managed_state_store(self.data_dir),
+                store,
                 synchronization,
-                catalog=service.catalog if service is not None else BUILTIN_CATALOG,
+                catalog=store.catalog,
                 source_id=source_id,
             )
         except SourceMutationError:

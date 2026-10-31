@@ -14,6 +14,7 @@ from test_source_import_http import _multipart
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
 from news_bulletin_playlist.playlist_import_web import imported_draft_editor
 from news_bulletin_playlist.portable_playlists import canonical_json
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 
 ROOT = "/admin/playlists/import"
 
@@ -306,6 +307,7 @@ def test_import_and_edit_page_work_without_oauth_services(tmp_path, monkeypatch)
     document = donor(tmp_path)
     with _server(tmp_path) as (server, _, store):
         store.save(ManagedState())
+        owner = open_managed_state_store(tmp_path)
         cookie = _login(server)
         _request(server, "GET", ROOT, cookie=cookie)
         source_service = _Handler.source_admin_service
@@ -316,7 +318,7 @@ def test_import_and_edit_page_work_without_oauth_services(tmp_path, monkeypatch)
         monkeypatch.setattr(_Handler, "source_admin_service", None)
         page = preview(server, cookie, document)
         assert _request(server, "POST", ROOT + "/apply", cookie=cookie, form=form(page))[0] == 200
-        draft = store.load_readonly().templates[0]
+        draft = owner.load_readonly().templates[0]
         before = _files(tmp_path)
         status, headers, page = _request(
             server, "GET", "/admin/playlists/imported/edit?id=" + str(draft.id), cookie=cookie

@@ -8,7 +8,7 @@ perform Spotify calls or change startup. Issue #552.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
@@ -67,7 +67,7 @@ def preview_legacy_materialization(
     if state.schema_version not in {6, 7, 8, 9, 10}:
         raise ManagedStateError("legacy materialization requires managed-state v6–v10")
 
-    runtime = compile_engine_config(catalog, state)
+    runtime = compile_engine_config(catalog, pause_dormant_legacy_playlists(catalog, state))
     effective = effective_sources(catalog, state)
     image_ids = {source.id for source in catalog.sources}
     frozen_sources: list[FrozenLegacySource] = []
@@ -103,4 +103,24 @@ def preview_legacy_materialization(
         template_snapshots=frozen_templates,
         original_state=state,
         original_runtime=runtime,
+    )
+
+
+def pause_dormant_legacy_playlists(catalog: BuiltInCatalog, state: ManagedState) -> ManagedState:
+    """Project the supported legacy pause without modifying the original records.
+
+    Unknown source/template references still fail during strict compilation.
+    Source assignments, Spotify destinations and independent playlists survive.
+    """
+    disabled = {item.id for item in effective_sources(catalog, state) if not item.enabled}
+    return replace(
+        state,
+        playlists=tuple(
+            replace(playlist, enabled=False)
+            if playlist.enabled
+            and playlist.source_ids
+            and disabled.issuperset(playlist.source_ids)
+            else playlist
+            for playlist in state.playlists
+        ),
     )

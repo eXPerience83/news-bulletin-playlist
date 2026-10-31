@@ -55,6 +55,7 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestOutcome,
     SpotifyWebApiOperation,
 )
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 
 PASSWORD = "long-enough-admin-password"
 SHOW = "A" * 22
@@ -345,6 +346,7 @@ def _exercise_admin_wake(
         source_ids=(SourceId("abc"),) if mutation == "assignment" else (SourceId("abc"), CUSTOM_ID),
     )
     managed_store.save(ManagedState(sources=(custom,), playlists=(playlist,)))
+    managed_store = open_managed_state_store(tmp_path)
     progress = threading.Event()
     providers = _Providers(metrics, progress)
     detector = PublicDetector(detector_journal, diagnostics, client=providers)

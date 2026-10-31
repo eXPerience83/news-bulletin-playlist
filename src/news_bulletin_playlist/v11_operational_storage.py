@@ -33,6 +33,8 @@ from news_bulletin_playlist.v11_operational_codec import (
 )
 
 V11_OPERATIONAL_FILENAME = "managed-state-v11.json"
+V11_AUTHORITY_FILENAME = ".managed-state-v11.authority"
+_AUTHORITY_BYTES = b"news-bulletin-playlist:managed-state-v11\n"
 _LEGACY_FILENAME = "managed-state.json"
 
 
@@ -73,6 +75,41 @@ def _write_temporary(root_fd: int, payload: bytes) -> str:
         raise
 
 
+def _authority_exists(root_fd: int) -> bool:
+    """Distinguish a virgin root from a damaged or interrupted migration."""
+    try:
+        os.stat(V11_AUTHORITY_FILENAME, dir_fd=root_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    try:
+        raw = _read_regular(root_fd, V11_AUTHORITY_FILENAME, 128)
+    except (OSError, ValueError) as exc:
+        raise V11StoreError("invalid v11 authority marker") from exc
+    if raw != _AUTHORITY_BYTES:
+        raise V11StoreError("invalid v11 authority marker")
+    return True
+
+
+def _record_authority(root_fd: int) -> None:
+    """Durably publish the irreversible gate before publishing operational v11."""
+    if _authority_exists(root_fd):
+        return
+    temporary = _write_temporary(root_fd, _AUTHORITY_BYTES)
+    try:
+        os.link(
+            temporary,
+            V11_AUTHORITY_FILENAME,
+            src_dir_fd=root_fd,
+            dst_dir_fd=root_fd,
+            follow_symlinks=False,
+        )
+        os.fsync(root_fd)
+    finally:
+        with suppress(FileNotFoundError):
+            os.unlink(temporary, dir_fd=root_fd)
+        os.fsync(root_fd)
+
+
 class V11OperationalStore:
     """A deliberate forward-only authority, independent of image catalog drift."""
 
@@ -99,7 +136,10 @@ class V11OperationalStore:
         with _locked_root(self.root) as dir_fd:
             prior = _read_existing(dir_fd)
             if prior is not None:
+                _record_authority(dir_fd)
                 return parse_v11_operational(prior)
+            if _authority_exists(dir_fd):
+                raise V11StoreError("v11 authority exists but its document is missing")
             try:
                 original = _read_regular(dir_fd, _LEGACY_FILENAME, 12 * 1024 * 1024)
                 legacy = ManagedStateStore(
@@ -112,6 +152,7 @@ class V11OperationalStore:
                 )
                 if _read_regular(dir_fd, _LEGACY_FILENAME, 12 * 1024 * 1024) != original:
                     raise V11StoreError("legacy state changed during forward migration")
+                _record_authority(dir_fd)
                 temporary = _write_temporary(dir_fd, next_bytes)
                 try:
                     # Publish only if the new authority does not already exist.
@@ -141,7 +182,10 @@ class V11OperationalStore:
         with _locked_root(self.root) as dir_fd:
             prior = _read_existing(dir_fd)
             if prior is not None:
+                _record_authority(dir_fd)
                 return parse_v11_operational(prior)
+            if _authority_exists(dir_fd):
+                raise V11StoreError("v11 authority exists but its document is missing")
             try:
                 os.stat(_LEGACY_FILENAME, dir_fd=dir_fd, follow_symlinks=False)
             except FileNotFoundError:
@@ -164,6 +208,7 @@ class V11OperationalStore:
                 next_bytes = build_v11_operational_from_candidate(
                     build_v11_candidate(frozen, original)
                 )
+                _record_authority(dir_fd)
                 temporary = _write_temporary(dir_fd, next_bytes)
                 try:
                     os.link(

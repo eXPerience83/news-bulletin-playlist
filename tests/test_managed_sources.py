@@ -58,6 +58,7 @@ from news_bulletin_playlist.spotify_backoff import (
     ProviderAuthorizationSession,
     SpotifyRateLimitJournal,
 )
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 
 SHOW_A = "A" * 22
 SHOW_B = "B" * 22
@@ -720,6 +721,7 @@ def test_mid_cycle_disable_blocks_write_but_safe_metadata_change_does_not(
     original = compile_engine_config(BUILTIN_CATALOG, state)
     managed_store = ManagedStateStore(tmp_path / "managed-state.json")
     managed_store.save(state)
+    managed_store = open_managed_state_store(tmp_path)
     synchronization = ConfigurationSynchronization()
 
     class NoAuth:

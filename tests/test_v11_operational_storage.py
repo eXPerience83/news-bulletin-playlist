@@ -14,6 +14,7 @@ from test_legacy_catalog_snapshot import _root
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_state import (
     ManagedSourceOverride,
+    ManagedStateError,
     ManagedStateStore,
 )
 from news_bulletin_playlist.models import PublicReleaseMode
@@ -23,6 +24,7 @@ from news_bulletin_playlist.v11_operational_codec import (
     update_v11_operational,
 )
 from news_bulletin_playlist.v11_operational_storage import (
+    V11_AUTHORITY_FILENAME,
     V11_OPERATIONAL_FILENAME,
     V11OperationalStore,
     V11StoreError,
@@ -50,7 +52,7 @@ def test_one_shot_forward_upgrade_then_edit_restart_and_preserve_legacy(
     assert {
         p.name: p.read_bytes()
         for p in root.iterdir()
-        if p.is_file() and p.name != V11_OPERATIONAL_FILENAME
+        if p.is_file() and p.name not in (V11_OPERATIONAL_FILENAME, V11_AUTHORITY_FILENAME)
     } == before
     previous = store.load_bytes()
     playlists = (
@@ -71,7 +73,7 @@ def test_one_shot_forward_upgrade_then_edit_restart_and_preserve_legacy(
     assert {
         p.name: p.read_bytes()
         for p in root.iterdir()
-        if p.is_file() and p.name != V11_OPERATIONAL_FILENAME
+        if p.is_file() and p.name not in (V11_OPERATIONAL_FILENAME, V11_AUTHORITY_FILENAME)
     } == before
     with pytest.raises(V11StoreError, match="stale"):
         store.save(first.managed_overlay, expected_bytes=previous)
@@ -110,7 +112,8 @@ def test_missing_or_corrupt_v11_never_falls_back_to_old_file(tmp_path: Path) -> 
         store.load()
     with pytest.raises(V11StoreError, match="never fall back"):
         store.initialize_from_legacy()
-    assert ManagedStateStore(root / "managed-state.json").load_readonly().playlists
+    with pytest.raises(ManagedStateError, match="retired"):
+        ManagedStateStore(root / "managed-state.json").load_readonly()
 
 
 def test_interrupted_atomic_publication_preserves_legacy_state(
