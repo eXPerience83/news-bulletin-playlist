@@ -43,6 +43,7 @@ from news_bulletin_playlist.managed_provisioning import (
     ProvisioningJournal,
     ProvisioningJournalError,
 )
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     ManagedStateError,
@@ -500,7 +501,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         store = (
             self.managed_admin_service.store
             if self.managed_admin_service
-            else ManagedStateStore(self.data_dir / MANAGED_STATE_FILENAME)
+            else open_managed_state_store(self.data_dir)
         )
         return PlaylistExportService(
             store, self.configuration_synchronization, PortableCoverLoader(self.data_dir)
@@ -613,7 +614,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         store = (
             service.store
             if service is not None
-            else ManagedStateStore(self.data_dir / MANAGED_STATE_FILENAME)
+            else open_managed_state_store(self.data_dir)
         )
         provisioning = (
             service.provisioning_journal
@@ -779,7 +780,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             payload = export_source_configuration(
                 service.store
                 if service is not None
-                else ManagedStateStore(self.data_dir / MANAGED_STATE_FILENAME),
+                else open_managed_state_store(self.data_dir),
                 synchronization,
                 catalog=service.catalog if service is not None else BUILTIN_CATALOG,
                 source_id=source_id,

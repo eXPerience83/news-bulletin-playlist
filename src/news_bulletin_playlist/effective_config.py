@@ -10,10 +10,11 @@ from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     ManagedStateError,
-    ManagedStateStore,
     compile_engine_config,
     effective_sources,
 )
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
 from news_bulletin_playlist.models import EngineConfig
 
 _OBSOLETE_CONFIG_FILENAME = "news-bulletin-playlist.yaml"
@@ -28,14 +29,16 @@ def load_effective_config(
     _reject_obsolete_configuration(data_dir, environ)
 
     managed_path = data_dir / MANAGED_STATE_FILENAME
-    if not _path_present(managed_path):
+    if not _path_present(managed_path) and not _path_present(
+        data_dir / V11_OPERATIONAL_FILENAME
+    ):
         return None
 
     try:
-        store = ManagedStateStore(managed_path)
+        store = open_managed_state_store(data_dir)
         state = store.load()
         disabled = {
-            source.id for source in effective_sources(BUILTIN_CATALOG, state) if not source.enabled
+            source.id for source in effective_sources(store.catalog, state) if not source.enabled
         }
         # Before dormant membership, an active playlist with only disabled assignments was
         # valid and preserved Spotify. Pause it durably so startup and Admin remain available
@@ -51,7 +54,7 @@ def load_effective_config(
                 for playlist in state.playlists
             ),
         )
-        config = compile_engine_config(BUILTIN_CATALOG, recovered)
+        config = compile_engine_config(store.catalog, recovered)
         if recovered != state:
             try:
                 store.save(recovered)

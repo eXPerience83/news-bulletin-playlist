@@ -58,6 +58,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     effective_sources,
 )
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.owner_cover_upload import (
     MAX_MULTIPART_BYTES,
@@ -1337,6 +1338,7 @@ def serve(
             detector_journal=detector_journal,
             cycle_synchronization=cycle_synchronization,
             provisioning_journal=managed_admin_service.provisioning_journal,
+            catalog=managed_admin_service.store.catalog,
         )
     )
     handler_type.source_audit_jobs = SourceAuditJobs()
@@ -1438,8 +1440,10 @@ def _build_managed_admin_service(
             return owner_covers.load(cover_id)
         return _load_bundled_cover(cover_id)
 
+    store = open_managed_state_store(data_dir)
     return ManagedAdminService(
-        ManagedStateStore(data_dir / MANAGED_STATE_FILENAME),
+        store,
+        catalog=store.catalog,
         client_factory=client_factory,
         cover_loader=cover_loader,
     )
