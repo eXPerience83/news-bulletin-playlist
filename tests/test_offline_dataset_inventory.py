@@ -123,3 +123,47 @@ def test_dataset_inventory_does_not_create_files(tmp_path: Path) -> None:
     assert {
         str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()
     } == before
+
+
+def test_backup_with_equal_bytes_but_different_file_or_directory_mode(
+    tmp_path: Path,
+) -> None:
+    root = _synthetic_dataset(tmp_path)
+    original = inventory_offline_dataset(root)
+    backup = tmp_path / "metadata-backup"
+    shutil.copytree(root, backup)
+    assert inventory_offline_dataset(backup) == original
+
+    file = backup / "custom-covers" / "uploads" / "own-cover.jpg"
+    file.chmod(file.stat().st_mode ^ 0o100)
+    assert inventory_offline_dataset(backup) != original
+    shutil.rmtree(backup)
+    shutil.copytree(root, backup)
+    directory = backup / "custom-covers"
+    directory.chmod(directory.stat().st_mode ^ 0o001)
+    assert inventory_offline_dataset(backup) != original
+
+
+def test_backup_xattr_fidelity_includes_files_and_directories(
+    tmp_path: Path,
+) -> None:
+    root = _synthetic_dataset(tmp_path)
+    cover = root / "custom-covers" / "uploads" / "own-cover.jpg"
+    directory = root / "custom-covers"
+    name = "user.nbp-migration"
+    try:
+        os.setxattr(cover, name, b"secret-test-value")
+        os.setxattr(directory, name, b"directory-value")
+    except OSError as exc:
+        pytest.skip(f"user xattrs not supported in test filesystem: {exc}")
+    original = inventory_offline_dataset(root)
+    assert "secret-test-value" not in repr(original)
+    backup = tmp_path / "metadata-backup"
+    shutil.copytree(root, backup)
+    assert inventory_offline_dataset(backup) == original
+    os.setxattr(backup / "custom-covers", name, b"changed")
+    assert inventory_offline_dataset(backup) != original
+    os.setxattr(backup / "custom-covers", name, b"directory-value")
+    assert inventory_offline_dataset(backup) == original
+    os.setxattr(backup / "custom-covers" / "uploads" / "own-cover.jpg", name, b"changed")
+    assert inventory_offline_dataset(backup) != original

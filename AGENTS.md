@@ -201,6 +201,8 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   `/data/news-bulletin-playlist-v1.sqlite3`. Pre-0.1 private-development SQLite tables/migrations
   are not runtime compatibility targets; future persistence changes need reviewed forward migrations.
 
+- The offline v11 inventory compares file bytes and file/directory metadata (UID/GID, POSIX mode, xattr digests); never expose xattr values. This is an evidence gate, not a complete ZFS ACL backup, SQLite snapshot, or permission to migrate. Preserve fail-closed shadow/cutover behavior.
+
 ## Documentation and external contracts
 
 - For Spotify endpoint/scopes/limits/response-contract claims, verify current official Spotify documentation before treating a claim as a defect.
