@@ -117,9 +117,7 @@ def pause_dormant_legacy_playlists(catalog: BuiltInCatalog, state: ManagedState)
         state,
         playlists=tuple(
             replace(playlist, enabled=False)
-            if playlist.enabled
-            and playlist.source_ids
-            and disabled.issuperset(playlist.source_ids)
+            if playlist.enabled and playlist.source_ids and disabled.issuperset(playlist.source_ids)
             else playlist
             for playlist in state.playlists
         ),

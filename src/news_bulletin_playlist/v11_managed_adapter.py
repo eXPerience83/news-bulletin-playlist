@@ -68,9 +68,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
 
     def save(self, state: ManagedState) -> None:
         try:
-            self._expected_bytes = self._owner.save(
-                state, expected_bytes=self._expected_bytes
-            )
+            self._expected_bytes = self._owner.save(state, expected_bytes=self._expected_bytes)
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner state could not be saved") from exc
 
