@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
 from news_bulletin_playlist.legacy_materialization import LegacyProvenance
 from news_bulletin_playlist.managed_state import (
     InstalledSource,
@@ -22,7 +23,6 @@ from news_bulletin_playlist.managed_state import (
     compile_engine_config,
     source_definition,
 )
-from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
 from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.v11_candidate import (
     V11Candidate,
