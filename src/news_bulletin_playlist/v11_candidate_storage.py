@@ -45,9 +45,9 @@ def _locked_root(root: Path) -> Iterator[int]:
             fcntl.flock(fd, fcntl.LOCK_EX)
             before = os.fstat(fd)
             current = root.lstat()
-            if (
-                not stat.S_ISDIR(current.st_mode)
-                or (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)
+            if not stat.S_ISDIR(current.st_mode) or (before.st_dev, before.st_ino) != (
+                current.st_dev,
+                current.st_ino,
             ):
                 raise V11CandidateError("legacy root changed while acquiring lock")
         except OSError as exc:
