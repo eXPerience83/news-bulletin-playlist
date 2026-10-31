@@ -61,9 +61,7 @@ def parse_v11_readonly_state(data: bytes) -> V11ReadOnlyState:
     return _state_from_candidate(parse_v11_candidate(data))
 
 
-def load_v11_readonly_state(
-    root: Path, *, recovery_inspection: bool = False
-) -> V11ReadOnlyState:
+def load_v11_readonly_state(root: Path, *, recovery_inspection: bool = False) -> V11ReadOnlyState:
     """Inspect a persisted v11 candidate, with no mutation of managed-state.json.
 
     Normal reads demand matching on-disk legacy state plus ordered-v2 evidence.
