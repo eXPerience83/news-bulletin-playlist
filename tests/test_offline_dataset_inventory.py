@@ -100,11 +100,12 @@ def test_mutated_file_during_hashing_fails_without_writing(
     source = root / "managed-state.json"
     original_read = os.read
     changed = False
+    source_inode = source.stat().st_ino
 
     def change_after_read(fd: int, nbytes: int) -> bytes:
         nonlocal changed
         result = original_read(fd, nbytes)
-        if not changed:
+        if not changed and os.fstat(fd).st_ino == source_inode:
             changed = True
             with source.open("ab") as stream:
                 stream.write(b"changed during inventory")
