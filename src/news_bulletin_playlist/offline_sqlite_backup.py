@@ -76,28 +76,24 @@ def _copy_verified(
                 os.close(out_fd)
             after = os.fstat(fd)
             if (
-                (
-                    before.st_dev,
-                    before.st_ino,
-                    before.st_size,
-                    before.st_mtime_ns,
-                    before.st_ctime_ns,
-                    before.st_mode,
-                    before.st_uid,
-                    before.st_gid,
-                )
-                != (
-                    after.st_dev,
-                    after.st_ino,
-                    after.st_size,
-                    after.st_mtime_ns,
-                    after.st_ctime_ns,
-                    after.st_mode,
-                    after.st_uid,
-                    after.st_gid,
-                )
-                or digest.hexdigest() != expected.sha256
-            ):
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+                before.st_mode,
+                before.st_uid,
+                before.st_gid,
+            ) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+                after.st_mode,
+                after.st_uid,
+                after.st_gid,
+            ) or digest.hexdigest() != expected.sha256:
                 raise OfflineSQLiteBackupError("SQLite backup changed during verified copy")
         finally:
             os.close(fd)
@@ -119,7 +115,7 @@ def _check_disposable_sqlite(path: Path) -> int:
             ).fetchone()
             if row is None or not isinstance(row[0], int) or row[0] < 1:
                 raise OfflineSQLiteBackupError("restored SQLite schema is empty")
-            return row[0]
+            return int(row[0])
     except sqlite3.DatabaseError as exc:
         raise OfflineSQLiteBackupError("restored SQLite could not be read consistently") from exc
 
