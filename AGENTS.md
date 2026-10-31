@@ -203,6 +203,8 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 
 - The offline v11 inventory compares file bytes and file/directory metadata (UID/GID, POSIX mode, xattr digests); never expose xattr values. This is an evidence gate, not a complete ZFS ACL backup, SQLite snapshot, or permission to migrate. Preserve fail-closed shadow/cutover behavior.
 
+- Offline SQLite backup validation is an isolated, opt-in verification step only. Open SQLite exclusively on a disposable, verified copy of the independent backup, not production /data or the backup itself. A successful integrity_check does not certify complete WAL capture, service quiescence or TrueNAS ACL restore. Preserve the old-image full-dataset rollback requirement and keep v11 cutover disabled.
+
 ## Documentation and external contracts
 
 - For Spotify endpoint/scopes/limits/response-contract claims, verify current official Spotify documentation before treating a claim as a defect.
