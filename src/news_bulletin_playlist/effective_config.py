@@ -15,7 +15,6 @@ from news_bulletin_playlist.managed_state import (
 from news_bulletin_playlist.models import EngineConfig
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
-from news_bulletin_playlist.models import EngineConfig
 
 _OBSOLETE_CONFIG_FILENAME = "news-bulletin-playlist.yaml"
 _OBSOLETE_CONFIG_PATH_ENV = "NEWS_PLAYLIST_CONFIG"
