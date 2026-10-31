@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 from test_legacy_catalog_snapshot import _root
-from test_offline_dataset_inventory import _synthetic_dataset
 
 from news_bulletin_playlist.legacy_catalog_snapshot import write_legacy_snapshot_v2
 from news_bulletin_playlist.offline_dataset_inventory import inventory_offline_dataset
