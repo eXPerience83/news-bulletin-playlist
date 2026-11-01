@@ -211,6 +211,7 @@ def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
             "version": SOURCE_FORMAT_VERSION,
             "sources": [],
         }
+        definitions: tuple[PortableSource, ...]
         if root["sources"] == empty_source_document and root["templates"] == []:
             definitions = ()
         else:
