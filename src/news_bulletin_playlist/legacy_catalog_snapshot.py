@@ -46,10 +46,10 @@ from news_bulletin_playlist.models import (
     SourceId,
 )
 from news_bulletin_playlist.portable_sources import (
-    PortableSource,
-    PortableSourceError,
     SOURCE_FORMAT,
     SOURCE_FORMAT_VERSION,
+    PortableSource,
+    PortableSourceError,
     parse_sources,
     serialize_sources,
 )

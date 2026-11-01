@@ -13,7 +13,7 @@ from contextlib import suppress
 from pathlib import Path
 from uuid import uuid4
 
-from news_bulletin_playlist.catalog import BuiltInCatalog
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.installation_identity import (
     INSTALLATION_IDENTITY_FILENAME,
     InstallationDisposition,

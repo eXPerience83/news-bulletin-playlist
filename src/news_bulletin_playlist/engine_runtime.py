@@ -23,7 +23,10 @@ from news_bulletin_playlist.custom_cover_assets import (
 )
 from news_bulletin_playlist.custom_playlist_templates import CUSTOM_DEFAULT_COVER_ID
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
-from news_bulletin_playlist.effective_config import load_effective_config
+from news_bulletin_playlist.effective_config import (
+    _reject_obsolete_configuration,
+    load_effective_config,
+)
 from news_bulletin_playlist.engine import (
     DEFAULT_ENGINE_INTERVAL,
     Clock,
@@ -36,7 +39,6 @@ from news_bulletin_playlist.engine import (
     SpotifyAuthProvider,
     SpotifyClientFactory,
 )
-from news_bulletin_playlist.effective_config import _reject_obsolete_configuration
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
 from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
