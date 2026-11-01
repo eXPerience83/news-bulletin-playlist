@@ -509,6 +509,10 @@ def test_backoff_suppression_before_transport_counts_zero_web_api_requests(tmp_p
 def test_runtime_managed_admin_client_records_real_web_api_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+
+    # First-boot v11 authority is published before SQLite creates durable data.
+    open_managed_state_store(tmp_path)
     metrics = _metrics(tmp_path)
     service = _build_managed_admin_service(
         data_dir=tmp_path,
