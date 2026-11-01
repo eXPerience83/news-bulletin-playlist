@@ -714,3 +714,20 @@ operator acceptance is not replaced by new issues. #541 is resolved. #450 editor
 rules, source expansion, Python/Docker promotion and production deployment remain
 separate. No merge, Edge publication, TrueNAS change or real Spotify action is
 authorized by this design.
+
+
+### v11 fresh-install source examples (opt-in)
+
+A newly claimed v11 installation contains **no installed sources**, no installed
+playlist templates and no Spotify destinations. The 13 bundled sources are
+examples only. Visit **Admin → Sources** to download a preset JSON, then use
+**Import sources** to preview and explicitly apply the desired source. These
+GET/preview operations never write configuration or require Spotify OAuth.
+The source's processing capabilities are preserved by portable JSON v1; the
+local installed identity is allocated by the existing import conflict and
+canonical Spotify-show deduplication rules. Reimporting an identical example
+is a no-op. Legacy v6–v10 installations preserve their frozen installed
+catalogue, overrides, UUIDs and destinations; they are not reset to empty.
+
+The bundled playlist examples and draft-from-example experience are part of
+the next acceptance block and do not authorize automatic Spotify creation.

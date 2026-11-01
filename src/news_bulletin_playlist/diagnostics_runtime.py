@@ -18,6 +18,7 @@ from news_bulletin_playlist import __version__, engine_runtime
 from news_bulletin_playlist.admin_session import SourceImportCapacityError, SourceInspectionContext
 from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetError
 from news_bulletin_playlist.diagnostics import (
     MAX_DIAGNOSTIC_EXPORT_EVENTS,
@@ -31,7 +32,11 @@ from news_bulletin_playlist.diagnostics_web import (
     render_diagnostics_page,
 )
 from news_bulletin_playlist.engine import EngineCycleResult, OperationalStatus
-from news_bulletin_playlist.managed_admin import ManagedAdminError, ManagedAdminService
+from news_bulletin_playlist.managed_admin import (
+    ManagedAdminError,
+    ManagedAdminService,
+    ManagedAdminSnapshot,
+)
 from news_bulletin_playlist.managed_admin_web import (
     duration_minutes_from_form,
     playlist_id_from_form,
@@ -64,7 +69,11 @@ from news_bulletin_playlist.portable_playlists import (
     PortableCoverLoader,
 )
 from news_bulletin_playlist.portable_playlists_web import render_identity_confirmation
-from news_bulletin_playlist.portable_sources import PortableSourceError, UnsupportedSourceCapability
+from news_bulletin_playlist.portable_sources import (
+    PortableSourceError,
+    UnsupportedSourceCapability,
+    export_sources,
+)
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
@@ -197,6 +206,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         if parsed.path == "/admin/sources/export.json":
             self._serve_source_configuration(parsed.query)
+            return
+        if parsed.path == "/admin/sources/preset.json":
+            self._serve_source_preset(parsed.query)
             return
         if parsed.path == "/admin/sources/import":
             security = self._require_admin()
@@ -747,6 +759,33 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
         except ValueError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source import request")
+
+    def _serve_source_preset(self, query: str) -> None:
+        """Serve a static preset JSON download without reading installation state."""
+        if self._require_admin() is None:
+            return
+        try:
+            values = urllib.parse.parse_qs(
+                query, keep_blank_values=True, strict_parsing=True, max_num_fields=1
+            )
+            if set(values) != {"source_id"} or len(values["source_id"]) != 1:
+                raise ValueError("Invalid preset selection")
+            source_id = values["source_id"][0]
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", source_id) is None:
+                raise ValueError("Invalid preset selection")
+            preset = next(source for source in BUILTIN_CATALOG.sources if source.id == source_id)
+            payload = export_sources((preset,), built_in_ids=(preset.id,))
+        except ValueError, StopIteration, PortableSourceError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source preset")
+            return
+        self._reply(
+            HTTPStatus.OK,
+            payload,
+            content_type="application/json",
+            extra_headers={
+                "Content-Disposition": f'attachment; filename="preset-{source_id}.json"'
+            },
+        )
 
     def _serve_source_configuration(self, query: str) -> None:
         if self._require_admin() is None:
@@ -1483,23 +1522,33 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if security is None:
             return
         service = self.managed_admin_service
-        if service is None:
-            self._reply(
-                HTTPStatus.NOT_FOUND,
-                b"Not found",
-                content_type="text/plain; charset=utf-8",
-            )
-            return
         synchronization = self.configuration_synchronization
         try:
-            if synchronization is None:
+            if service is None:
+                # With no OAuth, read the state but never finalize provisioning,
+                # activate a migration or call Spotify.
+                store = open_managed_state_store_readonly(self.data_dir)
+                if synchronization is None:
+                    state = store.load_readonly()
+                else:
+                    with synchronization.hold():
+                        state = store.load_readonly()
+                catalog = store.catalog
+                snapshot = ManagedAdminSnapshot(
+                    managed=state.playlists,
+                    available_templates=(),
+                    custom_templates=state.templates,
+                )
+            elif synchronization is None:
                 snapshot = service.snapshot()
                 state = service.store.load()
+                catalog = service.catalog
             else:
                 with synchronization.hold():
                     snapshot = service.snapshot()
                     state = service.store.load()
-            effective_sources(service.catalog, state)
+                catalog = service.catalog
+            effective_sources(catalog, state)
         except ManagedStateError, OSError:
             self._reply(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -1516,10 +1565,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             render_sources_page(
                 snapshot=snapshot,
                 state=state,
-                catalog=service.catalog,
+                catalog=catalog,
                 last_cycle=last_cycle,
                 lan_mode=self._is_lan_admin_mode(),
                 csrf_token=security.issue_csrf_token(),
+                provider_available=service is not None,
                 notice={
                     "source-added": "Custom source added successfully.",
                     "source-updated": "Custom source updated successfully.",

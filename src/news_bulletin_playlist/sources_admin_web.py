@@ -6,7 +6,7 @@ import html
 import urllib.parse
 
 from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warning
-from news_bulletin_playlist.catalog import BuiltInCatalog
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.engine import EngineCycleResult, SourceCycleOutcome
 from news_bulletin_playlist.managed_admin import ManagedAdminSnapshot
 from news_bulletin_playlist.managed_state import (
@@ -42,8 +42,42 @@ def render_sources_page(
     lan_mode: bool,
     csrf_token: str,
     notice: str | None = None,
+    provider_available: bool = True,
 ) -> bytes:
-    """Render effective sources, with lifecycle actions only for custom definitions."""
+    """Show installed sources separately from downloadable, uninstalled examples."""
+    current = effective_sources(catalog, state)
+    installed_shows = {
+        ref.external_id
+        for source in current
+        for ref in source.external_references
+        if ref.system == "spotify" and ref.resource_type == "show"
+    }
+    examples = tuple(
+        source
+        for source in BUILTIN_CATALOG.sources
+        if source.external_references[0].external_id not in installed_shows
+    )
+    examples_html = "".join(
+        "<li>"
+        + html.escape(source.display_name)
+        + ' — <a href="/admin/sources/preset.json?source_id='
+        + urllib.parse.quote(str(source.id), safe="")
+        + '">Download source preset (JSON)</a></li>'
+        for source in examples
+    )
+    examples_section = (
+        '<section class="section admin-section" aria-labelledby="source-examples-heading">'
+        '<h2 id="source-examples-heading">Available source examples</h2>'
+        '<p class="muted">These examples are not installed or queried automatically. '
+        "Download a source preset, then use Import sources to preview and "
+        "explicitly install it. No Spotify authorization is required.</p>"
+        + (
+            f"<ul>{examples_html}</ul>"
+            if examples
+            else '<p class="muted">All examples already installed.</p>'
+        )
+        + "</section>"
+    )
     safe_csrf = html.escape(csrf_token, quote=True)
     export_control = (
         '<a class="button" href="/admin/sources/export.json">Export all sources</a>'
@@ -51,6 +85,22 @@ def render_sources_page(
         "This download does not contact Spotify.</p>"
         if catalog.sources or state.sources
         else '<p class="muted">No sources are available to export. Add a source first.</p>'
+    )
+    add_source = (
+        '<p><a class="button button-primary" href="/admin/sources/new">Add source</a></p>'
+        if provider_available
+        else ""
+    )
+    audits = (
+        '<form method="post" action="/admin/sources/audits/export">'
+        f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
+        '<button class="button" type="submit">Export all audits</button></form>'
+        f'<p class="muted">Audits can inspect up to {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources.</p>'
+        if provider_available
+        else ""
+    )
+    table = _sources_table(
+        snapshot, catalog, state, last_cycle, csrf_token, provider_available=provider_available
     )
     body = "".join(
         (
@@ -65,20 +115,15 @@ def render_sources_page(
     </div>
     <p class="section-note">{len(catalog.sources)} built-in, {len(state.sources)} custom sources</p>
   </div>
-  <p><a class="button button-primary" href="/admin/sources/new">Add source</a></p>
+  {add_source}
   <p><a class="button" href="/admin/sources/import">Import sources</a></p>
   {export_control}
-  <form method="post" action="/admin/sources/audits/export">
-    <input type="hidden" name="csrf_token" value="{safe_csrf}">
-    <button class="button" type="submit">Export all audits</button>
-  </form>
-  <p class="muted">Starts a single read-only audit in the background, up to
-     {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources. The progress page stays responsive, and
-     the sanitized ZIP is available when complete. Only one batch may run at a time.</p>
+  {audits}
   <p class="muted">Provider origin, editorial scope and language are separate; an institutional
      origin need not be a country.</p>
-  {_sources_table(snapshot, catalog, state, last_cycle, csrf_token)}
+  {table}
 </section>
+{examples_section}
 """,
         )
     )
@@ -99,6 +144,8 @@ def _sources_table(
     state: ManagedState,
     last_cycle: EngineCycleResult | None,
     csrf_token: str,
+    *,
+    provider_available: bool = True,
 ) -> str:
     source_outcomes = (
         {} if last_cycle is None else {outcome.source_id: outcome for outcome in last_cycle.sources}
@@ -130,17 +177,20 @@ def _sources_table(
         safe_csrf = html.escape(csrf_token, quote=True)
         export_query = html.escape(urllib.parse.urlencode({"source_id": source.id}), quote=True)
         controls += f'<a href="/admin/sources/export.json?{export_query}">Export source</a>'
-        controls += (
-            '<form method="post" action="/admin/sources/audit">'
-            f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
-            f'<input type="hidden" name="source_id" value="{safe_id}">'
-            '<button class="button" type="submit">Audit</button></form>'
-        )
-        if source.id in built_in_ids:
+        if provider_available:
+            controls += (
+                '<form method="post" action="/admin/sources/audit">'
+                f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
+                f'<input type="hidden" name="source_id" value="{safe_id}">'
+                '<button class="button" type="submit">Audit</button></form>'
+            )
+        else:
+            controls += '<p class="muted">Connect Spotify to edit source settings.</p>'
+        if provider_available and source.id in built_in_ids:
             controls += (
                 f'<a href="/admin/sources/edit?source_id={safe_id}">Edit public release time</a>'
             )
-        if source.id not in built_in_ids:
+        if provider_available and source.id not in built_in_ids:
             next_enabled = not source.enabled
             verb = "Enable" if next_enabled else "Disable"
             controls += f'<a href="/admin/sources/edit?source_id={safe_id}">Edit</a>'

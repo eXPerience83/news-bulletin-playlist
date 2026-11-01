@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from test_legacy_catalog_snapshot import _root
 
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.effective_config import load_effective_config
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateError, ManagedStateStore
 from news_bulletin_playlist.v11_managed_adapter import (
@@ -65,6 +66,9 @@ def test_empty_first_run_goes_directly_to_v11_without_destination(tmp_path: Path
     store = open_managed_state_store(root)
     assert isinstance(store, ForwardOnlyManagedStateStore)
     assert store.load().playlists == ()
+    assert store.load().sources == ()
+    assert store.catalog.sources == ()
+    assert store.catalog.playlists == ()
     assert (root / V11_OPERATIONAL_FILENAME).exists()
     assert not (root / "managed-state.json").exists()
     assert load_effective_config(root, {}) is None
@@ -115,3 +119,23 @@ def test_stale_v11_writer_cannot_overwrite_newer_commit(tmp_path: Path) -> None:
     with pytest.raises(ManagedStateError, match="could not be saved"):
         second.save(stale)
     assert open_managed_state_store(root).load().playlists[0].display_name == "New"
+
+
+def test_fresh_install_never_materializes_bundled_source_presets(tmp_path: Path) -> None:
+    root = tmp_path / "fresh"
+    root.mkdir()
+    store = open_managed_state_store(root)
+    assert store.catalog.sources == ()
+    assert store.catalog.playlists == ()
+    assert store.load().sources == ()
+    assert BUILTIN_CATALOG.sources
+    assert open_managed_state_store(root).catalog.sources == ()
+
+
+def test_unknown_occupied_root_must_not_be_reclaimed_fresh(tmp_path: Path) -> None:
+    prior = tmp_path / "historical-data.sqlite3"
+    prior.write_bytes(b"prior installation")
+    with pytest.raises(ManagedStateError, match="conversion"):
+        open_managed_state_store(tmp_path)
+    assert prior.read_bytes() == b"prior installation"
+    assert not (tmp_path / V11_OPERATIONAL_FILENAME).exists()

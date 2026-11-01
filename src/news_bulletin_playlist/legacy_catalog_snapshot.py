@@ -46,6 +46,8 @@ from news_bulletin_playlist.models import (
     SourceId,
 )
 from news_bulletin_playlist.portable_sources import (
+    SOURCE_FORMAT,
+    SOURCE_FORMAT_VERSION,
     PortableSource,
     PortableSourceError,
     parse_sources,
@@ -119,7 +121,11 @@ def build_legacy_snapshot(preview: LegacyMigrationPreview, state_bytes: bytes) -
         for record in preview.source_snapshots
     )
     try:
-        source_document = json.loads(serialize_sources(source_records))
+        source_document = (
+            json.loads(serialize_sources(source_records))
+            if source_records
+            else {"format": SOURCE_FORMAT, "version": SOURCE_FORMAT_VERSION, "sources": []}
+        )
     except (PortableSourceError, ValueError) as exc:
         raise FrozenLegacySnapshotError("unsupported frozen source capability") from exc
 
@@ -197,7 +203,19 @@ def parse_legacy_snapshot(payload: bytes) -> FrozenLegacyCatalogSnapshot:
 
     try:
         source_payload = _canonical(root["sources"])
-        definitions = parse_sources(source_payload)
+        # An empty frozen catalogue is valid only as a complete empty inventory.
+        # The public portable JSON import format deliberately continues to
+        # require at least one source; no relaxation of its parser is implied.
+        empty_source_document = {
+            "format": SOURCE_FORMAT,
+            "version": SOURCE_FORMAT_VERSION,
+            "sources": [],
+        }
+        definitions: tuple[PortableSource, ...]
+        if root["sources"] == empty_source_document and root["templates"] == []:
+            definitions = ()
+        else:
+            definitions = parse_sources(source_payload)
     except (PortableSourceError, ValueError, TypeError) as exc:
         raise FrozenLegacySnapshotError("invalid frozen catalog sources") from exc
     sources = tuple(

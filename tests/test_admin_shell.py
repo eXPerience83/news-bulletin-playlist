@@ -194,7 +194,7 @@ def test_un_origin_is_rendered_in_sources_and_playlist_selectors(tmp_path: Path)
     assert "United Nations — ONU en minutos (US ·" not in playlists
 
 
-def test_sources_requires_service_after_authentication(tmp_path: Path) -> None:
+def test_sources_are_readable_without_oauth_after_authentication(tmp_path: Path) -> None:
     unauthorized, _ = _get(
         tmp_path,
         path="/admin/sources",
@@ -208,8 +208,11 @@ def test_sources_requires_service_after_authentication(tmp_path: Path) -> None:
     )
 
     assert unauthorized is HTTPStatus.SEE_OTHER
-    assert authenticated is HTTPStatus.NOT_FOUND
-    assert body == "Not found"
+    assert authenticated is HTTPStatus.OK
+    assert "Broadcasters and sources" in body
+    assert "Available source examples" in body
+    assert "Import sources" in body
+    assert 'action="/admin/sources/audit"' not in body
 
 
 def test_diagnostics_shell_preserves_filters_metrics_and_mobile_table_wrapper(
