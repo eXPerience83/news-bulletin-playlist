@@ -121,7 +121,6 @@ def test_stale_v11_writer_cannot_overwrite_newer_commit(tmp_path: Path) -> None:
     assert open_managed_state_store(root).load().playlists[0].display_name == "New"
 
 
-
 def test_fresh_install_never_materializes_bundled_source_presets(tmp_path: Path) -> None:
     root = tmp_path / "fresh"
     root.mkdir()

@@ -775,7 +775,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 raise ValueError("Invalid preset selection")
             preset = next(source for source in BUILTIN_CATALOG.sources if source.id == source_id)
             payload = export_sources((preset,), built_in_ids=(preset.id,))
-        except (ValueError, StopIteration, PortableSourceError):
+        except ValueError, StopIteration, PortableSourceError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source preset")
             return
         self._reply(

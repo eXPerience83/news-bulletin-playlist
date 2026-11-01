@@ -69,8 +69,8 @@ def render_sources_page(
         '<section class="section admin-section" aria-labelledby="source-examples-heading">'
         '<h2 id="source-examples-heading">Available source examples</h2>'
         '<p class="muted">These examples are not installed or queried automatically. '
-        'Download a source preset, then use Import sources to preview and '
-        'explicitly install it. No Spotify authorization is required.</p>'
+        "Download a source preset, then use Import sources to preview and "
+        "explicitly install it. No Spotify authorization is required.</p>"
         + (
             f"<ul>{examples_html}</ul>"
             if examples
