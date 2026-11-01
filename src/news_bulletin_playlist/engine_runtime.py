@@ -36,6 +36,7 @@ from news_bulletin_playlist.engine import (
     SpotifyAuthProvider,
     SpotifyClientFactory,
 )
+from news_bulletin_playlist.effective_config import _reject_obsolete_configuration
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
 from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
@@ -101,6 +102,10 @@ from news_bulletin_playlist.spotify_backoff import (
 )
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_storage import (
+    V11_AUTHORITY_FILENAME,
+    V11_OPERATIONAL_FILENAME,
+)
 
 _INTERVAL_SECONDS_ENV = "NEWS_PLAYLIST_INTERVAL_SECONDS"
 _SPOTIFY_INACTIVITY_HOURS_ENV = "NEWS_PLAYLIST_SPOTIFY_INACTIVITY_HOURS"
@@ -1216,6 +1221,18 @@ def serve(
 ) -> int:
     """Run HTTP, OAuth and the production engine scheduler in one durable process."""
     env = os.environ if environ is None else environ
+    _reject_obsolete_configuration(data_dir, env)
+    # A pristine root must become v11 before SQLite, OAuth or journals write
+    # durable files. Existing roots without state cannot be claimed fresh.
+    if not any(
+        (data_dir / name).exists() or (data_dir / name).is_symlink()
+        for name in ("managed-state.json", V11_OPERATIONAL_FILENAME, V11_AUTHORITY_FILENAME)
+    ):
+        data_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            open_managed_state_store(data_dir)
+        except ManagedStateError as exc:
+            raise RuntimeError("installation identity/configuration is ambiguous") from exc
     database_path = initialize_runtime_storage(data_dir)
     store = SQLiteStore(database_path)
     diagnostic_candidate = DiagnosticEventStore(database_path)

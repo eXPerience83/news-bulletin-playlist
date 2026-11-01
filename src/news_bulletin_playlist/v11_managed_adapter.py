@@ -47,7 +47,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
                 owned = self._owner.initialize_from_legacy(catalog=self.catalog)
                 raw = self._owner.load_bytes()
             else:
-                owned = self._owner.initialize_fresh(catalog=self.catalog)
+                owned = self._owner.initialize_fresh()
                 raw = self._owner.load_bytes()
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("forward-only v11 conversion failed") from exc

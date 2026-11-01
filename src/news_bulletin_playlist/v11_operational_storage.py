@@ -13,7 +13,12 @@ from contextlib import suppress
 from pathlib import Path
 from uuid import uuid4
 
-from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
+from news_bulletin_playlist.catalog import BuiltInCatalog
+from news_bulletin_playlist.installation_identity import (
+    INSTALLATION_IDENTITY_FILENAME,
+    InstallationDisposition,
+    inspect_installation_root,
+)
 from news_bulletin_playlist.legacy_catalog_snapshot import build_legacy_snapshot_v2
 from news_bulletin_playlist.legacy_materialization import preview_legacy_materialization
 from news_bulletin_playlist.managed_state import (
@@ -173,12 +178,10 @@ class V11OperationalStore:
                 ) from exc
             return parse_v11_operational(next_bytes)
 
-    def initialize_fresh(self, *, catalog: BuiltInCatalog = BUILTIN_CATALOG) -> V11OperationalState:
-        """Explicit v11 authority on first run, with zero managed destinations.
-
-        Preset catalog entries are available for manual selection, never
-        auto-activated on Spotify. Fresh-install preset UX is separate.
-        """
+    def initialize_fresh(self, *, catalog: BuiltInCatalog | None = None) -> V11OperationalState:
+        """Create an empty v11 inventory, never implicitly installing image presets."""
+        if catalog is None:
+            catalog = BuiltInCatalog((), ())
         with _locked_root(self.root) as dir_fd:
             prior = _read_existing(dir_fd)
             if prior is not None:
@@ -192,6 +195,16 @@ class V11OperationalStore:
                 pass
             else:
                 raise V11StoreError("legacy installation requires forward migration")
+            entries = set(os.listdir(dir_fd))
+            if entries:
+                inspection = inspect_installation_root(self.root)
+                if (
+                    entries != {INSTALLATION_IDENTITY_FILENAME}
+                    or inspection.disposition is not InstallationDisposition.CLAIMED_OPT_IN
+                ):
+                    raise V11StoreError(
+                        "occupied installation without managed state cannot be claimed fresh"
+                    )
             try:
                 empty = ManagedState(schema_version=10)
                 original = (

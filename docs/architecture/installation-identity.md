@@ -509,3 +509,22 @@ managed Spotify destinations; the image's preset catalog is still available
 to Admin for explicit manual template activation. Separating catalog examples
 from installed sources and the final opt-in preset UI remains planned.
 This integration does not release a new image or change production TrueNAS.
+
+
+
+## 2026-11-01 — Explicit fresh v11 source baseline
+
+This section supersedes the historical "not connected to runtime" status above.
+A fresh v11 installation now starts with **zero sources, templates and Spotify
+destinations** installed. The image's bundled sources remain examples, not runtime
+configuration. The existing authenticated JSON preview/Apply import workflow
+is the only mechanism that installs downloaded source examples. No OAuth or
+Spotify operations are required merely to view or download source presets.
+
+A root containing arbitrary files but neither v11 authority nor a legacy
+managed-state cannot be silently reinitialized. Runtime performs the initial
+claim before SQLite or other runtime files are created. A previously claimed
+opt-in installation identity is accepted only when it is the sole entry.
+Legacy v6-v10 state retains its frozen source definitions, templates and
+destinations under the forward-only migration rules. Explicit optional playlist
+example-to-draft UI remains a separate outstanding #552 step.
