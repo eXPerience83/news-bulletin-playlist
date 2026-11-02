@@ -8,11 +8,12 @@ import pytest
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
+from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _multipart import import_upload as _multipart
 from test_playlist_import import donor, rewrite
 from test_source_admin_http import _Handler, _server
-from test_source_configuration_export import _files, _forbid_effects
+from test_source_configuration_export import _forbid_effects
 
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
 from news_bulletin_playlist.playlist_import_web import imported_draft_editor

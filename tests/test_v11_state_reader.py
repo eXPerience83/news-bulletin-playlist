@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from _file_snapshots import snapshot_files as _files
 from _legacy_dataset import legacy_root as _root
 from test_legacy_materialization import _catalog_with_duration_exception, _legacy_state
 
@@ -36,12 +37,6 @@ def no_network_or_database(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
-
-
-def _files(root: Path) -> dict[str, bytes]:
-    return {
-        str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()
-    }
 
 
 @pytest.mark.parametrize("version", [6, 7, 8, 9, 10])

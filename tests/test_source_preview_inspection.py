@@ -9,8 +9,8 @@ import sqlite3
 from dataclasses import replace
 
 import pytest
+from _file_snapshots import snapshot_files as _files
 from _managed_fixtures import _source, _state
-from test_source_configuration_export import _files
 from test_source_import import _pending, _service
 
 from news_bulletin_playlist import portable_sources

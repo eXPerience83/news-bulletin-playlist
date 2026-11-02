@@ -11,11 +11,12 @@ import pytest
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
+from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _multipart import import_upload as _multipart
 from test_installed_sources import _rich_state
 from test_source_admin_http import _Handler, _server
-from test_source_configuration_export import _files, _forbid_effects
+from test_source_configuration_export import _forbid_effects
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState

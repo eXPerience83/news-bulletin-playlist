@@ -11,6 +11,7 @@ import pytest
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
+from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _managed_fixtures import _source
 from test_source_admin_http import _Handler, _server
@@ -65,12 +66,6 @@ def installation(tmp_path):
         # tests install guards against auth/operational activity during downloads.
         assert _request(server, "GET", "/admin/sources/new", cookie=cookie)[0] == HTTPStatus.OK
         yield server, cookie, store, service, client, state
-
-
-def _files(root):
-    return {
-        str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()
-    }
 
 
 def _forbid_effects(monkeypatch, service):
