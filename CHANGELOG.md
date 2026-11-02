@@ -5,12 +5,25 @@ after the latest release stay under **Unreleased** until the next stable release
 
 ## [Unreleased]
 
-**Staged candidate: 0.2.3b1 (not yet published).** This is a recovery-focused
-prerelease candidate intended to replace an older TrueNAS image blocked by
-Spotify catalogue `null` slots. It retains existing built-in sources, playlist
-templates, managed destinations, SQLite format 3 and managed-state v10. PR #567
-only adds a read-only installation identity inspector and design tests; it does
-not change startup, initialize a marker or activate optional presets.
+**Proposed next beta: 0.3.0b1 — package metadata staged, NOT published or
+deployed.** The previous known production beta is `0.2.3b1`; this section
+describes unreleased `main`, not the deployed TrueNAS image.
+
+**BREAKING CHANGE: forward-only v11 configuration authority; NO SUPPORTED
+DOWNGRADE.** Fresh installations start with **zero** installed sources, playlist
+templates, local drafts and Spotify destinations; image-owned 13 source presets
+and seven playlist examples are *read-only* until explicitly installed.
+Existing v6–v10 installations migrate once, preserving their full historical
+source/catalogue and four real destination identities; `managed-state-v11.json`
+is then authoritative, and `managed-state.json` remains **inert evidence**.
+Missing, corrupt or ambiguous v11 state must fail closed, never reimport
+legacy state as a fallback. No support for booting an old image after migration.
+
+Before a future **explicitly authorized live upgrade**, take a separate,
+one-time **complete /data backup** (SQLite/WAL, OAuth, journals and covers).
+Portable source JSON and playlist ZIP are not substitutes for that backup.
+This changelog and version bump do not authorize Spotify access, release tags,
+GHCR publication, edge/stable/latest movement or TrueNAS deployment.
 
 A successful candidate CI/Container check **does not prove the live RNE
 incident is resolved**. The null-bearing source permits only add-only
@@ -18,12 +31,26 @@ reconciliation with positively observed eligible episodes. If the destination
 is at its configured cap, writes pause without evictions. Production acceptance
 and actual deployment are separately tracked in #562 and #565.
 
-This section documents changes already integrated or staged for the candidate.
-Optional preset migration and clean-install acceptance (#552/#553), plus
-initial-cover automation (#528), remain unfinished and must not be represented
-as released features. This candidate is **not a stable image promotion**.
+Optional preset implementation (#552) and **synthetic-only** v11 acceptance
+(#553) are complete in code (PRs #585–#587, #589). The initial attribution and
+selected-cover fix (#528) is also merged in code (PR #590). This does **not**
+prove the behavior on the owner's real Spotify account or on the TrueNAS
+installation; #527/#528, #562 and beta gate #565 retain their independent
+live/operational acceptance requirements. No prerelease or stable promotion
+has occurred.
 
 ### Changed
+
+- **v11 operational authority:** atomically migrate legacy v6–v10 into the
+  installation-owned v11 document; retain frozen historical sources/templates,
+  all four Spotify destinations, dormant assignments, overrides, portable UUIDs,
+  quarantine, exact temporal policies, cover references and operational journals.
+  The durable v11 authority marker prevents fallback to the legacy file after
+  migration; CAS rejects stale overwrites and partial/corrupt state fails closed.
+  Migrated installations do not silently adopt presets on future image changes.
+- **Forward-only installation model:** new roots are empty and opt-in; Admin,
+  runtime and portable import/export use the same v11 owner configuration.
+  Bundled examples are not installed or made into Spotify playlists at startup.
 
 - Prepared MIT software licensing under `Copyright (c) 2026 Roberto Ribes`,
   updated package/image license metadata and the public/admin copyright notices.
@@ -44,6 +71,18 @@ as released features. This candidate is **not a stable image promotion**.
   refresh on failure instead of certifying partial new rows with old coverage.
 
 ### Added
+
+- Admin shows 13 read-only packaged source presets and seven playlist examples,
+  distinct from installed sources, local editable drafts and managed Spotify
+  destinations. Explicit JSON import installs sources by canonical Spotify show
+  identity; example selection creates only a durable local draft without OAuth,
+  provider request or scheduler work. Missing/disabled sources require
+  operator action. Example covers become persistent content-addressed owner
+  JPEGs; exact durations/exceptions and metadata survive restart (#552, #587).
+- Synthetic end-to-end acceptance for v6–v10 forward upgrades with four
+  historical destination IDs and real isolated SQLite/WAL, and fresh v11
+  JSON source import → local draft → ZIP round-trip across separate roots,
+  idempotent restart, malformed ZIP and stale CAS rejection (#553, #589).
 
 - Installation-owned custom playlist templates and drafts through Admin, with
   deliberate Spotify activation, bounded editing, safe deletion/reference checks,
@@ -72,6 +111,12 @@ as released features. This candidate is **not a stable image promotion**.
 
 ### Fixed
 
+- **First Spotify playlist activation:** include the bounded project
+  attribution in the *initial* create request for any new template, not only
+  custom drafts. After the new destination is durably recorded, attempt the
+  selected cover once; report failures separately and leave explicit metadata/
+  cover sync available without recreating the destination. Existing managed
+  destinations are never rewritten by this fix (#528, #590).
 - **Admin / Sources — Export all audits** no longer runs provider requests synchronously on
   the HTTP request thread. A single bounded, read-only background job reports per-source
   progress, supports cooperative cancellation and offers a sanitized ZIP after completion;
@@ -80,19 +125,22 @@ as released features. This candidate is **not a stable image promotion**.
 
 ### Compatibility / operations
 
-- Managed-state serialization now supports schema **v10**, including v7 custom
-  drafts, v8 installed-source capabilities, v9 persistent portable playlist UUID
-  and v10 imported ZIP metadata/identities, while retaining validated legacy
-  upgrade paths. SQLite remains database format **3**; add-only recovery uses
-  an isolated, lazily created SQLite intent table for uncertain Spotify POSTs.
-- Python package metadata supports **3.14 and 3.15**, GitHub CI tests **3.15**,
-  and the current image uses pinned **Python 3.15.2**. This is a change from the
-  historical 0.2.2 Python 3.14.8 image; keep old-version changelog sections as
-  historical facts.
+- **Operational managed-state is v11**, migrated once from the previous
+  v6–v10 layouts; older schema versions remain historical *input formats*,
+  not simultaneous active authorities. SQLite remains database format **3**
+  with preserved WAL and history; add-only recovery uses an isolated, lazily
+  created SQLite intent table for uncertain Spotify POSTs.
+- Declared Python package support remains **3.14 and 3.15**; GitHub CI
+  validates **3.15** while Ruff/mypy enforce the declared 3.14 lower bound.
+  The unreleased Dockerfile currently references pinned Python **3.15.2**;
+  the separately published production image remains subject to the existing
+  3.14 compatibility contract pending #494's independent validation.
+  No image promotion accompanies this candidate preparation.
 - Source and playlist import/export actions are local-only and authenticated.
   They do not include or migrate live Spotify destinations, secrets, history,
   pending provider journals or production `/data`. Legacy source/template
-  preset separation and clean-install acceptance remain tracked in #552/#553.
+  preset separation and clean-install synthetic acceptance were completed
+  by #552/#553. They do not authorize using production /data.
 - Source Audit exports are session-authenticated, limited to 20 sources, 600 seconds and
   16 MiB per ZIP, and kept in memory for at most 30 minutes after completion (or until
   another job replaces them). No playlist/Spotify destination writes, schema changes or
