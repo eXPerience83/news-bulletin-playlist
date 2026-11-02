@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import http.client
 import io
 import json
-import re
 import sqlite3
 import threading
 import time
@@ -13,12 +11,16 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from http import HTTPStatus
 from http.server import HTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
+from _admin_http import csrf as _csrf
+from _admin_http import login as _admin_login
+from _admin_http import request as _admin_request
 
 from news_bulletin_playlist import source_audit_jobs as audit_jobs_module
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -209,42 +211,8 @@ def _server(
         thread.join(timeout=5)
 
 
-def _request(
-    server: HTTPServer,
-    method: str,
-    path: str,
-    *,
-    cookie: str | None = None,
-    form: dict[str, str] | None = None,
-) -> tuple[int, dict[str, str], bytes]:
-    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-    headers = {} if cookie is None else {"Cookie": cookie}
-    body = None
-    if form is not None:
-        body = urllib.parse.urlencode(form)
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-    connection.request(method, path, body=body, headers=headers)
-    response = connection.getresponse()
-    result = response.status, dict(response.getheaders()), response.read()
-    connection.close()
-    return result
-
-
-def _login(server: HTTPServer) -> str:
-    status, headers, _ = _request(
-        server,
-        "POST",
-        "/admin/login",
-        form={"username": "admin", "password": PASSWORD},
-    )
-    assert status == HTTPStatus.SEE_OTHER
-    return headers["Set-Cookie"].split(";", 1)[0]
-
-
-def _csrf(body: bytes) -> str:
-    match = re.search(rb'name="csrf_token" value="([^"]+)"', body)
-    assert match is not None
-    return match.group(1).decode()
+_request = partial(_admin_request, timeout=10, doseq=False)
+_login = partial(_admin_login, timeout=10)
 
 
 def _show_id(source: SourceDefinition) -> str:

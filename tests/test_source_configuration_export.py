@@ -8,9 +8,12 @@ from dataclasses import replace
 from http import HTTPStatus
 
 import pytest
+from _admin_http import csrf as _csrf
+from _admin_http import login as _login
+from _admin_http import request as _request
 from _html import assert_valid_admin_html
 from test_managed_sources import _source
-from test_source_admin_http import _Handler, _login, _request, _server
+from test_source_admin_http import _Handler, _server
 
 from news_bulletin_playlist import diagnostics_runtime
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
@@ -489,7 +492,7 @@ def test_v8_installed_capabilities_export_over_authenticated_http(installation, 
 def test_v8_source_http_edit_preserves_languages_countries_and_processing(
     installation, monkeypatch
 ):
-    from test_source_admin_http import _csrf, _update_form
+    from test_source_admin_http import _update_form
 
     server, cookie, store, service, client, state = installation
     source = _installed_definition()

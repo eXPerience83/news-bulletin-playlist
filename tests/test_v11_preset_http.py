@@ -5,8 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _admin_http import csrf as _csrf
+from _admin_http import login as _login
+from _admin_http import request as _request
 from _html import assert_valid_admin_html
-from test_source_admin_http import _Handler, _login, _request, _server
+from test_source_admin_http import _Handler, _server
 from test_source_import_http import ROOT, _form, _post
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -59,7 +62,6 @@ def test_explicit_preset_import_without_oauth_is_durable_and_idempotent(
         cookie = _login(server)
         source_json = _request(server, "GET", PRESET, cookie=cookie)[2]
         page = _request(server, "GET", ROOT, cookie=cookie)[2]
-        from test_source_admin_http import _csrf
 
         status, _, preview = _post(server, cookie, source_json, _csrf(page))
         assert status == 200

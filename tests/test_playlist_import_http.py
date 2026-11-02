@@ -5,9 +5,12 @@ import json
 import re
 
 import pytest
+from _admin_http import csrf as _csrf
+from _admin_http import login as _login
+from _admin_http import request as _request
 from _html import assert_valid_admin_html
 from test_playlist_import import donor, rewrite
-from test_source_admin_http import _csrf, _Handler, _login, _request, _server
+from test_source_admin_http import _Handler, _server
 from test_source_configuration_export import _files, _forbid_effects
 from test_source_import_http import _multipart
 
