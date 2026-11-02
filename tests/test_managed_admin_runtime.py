@@ -1022,8 +1022,11 @@ def test_lifecycle_reactivation_waits_for_draining_cycle_then_restarts() -> None
     assert controller.status.snapshot().configured is False
 
 
-def test_managed_web_service_requires_spotify_auth(tmp_path: Path) -> None:
-    assert _build_managed_admin_service(tmp_path, spotify_auth=None) is None
+def test_managed_web_service_supports_local_drafts_without_spotify_auth(tmp_path: Path) -> None:
+    service = _build_managed_admin_service(tmp_path, spotify_auth=None)
+    assert isinstance(service, ManagedAdminService)
+    state = service.store.load_readonly()
+    assert state.sources == state.templates == state.playlists == ()
     assert (
         _build_managed_admin_service(
             tmp_path,

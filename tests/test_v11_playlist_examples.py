@@ -104,13 +104,16 @@ def test_nonnative_source_id_and_duration_exceptions_survive_restart(
 ) -> None:
     template = BUILTIN_CATALOG.playlist("international_spanish_news")
     exception = DurationPolicyException(
-        id="special", source_id=SourceId("cnn"),
-        edition_local_time=time(8, 15), max_seconds=3201,
+        id="special",
+        source_id=SourceId("cnn"),
+        edition_local_time=time(8, 15),
+        max_seconds=3201,
     )
     adjusted = replace(
-        template, duration_policy=DurationPolicy(
+        template,
+        duration_policy=DurationPolicy(
             default_min_seconds=601, default_max_seconds=2101, exceptions=(exception,)
-        )
+        ),
     )
     catalog = BuiltInCatalog(BUILTIN_CATALOG.sources, (adjusted,))
     monkeypatch.setattr(admin_module, "BUILTIN_CATALOG", catalog)

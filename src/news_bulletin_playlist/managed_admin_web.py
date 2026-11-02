@@ -447,15 +447,17 @@ def _example_card(
     needs = "".join(
         "<li>"
         + html.escape(source.display_name)
-        + " — <a href=\"/admin/sources/preset.json?source_id="
+        + ' — <a href="/admin/sources/preset.json?source_id='
         + urllib.parse.quote(str(source.id), safe="")
-        + "\">Download source preset (JSON)</a></li>"
+        + '">Download source preset (JSON)</a></li>'
         for source in resolved.missing
     )
     inactive = ", ".join(html.escape(source.display_name) for source in resolved.disabled)
     requirements = (
-        "<p class=\"muted\">Import required source presets first, then return here:</p>"
-        + "<ul>" + needs + "</ul>"
+        '<p class="muted">Import required source presets first, then return here:</p>'
+        + "<ul>"
+        + needs
+        + "</ul>"
         + '<p><a href="/admin/sources/import">Import sources</a></p>'
         if needs
         else ""
@@ -463,7 +465,8 @@ def _example_card(
     if inactive:
         requirements += (
             '<p class="muted">Enable these installed sources before creating the draft: '
-            + inactive + "</p>"
+            + inactive
+            + "</p>"
         )
     ready = not resolved.missing and not resolved.disabled and not existing
     button = (

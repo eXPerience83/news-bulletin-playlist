@@ -249,9 +249,7 @@ class ManagedAdminService:
             # Never replace an already-edited draft after a repeated submission.
             return existing
         try:
-            resolved = resolve_example_sources(
-                example, effective_sources(self.catalog, state)
-            )
+            resolved = resolve_example_sources(example, effective_sources(self.catalog, state))
         except ValueError as exc:
             raise ManagedAdminError("playlist example source mapping is ambiguous") from exc
         if resolved.missing:
