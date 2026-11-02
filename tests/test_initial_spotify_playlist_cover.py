@@ -44,7 +44,8 @@ class _Client:
     def upload_playlist_cover(self, playlist_id: str, jpeg_bytes: bytes) -> dict[str, Any]:
         assert self.service is not None
         assert self.service.provisioning_journal.load() is None
-        assert self.service.store.load_readonly().playlists[-1].destination.external_id == playlist_id
+        destination = self.service.store.load_readonly().playlists[-1].destination.external_id
+        assert destination == playlist_id
         self.events.append("cover")
         self.cover_calls.append((playlist_id, jpeg_bytes))
         if self.cover_error is not None:
