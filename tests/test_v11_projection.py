@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from test_legacy_catalog_snapshot import _root
+from _legacy_dataset import legacy_root as _root
 
 from news_bulletin_playlist.legacy_catalog_snapshot import (
     FrozenLegacySnapshotError,

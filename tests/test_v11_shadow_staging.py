@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from test_legacy_catalog_snapshot import _root
+from _legacy_dataset import legacy_root as _root
 
 from news_bulletin_playlist.legacy_catalog_snapshot import write_legacy_snapshot_v2
 from news_bulletin_playlist.offline_dataset_inventory import inventory_offline_dataset

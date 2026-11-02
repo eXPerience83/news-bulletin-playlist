@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from test_legacy_catalog_snapshot import _root
+from _legacy_dataset import legacy_root as _root
 from test_legacy_materialization import _catalog_with_duration_exception, _legacy_state
 
 from news_bulletin_playlist.legacy_catalog_snapshot import (

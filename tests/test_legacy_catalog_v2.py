@@ -8,8 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from _legacy_dataset import legacy_root as _root
 from test_installed_sources import _installed
-from test_legacy_catalog_snapshot import _root
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.legacy_catalog_snapshot import (
