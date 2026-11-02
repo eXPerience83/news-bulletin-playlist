@@ -10,10 +10,17 @@ Admin source downloads (#547). Decoding returns data; it does **not** install so
 change persistence, or activate anything. Authenticated source upload, preview and
 explicit apply are implemented in #549. Playlist ZIP export is implemented in #550.
 Playlist ZIP preview/import as editable local drafts is implemented in #551.
-CLI and the empty-default image remain future work. Installed-source persistence uses explicit schema v8 (#548),
-without automatic migration. Clean-image migration remains future work under #552,
-with isolated round-trip/rollback acceptance under #553. Next beta release gates are tracked
-in #565. A portable configuration is not a production backup.
+The earlier v8–v10 adoption and rollback notes below are historical design context.
+**Unreleased `main` now uses forward-only v11** as the single operative configuration
+authority (#552); fresh roots contain **zero** installed sources, templates and
+destinations. Image source and playlist examples are explicitly imported/converted
+into local configuration. Existing v6–v10 installations migrate once, preserving
+their identities and historical catalogue, with no supported downgrade to old
+images. Do not use an old `managed-state.json` file to recover a damaged v11.
+Before a future *authorized* live migration, a one-off independent full `/data`
+copy is prudent; **portable JSON and ZIP are not production backups**.
+Acceptance on isolated synthetic roots is tracked by #553 and later beta gates by
+#565. No release/image or live migration is implied by code merged into `main`.
 
 ## Dependency and risk matrix
 

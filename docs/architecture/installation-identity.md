@@ -525,6 +525,13 @@ A root containing arbitrary files but neither v11 authority nor a legacy
 managed-state cannot be silently reinitialized. Runtime performs the initial
 claim before SQLite or other runtime files are created. A previously claimed
 opt-in installation identity is accepted only when it is the sole entry.
-Legacy v6-v10 state retains its frozen source definitions, templates and
-destinations under the forward-only migration rules. Explicit optional playlist
-example-to-draft UI remains a separate outstanding #552 step.
+Legacy v6–v10 state retains its frozen source definitions, templates and
+destinations under the forward-only migration rules. The subsequent PR #587
+completed the explicit seven-example playlist-to-local-draft UI and persisted
+artwork, with canonical Spotify-show source remapping and no OAuth/Spotify call.
+The isolated cross-service acceptance matrix in #553 verifies exact historical
+destination IDs, SQLite/WAL and OAuth/journal bytes, and fresh JSON/ZIP
+round trips. No old-image rollback or reverse migration is required; once v11
+owns the installation, there is **no supported downgrade**. Before any
+operator-approved live deployment, retain one separate full `/data` copy.
+Neither the acceptance tests nor this documentation change production.
