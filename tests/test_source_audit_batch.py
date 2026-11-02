@@ -171,21 +171,24 @@ def _server(
     runtime_store = SQLiteStore(tmp_path / "state.sqlite3")
     runtime_store.initialize()
 
-    _Handler.admin_security = LanAdminSecurity(PASSWORD)
-    _Handler.data_dir = tmp_path
-    _Handler.spotify_auth = None
-    _Handler.operational_status = OperationalStatus(configured=False)
-    _Handler.engine_lifecycle = _Lifecycle()  # type: ignore[assignment]
-    _Handler.auth_synchronization = None
-    _Handler.configuration_synchronization = synchronization
-    _Handler.managed_admin_service = ManagedAdminService(store)
-    _Handler.managed_admin_auth = None
-    _Handler.diagnostic_store = None
-    _Handler.operational_diagnostics = None
-    _Handler.spotify_request_metrics = None
-    _Handler.build_revision = "test-build"
-    _Handler.source_audit_jobs = SourceAuditJobs()
-    _Handler.source_admin_service = SourceAdminService(
+    class _ScopedHandler(_Handler):
+        """Isolate all mutable HTTP fixture state per server installation."""
+
+    _ScopedHandler.admin_security = LanAdminSecurity(PASSWORD)
+    _ScopedHandler.data_dir = tmp_path
+    _ScopedHandler.spotify_auth = None
+    _ScopedHandler.operational_status = OperationalStatus(configured=False)
+    _ScopedHandler.engine_lifecycle = _Lifecycle()  # type: ignore[assignment]
+    _ScopedHandler.auth_synchronization = None
+    _ScopedHandler.configuration_synchronization = synchronization
+    _ScopedHandler.managed_admin_service = ManagedAdminService(store)
+    _ScopedHandler.managed_admin_auth = None
+    _ScopedHandler.diagnostic_store = None
+    _ScopedHandler.operational_diagnostics = None
+    _ScopedHandler.spotify_request_metrics = None
+    _ScopedHandler.build_revision = "test-build"
+    _ScopedHandler.source_audit_jobs = SourceAuditJobs()
+    _ScopedHandler.source_admin_service = SourceAdminService(
         store,
         synchronization,
         auth,
@@ -195,7 +198,7 @@ def _server(
         public_client=public,
     )
 
-    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    server = HTTPServer(("127.0.0.1", 0), _ScopedHandler)
     thread = threading.Thread(
         target=server.serve_forever,
         kwargs={"poll_interval": 0.01},
@@ -205,7 +208,7 @@ def _server(
     try:
         yield server, client, public, store
     finally:
-        _Handler.source_audit_jobs.close()
+        _ScopedHandler.source_audit_jobs.close()
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
@@ -213,6 +216,30 @@ def _server(
 
 _request = partial(_admin_request, timeout=10, doseq=False)
 _login = partial(_admin_login, timeout=10)
+
+
+def test_parallel_audit_servers_keep_independent_handler_state(tmp_path: Path) -> None:
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    with _server(first_dir) as (first_server, _client, _public, _store):
+        first_handler = first_server.RequestHandlerClass
+        first_service = first_handler.source_admin_service
+        first_jobs = first_handler.source_audit_jobs
+        cookie = _login(first_server)
+        with _server(second_dir) as (second_server, _client, _public, _store):
+            second_handler = second_server.RequestHandlerClass
+            assert first_handler is not second_handler
+            assert first_handler.data_dir == first_dir
+            assert second_handler.data_dir == second_dir
+            assert first_handler.source_admin_service is first_service
+            assert first_service is not second_handler.source_admin_service
+            assert first_handler.source_audit_jobs is first_jobs
+            assert first_jobs is not second_handler.source_audit_jobs
+            assert (
+                _request(first_server, "GET", "/admin/sources", cookie=cookie)[0] == HTTPStatus.OK
+            )
 
 
 def _show_id(source: SourceDefinition) -> str:
@@ -288,7 +315,7 @@ def _decompressed_archive(payload: bytes) -> bytes:
 
 def test_batch_export_uses_one_snapshot_and_includes_disabled_custom(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, public, store):
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         custom = replace(_custom_source(service), enabled=False)
         store.save(ManagedState(sources=(custom,)))
@@ -474,7 +501,7 @@ def test_batch_export_keeps_public_observations_after_source_local_public_failur
 
 def test_batch_export_rejects_more_than_hard_cap_before_provider_work(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, public, store):
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         custom_needed = MAX_SOURCE_AUDIT_BATCH_SOURCES - len(BUILTIN_CATALOG.sources) + 1
         custom = tuple(
@@ -515,7 +542,7 @@ def test_batch_catalogue_failure_keeps_17_source_export_read_only(
     item_kind: str | None,
 ) -> None:
     with _server(tmp_path) as (server, client, public, store):
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         custom = tuple(_custom_source(service, f"{index:022d}") for index in range(4))
         store.save(ManagedState(sources=custom))
@@ -623,7 +650,7 @@ def test_batch_null_slots_succeeds_for_17_sources_with_degraded_report_read_only
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with _server(tmp_path) as (server, client, public, store):
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         custom = tuple(_custom_source(service, f"{index:022d}") for index in range(4))
         store.save(ManagedState(sources=custom))
@@ -713,7 +740,7 @@ def test_background_batch_does_not_block_admin_get_and_rejects_second_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with _server(tmp_path) as (server, client, _public, store):
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         custom_needed = MAX_SOURCE_AUDIT_BATCH_SOURCES - len(BUILTIN_CATALOG.sources)
         store.save(
@@ -845,7 +872,7 @@ def test_audit_export_persists_sanitized_job_progress_events(tmp_path: Path) -> 
     with _server(tmp_path) as (server, _client, _public, _store):
         diagnostics = DiagnosticEventStore(tmp_path / "audit-events.sqlite3")
         diagnostics.initialize()
-        _Handler.diagnostic_store = diagnostics
+        server.RequestHandlerClass.diagnostic_store = diagnostics
         cookie = _login(server)
 
         status, _, payload, _ = _export(server, cookie)
@@ -881,7 +908,7 @@ def test_audit_export_deadline_applies_after_zip_build(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with _server(tmp_path) as (server, _client, _public, _store):
-        jobs = _Handler.source_audit_jobs
+        jobs = server.RequestHandlerClass.source_audit_jobs
         assert jobs is not None
         original = audit_jobs_module.build_source_audit_bundle
 
@@ -911,7 +938,7 @@ def test_audit_result_expiry_releases_zip_and_hides_job(tmp_path: Path) -> None:
         assert status == HTTPStatus.SEE_OTHER
         url = headers["Location"]
         assert _await_export(server, cookie, url)[0] == HTTPStatus.OK
-        jobs = _Handler.source_audit_jobs
+        jobs = server.RequestHandlerClass.source_audit_jobs
         assert jobs is not None
         with jobs._lock:
             jobs._finished -= audit_jobs_module.JOB_RESULT_SECONDS + 1
