@@ -50,6 +50,7 @@ from news_bulletin_playlist.models import (
     PlaylistId,
     SourceId,
 )
+from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
     SpotifyClient,
@@ -178,6 +179,7 @@ class PlaylistProvisioningClient(Protocol):
 
 PlaylistClientFactory = Callable[[str], PlaylistProvisioningClient]
 CoverAssetLoader = Callable[[str], bytes]
+CoverAssetInstaller = Callable[[bytes], str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +188,7 @@ class ManagedAdminSnapshot:
     available_templates: tuple[PlaylistTemplate, ...]
     provisioning_intent: ProvisioningIntent | None = None
     custom_templates: tuple[LocalPlaylistTemplate, ...] = ()
+    playlist_examples: tuple[PlaylistTemplate, ...] = ()
 
 
 class ManagedAdminService:
@@ -198,12 +201,14 @@ class ManagedAdminService:
         catalog: BuiltInCatalog = BUILTIN_CATALOG,
         client_factory: PlaylistClientFactory | None = None,
         cover_loader: CoverAssetLoader | None = None,
+        cover_installer: CoverAssetInstaller | None = None,
         provisioning_journal: ProvisioningJournal | None = None,
     ) -> None:
         self.store = store
         self.catalog = catalog
         self.client_factory = client_factory or SpotifyClient
         self.cover_loader = cover_loader
+        self.cover_installer = cover_installer
         # Scoped to the current authenticated POST; never changes persisted destination state.
         self.last_initial_cover_error: str | None = None
         self.provisioning_journal = provisioning_journal or ProvisioningJournal(
@@ -222,7 +227,76 @@ class ManagedAdminService:
             available_templates=available,
             provisioning_intent=self.provisioning_journal.load(),
             custom_templates=state.templates,
+            playlist_examples=BUILTIN_CATALOG.playlists,
         )
+
+    def create_from_example(self, example_id: PlaylistId | str) -> LocalPlaylistTemplate:
+        """Explicitly copy a bundled example into one owner-controlled local draft.
+
+        Caller holds the configuration lock. Source import, Spotify and OAuth are
+        deliberately absent from this operation.
+        """
+        try:
+            example = BUILTIN_CATALOG.playlist(example_id)
+        except KeyError as exc:
+            raise ManagedAdminError("unknown playlist example") from exc
+        state = self.store.load()
+        if state.schema_version < 10:
+            raise ManagedAdminError("playlist examples require v11 owner state")
+        draft_id = example_draft_id(example)
+        existing = next((item for item in state.templates if item.id == draft_id), None)
+        if existing is not None:
+            # Never replace an already-edited draft after a repeated submission.
+            return existing
+        try:
+            resolved = resolve_example_sources(example, effective_sources(self.catalog, state))
+        except ValueError as exc:
+            raise ManagedAdminError("playlist example source mapping is ambiguous") from exc
+        if resolved.missing:
+            names = ", ".join(source.display_name for source in resolved.missing)
+            raise ManagedAdminError(
+                f"Import the required source presets first: {names}. "
+                "Use Sources -> Download source preset (JSON) and Import sources."
+            )
+        if resolved.disabled:
+            names = ", ".join(source.display_name for source in resolved.disabled)
+            raise ManagedAdminError(f"Enable required sources before adding this example: {names}")
+        mapping = dict(resolved.source_pairs)
+        try:
+            exceptions = tuple(
+                replace(exception, source_id=mapping[exception.source_id])
+                for exception in example.duration_policy.exceptions
+            )
+        except KeyError as exc:
+            raise ManagedAdminError(
+                "playlist example has an exception for an unassigned source"
+            ) from exc
+        if self.cover_loader is None or self.cover_installer is None:
+            raise ManagedAdminError("persistent example cover storage is unavailable")
+        try:
+            # Persist immutable bytes under /data before referencing them from v11.
+            # A failed CAS can leave a verified, safely reusable orphan image.
+            cover_id = self.cover_installer(self.cover_loader(example.cover_id))
+        except (OSError, ValueError) as exc:
+            raise ManagedAdminError("playlist example artwork could not be stored") from exc
+        draft = LocalPlaylistTemplate(
+            id=draft_id,
+            display_name=example.display_name,
+            description=example.description,
+            default_source_ids=resolved.selected_ids,
+            cover_id=self._cover_id(cover_id),
+            countries=example.countries,
+            languages=example.languages,
+            retention_hours=example.retention_hours,
+            max_episodes=example.max_episodes,
+            min_duration_seconds=example.duration_policy.default_min_seconds,
+            max_duration_seconds=example.duration_policy.default_max_seconds,
+            duration_exceptions=exceptions,
+            ordering=example.ordering,
+            portable_id=allocate_portable_id(state),
+        )
+        self._save_validated(replace(state, templates=state.templates + (draft,)))
+        return draft
 
     def create_local_template(
         self,

@@ -80,14 +80,12 @@ class LocalPlaylistTemplate:
                 raise LocalPlaylistTemplateError("invalid portable draft provenance") from exc
             if self.portable_id is None:
                 raise LocalPlaylistTemplateError("imported draft requires portable identity")
-        if self.duration_exceptions and not imported:
-            raise LocalPlaylistTemplateError("exceptions require an imported draft")
         if (
             not isinstance(self.duration_exceptions, tuple)
             or len(self.duration_exceptions) > 100
             or any(e.source_id not in self.default_source_ids for e in self.duration_exceptions)
         ):
-            raise LocalPlaylistTemplateError("invalid portable draft exceptions")
+            raise LocalPlaylistTemplateError("invalid playlist duration exceptions")
         if not isinstance(self.id, str) or _LOCAL_ID.fullmatch(self.id) is None:
             raise LocalPlaylistTemplateError("invalid custom playlist template id")
         if (

@@ -731,3 +731,27 @@ catalogue, overrides, UUIDs and destinations; they are not reset to empty.
 
 The bundled playlist examples and draft-from-example experience are part of
 the next acceptance block and do not authorize automatic Spotify creation.
+
+## Optional playlist examples in fresh v11 installations
+
+Fresh v11 installations have **zero** installed sources, playlists, and Spotify
+destinations. The image provides seven **read-only playlist examples** separately
+from the installation-owned catalogue. Opening Admin does not install them.
+
+To use an example, first download each missing source's portable JSON from
+Admin → Sources and explicitly import/confirm it. Example requirements are
+matched against installed sources by their canonical Spotify show identity, not
+their image-owned source ID. Missing, ambiguous, or disabled sources block
+the conversion rather than silently losing assignments. The authenticated,
+CSRF-protected **Create local draft from example** action then creates a
+deterministic, idempotent owner-controlled draft. Repeat submissions do not
+overwrite subsequent edits. No OAuth, playlist creation, Spotify write, or
+scheduler operation occurs during this action.
+
+The example's bundled cover is copied as a verified, content-addressed JPEG to
+installation-owned `/data/custom-covers` before the v11 state references it.
+Exact duration seconds, source-specific duration exceptions, retention, ordering,
+country/language and description are preserved in the native draft; imported ZIP
+provenance is **not** forged. The draft remains editable. Only the separate
+Spotify activation action (requiring Spotify authorization) can publish it.
+The previous v6–v10 installation-owned catalogue and destinations are unaffected.

@@ -126,6 +126,7 @@ _ADMIN_NOTICE_MESSAGES = {
     "playlist-provisioning-adopted": "Existing Spotify playlist adopted successfully.",
     "playlist-provisioning-cleared": "Uncertain playlist creation state cleared successfully.",
     "local-draft-created": "Custom playlist draft saved locally.",
+    "local-example-created": "Playlist example saved as a local draft; Spotify was not contacted.",
     "local-draft-updated": "Custom playlist draft updated locally.",
     "local-draft-deleted": "Custom playlist draft deleted locally.",
     "owner-cover-uploaded": (
@@ -142,6 +143,7 @@ _ADMIN_POST_NOTICE_KEYS = {
     "/admin/provisioning/adopt": "playlist-provisioning-adopted",
     "/admin/provisioning/clear": "playlist-provisioning-cleared",
     "/admin/playlists/templates/create": "local-draft-created",
+    "/admin/playlists/templates/from-example": "local-example-created",
     "/admin/playlists/templates/update": "local-draft-updated",
     "/admin/playlists/templates/delete": "local-draft-deleted",
     "/admin/playlists/templates/quarantine/discard": "local-quarantine-discarded",
@@ -834,7 +836,18 @@ class OperationalHealthHandler(LanAdminHandler):
         service = self.managed_admin_service
         synchronization = self.configuration_synchronization
         lifecycle = self.engine_lifecycle
-        if service is None or synchronization is None or lifecycle is None:
+        local_paths = {
+            "/admin/playlists/templates/create",
+            "/admin/playlists/templates/from-example",
+            "/admin/playlists/templates/update",
+            "/admin/playlists/templates/delete",
+            "/admin/playlists/templates/quarantine/discard",
+        }
+        if (
+            service is None
+            or synchronization is None
+            or (lifecycle is None and path not in local_paths)
+        ):
             self._reply(
                 HTTPStatus.SERVICE_UNAVAILABLE,
                 b"Managed playlist administration is not available",
@@ -881,6 +894,7 @@ class OperationalHealthHandler(LanAdminHandler):
                 )
             elif path in {
                 "/admin/playlists/templates/create",
+                "/admin/playlists/templates/from-example",
                 "/admin/playlists/templates/update",
                 "/admin/playlists/templates/delete",
                 "/admin/playlists/templates/quarantine/discard",
@@ -914,6 +928,7 @@ class OperationalHealthHandler(LanAdminHandler):
                         event_name = "admin_playlist_provisioning_cleared"
                         next_state = "cleared"
                     configured = any(playlist.enabled for playlist in service.snapshot().managed)
+                assert lifecycle is not None
                 lifecycle.reconcile(configured=configured)
                 self._emit_admin_configuration_event(
                     event_name=event_name,
@@ -938,6 +953,7 @@ class OperationalHealthHandler(LanAdminHandler):
                         event_name = "admin_playlist_stopped"
                         next_state = "stopped"
                     configured = any(playlist.enabled for playlist in service.snapshot().managed)
+                assert lifecycle is not None
                 lifecycle.reconcile(configured=configured)
                 self._emit_admin_configuration_event(
                     event_name=event_name,
@@ -1014,6 +1030,9 @@ class OperationalHealthHandler(LanAdminHandler):
         path: str,
     ) -> str:
         """Local-only custom template mutation behind existing auth/CSRF/lock."""
+        if path == "/admin/playlists/templates/from-example":
+            draft = service.create_from_example(single_form_value(form, "example_id"))
+            return str(draft.id)
         if path == "/admin/playlists/templates/delete":
             template_id = single_form_value(form, "template_id")
             service.delete_local_template(template_id)
@@ -1436,9 +1455,9 @@ def _build_managed_admin_service(
     spotify_auth: SpotifyAuthService | None,
     request_metrics: SpotifyRequestMetrics | None = None,
     rate_limit_journal: SpotifyRateLimitJournal | None = None,
-) -> ManagedAdminService | None:
-    if spotify_auth is None:
-        return None
+) -> ManagedAdminService:
+    # Local drafts and example selection do not require Spotify OAuth.
+    del spotify_auth
 
     def client_factory(access_token: str) -> PlaylistProvisioningClient:
         client = SpotifyClient(access_token=access_token, metrics=request_metrics)
@@ -1463,6 +1482,7 @@ def _build_managed_admin_service(
         catalog=store.catalog,
         client_factory=client_factory,
         cover_loader=cover_loader,
+        cover_installer=owner_covers.install_canonical,
     )
 
 
