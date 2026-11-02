@@ -928,6 +928,7 @@ class OperationalHealthHandler(LanAdminHandler):
                         event_name = "admin_playlist_provisioning_cleared"
                         next_state = "cleared"
                     configured = any(playlist.enabled for playlist in service.snapshot().managed)
+                assert lifecycle is not None
                 lifecycle.reconcile(configured=configured)
                 self._emit_admin_configuration_event(
                     event_name=event_name,
@@ -952,6 +953,7 @@ class OperationalHealthHandler(LanAdminHandler):
                         event_name = "admin_playlist_stopped"
                         next_state = "stopped"
                     configured = any(playlist.enabled for playlist in service.snapshot().managed)
+                assert lifecycle is not None
                 lifecycle.reconcile(configured=configured)
                 self._emit_admin_configuration_event(
                     event_name=event_name,
