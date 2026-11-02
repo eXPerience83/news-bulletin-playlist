@@ -122,9 +122,7 @@ def test_initial_cover_failure_never_reissues_create_and_explicit_retry_is_separ
     assert len(service.store.load_readonly().playlists) == 1
     assert service.provisioning_journal.load() is None
     client.cover_error = None
-    result = service.sync_spotify_metadata_and_cover(
-        managed.id, access_token="offline-test-token"
-    )
+    result = service.sync_spotify_metadata_and_cover(managed.id, access_token="offline-test-token")
     assert isinstance(result, SpotifyPlaylistSyncResult)
     assert len(client.create_calls) == 1
     assert len(client.cover_calls) == 2
