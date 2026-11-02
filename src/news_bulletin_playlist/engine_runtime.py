@@ -843,7 +843,11 @@ class OperationalHealthHandler(LanAdminHandler):
             "/admin/playlists/templates/delete",
             "/admin/playlists/templates/quarantine/discard",
         }
-        if service is None or synchronization is None or (lifecycle is None and path not in local_paths):
+        if (
+            service is None
+            or synchronization is None
+            or (lifecycle is None and path not in local_paths)
+        ):
             self._reply(
                 HTTPStatus.SERVICE_UNAVAILABLE,
                 b"Managed playlist administration is not available",

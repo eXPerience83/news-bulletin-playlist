@@ -9,7 +9,6 @@ from collections.abc import Mapping
 
 from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warning
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
-from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.custom_playlist_templates import (
     CUSTOM_DEFAULT_COVER_ID,
@@ -31,6 +30,7 @@ from news_bulletin_playlist.managed_state import (
     template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
+from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.playlist_import_web import imported_draft_editor
 from news_bulletin_playlist.portable_playlists_web import portable_controls
 from news_bulletin_playlist.spotify.auth import AuthorizationState
@@ -108,7 +108,9 @@ def render_managed_admin_page(
         or '<p class="empty">No custom playlist drafts yet.</p>'
     )
     examples = "".join(
-        _example_card(example, csrf_token=csrf_token, sources=sources, drafts=snapshot.custom_templates)
+        _example_card(
+            example, csrf_token=csrf_token, sources=sources, drafts=snapshot.custom_templates
+        )
         for example in snapshot.playlist_examples
     )
     new_draft = _custom_draft_create_form(
@@ -481,7 +483,8 @@ def _example_card(
     </div>
   </div>
   <p>{html.escape(example.description)}</p>
-  <p class="muted">Duration: {example.duration_policy.default_min_seconds}–{example.duration_policy.default_max_seconds} seconds;
+  <p class="muted">Duration: {example.duration_policy.default_min_seconds}–
+     {example.duration_policy.default_max_seconds} seconds;
      retention: {example.retention_hours} hours; max episodes: {example.max_episodes}.</p>
   {requirements}
   <form method="post" action="/admin/playlists/templates/from-example">

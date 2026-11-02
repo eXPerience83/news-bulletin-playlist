@@ -24,7 +24,6 @@ from news_bulletin_playlist.managed_duration import (
     validate_min_duration_update,
     validate_new_duration_seconds,
 )
-from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.managed_provisioning import (
     MANAGED_PROVISIONING_FILENAME,
     ProvisioningIntent,
@@ -51,6 +50,7 @@ from news_bulletin_playlist.models import (
     PlaylistId,
     SourceId,
 )
+from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
     SpotifyClient,

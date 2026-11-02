@@ -90,7 +90,9 @@ def test_explicit_example_copies_cover_remaps_show_and_is_idempotent(tmp_path: P
 
 def test_disabled_required_source_blocks_without_losing_assignments(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    service.store.save(replace(service.store.load(), sources=(_installed_source("cnn", enabled=False),)))
+    service.store.save(
+        replace(service.store.load(), sources=(_installed_source("cnn", enabled=False),))
+    )
     before = service.store.load()
     with pytest.raises(ManagedAdminError, match="Enable required sources"):
         service.create_from_example("international_spanish_news")
@@ -149,16 +151,21 @@ def test_stale_v11_cas_cannot_overwrite_a_concurrent_source_install(tmp_path: Pa
 
 
 def test_admin_html_and_csrf_without_spotify_oauth_or_scheduler(tmp_path: Path) -> None:
+    from http import HTTPStatus
+
     from _html import assert_valid_admin_html
     from test_managed_admin_runtime import _FakeLifecycle, _HandlerHarness, _response
+
     from news_bulletin_playlist.lan_admin import LanAdminSecurity
-    from http import HTTPStatus
 
     service = _service(tmp_path)
     security = LanAdminSecurity("long-enough-admin-password")
     page = _HandlerHarness(
-        tmp_path=tmp_path, service=service, lifecycle=_FakeLifecycle(),
-        path="/admin/", security=security,
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=_FakeLifecycle(),
+        path="/admin/",
+        security=security,
     )
     page.spotify_auth = None
     page.engine_lifecycle = None
@@ -171,7 +178,9 @@ def test_admin_html_and_csrf_without_spotify_oauth_or_scheduler(tmp_path: Path) 
     assert "Create local draft from example" in html
     assert " disabled" in html
     forbidden = _HandlerHarness(
-        tmp_path=tmp_path, service=service, lifecycle=_FakeLifecycle(),
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=_FakeLifecycle(),
         path="/admin/playlists/templates/from-example",
         form={"csrf_token": ["incorrect"], "example_id": ["international_spanish_news"]},
         security=security,
@@ -181,7 +190,9 @@ def test_admin_html_and_csrf_without_spotify_oauth_or_scheduler(tmp_path: Path) 
     assert _response(forbidden).status == HTTPStatus.FORBIDDEN
     service.store.save(replace(service.store.load(), sources=(_installed_source("cnn"),)))
     accepted = _HandlerHarness(
-        tmp_path=tmp_path, service=service, lifecycle=_FakeLifecycle(),
+        tmp_path=tmp_path,
+        service=service,
+        lifecycle=_FakeLifecycle(),
         path="/admin/playlists/templates/from-example",
         form={
             "csrf_token": [security.issue_csrf_token()],
