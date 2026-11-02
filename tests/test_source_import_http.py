@@ -12,6 +12,7 @@ from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
 from _html import assert_valid_admin_html
+from _multipart import import_upload as _multipart
 from test_installed_sources import _rich_state
 from test_source_admin_http import _Handler, _server
 from test_source_configuration_export import _files, _forbid_effects
@@ -32,21 +33,6 @@ def _document(**changes):
         external_references=(ExternalReference("spotify", "show", "B" * 22),),
     )
     return export_sources((replace(source, **changes),))
-
-
-def _multipart(token, document):
-    boundary = "source-import-test-boundary"
-    body = (
-        (
-            f'--{boundary}\r\nContent-Disposition: form-data; name="csrf_token"\r\n\r\n{token}\r\n'
-            f'--{boundary}\r\nContent-Disposition: form-data; name="document"; '
-            'filename="../../managed-state.json"\r\n'
-            "Content-Type: application/json\r\n\r\n"
-        ).encode()
-        + document
-        + f"\r\n--{boundary}--\r\n".encode()
-    )
-    return "multipart/form-data; boundary=" + boundary, body
 
 
 def _post(server, cookie, document, token, *, path=ROOT + "/preview", modify=None):
