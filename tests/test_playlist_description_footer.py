@@ -124,7 +124,9 @@ def test_managed_state_keeps_only_editable_base_description(tmp_path: Path) -> N
 
     assert managed.description == "Base editable"
     assert service.snapshot().managed[0].description == "Base editable"
-    assert spotify.create_calls == [(template.display_name, "")]
+    assert spotify.create_calls == [
+        (template.display_name, render_spotify_description("Base editable"))
+    ]
     assert spotify.update_calls == []
 
 
@@ -272,7 +274,7 @@ def test_maximum_syncable_description_fits_spotify_limit_with_footer(tmp_path: P
     )
 
     assert managed.description == maximum
-    assert spotify.create_calls[-1][1] == ""
+    assert spotify.create_calls[-1][1] == render_spotify_description(maximum)
     rendered = render_spotify_description(maximum)
     assert len(rendered) == 300
     assert MAX_PLAYLIST_DESCRIPTION_LENGTH == 248
@@ -349,7 +351,8 @@ def test_inline_description_is_cleaned_in_local_managed_state_update(tmp_path: P
     assert updated.description == "x" * 248
     assert service.store.load().playlists[0].description == updated.description
     assert spotify.update_calls == []
-    assert spotify.cover_calls == []
+    # The initial artwork upload belongs to explicit creation, not to the local edit.
+    assert spotify.cover_calls == [("destination", b"\xff\xd8cover\xff\xd9")]
     assert render_spotify_description(render_spotify_description("Base")) == (
         f"Base{PROJECT_DESCRIPTION_SUFFIX}"
     )
@@ -391,13 +394,14 @@ def test_legacy_long_base_loads_and_saves_but_metadata_preflight_preserves_it(
         enabled=True,
         access_token=None,
     )
-    assert spotify.update_calls == spotify.cover_calls == []
+    assert spotify.update_calls == []
+    assert spotify.cover_calls == [("destination", b"\xff\xd8cover\xff\xd9")]
     with pytest.raises(SpotifyPlaylistSyncError, match="shorten.*190") as exc_info:
         reloaded.sync_spotify_metadata_and_cover(managed.id, access_token="sync-token")
     assert exc_info.value.cover_error is None
     assert exc_info.value.metadata_outcome is None
     assert spotify.update_calls == []
-    assert len(spotify.cover_calls) == 1
+    assert len(spotify.cover_calls) == 2  # Initial create and later explicit sync.
     assert reloaded.store.load().playlists[0].description == base
 
 

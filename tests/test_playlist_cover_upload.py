@@ -257,26 +257,31 @@ def test_coverless_injected_client_skips_optional_cover_capability(tmp_path: Pat
     assert not loader_called
 
 
-def test_activation_defers_cover_until_explicit_sync(tmp_path: Path) -> None:
+def test_activation_applies_initial_cover_without_separate_metadata_sync(tmp_path: Path) -> None:
     client = _CoverClient()
     jpeg = b"\xff\xd8cover\xff\xd9"
 
     service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
 
     assert service.snapshot().managed == (managed,)
-    assert client.create_calls == [(managed.display_name, "")]
+    assert client.create_calls == [
+        (managed.display_name, render_spotify_description(managed.description))
+    ]
     assert client.update_calls == []
-    assert client.cover_calls == []
+    assert client.cover_calls == [("destination", jpeg)]
+    assert service.last_initial_cover_error is None
 
 
-def test_failing_cover_cannot_rollback_activation_before_explicit_sync(tmp_path: Path) -> None:
+def test_failing_initial_cover_cannot_rollback_activation(tmp_path: Path) -> None:
     client = _CoverClient(fail_cover=True)
     jpeg = b"\xff\xd8cover\xff\xd9"
 
     service, managed = _activate(tmp_path, client, cover_loader=lambda _cover_id: jpeg)
 
     assert service.snapshot().managed == (managed,)
-    assert client.cover_calls == []
+    assert client.cover_calls == [("destination", jpeg)]
+    assert service.last_initial_cover_error == "HTTP 403"
+    assert service.provisioning_journal.load() is None
 
 
 def test_explicit_sync_reapplies_metadata_and_retries_cover(tmp_path: Path) -> None:
@@ -299,7 +304,7 @@ def test_explicit_sync_reapplies_metadata_and_retries_cover(tmp_path: Path) -> N
             render_spotify_description(managed.description),
         )
     ]
-    assert client.cover_calls == [("destination", jpeg)]
+    assert client.cover_calls == [("destination", jpeg), ("destination", jpeg)]
 
 
 def test_cover_failure_during_explicit_sync_reports_failure_after_metadata_sync(
@@ -318,7 +323,7 @@ def test_cover_failure_during_explicit_sync_reports_failure_after_metadata_sync(
 
     assert raised.value.metadata_outcome is SpotifyMetadataSyncOutcome.APPLIED_WITH_ATTRIBUTION
     assert len(client.update_calls) == 1
-    assert client.cover_calls == [("destination", jpeg)]
+    assert client.cover_calls == [("destination", jpeg), ("destination", jpeg)]
 
 
 def test_local_save_without_access_token_skips_cover_and_still_persists(tmp_path: Path) -> None:
@@ -341,7 +346,8 @@ def test_local_save_without_access_token_skips_cover_and_still_persists(tmp_path
 
     assert updated.source_ids == ("ser",)
     assert service.snapshot().managed == (updated,)
-    assert client.cover_calls == []
+    # Local Save must not issue a second upload beyond the initial selected cover.
+    assert client.cover_calls == [("destination", b"\xff\xd8cover\xff\xd9")]
 
 
 @pytest.mark.parametrize(
@@ -370,4 +376,4 @@ def test_metadata_failure_never_retries_and_cover_remains_independent(
     assert client.update_calls == [
         ("destination", managed.display_name, render_spotify_description(managed.description))
     ]
-    assert client.cover_calls == [("destination", jpeg)]
+    assert client.cover_calls == [("destination", jpeg), ("destination", jpeg)]
