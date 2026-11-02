@@ -4,7 +4,7 @@ The GHCR package is:
 
 `ghcr.io/experience83/news-bulletin-playlist`
 
-For the narrowly scoped **0.2.3b1 null-catalogue recovery beta**, follow [the controlled TrueNAS acceptance and rollback checklist](BETA_TRUENAS_RECOVERY.md). Preparing a Python beta version or merging a PR does not publish a container; only the deliberately authorized candidate or edge workflow does. Do not promote stable/latest while #562 production acceptance remains pending.
+For unreleased **0.3.0b1** (forward-only schema v11), read [the v11 beta acceptance checklist](BETA_V11_ACCEPTANCE.md). The [0.2.3b1 null-catalogue recovery document](BETA_TRUENAS_RECOVERY.md) is historical and must not be used as a v11 upgrade/rollback procedure. A Python prerelease version in source or a merged PR does **not** publish a container; only separately authorized candidate/edge workflows do. Never advance stable/latest for this beta while operator acceptance (#527/#528/#562/#565) is pending.
 
 Publication channels deliberately represent different trust levels:
 
@@ -106,7 +106,9 @@ For each stable release:
 Do not consider a version stable merely because its version metadata was merged. If step 3 is
 forgotten, the version exists in source history but no named stable GHCR release is published.
 
-## Rollback
+## Image reproduction and compatibility
+
+> **Forward-only v11 exception:** the immutable references below reproduce an **image**, not a compatible configuration schema. Once `managed-state-v11.json` is the operative authority, there is **no supported downgrade to a pre-v11 image**, even when its digest is known. Never represent an image-only rollback or an old `managed-state.json` as v11 recovery. Preserve full independent `/data` backups and stop for operator investigation on failed cutover. Refer to [the v11 acceptance checklist](BETA_V11_ACCEPTANCE.md).
 
 Mutable channels are convenient deployment pointers, not exact evidence. For deterministic rollback use one of the immutable references recorded by publication:
 

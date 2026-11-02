@@ -1,5 +1,7 @@
 # Installation-owned playlist templates — staged state contract
 
+> **Historical v7 design and migration notes below.** For unreleased `0.3.0b1`, operational writes use **forward-only v11** in `/data/managed-state-v11.json`; new roots have **zero** installed templates or sources, while imported source examples and converted playlist examples become installation-owned only after explicit action. The old `managed-state.json` becomes inert after migration. **No supported old-image downgrade.** Consult [v11 beta acceptance](BETA_V11_ACCEPTANCE.md) and [v11 portability](PORTABILITY.md#optional-playlist-examples-in-fresh-v11-installations). The historical v7 checklist is not a current deployment recipe.
+
 Tracked by [#259](https://github.com/eXPerience83/news-bulletin-playlist/issues/259)
 and its implementation slices [#516](https://github.com/eXPerience83/news-bulletin-playlist/issues/516),
 [#517](https://github.com/eXPerience83/news-bulletin-playlist/issues/517) and
@@ -39,7 +41,7 @@ a separate deliberate user action.
   The new neutral image is built into the Docker image under
   `/opt/news-bulletin-playlist/covers/custom_default.jpg`.
 
-## Opt-in schema v7 (no migration on boot)
+## Historical opt-in schema v7 (superseded by forward-only v11)
 
 Legacy installations may still have schema **v6** in
 `/data/managed-state.json`. **Simply installing a newer image must not rewrite
@@ -115,8 +117,7 @@ saved, Admin makes one best-effort attempt to upload the selected cover
 A cover error cannot undo the destination, trigger duplicate creation or block
 ordinary news reconciliation: Admin reports **created, cover pending** and the
 existing explicit **Apply Spotify metadata & cover** action can retry later.
-Saving/editing a local draft does not call Spotify. Existing image-owned built-in
-activation keeps its separate manual sync policy until reviewed independently.
+Saving/editing a local draft does not call Spotify. **As of PR #590, new bundled/historical playlist activations also include attribution on the initial create and best-effort cover upload after durable destination persistence.** No existing managed destination is modified merely by upgrading.
 No automatic public README link is generated from a mere local draft.
 
 **Production safety:** quarantine/repair are implemented and the basic
@@ -124,7 +125,9 @@ v7 draft flow has been exercised in TrueNAS, but a green PR alone is not proof
 of the newer image-upload UI working with the real persistent mount. Validate
 the next deployment and its rollback path independently with operator approval.
 
-## Backup and rollback checklist
+## Historical v6/v7 backup and rollback checklist (NOT applicable to v11)
+
+These steps describe the older explicit v6→v7 period and are **not** supported instructions for downgrading a v11 installation. See the [forward-only v11 checklist](BETA_V11_ACCEPTANCE.md) instead.
 
 Before the **first v7 local write** on TrueNAS:
 

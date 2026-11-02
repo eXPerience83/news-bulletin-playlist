@@ -1,5 +1,7 @@
 # Controlled TrueNAS recovery candidate: Spotify null-slot handling
 
+> **HISTORICAL 0.2.3b1 PLAN — NOT A v11 deployment guide.** This document records an earlier v10-era recovery candidate. Its schema, unfinished-work assumptions, image-rollback and release instructions are **superseded** for current unreleased `0.3.0b1`. Do **not** use the steps below to deploy or recover a v11 installation. Refer instead to [the forward-only v11 beta acceptance checklist](BETA_V11_ACCEPTANCE.md). A v11 migration has **no supported downgrade** to an older image. No publication or deployment is authorized by this note.
+
 Status: **0.2.3b1 source candidate, NOT yet published or deployed**.
 Operator production acceptance is tracked in #562 and #565.
 
