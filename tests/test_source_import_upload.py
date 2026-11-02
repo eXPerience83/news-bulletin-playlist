@@ -1,7 +1,7 @@
 """Bounded multipart envelope around the existing strict source JSON codec."""
 
 import pytest
-from test_source_import_http import _multipart
+from _multipart import import_upload as _multipart
 
 from news_bulletin_playlist.source_import_web import parse_source_import_upload
 

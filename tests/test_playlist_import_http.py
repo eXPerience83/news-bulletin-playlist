@@ -9,10 +9,10 @@ from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
 from _html import assert_valid_admin_html
+from _multipart import import_upload as _multipart
 from test_playlist_import import donor, rewrite
 from test_source_admin_http import _Handler, _server
 from test_source_configuration_export import _files, _forbid_effects
-from test_source_import_http import _multipart
 
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
 from news_bulletin_playlist.playlist_import_web import imported_draft_editor
@@ -23,8 +23,7 @@ ROOT = "/admin/playlists/import"
 
 
 def post(server, cookie, document, token, headers=None):
-    kind, body = _multipart(token, document)
-    body = body.replace(b"Content-Type: application/json", b"Content-Type: application/zip")
+    kind, body = _multipart(token, document, media_type="application/zip")
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
     extra = {"Content-Type": kind} | ({"Cookie": cookie} if cookie else {}) | (headers or {})
     connection.request("POST", ROOT + "/preview", body=body, headers=extra)
@@ -32,6 +31,15 @@ def post(server, cookie, document, token, headers=None):
     result = response.status, dict(response.getheaders()), response.read()
     connection.close()
     return result
+
+
+def test_zip_upload_fixture_preserves_document_bytes() -> None:
+    marker = b"Content-Type: application/json"
+    payload = b"before" + marker + b"after"
+    kind, body = _multipart("csrf", payload, media_type="application/zip")
+    assert kind == "multipart/form-data; boundary=source-import-test-boundary"
+    assert body.count(b"Content-Type: application/zip") == 1
+    assert body.endswith(payload + b"\r\n--source-import-test-boundary--\r\n")
 
 
 def form(page):
