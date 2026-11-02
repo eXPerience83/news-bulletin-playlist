@@ -8,9 +8,9 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from _managed_fixtures import _source, _state
 from _spotify_catalogue import catalogue_page
 from test_custom_playlist_templates import _draft
-from test_managed_sources import _source, _state
 
 from news_bulletin_playlist import managed_state
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog

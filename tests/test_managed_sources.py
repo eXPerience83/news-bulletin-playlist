@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _managed_fixtures import _source, _state
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.engine import EngineRunner, _required_sources
@@ -63,31 +64,6 @@ from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 SHOW_A = "A" * 22
 SHOW_B = "B" * 22
 NOW = datetime(2026, 9, 24, 12, tzinfo=UTC)
-
-
-def _source(show_id: str = SHOW_A, *, enabled: bool = True) -> ManagedSource:
-    return ManagedSource(
-        id=SourceId(f"custom_{show_id}"),
-        spotify_show_id=show_id,
-        display_name="Custom News",
-        origin=SourceOrigin.country(CountryCode("ES")),
-        language=LanguageTag("es-ES"),
-        editorial_scope=EditorialScope.INTERNATIONAL,
-        timezone="Europe/Madrid",
-        parser_id=ParserId("release_date_title"),
-        collection_filter_id=None,
-        enabled=enabled,
-    )
-
-
-def _state(source: ManagedSource | None = None) -> ManagedState:
-    selected = _source() if source is None else source
-    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
-    playlist = replace(
-        activate_template(template, "destination"),
-        source_ids=(selected.id,),
-    )
-    return ManagedState(sources=(selected,), playlists=(playlist,))
 
 
 def _payload() -> dict[str, object]:

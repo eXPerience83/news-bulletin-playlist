@@ -10,9 +10,9 @@ from datetime import time
 from pathlib import Path
 
 import pytest
+from _managed_fixtures import _source
 from test_custom_playlist_templates import _draft
 from test_installed_sources import _installed
-from test_managed_sources import _source
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.installation_identity import (

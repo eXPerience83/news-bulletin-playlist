@@ -401,7 +401,7 @@ def test_post_replace_error_is_reported_with_readback_and_without_second_save(
 def test_full_hundred_conflict_decisions_fit_existing_confirmation_form_limit(
     installation, monkeypatch
 ):
-    from test_managed_sources import _source
+    from _managed_fixtures import _source
 
     from news_bulletin_playlist.managed_state import InstalledSource, source_definition
 
