@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from _file_snapshots import snapshot_files as _files
 from _legacy_dataset import legacy_root as _root
 
 from news_bulletin_playlist.legacy_catalog_snapshot import write_legacy_snapshot_v2
@@ -23,12 +24,6 @@ def _prepared(tmp_path: Path, schema: int = 10) -> Path:
     root, preview = _root(tmp_path, schema)
     write_legacy_snapshot_v2(root, preview)
     return root
-
-
-def _files(root: Path) -> dict[str, bytes]:
-    return {
-        str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()
-    }
 
 
 @pytest.mark.parametrize("schema", [6, 7, 8, 9, 10])

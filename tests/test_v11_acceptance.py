@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from _file_snapshots import snapshot_files as _files
 from _legacy_dataset import legacy_root as _root
 from test_v11_playlist_examples import _artwork
 
@@ -38,12 +39,6 @@ def no_provider_socket(monkeypatch: pytest.MonkeyPatch) -> None:
         pytest.fail("v11 acceptance attempted provider network I/O")
 
     monkeypatch.setattr(socket.socket, "connect", forbidden)
-
-
-def _files(root: Path) -> dict[str, bytes]:
-    return {
-        str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()
-    }
 
 
 @pytest.mark.parametrize("schema", [6, 7, 8, 9, 10])

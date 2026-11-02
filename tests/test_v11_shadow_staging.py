@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from _file_snapshots import snapshot_files as _files
 from _legacy_dataset import legacy_root as _root
 
 from news_bulletin_playlist.legacy_catalog_snapshot import write_legacy_snapshot_v2
@@ -35,10 +36,6 @@ def _two_roots(tmp_path: Path, version: int = 10) -> tuple[Path, Path]:
     shutil.copytree(root, backup)
     assert inventory_offline_dataset(root) == inventory_offline_dataset(backup)
     return root, backup
-
-
-def _files(root: Path) -> dict[str, bytes]:
-    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
 @pytest.mark.parametrize("version", [6, 7, 8, 9, 10])
