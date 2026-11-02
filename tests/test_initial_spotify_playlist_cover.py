@@ -153,6 +153,7 @@ def test_new_activation_leaves_four_existing_destinations_unmodified(tmp_path: P
     assert client.update_calls == []
     assert len(client.create_calls) == 1
 
+
 @pytest.mark.parametrize("overlong", [191, 200, 248])
 def test_new_playlist_description_overflow_fails_before_journal_or_provider(
     tmp_path: Path, overlong: int
