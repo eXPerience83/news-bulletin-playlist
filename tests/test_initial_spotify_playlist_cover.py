@@ -11,6 +11,8 @@ from test_v11_playlist_examples import _artwork
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_admin import (
+    MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH,
+    ManagedAdminError,
     ManagedAdminService,
     SpotifyPlaylistSyncResult,
     render_spotify_description,
@@ -150,3 +152,24 @@ def test_new_activation_leaves_four_existing_destinations_unmodified(tmp_path: P
     assert client.cover_calls == [(managed.destination.external_id, _artwork())]
     assert client.update_calls == []
     assert len(client.create_calls) == 1
+
+@pytest.mark.parametrize("overlong", [191, 200, 248])
+def test_new_playlist_description_overflow_fails_before_journal_or_provider(
+    tmp_path: Path, overlong: int
+) -> None:
+    assert overlong > MAX_SPOTIFY_BASE_DESCRIPTION_LENGTH
+    client = _Client()
+    service = _service(tmp_path, client)
+    template = BUILTIN_CATALOG.playlist("international_french_news")
+    with pytest.raises(ManagedAdminError, match="shorten.*190"):
+        service.activate(
+            template_id=template.id,
+            display_name=template.display_name,
+            description="x" * overlong,
+            cover_id=template.cover_id,
+            source_ids=template.default_source_ids,
+            access_token="offline-test-token",
+        )
+    assert not client.events
+    assert service.provisioning_journal.load() is None
+    assert service.store.load_readonly().playlists == ()
