@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM python:3.15.2-slim-trixie@sha256:c4158543ecb725b99e57d129dfd43d761d4c43e4577b5e23326aabb223cf7f4e AS builder
+FROM python:3.15.2-slim-trixie@sha256:8c13a3f37a6a5b71498228e902c4b9f51c1f7900d49fabf71f9a650c6120e0d0 AS builder
 
 WORKDIR /build
 COPY pyproject.toml README.md LICENSE ./
@@ -7,7 +7,7 @@ COPY src ./src
 # Wheel every runtime dependency in the builder; runtime stays offline.
 RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 
-FROM python:3.15.2-slim-trixie@sha256:c4158543ecb725b99e57d129dfd43d761d4c43e4577b5e23326aabb223cf7f4e AS runtime
+FROM python:3.15.2-slim-trixie@sha256:8c13a3f37a6a5b71498228e902c4b9f51c1f7900d49fabf71f9a650c6120e0d0 AS runtime
 
 ARG SOURCE_REVISION=dev
 
