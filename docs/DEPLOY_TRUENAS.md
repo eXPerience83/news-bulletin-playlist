@@ -1,5 +1,7 @@
 # TrueNAS deployment
 
+> **Version boundary:** the following general networking and TrueNAS installation details remain useful, but unreleased `0.3.0b1` introduces a **forward-only v11** configuration model. For its approved-upgrade prerequisites and acceptance gates use [the v11 beta checklist](BETA_V11_ACCEPTANCE.md), not historical v6/v7/0.1.0 cutover steps. Upgrading production is a separate operator decision; no old-image downgrade is supported after v11 authority is adopted.
+
 The first supported NAS target is TrueNAS 26-BETA.3 or newer. Install this project as a **Custom App from YAML** using **Apps -> Discover Apps -> menu -> Install via YAML**. It is not packaged for the TrueNAS Community catalog.
 
 ## Storage first
@@ -31,24 +33,17 @@ The checked-in base YAML deliberately contains **no Spotify credentials and no a
 
 Do not forward backend port `8788` from the router or expose it directly to the public Internet. If `8788` is occupied, change both the published host port and the `x-portals` port; keep container port `8080`.
 
-## Managed first-run configuration
+## Managed first-run configuration (unreleased v11)
 
-The normal production path uses the built-in catalog plus installation-owned managed state under `/data`. Do **not** copy the legacy example YAML merely to make a new installation start running.
+The normal runtime uses image-owned **examples** and an installation-owned configuration under `/data`; no engine YAML is needed. On a truly fresh v11 root, **zero** sources, templates and Spotify destinations are installed implicitly. The 13 bundled source examples and seven playlist examples remain available but read-only until an operator chooses to install/convert them.
 
-The ordinary first-run flow is:
+1. Install a reviewed image **only after** a separate operator-approved publication/deployment decision. Configure protected Admin and Spotify credentials through the documented environment and authentication flow.
+2. In **Admin → Sources**, explicitly download the desired source example JSON, preview it through **Import sources** and confirm each install. Canonical Spotify show identity is used to resolve matches; no Spotify connection is necessary for local preparation.
+3. Convert a playlist example to a **local draft** only after its required installed sources exist and are enabled, or create a local draft manually. Preview the selected bundled/custom cover and adjust the sources, time bounds, retention and description. Saving a draft is provider-free.
+4. Connect Spotify in Admin and **explicitly activate** the desired local draft or installed template. This separate public-playlist operation creates and durably records the destination, adds project attribution to the initial description, then makes one best-effort attempt to upload the selected cover. Cover failure must not create another playlist.
+5. Use **Apply Spotify metadata & cover** only for subsequent explicit edits/retries. Stopping management does not delete a Spotify destination.
 
-1. Install or update the container image.
-2. Configure the protected production administration surface and Spotify settings described below.
-3. Connect Spotify from `/admin/`.
-4. Review the available built-in playlist templates. The primary Spain-focused Spanish template is **Noticias en Español**; the current catalog also exposes initial `INT · ES`, `INT · EN`, `INT · FR`, `INT · DE` and `INT · PL` experiments.
-5. Review/edit each playlist name, provider-agnostic description, bundled cover, selected supported sources and minimum and maximum episode duration. The current provisional default is **0..30 minutes**, with inclusive bounds stored independently per playlist.
-6. Activate a template. The application creates a Spotify playlist destination using the current **public** product semantics and persists the managed instance under `/data/managed-state.json`.
-7. The scheduler is woken immediately; the read-only status page moves from **Not configured** to running/scheduled once an enabled managed playlist exists.
-8. Repeat activation only for the additional playlists you actually want this installation to manage.
-
-Subsequent playlist/source choices are installation-owned state. Updating the image can add supported sources/templates without overwriting selections already stored under `/data`. In particular, an existing managed playlist keeps its saved display name and explicit source selection when a newer image changes catalog defaults; review and save those changes deliberately from `/admin/`.
-
-Stopping management of a playlist does not delete its Spotify destination by default. Paused/disabled managed playlists remain durable installation state but do not cause their sources to be fetched solely for that playlist.
+An **existing v6–v10** installation is not treated as fresh. One forward-only migration preserves its installed catalogue, four existing destination IDs, assignments, local drafts, cover references, and per-playlist policies; it does not activate/create Spotify destinations as a side effect. A corrupt or ambiguous root fails closed rather than silently installing defaults. A complete independent `/data` backup is needed before an authorized upgrade, and portable ZIP/JSON is not a substitute. **No supported downgrade to an older image exists after v11 migration.**
 
 ### Source labels in admin
 
@@ -56,11 +51,10 @@ The source table and selectors distinguish **provider origin** (country or insti
 
 ## Managed configuration only
 
-The runtime configuration is the image-owned built-in catalog plus schema v6 `/data/managed-state.json`. Existing v1/v2 managed state migrates atomically to v6 with an empty installation-owned `sources` collection; v3 upgrades preserve custom sources and default an absent temporal strategy to Auto. v4 upgrades default custom public release modes to instant and initialize an empty built-in mode overlay. All v1-v5 playlists migrate with a missing minimum set to 0 seconds and preserve the exact existing maximum. Admin Sources can inspect and add validated custom Spotify-first sources, edit safe metadata, reversibly enable or disable them, assign them to playlists, and explicitly delete unreferenced custom sources after source-local operational cleanup. Managed state does not store OAuth secrets, inspection reports or raw provider responses.
-Playlist activation, metadata, source membership and duration policy are managed through `/admin/`; there is no longer a second full-YAML runtime configuration path.
+In unreleased v11 the **single runtime/Admin authority** is `/data/managed-state-v11.json`. The former `/data/managed-state.json` is retained as **inert migration evidence** after a validated one-time v6–v10 upgrade; no automatic fallback to it is allowed. Fresh roots start with no installed sources/templates/destinations, and the bundled examples remain optional. A missing, newer, corrupt or conflicting v11 document fails closed rather than resetting the installation. Admin controls source membership, duration policies, cover selection, activation and explicit public metadata sync, but does not store OAuth secrets or raw provider responses in the managed document.
 
-The pre-1.0 settings `NEWS_PLAYLIST_CONFIG` and `/data/news-bulletin-playlist.yaml` are obsolete.
-A non-empty legacy environment value or any leftover default YAML path, including a broken symlink, causes startup to fail closed with an actionable message. Remove or relocate the obsolete setting or file after confirming the managed state is the intended installation configuration. The application never reads, rewrites or deletes the old YAML automatically.
+The pre-1.0 `NEWS_PLAYLIST_CONFIG` setting and `/data/news-bulletin-playlist.yaml` are obsolete. Leftover values or files can block startup safely; never remove or rewrite them without first confirming they are unused. Historical schema v6/v7/v8/v9/v10 migration rules are documented separately in [portability](PORTABILITY.md); they are **not** the current writable-state contract.
+
 ### Scheduler
 
 One scheduler inside the existing process runs the complete engine cycle immediately after a playlist becomes active/startup configuration is available and then approximately every 10 minutes. The default is 600 seconds:
@@ -216,11 +210,13 @@ The checked-in TrueNAS YAML follows `ghcr.io/experience83/news-bulletin-playlist
 
 `dev-amd64` is reserved for deliberate pre-merge testing of an explicitly owner-authorized PR candidate. Normal PR CI never moves `dev`. `stable-amd64` and `latest` move only when an exact `vMAJOR.MINOR.PATCH` release from `main` is published, and `latest` is always the same stable image rather than an alias for current development.
 
-GHCR also keeps candidate/revision tags and immutable image digests for audit and rollback. When exact reproduction matters, temporarily pin `ghcr.io/experience83/news-bulletin-playlist@sha256:<digest>` rather than relying on a mutable channel.
+GHCR also keeps candidate/revision tags and immutable image digests for build audit and schema-compatible recovery. **An older image cannot safely read v11 state: image-only rollback is not supported after v11 cutover.** For exact build reproduction, pin `ghcr.io/experience83/news-bulletin-playlist@sha256:<digest>` rather than relying on a mutable channel.
 
 CI checks the deployment channel, package visibility, Compose rendering and the hardened health/web smoke test. The `/data` dataset is deliberately external to the container image, so updating or rolling back an image does not erase SQLite state, Spotify refresh authorization or managed configuration.
 
-## 0.1.0 persistence baseline cutover
+## Historical 0.1.0 persistence baseline cutover (not for v11)
+
+The steps below document the old SQLite format transition. **Do not reuse them as a v11 upgrade, rollback or cleanup plan.** Follow [BETA_V11_ACCEPTANCE.md](BETA_V11_ACCEPTANCE.md) for the unreleased forward-only candidate instead.
 
 The clean Spotify-first persistence baseline uses
 `/data/news-bulletin-playlist-v1.sqlite3`. The pre-0.1 private-development database remains at

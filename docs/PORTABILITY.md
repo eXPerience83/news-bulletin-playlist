@@ -684,7 +684,9 @@ provisioning are mutated. Tests use independent synthetic installations and fake
 catalogue clients, including specialized chronology/filter decisions after remapping.
 No clean-default migration, default removal or deployment is implemented here.
 
-## Clean image and compatibility strategy (deferred)
+## Historical clean-image design proposal (implemented differently in v11)
+
+The following proposal table and review sequence predate the accepted **forward-only v11** decision. They are retained for design provenance, **not** as instructions to select a migration, restore a prior image, or defer the now-integrated optional-preset work. The active v11 behavior is documented in the following fresh-install examples sections and in [v11 beta acceptance](BETA_V11_ACCEPTANCE.md).
 
 Separate engine capabilities, available source examples, installed sources,
 available playlist examples, user drafts and managed Spotify destinations.
