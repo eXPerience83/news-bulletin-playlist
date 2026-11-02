@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from test_legacy_catalog_snapshot import _root
+from _legacy_dataset import legacy_root as _root
 
 from news_bulletin_playlist.legacy_catalog_snapshot import write_legacy_snapshot_v2
 from news_bulletin_playlist.v11_candidate import V11CandidateError, parse_v11_candidate
