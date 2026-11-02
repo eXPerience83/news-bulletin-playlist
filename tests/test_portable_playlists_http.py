@@ -8,8 +8,8 @@ import pytest
 from _admin_http import login as _login
 from _admin_http import request as _request
 from _html import assert_valid_admin_html
+from _managed_fixtures import _state
 from test_custom_playlist_templates import _draft
-from test_managed_sources import _state
 from test_portable_playlists import UUID, _ready, _unpack
 from test_source_admin_http import _Handler, _server
 from test_source_configuration_export import _files, _forbid_effects

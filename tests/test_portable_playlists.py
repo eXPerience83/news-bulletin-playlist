@@ -11,9 +11,9 @@ from datetime import time
 from zipfile import ZipFile
 
 import pytest
+from _managed_fixtures import _state
 from test_custom_playlist_templates import _draft
 from test_installed_sources import _installed
-from test_managed_sources import _state
 
 from news_bulletin_playlist import managed_state, portable_playlists
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog

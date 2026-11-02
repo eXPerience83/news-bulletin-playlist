@@ -11,7 +11,7 @@ import pytest
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
-from test_managed_sources import _source, _state
+from _managed_fixtures import _source, _state
 from test_public_release_fallback import EPISODE, NOW, OLD, SOURCE, evidence, fetch
 from test_source_admin_http import (
     _configured_source,

@@ -9,7 +9,7 @@ import sqlite3
 from dataclasses import replace
 
 import pytest
-from test_managed_sources import _source, _state
+from _managed_fixtures import _source, _state
 from test_source_configuration_export import _files
 from test_source_import import _pending, _service
 

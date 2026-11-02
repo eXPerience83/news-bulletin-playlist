@@ -7,8 +7,8 @@ import socket
 from dataclasses import replace
 
 import pytest
+from _managed_fixtures import _source, _state
 from test_installed_sources import EMPTY, _installed, _rich_state
-from test_managed_sources import _source, _state
 
 from news_bulletin_playlist import managed_state
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG

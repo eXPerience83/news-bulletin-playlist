@@ -12,7 +12,7 @@ from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
 from _html import assert_valid_admin_html
-from test_managed_sources import _source
+from _managed_fixtures import _source
 from test_source_admin_http import _Handler, _server
 
 from news_bulletin_playlist import diagnostics_runtime
