@@ -9,6 +9,7 @@ from collections.abc import Mapping
 
 from news_bulletin_playlist.admin_web import render_admin_shell, render_lan_warning
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.custom_playlist_templates import (
     CUSTOM_DEFAULT_COVER_ID,
@@ -106,6 +107,10 @@ def render_managed_admin_page(
         )
         or '<p class="empty">No custom playlist drafts yet.</p>'
     )
+    examples = "".join(
+        _example_card(example, csrf_token=csrf_token, sources=sources, drafts=snapshot.custom_templates)
+        for example in snapshot.playlist_examples
+    )
     new_draft = _custom_draft_create_form(
         catalog=catalog,
         csrf_token=csrf_token,
@@ -167,6 +172,15 @@ def render_managed_admin_page(
   <p><a class="button" href="/admin/playlists/import">Import playlist ZIP</a></p>
   {new_draft}
   <div class="admin-grid">{drafts}</div>
+</section>
+<section class="section admin-section" aria-labelledby="playlist-examples-heading">
+  <div class="section-head"><div>
+    <p class="eyebrow">Not installed</p>
+    <h2 id="playlist-examples-heading">Playlist examples</h2>
+  </div></div>
+  <p class="muted">Choose an example to create a local draft only. Sources must first be imported
+     separately from their JSON presets. No Spotify destination is created.</p>
+  <div class="admin-grid">{examples}</div>
 </section>
 <section class="section admin-section" aria-labelledby="available-playlists-heading">
   <div class="section-head">
@@ -414,6 +428,66 @@ def _template_card(
     {fields}
     {hint}
     <button class="button" type="submit"{disabled}>Create Spotify playlist</button>
+  </form>
+</article>
+"""
+
+
+def _example_card(
+    example: PlaylistTemplate,
+    *,
+    csrf_token: str,
+    sources: tuple[SourceDefinition, ...],
+    drafts: tuple[LocalPlaylistTemplate, ...],
+) -> str:
+    resolved = resolve_example_sources(example, sources)
+    existing = any(draft.id == example_draft_id(example) for draft in drafts)
+    needs = "".join(
+        "<li>"
+        + html.escape(source.display_name)
+        + " — <a href=\"/admin/sources/preset.json?source_id="
+        + urllib.parse.quote(str(source.id), safe="")
+        + "\">Download source preset (JSON)</a></li>"
+        for source in resolved.missing
+    )
+    inactive = ", ".join(html.escape(source.display_name) for source in resolved.disabled)
+    requirements = (
+        "<p class=\"muted\">Import required source presets first, then return here:</p>"
+        + "<ul>" + needs + "</ul>"
+        + '<p><a href="/admin/sources/import">Import sources</a></p>'
+        if needs
+        else ""
+    )
+    if inactive:
+        requirements += (
+            '<p class="muted">Enable these installed sources before creating the draft: '
+            + inactive + "</p>"
+        )
+    ready = not resolved.missing and not resolved.disabled and not existing
+    button = (
+        '<p class="muted">Already saved as a local draft. Edit it under My playlists.</p>'
+        if existing
+        else '<button class="button" type="submit"'
+        + ("" if ready else " disabled")
+        + ">Create local draft from example</button>"
+    )
+    return f"""
+<article class="card playlist-card">
+  <div class="card-head">
+    {_cover_image(example.cover_id, example.display_name)}
+    <div>
+      <h3>{html.escape(example.display_name)}</h3>
+      <p>{status_badge("Bundled example", tone="muted")}</p>
+    </div>
+  </div>
+  <p>{html.escape(example.description)}</p>
+  <p class="muted">Duration: {example.duration_policy.default_min_seconds}–{example.duration_policy.default_max_seconds} seconds;
+     retention: {example.retention_hours} hours; max episodes: {example.max_episodes}.</p>
+  {requirements}
+  <form method="post" action="/admin/playlists/templates/from-example">
+    {_hidden_input("csrf_token", csrf_token)}
+    {_hidden_input("example_id", str(example.id))}
+    {button}
   </form>
 </article>
 """
