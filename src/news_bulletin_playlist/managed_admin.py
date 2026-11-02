@@ -575,11 +575,9 @@ class ManagedAdminService:
             max_duration_seconds=duration_max,
             min_duration_seconds=duration_min,
         )
-        # Initial custom playlist attribution belongs to the creation request itself.
-        # Validate *before* the irreversible Spotify POST or durable journal.
-        initial_description = (
-            render_spotify_description(intent.description) if local is not None else ""
-        )
+        # Every new Spotify playlist must carry project attribution in its first
+        # irreversible create request; validate before journaling or provider I/O.
+        initial_description = render_spotify_description(intent.description)
         self.provisioning_journal.save(intent)
 
         client = self.client_factory(access_token)
@@ -613,7 +611,7 @@ class ManagedAdminService:
 
         # The destination is now durable, so a cover failure cannot undo creation.
         # No cover attempt is made during a normal local draft save or scheduler cycle.
-        if local is not None and self.cover_loader is not None:
+        if self.cover_loader is not None:
             try:
                 self._upload_cover_explicit(client, destination_id, managed.cover_id)
             except SpotifyRateLimitSuppressed:
