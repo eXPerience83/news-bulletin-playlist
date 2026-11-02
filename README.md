@@ -5,6 +5,8 @@ with Spotify as the first destination.
 
 > **Pre-release / active development (0.2.x).** This is experimental software, not a finished multi-user playlist platform. Spotify's official Web API is the authority for episode catalogues and playlist operations; a separate, experimental public change detector is described below. The project is not affiliated with or endorsed by Spotify or any news provider.
 
+> **Unreleased `main` — breaking forward-only v11 change:** a fresh installation starts with **zero** installed sources, playlist templates and Spotify destinations. The 13 bundled source and seven playlist examples are **not installed automatically**. Operators explicitly import sources from JSON and turn playlist examples into local drafts without Spotify/OAuth, then activate separately. Existing v6–v10 roots migrate exactly once; `managed-state-v11.json` becomes the sole authority and `managed-state.json` remains inert evidence. **Downgrading to older images is not supported.** Before any future authorized live transition, take a **one-off independent copy of the complete `/data` dataset**. No production upgrade, GHCR image or beta release is included in these development commits. See [the v11 installation contract](docs/architecture/installation-identity.md) and [portability details](docs/PORTABILITY.md).
+
 Version **0.1.0** establishes the first supported persistence compatibility baseline: database
 format 1 in `/data/news-bulletin-playlist-v1.sqlite3`. The private-development database at
 `/data/news-bulletin-playlist.sqlite3` is not migrated into this baseline. From 0.1.0 forward,
@@ -29,12 +31,12 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the architectural contrac
 
 ## What works today — and what does not
 
-- **Available:** activate and manage the playlist templates shipped with the application, adjust their source assignments and duration limits, and manage supported Spotify-first news sources through the authenticated administration UI.
+- **Available on existing migrated installations:** manage preserved historical templates and real destinations, including source assignments and duration limits. On fresh v11 installations, bundled examples are not operational templates until selected explicitly.
 - **Available:** add supported Spotify **shows/sources** through Admin and assign them to managed playlists.
 - **Available in integrated `main`:** create, edit, hide and delete installation-owned **playlist drafts** in Admin, with deliberate Spotify activation and independent metadata/cover sync. Saving a draft does not create a Spotify playlist.
 - **Available in integrated `main`:** export/import source definitions using portable JSON v1 (with preview and conflict resolution) and export/import playlist bundles as self-contained ZIP v1, importing them as editable drafts. These portable formats **are not a backup** of Spotify destinations, OAuth credentials, SQLite history or production data. See [portability documentation](docs/PORTABILITY.md).
 - **Available:** use **Admin → Sources → Export all audits** to run a read-only background audit with progress, cancellation and a sanitized per-source ZIP, without blocking the other Admin pages. See [the Source Audit export guide](docs/DIAGNOSTICS.md#export-all-source-audits-read-only).
-- **Still planned:** fully optional starter presets and a new-install empty-default model, together with non-destructive legacy migration (#552) and isolated empty-install acceptance (#553). Existing live destinations and built-in IDs are retained. These are not yet shipped as a completed migration. More international sources and editorial filtering remain separate product work.
+- **Integrated into unreleased `main` (#552):** fresh empty-default v11, authenticated source JSON preset import, seven read-only playlist examples and explicit conversion to durable editable drafts; no OAuth or provider call for local preparation. #553 tracks isolated migration/import acceptance before any authorized release. More international sources and editorial filtering remain separate work.
 - **Deployment scope:** experimental, self-hosted operation; protect Admin and credentials on a trusted LAN or through the supported hardened HTTPS/reverse-proxy configuration. Publishing the source under MIT does not grant expanded Spotify API access.
 
 ## Playlists
