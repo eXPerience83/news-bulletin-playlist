@@ -42,9 +42,7 @@ def no_provider_socket(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _files(root: Path) -> dict[str, bytes]:
     return {
-        str(path.relative_to(root)): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
+        str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()
     }
 
 
@@ -72,8 +70,7 @@ def test_legacy_forward_migration_preserves_synthetic_wal_and_all_four_destinati
             p.destination.external_id for p in preview.original_state.playlists
         ]
         assert [(p.id, p.template_id, p.source_ids, p.enabled) for p in actual.playlists] == [
-            (p.id, p.template_id, p.source_ids, p.enabled)
-            for p in preview.original_state.playlists
+            (p.id, p.template_id, p.source_ids, p.enabled) for p in preview.original_state.playlists
         ]
         after = _files(root)
         for filename, data in before.items():
@@ -101,10 +98,15 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
     source_document = export_sources((cnn,), built_in_ids={cnn.id})
     first_preview = importer.preview(source_document)
     assert first_preview.rows[0].status == "create"
-    assert importer.apply(
-        source_document, first_preview.fingerprint,
-        keep_local=frozenset(), confirm_v8=False,
-    ).created == 1
+    assert (
+        importer.apply(
+            source_document,
+            first_preview.fingerprint,
+            keep_local=frozenset(),
+            confirm_v8=False,
+        ).created
+        == 1
+    )
     assert importer.preview(source_document).rows[0].status == "reuse"
     installed = effective_sources(original_store.catalog, original_store.load_readonly())
     assert len(installed) == 1 and installed[0].id != cnn.id
@@ -122,9 +124,7 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
     assert draft.portable_id is not None
     assert original_store.load_readonly().playlists == ()
 
-    exporter = PlaylistExportService(
-        original_store, sync, PortableCoverLoader(donor)
-    )
+    exporter = PlaylistExportService(original_store, sync, PortableCoverLoader(donor))
     portable_identity, archive = exporter.export("draft", str(draft.id))
     assert portable_identity == draft.portable_id
     bundle = inspect_playlist_bundle(archive)
@@ -149,8 +149,10 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
     preview = receiving.preview(archive)
     assert preview.status == "create" and not preview.blocked
     result = receiving.apply(
-        archive, preview.sources.fingerprint,
-        keep_local=preview.sources.conflicts, confirm_schema=False,
+        archive,
+        preview.sources.fingerprint,
+        keep_local=preview.sources.conflicts,
+        confirm_schema=False,
     )
     assert result.created_draft and result.created_sources == 1
     restored = open_managed_state_store(recipient).load_readonly()
@@ -165,9 +167,10 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
     assert restored_draft.retention_hours == draft.retention_hours
     assert restored_draft.max_episodes == draft.max_episodes
     assert restored_draft.default_source_ids == (restored.sources[0].id,)
-    assert CustomCoverAssetStore(recipient / "custom-covers").load(
-        restored_draft.cover_id
-    ) == bundle.jpeg
+    assert (
+        CustomCoverAssetStore(recipient / "custom-covers").load(restored_draft.cover_id)
+        == bundle.jpeg
+    )
 
     before_retry = _files(recipient)
     restarted = PlaylistImportService(
@@ -179,8 +182,10 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
     second = restarted.preview(archive)
     assert second.status == "identical"
     assert not restarted.apply(
-        archive, second.sources.fingerprint,
-        keep_local=second.sources.conflicts, confirm_schema=False,
+        archive,
+        second.sources.fingerprint,
+        keep_local=second.sources.conflicts,
+        confirm_schema=False,
     ).created_draft
     assert _files(recipient) == before_retry
 
@@ -196,12 +201,14 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
     second_document = export_sources((second_source,), built_in_ids={second_source.id})
     stale = source_service.preview(second_document)
     owned = restarted.store.load()
-    restarted.store.save(replace(owned, templates=(
-        replace(owned.templates[0], description="Locally edited"),
-    )))
+    restarted.store.save(
+        replace(owned, templates=(replace(owned.templates[0], description="Locally edited"),))
+    )
     with pytest.raises(StaleSourceImport):
         source_service.apply(
-            second_document, stale.fingerprint,
-            keep_local=frozenset(), confirm_v8=False,
+            second_document,
+            stale.fingerprint,
+            keep_local=frozenset(),
+            confirm_v8=False,
         )
     assert len(restarted.store.load().sources) == 1
