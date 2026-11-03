@@ -11,13 +11,13 @@ import sqlite3
 import stat
 from dataclasses import replace
 from datetime import time
-from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from _installed_fixtures import EMPTY, _installed, _rich_state
 from _playlist_template_fixtures import _draft
-from test_portable_playlists import OTHER_UUID, UUID, _ready
-from test_portable_playlists import _service as export_service
+from _portable_playlist_fixtures import OTHER_UUID, UUID, _ready, donor, rewrite
+from _portable_playlist_fixtures import _service as export_service
 
 from news_bulletin_playlist import managed_state
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
@@ -49,26 +49,6 @@ def no_operational_io(monkeypatch):
     monkeypatch.setattr(sqlite3, "connect", forbidden)
 
 
-def donor(
-    tmp_path, *, template=None, playlist=None, draft=None, catalog=BUILTIN_CATALOG, state=None
-):
-    root = tmp_path / "donor"
-    root.mkdir(exist_ok=True)
-    if state is None:
-        if draft is not None:
-            state = ManagedState(schema_version=9, templates=(draft,))
-        else:
-            template = template or catalog.playlists[0]
-            playlist = playlist or replace(
-                activate_template(template, "PRIVATE-DESTINATION"), portable_id=UUID
-            )
-            state = ManagedState(schema_version=9, playlists=(playlist,))
-    service = export_service(root, state, catalog=catalog)
-    kind = "draft" if draft is not None else "managed"
-    id_ = str(draft.id if draft is not None else state.playlists[0].id)
-    return service.export(kind, id_)[1]
-
-
 def receiver(tmp_path, *, schema=6, catalog=EMPTY, state=None):
     root = tmp_path / "receiver"
     root.mkdir(exist_ok=True)
@@ -94,32 +74,6 @@ def apply(service, document, *, keep=None):
 
 def files(root):
     return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
-
-
-def rewrite(document, edit=None, *, names=None, compression=0, duplicate=False, info_edit=None):
-    with ZipFile(io.BytesIO(document)) as archive:
-        entries = [(i, archive.read(i)) for i in archive.infolist()]
-    data = {i.filename: b for i, b in entries}
-    if edit:
-        manifest = json.loads(data["manifest.json"])
-        edit(manifest, data)
-        data["manifest.json"] = canonical_json(manifest)
-        data["manifest.sha256"] = (
-            hashlib.sha256(data["manifest.json"]).hexdigest() + "\n"
-        ).encode()
-    output = io.BytesIO()
-    with ZipFile(output, "w", compression=compression) as archive:
-        for index, (old, _) in enumerate(entries):
-            info = ZipInfo((names or {}).get(index, old.filename), date_time=(1980, 1, 1, 0, 0, 0))
-            info.create_system = 3
-            info.external_attr = (stat.S_IFREG | 0o600) << 16
-            info.compress_type = compression
-            if info_edit:
-                info_edit(index, info)
-            archive.writestr(info, data[old.filename])
-        if duplicate:
-            archive.writestr(entries[0][0], data[entries[0][0].filename])
-    return output.getvalue()
 
 
 @pytest.mark.parametrize("template", BUILTIN_CATALOG.playlists, ids=lambda t: t.id)

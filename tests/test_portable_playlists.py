@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
-import hashlib
-import io
 import json
 import os
 from dataclasses import replace
 from datetime import time
-from zipfile import ZipFile
 
 import pytest
 from _installed_fixtures import _installed
 from _managed_fixtures import _state
 from _playlist_template_fixtures import _draft
+from _portable_playlist_fixtures import UUID, _ready, _service, _unpack
 
 from news_bulletin_playlist import managed_state, portable_playlists
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetStore
-from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.managed_state import (
     ManagedSourceOverride,
     ManagedState,
@@ -38,56 +35,9 @@ from news_bulletin_playlist.models import (
 )
 from news_bulletin_playlist.portable_playlists import (
     PlaylistExportError,
-    PlaylistExportService,
     PortableCoverLoader,
 )
 from news_bulletin_playlist.portable_sources import parse_sources
-
-UUID = "b96ab2b3-6568-459c-a391-3a993280e174"
-OTHER_UUID = "abb9730d-d6eb-4235-b9b4-1ea1c127d67c"
-
-
-def _service(tmp_path, state=None, *, catalog=BUILTIN_CATALOG):
-    store = ManagedStateStore(tmp_path / "managed-state.json", catalog=catalog)
-    if state is not None:
-        store.save(state)
-    return PlaylistExportService(
-        store, ConfigurationSynchronization(), PortableCoverLoader(tmp_path)
-    )
-
-
-def _ready(state=None):
-    state = state or _state()
-    return replace(
-        state,
-        schema_version=9,
-        playlists=tuple(replace(p, portable_id=UUID) for p in state.playlists),
-    )
-
-
-def _unpack(payload):
-    with ZipFile(io.BytesIO(payload)) as archive:
-        files = {name: archive.read(name) for name in archive.namelist()}
-        assert archive.namelist()[:3] == ["manifest.json", "manifest.sha256", "sources.json"]
-        assert len(files) == 4
-        assert all(
-            i.date_time == (1980, 1, 1, 0, 0, 0)
-            and not i.extra
-            and not i.comment
-            and i.compress_type == 0
-            for i in archive.infolist()
-        )
-    manifest = json.loads(files["manifest.json"])
-    assert (
-        files["manifest.sha256"]
-        == (hashlib.sha256(files["manifest.json"]).hexdigest() + "\n").encode()
-    )
-    for path, expected in manifest["files"].items():
-        assert expected == {
-            "size": len(files[path]),
-            "sha256": hashlib.sha256(files[path]).hexdigest(),
-        }
-    return manifest["playlist"], files
 
 
 @pytest.mark.parametrize("template", BUILTIN_CATALOG.playlists, ids=lambda t: t.id)

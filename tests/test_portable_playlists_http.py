@@ -12,7 +12,7 @@ from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _managed_fixtures import _state
 from _playlist_template_fixtures import _draft
-from test_portable_playlists import UUID, _ready, _unpack
+from _portable_playlist_fixtures import UUID, _ready, _unpack
 from test_source_admin_http import _server
 
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
