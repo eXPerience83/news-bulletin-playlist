@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from _managed_fixtures import _source
-from test_custom_playlist_templates import _draft
+from _playlist_template_fixtures import _draft
 from test_installed_sources import _installed
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog

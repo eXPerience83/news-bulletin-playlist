@@ -350,7 +350,7 @@ def test_browser_textarea_roundtrip_preserves_original_text(tmp_path, descriptio
     from html.parser import HTMLParser
     from types import SimpleNamespace
 
-    from test_custom_playlist_templates import _draft
+    from _playlist_template_fixtures import _draft
     from test_portable_playlists import UUID
 
     from news_bulletin_playlist.diagnostics_runtime import DiagnosticOperationalHealthHandler
