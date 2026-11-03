@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import time
-from io import BytesIO
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from _cover_fixtures import _artwork
 
 import news_bulletin_playlist.managed_admin as admin_module
 import news_bulletin_playlist.playlist_examples as examples_module
@@ -19,12 +18,6 @@ from news_bulletin_playlist.managed_state import InstalledSource, ManagedStateEr
 from news_bulletin_playlist.models import DurationPolicy, DurationPolicyException, SourceId
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
-
-
-def _artwork() -> bytes:
-    buffer = BytesIO()
-    Image.new("RGB", (512, 512), "navy").save(buffer, format="JPEG")
-    return buffer.getvalue()
 
 
 def _installed_source(name: str, *, enabled: bool = True) -> InstalledSource:

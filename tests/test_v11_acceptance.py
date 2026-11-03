@@ -8,9 +8,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from _cover_fixtures import _artwork
 from _file_snapshots import snapshot_files as _files
 from _legacy_dataset import legacy_root as _root
-from test_v11_playlist_examples import _artwork
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetStore
