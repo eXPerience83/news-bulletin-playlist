@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_v11_playlist_examples import _artwork
+from _cover_fixtures import _artwork
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_admin import (
