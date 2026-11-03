@@ -12,7 +12,7 @@ from _html import assert_valid_admin_html
 from _managed_fixtures import _state
 from test_custom_playlist_templates import _draft
 from test_portable_playlists import UUID, _ready, _unpack
-from test_source_admin_http import _Handler, _server
+from test_source_admin_http import _server
 from test_source_configuration_export import _forbid_effects
 
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
@@ -40,7 +40,7 @@ def test_download_and_identity_get_are_offline_readonly(tmp_path, monkeypatch, k
             _ready(), templates=(_draft(portable_id="abb9730d-d6eb-4235-b9b4-1ea1c127d67c"),)
         )
         store.save(state)
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         p = state.playlists[0]
         service.provisioning_journal.save(
             ProvisioningIntent(
@@ -59,7 +59,7 @@ def test_download_and_identity_get_are_offline_readonly(tmp_path, monkeypatch, k
         cookie = _login(server)
         _request(server, "GET", "/admin/sources/new", cookie=cookie)
         before = _files(tmp_path)
-        _forbid_effects(monkeypatch, service)
+        _forbid_effects(monkeypatch, service, server)
         query = (
             "kind=managed&id=spain_spanish_news"
             if kind == "managed"
@@ -152,7 +152,7 @@ def test_missing_cover_has_no_partial_download_or_writes(tmp_path, monkeypatch):
         cookie = _login(server)
         _request(server, "GET", "/admin/sources/new", cookie=cookie)
         before = _files(tmp_path)
-        _forbid_effects(monkeypatch, _Handler.source_admin_service)
+        _forbid_effects(monkeypatch, server.RequestHandlerClass.source_admin_service, server)
 
         def broken(*args, **kwargs):
             raise OSError("secret path /private")
@@ -180,7 +180,7 @@ def test_identity_post_only_one_state_save_no_other_effects(tmp_path, monkeypatc
         before = _files(tmp_path)
         original_save = ManagedStateStore.save
         saves = []
-        _forbid_effects(monkeypatch, _Handler.source_admin_service)
+        _forbid_effects(monkeypatch, server.RequestHandlerClass.source_admin_service, server)
 
         def save(self, state):
             saves.append(state)

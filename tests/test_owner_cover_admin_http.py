@@ -13,7 +13,7 @@ from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
 from PIL import Image
-from test_source_admin_http import _Handler, _server
+from test_source_admin_http import _server
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.custom_cover_assets import (
@@ -108,7 +108,7 @@ def _draft(service: ManagedAdminService):
 def test_authenticated_upload_and_private_preview_do_not_call_spotify(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, _unused_client, store):
         service = _setup_service(store, tmp_path)
-        _Handler.managed_admin_service = service
+        server.RequestHandlerClass.managed_admin_service = service
         draft = _draft(service)
         cookie = _login(server)
         status, _, page = _request(server, "GET", "/admin/", cookie=cookie)

@@ -16,7 +16,6 @@ from test_public_release_fallback import EPISODE, NOW, OLD, SOURCE, evidence, fe
 from test_source_admin_http import (
     _configured_source,
     _create_form,
-    _Handler,
     _inspect,
     _server,
     _update_form,
@@ -520,7 +519,7 @@ def test_http_custom_modes_create_edit_and_next_refresh_without_extra_io(tmp_pat
         source = effective_sources(BUILTIN_CATALOG, store.load())[-1]
         assert source.public_release_mode is changed
         assert source.temporal_strategy is TemporalStrategy.AUTO
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         raw = (
             (observed.astimezone(source.timezone) - timedelta(minutes=1))
             .replace(tzinfo=UTC)
@@ -573,7 +572,7 @@ def test_http_builtin_edit_only_policy_and_restores_image_default(tmp_path, mode
     from _html import assert_valid_admin_html
 
     with _server(tmp_path) as (server, client, store):
-        _configured_source(store)
+        _configured_source(server, store)
         previous = store.load()
         cookie = _login(server)
         status, _, page = _request(
@@ -630,7 +629,7 @@ def test_http_builtin_edit_only_policy_and_restores_image_default(tmp_path, mode
 @pytest.mark.parametrize("action", ["update", "public-release-mode"])
 def test_http_mode_auth_csrf_unknown_enum_source_and_duplicate_fields(tmp_path, action):
     with _server(tmp_path) as (server, client, store):
-        custom = _configured_source(store)
+        custom = _configured_source(server, store)
         source_id = str(custom.id) if action == "update" else "rne"
         path = f"/admin/sources/{action}"
         assert _request(server, "POST", path, form={})[0] == 303
@@ -705,9 +704,9 @@ def test_individual_audit_and_zip_share_mode_outcome_and_request_counts(tmp_path
     from test_source_admin_http import OTHER
 
     with _server(tmp_path) as (_server_unused, client, store):
-        custom = _configured_source(store)
+        custom = _configured_source(_server_unused, store)
         store.save(replace(store.load(), sources=(replace(custom, public_release_mode=mode),)))
-        service = _Handler.source_admin_service
+        service = _server_unused.RequestHandlerClass.source_admin_service
         client.release_day_override = now.astimezone(ZoneInfo(custom.timezone)).date().isoformat()
 
         class Public:
@@ -802,8 +801,8 @@ def test_audit_all_uses_effective_builtin_override_and_custom_policy(tmp_path):
     from test_source_admin_http import _PublicAudit
 
     with _server(tmp_path) as (_server_unused, client, store):
-        custom = _configured_source(store)
-        service = _Handler.source_admin_service
+        custom = _configured_source(_server_unused, store)
+        service = _server_unused.RequestHandlerClass.source_admin_service
         # Bounded test catalogue still uses real SourceAdminService.audit_all and inspection.
         store.save(replace(store.load(), playlists=()))
         service.catalog = replace(
