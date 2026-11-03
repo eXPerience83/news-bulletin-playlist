@@ -8,23 +8,21 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from _installed_fixtures import EMPTY, _installed, _rich_state
 from _managed_fixtures import _source, _state
-from _playlist_template_fixtures import _draft
 from _spotify_catalogue import catalogue_page
 
 from news_bulletin_playlist import managed_state
-from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.custom_source_policy import custom_strategy_allowed
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.managed_admin import ManagedAdminService
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import (
     InstalledSource,
-    ManagedSourceOverride,
     ManagedState,
     ManagedStateError,
     ManagedStateStore,
-    QuarantinedPlaylistTemplate,
     compile_engine_config,
     effective_sources,
     serialize_managed_state,
@@ -32,11 +30,8 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.models import (
     CountryCode,
-    ExternalReference,
     LanguageTag,
     ParserId,
-    PublicReleaseMode,
-    SourceId,
 )
 from news_bulletin_playlist.portable_sources import export_sources, parse_sources
 from news_bulletin_playlist.source_admin import SourceAdminService, export_source_configuration
@@ -44,8 +39,6 @@ from news_bulletin_playlist.spotify.auth import SpotifyAuthService
 from news_bulletin_playlist.spotify.client import SpotifyClient
 from news_bulletin_playlist.spotify.first_catalogue import fetch_source_catalogue
 from news_bulletin_playlist.spotify.first_models import TimestampSource
-
-EMPTY = BuiltInCatalog((), ())
 
 
 @pytest.fixture(autouse=True)
@@ -74,17 +67,6 @@ def test_all_builtin_definitions_persist_without_loss(tmp_path, definition):
     assert document["installed_sources"] == json.loads(export_sources((definition,)))
     assert export_sources(effective_sources(EMPTY, store.load())) == export_sources((definition,))
     assert document["installed_sources"]["sources"][0]["processing"]["parser"]["version"] == 1
-
-
-def _installed(**overrides):
-    definition = replace(
-        BUILTIN_CATALOG.sources[0],
-        id=SourceId("installed_news"),
-        external_references=(ExternalReference("spotify", "show", "Z" * 22),),
-        countries=(CountryCode("ES"), CountryCode("AR")),
-        languages=(LanguageTag("es-ES"), LanguageTag("es-419"), LanguageTag("en")),
-    )
-    return InstalledSource.from_definition(replace(definition, **overrides))
 
 
 @pytest.mark.parametrize("countries", [(), (CountryCode("ES"), CountryCode("AR"))])
@@ -207,26 +189,6 @@ def test_builtin_identity_collisions_still_fail_closed(tmp_path):
     with pytest.raises(ManagedStateError, match="conflicts with built-in"):
         store.save(ManagedState(schema_version=8, sources=(installed,)))
     assert not store.path.exists()
-
-
-def _rich_state():
-    source = _installed(enabled=False)
-    original = _state()
-    playlist = replace(
-        original.playlists[0], source_ids=(*original.playlists[0].source_ids, source.id)
-    )
-    draft = _draft(default_source_ids=(source.id, _source().id), cover_id="uploaded_" + "a" * 64)
-    return replace(
-        original,
-        schema_version=8,
-        sources=(*original.sources, source),
-        playlists=(playlist,),
-        source_overrides=(ManagedSourceOverride(SourceId("rne"), PublicReleaseMode.DISABLED),),
-        templates=(draft,),
-        quarantined_templates=(
-            QuarantinedPlaylistTemplate(4, "invalid_definition", json.dumps({"id": "damaged"})),
-        ),
-    )
 
 
 def test_references_drafts_overrides_quarantine_and_pending_journal_survive(tmp_path):
