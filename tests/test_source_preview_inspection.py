@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import copy
-import json
 import socket
 import sqlite3
 from dataclasses import replace
 
 import pytest
 from _file_snapshots import snapshot_files as _files
-from _managed_fixtures import _source, _state
-from test_source_import import _pending, _service
+from _managed_fixtures import _state
+from _source_import_fixtures import _bytes, _mixed_document, _payload, _pending, _service
 
 from news_bulletin_playlist import portable_sources
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.managed_state import source_definition
-from news_bulletin_playlist.models import ParserId, SourceId
+from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.portable_sources import (
     PortableSource,
     PortableSourceError,
@@ -42,14 +40,6 @@ def no_external_effects(monkeypatch):
     monkeypatch.setattr(sqlite3, "connect", forbidden)
     monkeypatch.setattr(SpotifyAuthService, "get_access_token", forbidden)
     monkeypatch.setattr(SpotifyClient, "__init__", forbidden)
-
-
-def _payload():
-    return json.loads(export_sources((BUILTIN_CATALOG.sources[0],)))
-
-
-def _bytes(payload):
-    return json.dumps(payload).encode("utf-8")
 
 
 @pytest.mark.parametrize("definition", BUILTIN_CATALOG.sources, ids=lambda source: source.id)
@@ -292,24 +282,6 @@ def test_root_json_and_bounds_remain_strict(bad):
     with pytest.raises(PortableSourceError) as error:
         inspect_sources(document)
     assert "secret-sentinel" not in str(error.value)
-
-
-def _mixed_document():
-    records = [
-        json.loads(export_sources((source_definition(_source("B" * 22)),)))["sources"][0],
-        json.loads(
-            export_sources((replace(BUILTIN_CATALOG.sources[0], id=SourceId("foreign_ser")),))
-        )["sources"][0],
-        json.loads(export_sources((source_definition(_source()),)))["sources"][0],
-        json.loads(export_sources((replace(BUILTIN_CATALOG.sources[1], display_name="Conflict"),)))[
-            "sources"
-        ][0],
-        json.loads(export_sources((source_definition(_source("C" * 22)),)))["sources"][0],
-    ]
-    records[-1]["processing"]["parser"]["id"] = "unknown"
-    payload = _payload()
-    payload["sources"] = records
-    return _bytes(payload)
 
 
 def test_mixed_preview_keeps_all_states_and_blocks_every_write(tmp_path, monkeypatch):
