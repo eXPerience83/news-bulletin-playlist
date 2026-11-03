@@ -3,39 +3,20 @@
 from __future__ import annotations
 
 import os
-import shutil
 import stat
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from _file_snapshots import snapshot_files as _files
-from _legacy_dataset import legacy_root as _root
+from _offline_dataset_fixtures import _two_roots
 
-from news_bulletin_playlist.legacy_catalog_snapshot import write_legacy_snapshot_v2
-from news_bulletin_playlist.offline_dataset_inventory import inventory_offline_dataset
-from news_bulletin_playlist.v11_candidate_storage import publish_v11_candidate
 from news_bulletin_playlist.v11_shadow_staging import (
     V11_SHADOW_FILENAME,
     V11ShadowStageError,
     inspect_v11_shadow_state,
     stage_v11_shadow_state,
 )
-
-
-def _two_roots(tmp_path: Path, version: int = 10) -> tuple[Path, Path]:
-    root, preview = _root(tmp_path, version)
-    write_legacy_snapshot_v2(root, preview)
-    publish_v11_candidate(root)
-    (root / "history.sqlite3-wal").write_bytes(b"synthetic wal")
-    (root / "history.sqlite3-shm").write_bytes(b"synthetic shm")
-    nested = root / "custom-covers"
-    nested.mkdir()
-    (nested / "image.jpg").write_bytes(b"synthetic cover")
-    backup = tmp_path / "independent-backup"
-    shutil.copytree(root, backup)
-    assert inventory_offline_dataset(root) == inventory_offline_dataset(backup)
-    return root, backup
 
 
 @pytest.mark.parametrize("version", [6, 7, 8, 9, 10])

@@ -9,7 +9,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from test_v11_shadow_staging import _two_roots
+from _offline_dataset_fixtures import _two_roots
 
 from news_bulletin_playlist.offline_dataset_inventory import inventory_offline_dataset
 from news_bulletin_playlist.offline_legacy_rollback import (
