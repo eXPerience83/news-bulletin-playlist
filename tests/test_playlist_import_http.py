@@ -12,7 +12,7 @@ from _admin_http import request as _request
 from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _multipart import import_upload as _multipart
-from test_playlist_import import donor, rewrite
+from _portable_playlist_fixtures import donor, rewrite
 from test_source_admin_http import _server
 
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
@@ -351,7 +351,7 @@ def test_browser_textarea_roundtrip_preserves_original_text(tmp_path, descriptio
     from types import SimpleNamespace
 
     from _playlist_template_fixtures import _draft
-    from test_portable_playlists import UUID
+    from _portable_playlist_fixtures import UUID
 
     from news_bulletin_playlist.diagnostics_runtime import DiagnosticOperationalHealthHandler
     from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
