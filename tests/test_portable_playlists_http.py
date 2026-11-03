@@ -11,7 +11,7 @@ from _admin_http import request as _request
 from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _managed_fixtures import _state
-from test_custom_playlist_templates import _draft
+from _playlist_template_fixtures import _draft
 from test_portable_playlists import UUID, _ready, _unpack
 from test_source_admin_http import _server
 
