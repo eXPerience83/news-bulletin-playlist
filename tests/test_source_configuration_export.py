@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import socket
-import sqlite3
 from contextlib import contextmanager
 from dataclasses import replace
 from http import HTTPStatus
-from http.server import HTTPServer
 
 import pytest
+from _admin_effect_guards import forbid_effects as _forbid_effects
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
@@ -19,7 +17,6 @@ from test_source_admin_http import _server
 
 from news_bulletin_playlist import diagnostics_runtime
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
-from news_bulletin_playlist.managed_admin import ManagedAdminService
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import (
     ManagedSourceOverride,
@@ -31,7 +28,6 @@ from news_bulletin_playlist.managed_state import (
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PublicReleaseMode, SourceId
 from news_bulletin_playlist.portable_sources import parse_sources
 from news_bulletin_playlist.registry import TITLE_PARSERS
-from news_bulletin_playlist.source_admin import SourceAdminService
 
 EXPORT = "/admin/sources/export.json"
 
@@ -67,37 +63,6 @@ def installation(tmp_path):
         # tests install guards against auth/operational activity during downloads.
         assert _request(server, "GET", "/admin/sources/new", cookie=cookie)[0] == HTTPStatus.OK
         yield server, cookie, store, service, client, state
-
-
-def _forbid_effects(monkeypatch, service, server: HTTPServer):
-    def forbidden(*args, **kwargs):
-        pytest.fail("Portable download attempted an operational side effect")
-
-    for cls, names in (
-        (ManagedStateStore, ("load", "save")),
-        (ManagedAdminService, ("snapshot", "finalize_known_provisioning")),
-        (SourceAdminService, ("snapshot", "inspect", "audit", "audit_all")),
-    ):
-        for name in names:
-            monkeypatch.setattr(cls, name, forbidden)
-    monkeypatch.setattr(sqlite3, "connect", forbidden)
-    monkeypatch.setattr(service.auth, "get_access_token", forbidden)
-    monkeypatch.setattr(service, "client_factory", forbidden)
-    monkeypatch.setattr(service.public_client, "observe_episode", forbidden)
-    monkeypatch.setattr(server.RequestHandlerClass, "_spotify_state", forbidden)
-    monkeypatch.setattr(server.RequestHandlerClass, "_spotify_metrics", forbidden)
-    monkeypatch.setattr(server.RequestHandlerClass, "_admin_diagnostics", forbidden)
-    lifecycle = server.RequestHandlerClass.engine_lifecycle
-    monkeypatch.setattr(lifecycle, "reconcile", forbidden)
-    monkeypatch.setattr(lifecycle, "wake", forbidden, raising=False)
-    connect = socket.socket.connect
-
-    def local_only(sock, address):
-        if not isinstance(address, tuple) or address[0] != "127.0.0.1":
-            forbidden()
-        return connect(sock, address)
-
-    monkeypatch.setattr(socket.socket, "connect", local_only)
 
 
 def test_all_sources_export_is_lossless_deterministic_and_readonly(installation, monkeypatch):
