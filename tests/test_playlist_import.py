@@ -14,8 +14,8 @@ from datetime import time
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import pytest
+from _installed_fixtures import EMPTY, _installed, _rich_state
 from _playlist_template_fixtures import _draft
-from test_installed_sources import EMPTY, _installed, _rich_state
 from test_portable_playlists import OTHER_UUID, UUID, _ready
 from test_portable_playlists import _service as export_service
 

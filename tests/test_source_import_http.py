@@ -14,8 +14,8 @@ from _admin_http import login as _login
 from _admin_http import request as _request
 from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
+from _installed_fixtures import _rich_state
 from _multipart import import_upload as _multipart
-from test_installed_sources import _rich_state
 from test_source_admin_http import _server
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
