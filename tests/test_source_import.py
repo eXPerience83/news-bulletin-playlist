@@ -9,20 +9,14 @@ from dataclasses import replace
 import pytest
 from _installed_fixtures import EMPTY, _installed, _rich_state
 from _managed_fixtures import _source, _state
+from _source_import_fixtures import _apply, _document, _pending, _service
 
 from news_bulletin_playlist import managed_state
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
-from news_bulletin_playlist.managed_provisioning import (
-    ProvisioningIntent,
-    ProvisioningJournal,
-    ProvisioningState,
-)
 from news_bulletin_playlist.managed_state import (
     InstalledSource,
     ManagedState,
     ManagedStateError,
-    ManagedStateStore,
     effective_sources,
     source_definition,
 )
@@ -40,7 +34,6 @@ from news_bulletin_playlist.models import (
 from news_bulletin_playlist.portable_sources import PortableSourceError, export_sources
 from news_bulletin_playlist.source_import import (
     SourceImportError,
-    SourceImportService,
     SourceImportWriteError,
     StaleSourceImport,
 )
@@ -57,24 +50,6 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", forbidden)
     monkeypatch.setattr(SpotifyAuthService, "get_access_token", forbidden)
     monkeypatch.setattr(SpotifyClient, "__init__", forbidden)
-
-
-def _service(tmp_path, *, catalog=BUILTIN_CATALOG):
-    store = ManagedStateStore(tmp_path / "managed-state.json", catalog=catalog)
-    return SourceImportService(
-        store, ConfigurationSynchronization(), ProvisioningJournal(tmp_path / "pending.json")
-    )
-
-
-def _document(**changes):
-    return export_sources((replace(source_definition(_source()), **changes),))
-
-
-def _apply(service, document, *, keep_local=frozenset(), confirm_v8=True):
-    preview = service.preview(document)
-    return service.apply(
-        document, preview.fingerprint, keep_local=keep_local, confirm_v8=confirm_v8
-    )
 
 
 @pytest.mark.parametrize("definition", BUILTIN_CATALOG.sources, ids=lambda source: source.id)
@@ -302,22 +277,6 @@ def test_invalid_document_is_rejected_before_configuration_access(
         service.preview(document)
     assert "secret-sentinel" not in str(error.value)
     assert not list(tmp_path.iterdir())
-
-
-def _pending(service, source_ids=("ser",)):
-    intent = ProvisioningIntent(
-        ProvisioningState.REQUEST_STARTED,
-        BUILTIN_CATALOG.playlists[0].id,
-        "Pending",
-        "Keep description",
-        "spain_spanish_news",
-        source_ids,
-        retention_hours=48,
-        max_episodes=50,
-        max_duration_seconds=900,
-    )
-    service.provisioning.save(intent)
-    return intent
 
 
 @pytest.mark.parametrize("change", ["source", "references", "quarantine", "pending"])

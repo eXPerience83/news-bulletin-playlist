@@ -368,8 +368,8 @@ def test_v9_new_drafts_edits_and_managed_recovery_keep_distinct_identities(tmp_p
 
 
 def test_source_import_preserves_v9_identities(tmp_path):
-    from test_source_import import _apply, _document
-    from test_source_import import _service as import_service
+    from _source_import_fixtures import _apply, _document
+    from _source_import_fixtures import _service as import_service
 
     service = import_service(tmp_path)
     service.store.save(

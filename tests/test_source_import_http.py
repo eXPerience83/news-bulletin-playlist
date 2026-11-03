@@ -16,6 +16,7 @@ from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _installed_fixtures import _rich_state
 from _multipart import import_upload as _multipart
+from _source_import_fixtures import _mixed_document
 from test_source_admin_http import _server
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -531,8 +532,6 @@ def test_preview_reports_missing_installed_registry_capability(installation, mon
 
 
 def test_mixed_preview_renders_all_statuses_and_no_partial_apply(installation, monkeypatch):
-    from test_source_preview_inspection import _mixed_document
-
     server, cookie, store, service, client, state, page = installation
     before = _files(store.path.parent)
     _guard(monkeypatch, service, server)

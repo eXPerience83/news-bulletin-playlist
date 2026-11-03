@@ -625,7 +625,7 @@ def test_save_readback_failure_reports_uncertainty_without_second_save(tmp_path,
 
 
 def test_import_metadata_requires_explicit_v10_and_other_operations_keep_v10(tmp_path):
-    from test_source_import import _document
+    from _source_import_fixtures import _document
 
     from news_bulletin_playlist.managed_state import ManagedStateError
 
