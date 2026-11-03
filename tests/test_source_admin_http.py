@@ -188,19 +188,23 @@ def _server(
     synchronization = ConfigurationSynchronization()
     auth = _Auth()
     client = _Client()
-    _Handler.admin_security = LanAdminSecurity(PASSWORD)
-    _Handler.data_dir = tmp_path
-    _Handler.spotify_auth = None
-    _Handler.operational_status = OperationalStatus(configured=False)
-    _Handler.engine_lifecycle = lifecycle or _Lifecycle()  # type: ignore[assignment]
-    _Handler.auth_synchronization = None
-    _Handler.configuration_synchronization = synchronization
-    _Handler.managed_admin_service = ManagedAdminService(store)
-    _Handler.managed_admin_auth = None
+
+    class _ScopedHandler(_Handler):
+        """Give each HTTP server its own mutable handler configuration."""
+
+    _ScopedHandler.admin_security = LanAdminSecurity(PASSWORD)
+    _ScopedHandler.data_dir = tmp_path
+    _ScopedHandler.spotify_auth = None
+    _ScopedHandler.operational_status = OperationalStatus(configured=False)
+    _ScopedHandler.engine_lifecycle = lifecycle or _Lifecycle()  # type: ignore[assignment]
+    _ScopedHandler.auth_synchronization = None
+    _ScopedHandler.configuration_synchronization = synchronization
+    _ScopedHandler.managed_admin_service = ManagedAdminService(store)
+    _ScopedHandler.managed_admin_auth = None
     diagnostic_store = DiagnosticEventStore(tmp_path / "diagnostics.sqlite3")
     diagnostic_store.initialize()
-    _Handler.diagnostic_store = diagnostic_store
-    _Handler.operational_diagnostics = None
+    _ScopedHandler.diagnostic_store = diagnostic_store
+    _ScopedHandler.operational_diagnostics = None
     runtime_store = SQLiteStore(tmp_path / "state.sqlite3")
     runtime_store.initialize()
     first_journal = SpotifyFirstJournal(runtime_store)
@@ -208,7 +212,7 @@ def _server(
     detector_journal = PublicDetectorJournal(runtime_store)
     detector_journal.initialize()
     cycle_synchronization = EngineCycleSynchronization()
-    _Handler.source_admin_service = SourceAdminService(
+    _ScopedHandler.source_admin_service = SourceAdminService(
         store,
         synchronization,
         auth,
@@ -218,10 +222,10 @@ def _server(
         first_journal=first_journal,
         detector_journal=detector_journal,
         cycle_synchronization=cycle_synchronization,
-        provisioning_journal=_Handler.managed_admin_service.provisioning_journal,
+        provisioning_journal=_ScopedHandler.managed_admin_service.provisioning_journal,
         public_client=_PublicAudit(),
     )
-    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    server = HTTPServer(("127.0.0.1", 0), _ScopedHandler)
     thread = threading.Thread(
         target=server.serve_forever,
         kwargs={"poll_interval": 0.01},
@@ -277,8 +281,12 @@ def _create_form(review: bytes) -> dict[str, str]:
     }
 
 
-def _configured_source(store: ManagedStateStore, *, enabled: bool = True) -> ManagedSource:
-    source = _Handler.source_admin_service.validate_new_source(  # type: ignore[union-attr]
+def _configured_source(
+    server: HTTPServer, store: ManagedStateStore, *, enabled: bool = True
+) -> ManagedSource:
+    service = server.RequestHandlerClass.source_admin_service
+    assert service is not None
+    source = service.validate_new_source(
         show_id=SHOW,
         display_name="Original news",
         origin_kind="country",
@@ -296,6 +304,31 @@ def _configured_source(store: ManagedStateStore, *, enabled: bool = True) -> Man
     )
     store.save(ManagedState(sources=(source,), playlists=(playlist,)))
     return source
+
+
+def test_parallel_source_admin_servers_keep_independent_handler_state(tmp_path: Path) -> None:
+    first_path = tmp_path / "first"
+    second_path = tmp_path / "second"
+    first_path.mkdir()
+    second_path.mkdir()
+    with _server(first_path) as (first_server, _first_client, _first_store):
+        first_handler = first_server.RequestHandlerClass
+        first_service = first_handler.source_admin_service
+        first_security = first_handler.admin_security
+        first_cookie = _login(first_server)
+        with _server(second_path) as (second_server, _second_client, _second_store):
+            second_handler = second_server.RequestHandlerClass
+            assert first_handler is not second_handler
+            assert first_handler.data_dir == first_path
+            assert second_handler.data_dir == second_path
+            assert first_handler.admin_security is first_security
+            assert first_security is not second_handler.admin_security
+            assert first_handler.source_admin_service is first_service
+            assert first_service is not second_handler.source_admin_service
+            second_handler.source_admin_service = None
+            assert first_handler.source_admin_service is first_service
+            response = _request(first_server, "GET", "/admin/sources/new", cookie=first_cookie)
+            assert response[0] == HTTPStatus.OK
 
 
 def test_source_admin_rendered_html_contract_over_real_http(tmp_path: Path) -> None:
@@ -318,7 +351,7 @@ def test_source_admin_rendered_html_contract_over_real_http(tmp_path: Path) -> N
         assert_valid_admin_html(review.decode())
 
         # Read-only configured Source Audit, using the existing real CSRF journey.
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         status, audit = _audit(server, cookie, str(source.id))
         assert status == HTTPStatus.OK
         assert_valid_admin_html(audit.decode())
@@ -396,7 +429,7 @@ def test_temporal_strategy_unknown_value_is_rejected_without_provider_io(tmp_pat
             _, review = _inspect(server, cookie)
             form = _create_form(review)
         else:
-            _configured_source(store)
+            _configured_source(server, store)
             _, _, edit = _request(
                 server, "GET", f"/admin/sources/edit?source_id=custom_{SHOW}", cookie=cookie
             )
@@ -431,9 +464,9 @@ def _playlist_form(token: str, source_ids: list[str]) -> dict[str, str | list[st
 
 def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         original = store.load()
         updated = replace(original.playlists[0], source_ids=("ser",))
         store.save(replace(original, playlists=(updated,)))
@@ -531,7 +564,7 @@ def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) ->
             == 409
         )
         assert store.load().sources == (replace(source, enabled=False),)
-        events = _Handler.diagnostic_store.list_events(source_id=str(source.id))
+        events = server.RequestHandlerClass.diagnostic_store.list_events(source_id=str(source.id))
         assert not any(event.event_name == "admin_source_deleted" for event in events)
 
         _, _, playlists = _request(server, "GET", "/admin/", cookie=cookie)
@@ -583,7 +616,9 @@ def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) ->
         assert client.calls == [] and service.auth.calls == 0  # type: ignore[attr-defined]
         events = tuple(
             event
-            for event in _Handler.diagnostic_store.list_events(source_id=str(source.id))
+            for event in server.RequestHandlerClass.diagnostic_store.list_events(
+                source_id=str(source.id)
+            )
             if event.event_name == "admin_source_deleted"
         )
         assert len(events) == 1 and events[0].source_id == str(source.id)
@@ -610,7 +645,7 @@ def test_real_http_assignment_unassignment_and_guarded_delete(tmp_path: Path) ->
 
 def test_blocked_source_disable_has_one_contextual_disclosure(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         state = store.load()
         playlist_name = "Operator <news> & updates"
         store.save(
@@ -638,7 +673,8 @@ def test_blocked_source_disable_has_one_contextual_disclosure(tmp_path: Path) ->
         assert b">Disable</button>" not in row
         assert b"/admin/sources/set-enabled" not in row
         assert_valid_admin_html(page.decode())
-        assert client.calls == [] and _Handler.source_admin_service.auth.calls == 0
+        assert client.calls == []
+        assert server.RequestHandlerClass.source_admin_service.auth.calls == 0
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -646,7 +682,7 @@ def test_unreferenced_or_disabled_source_actions_need_no_disclosure(
     tmp_path: Path, enabled: bool
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store, enabled=enabled)
+        source = _configured_source(server, store, enabled=enabled)
         if enabled:
             store.save(replace(store.load(), playlists=()))
         cookie = _login(server)
@@ -663,7 +699,8 @@ def test_unreferenced_or_disabled_source_actions_need_no_disclosure(
         assert b'<form method="post" action="/admin/sources/set-enabled">' in row
         assert (b">Disable</button>" if enabled else b">Enable</button>") in row
         assert_valid_admin_html(page.decode())
-        assert client.calls == [] and _Handler.source_admin_service.auth.calls == 0
+        assert client.calls == []
+        assert server.RequestHandlerClass.source_admin_service.auth.calls == 0
 
 
 def test_source_action_css_wraps_and_bounds_disclosure_content(tmp_path: Path) -> None:
@@ -687,7 +724,7 @@ def test_disabled_unselected_source_is_not_offered_and_backend_rejects_manual_as
     tmp_path: Path,
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store, enabled=False)
+        source = _configured_source(server, store, enabled=False)
         current = store.load()
         playlist = replace(current.playlists[0], source_ids=("ser",))
         store.save(replace(current, playlists=(playlist,)))
@@ -708,10 +745,10 @@ def test_disabled_unselected_source_is_not_offered_and_backend_rejects_manual_as
 
 def test_delete_rejects_builtin_bad_form_and_busy_cycle_over_http(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         current = store.load()
         store.save(replace(current, playlists=()))
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None and service.cycle_synchronization is not None
         cookie = _login(server)
         builtin_delete = _request(
@@ -766,7 +803,7 @@ def test_delete_rejects_builtin_bad_form_and_busy_cycle_over_http(tmp_path: Path
                 == 409
             )
         assert store.load().sources == (source,)
-        events = _Handler.diagnostic_store.list_events(source_id=str(source.id))
+        events = server.RequestHandlerClass.diagnostic_store.list_events(source_id=str(source.id))
         assert not any(event.event_name == "admin_source_deleted" for event in events)
         _, _, confirm = _request(
             server, "GET", f"/admin/sources/delete?source_id={source.id}", cookie=cookie
@@ -786,13 +823,13 @@ def test_delete_rejects_builtin_bad_form_and_busy_cycle_over_http(tmp_path: Path
 
 def test_stale_playlist_form_cannot_assign_source_deleted_after_render(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         current = store.load()
         playlist = replace(current.playlists[0], source_ids=("ser",))
         store.save(replace(current, playlists=(playlist,)))
         cookie = _login(server)
         _, _, old_form = _request(server, "GET", "/admin/", cookie=cookie)
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         assert service.delete(str(source.id)) is True
         assert (
@@ -813,7 +850,7 @@ def test_selected_disabled_source_cannot_be_removed_from_active_playlist_to_empt
     tmp_path: Path,
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store, enabled=False)
+        source = _configured_source(server, store, enabled=False)
         cookie = _login(server)
         _, _, page = _request(server, "GET", "/admin/", cookie=cookie)
         assert f'value="{source.id}" checked'.encode() in page
@@ -842,7 +879,7 @@ def test_selected_disabled_source_cannot_be_removed_from_active_playlist_to_empt
 
 def test_delete_confirmation_escapes_name_and_rejects_duplicate_post_field(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         hostile = replace(source, display_name="<img src=x onerror=alert(1)>")
         store.save(ManagedState(sources=(hostile,)))
         cookie = _login(server)
@@ -870,9 +907,9 @@ def test_failed_runtime_cleanup_emits_no_success_event_and_can_be_retried(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         store.save(ManagedState(sources=(source,)))
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None and service.detector_journal is not None
         original = service.detector_journal.clear_source_state
 
@@ -893,7 +930,7 @@ def test_failed_runtime_cleanup_emits_no_success_event_and_can_be_retried(
         )
         assert status == 500 and b"secret-sqlite-path" not in body
         assert store.load().sources == (source,)
-        events = _Handler.diagnostic_store.list_events(source_id=str(source.id))
+        events = server.RequestHandlerClass.diagnostic_store.list_events(source_id=str(source.id))
         assert not any(event.event_name == "admin_source_deleted" for event in events)
         monkeypatch.setattr(service.detector_journal, "clear_source_state", original)
         _, _, confirm = _request(server, "GET", path, cookie=cookie)
@@ -914,9 +951,9 @@ def test_http_delete_then_fresh_create_same_show_cannot_reuse_old_runtime_state(
     tmp_path: Path,
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         store.save(ManagedState(sources=(source,)))
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         first = service.first_journal
         detector = service.detector_journal
@@ -1011,14 +1048,14 @@ def test_http_delete_then_fresh_create_same_show_cannot_reuse_old_runtime_state(
 
 def test_real_http_custom_lifecycle_is_local_and_preserves_references(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        original = _configured_source(store)
+        original = _configured_source(server, store)
         current = store.load()
         store.save(
             replace(
                 current, playlists=(replace(current.playlists[0], source_ids=("ser", original.id)),)
             )
         )
-        auth = _Handler.source_admin_service.auth  # type: ignore[union-attr]
+        auth = server.RequestHandlerClass.source_admin_service.auth  # type: ignore[union-attr]
         for path in ("/admin/sources/edit?source_id=custom_" + SHOW,):
             assert _request(server, "GET", path)[0] == 303
         for path in ("/admin/sources/update", "/admin/sources/set-enabled"):
@@ -1086,7 +1123,7 @@ def test_real_http_custom_lifecycle_is_local_and_preserves_references(tmp_path: 
         assert status == 303 and headers["Location"] == "/admin/sources?notice=source-enabled"
         assert ManagedStateStore(store.path).load().sources == (edited,)
         assert client.calls == [] and auth.calls == 0
-        events = _Handler.diagnostic_store.list_events(source_id=str(original.id))
+        events = server.RequestHandlerClass.diagnostic_store.list_events(source_id=str(original.id))
         assert {event.event_name for event in events} == {
             "admin_source_updated",
             "admin_source_disabled",
@@ -1127,7 +1164,7 @@ def test_real_http_custom_lifecycle_is_local_and_preserves_references(tmp_path: 
 )
 def test_update_rejects_immutable_post_fields(tmp_path: Path, extra: str, value: str) -> None:
     with _server(tmp_path) as (server, client, store):
-        original = _configured_source(store)
+        original = _configured_source(server, store)
         cookie = _login(server)
         _, _, edit = _request(
             server, "GET", f"/admin/sources/edit?source_id={original.id}", cookie=cookie
@@ -1137,7 +1174,8 @@ def test_update_rejects_immutable_post_fields(tmp_path: Path, extra: str, value:
         assert _request(server, "POST", "/admin/sources/update", cookie=cookie, form=form)[0] == 400
         assert store.load().sources == (original,)
         assert client.calls == []
-        assert _Handler.diagnostic_store.list_events(source_id=str(original.id)) == ()
+        diagnostics = server.RequestHandlerClass.diagnostic_store
+        assert diagnostics.list_events(source_id=str(original.id)) == ()
 
 
 @pytest.mark.parametrize(
@@ -1156,7 +1194,7 @@ def test_update_rejects_invalid_metadata_without_provider_call(
     tmp_path: Path, field: str, value: str
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        original = _configured_source(store)
+        original = _configured_source(server, store)
         cookie = _login(server)
         _, _, edit = _request(
             server, "GET", f"/admin/sources/edit?source_id={original.id}", cookie=cookie
@@ -1174,7 +1212,7 @@ def test_lifecycle_forms_reject_unknown_fields_duplicate_values_and_bad_boolean(
     tmp_path: Path,
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        original = _configured_source(store)
+        original = _configured_source(server, store)
         cookie = _login(server)
         for modified in (
             {"timezone": "UTC"},
@@ -1190,12 +1228,12 @@ def test_lifecycle_forms_reject_unknown_fields_duplicate_values_and_bad_boolean(
             )
         assert store.load().sources == (original,)
         assert client.calls == []
-        assert _Handler.diagnostic_store.list_events() == ()
+        assert server.RequestHandlerClass.diagnostic_store.list_events() == ()
 
 
 def test_builtin_lifecycle_rejected_and_invalid_csrf_has_no_effect(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        _configured_source(store)
+        _configured_source(server, store)
         cookie = _login(server)
         builtin = str(BUILTIN_CATALOG.sources[0].id)
         assert (
@@ -1236,13 +1274,13 @@ def test_builtin_lifecycle_rejected_and_invalid_csrf_has_no_effect(tmp_path: Pat
             == 409
         )
         assert len(store.load().sources) == 1 and client.calls == []
-        assert _Handler.diagnostic_store.list_events() == ()
+        assert server.RequestHandlerClass.diagnostic_store.list_events() == ()
 
 
 def test_lifecycle_reconciles_active_playlists_but_not_sources_alone(tmp_path: Path) -> None:
     lifecycle = _Lifecycle()
     with _server(tmp_path, lifecycle=lifecycle) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         current = store.load()
         store.save(
             replace(
@@ -1284,7 +1322,7 @@ def test_invalid_metadata_and_failed_save_emit_no_success_event(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         current = store.load()
         store.save(
             replace(
@@ -1317,13 +1355,13 @@ def test_invalid_metadata_and_failed_save_emit_no_success_event(
         )
         assert status == 500 and b"secret-path" not in body
         assert store.load().sources == (source,)
-        assert _Handler.diagnostic_store.list_events() == ()
+        assert server.RequestHandlerClass.diagnostic_store.list_events() == ()
         assert client.calls == []
 
 
 def test_source_csrf_cannot_cross_sessions_or_be_reused(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         current = store.load()
         store.save(
             replace(
@@ -1370,7 +1408,7 @@ def test_source_csrf_cannot_cross_sessions_or_be_reused(tmp_path: Path) -> None:
 
 def test_edited_operator_name_is_escaped_in_sources_and_edit(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         cookie = _login(server)
         _, _, edit = _request(
             server, "GET", f"/admin/sources/edit?source_id={source.id}", cookie=cookie
@@ -1423,7 +1461,7 @@ def test_real_http_login_inspect_download_create_logout(tmp_path: Path) -> None:
         assert headers["Content-Disposition"] == (
             f'attachment; filename="source-inspection-{SHOW}.json"'
         )
-        manager = admin_session_manager_for(_Handler.admin_security)
+        manager = admin_session_manager_for(server.RequestHandlerClass.admin_security)
         context = manager.source_inspection(cookie.partition("=")[2])
         assert context is not None and report == context.report_json
         assert client.calls == ["details", "episodes"]
@@ -1529,7 +1567,7 @@ def test_duplicate_and_create_race_fail_before_provider_io(tmp_path: Path) -> No
         assert client.calls == []
         _, review = _inspect(server, cookie)
         assert client.calls == ["details", "episodes"]
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         duplicate = service.validate_new_source(
             show_id=SHOW,
@@ -1563,7 +1601,7 @@ def test_duplicate_inserted_during_fresh_validation_fails_final_locked_check(
     with _server(tmp_path) as (server, client, store):
         cookie = _login(server)
         _, review = _inspect(server, cookie)
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         competing = service.validate_new_source(
             show_id=SHOW,
@@ -1711,7 +1749,7 @@ def test_failed_second_inspect_clears_review_and_failed_fresh_create_preserves_s
 
 def test_sources_page_renders_disabled_custom_without_network(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None
         source = service.validate_new_source(
             show_id=SHOW,
@@ -1766,7 +1804,7 @@ def test_web_intake_uses_durable_global_cooldown_without_retry(tmp_path: Path) -
         )
         assert status == 503 and b"secret-provider-body" not in error
         assert client.calls == ["details", "episodes", "details"]
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None and service.rate_limit.get() is not None
         assert _inspect(server, cookie)[0] == 503
         assert client.calls == ["details", "episodes", "details"]
@@ -1791,7 +1829,7 @@ def test_configured_audit_is_read_only_and_downloadable(tmp_path: Path, kind: st
     with _server(tmp_path) as (server, client, store):
         source_id = str(BUILTIN_CATALOG.sources[0].id)
         if kind != "built_in":
-            source = _configured_source(store, enabled=kind == "custom")
+            source = _configured_source(server, store, enabled=kind == "custom")
             source_id = str(source.id)
         before = store.path.read_bytes() if store.path.exists() else None
         with sqlite3.connect(tmp_path / "state.sqlite3") as connection:
@@ -1833,7 +1871,7 @@ def test_configured_audit_is_read_only_and_downloadable(tmp_path: Path, kind: st
         assert parsed["episodes"] and parsed["public_status"] == "available"
         assert (
             report
-            == admin_session_manager_for(_Handler.admin_security)
+            == admin_session_manager_for(server.RequestHandlerClass.admin_security)
             .source_inspection(cookie.partition("=")[2])
             .report_json
         )
@@ -1874,7 +1912,7 @@ def test_configured_audit_is_read_only_and_downloadable(tmp_path: Path, kind: st
 
 def test_configured_audit_auth_csrf_and_stale_identity(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         assert _request(server, "POST", "/admin/sources/audit")[0] == 303
         cookie = _login(server)
         assert (
@@ -1917,7 +1955,7 @@ def test_configured_audit_auth_csrf_and_stale_identity(tmp_path: Path) -> None:
 
 def test_configured_audit_provider_failure_and_global_cooldown(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         cookie = _login(server)
         client.error = SpotifyApiError(503, "secret-provider-body")
         status, body = _audit(server, cookie, str(source.id))
@@ -1928,7 +1966,9 @@ def test_configured_audit_provider_failure_and_global_cooldown(tmp_path: Path) -
         client.error = SpotifyApiError(429, "secret-provider-body", retry_after=60)
         status, body = _audit(server, cookie, str(source.id))
         assert status == 503 and b"secret-provider-body" not in body
-        assert _Handler.source_admin_service.rate_limit.get() is not None  # type: ignore[union-attr]
+        service = server.RequestHandlerClass.source_admin_service
+        assert service is not None
+        assert service.rate_limit.get() is not None
         calls = client.calls[:]
         assert _audit(server, cookie, str(source.id))[0] == 503
         assert client.calls == calls
@@ -1937,8 +1977,8 @@ def test_configured_audit_provider_failure_and_global_cooldown(tmp_path: Path) -
 
 def test_configured_audit_public_failure_is_optional(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store, enabled=False)
-        service = _Handler.source_admin_service
+        source = _configured_source(server, store, enabled=False)
+        service = server.RequestHandlerClass.source_admin_service
         assert service is not None and isinstance(service.public_client, _PublicAudit)
         service.public_client.fail = True
         cookie = _login(server)
@@ -1954,7 +1994,7 @@ def test_last_effective_source_disable_is_blocked_in_ui_and_backend_even_for_sta
     tmp_path: Path,
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         sole = store.load()
         store.save(
             replace(sole, playlists=(replace(sole.playlists[0], source_ids=("ser", source.id)),))
@@ -1986,15 +2026,16 @@ def test_last_effective_source_disable_is_blocked_in_ui_and_backend_even_for_sta
         assert sole.playlists[0].display_name.encode() in body
         assert b"no enabled sources" in body
         assert store.path.read_bytes() == before
-        assert _Handler.diagnostic_store.list_events() == ()
-        assert client.calls == [] and _Handler.source_admin_service.auth.calls == 0
+        assert server.RequestHandlerClass.diagnostic_store.list_events() == ()
+        assert client.calls == []
+        assert server.RequestHandlerClass.source_admin_service.auth.calls == 0
 
 
 def test_paused_dormant_assignment_can_be_saved_but_cannot_be_resumed_over_http(
     tmp_path: Path,
 ) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         state = store.load()
         store.save(replace(state, playlists=(replace(state.playlists[0], enabled=False),)))
         cookie = _login(server)
@@ -2031,15 +2072,16 @@ def test_paused_dormant_assignment_can_be_saved_but_cannot_be_resumed_over_http(
             == 303
         )
         assert store.load().playlists[0].source_ids == (source.id,)
-        assert client.calls == [] and _Handler.source_admin_service.auth.calls == 0
+        assert client.calls == []
+        assert server.RequestHandlerClass.source_admin_service.auth.calls == 0
 
 
 def test_pending_activation_blocks_last_source_disable_in_ui_and_http(tmp_path: Path) -> None:
     with _server(tmp_path) as (server, client, store):
-        source = _configured_source(store)
+        source = _configured_source(server, store)
         store.save(ManagedState(sources=(source,)))
         template = BUILTIN_CATALOG.playlist("spain_spanish_news")
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         intent = ProvisioningIntent(
             state=ProvisioningState.REQUEST_STARTED,
             template_id=template.id,

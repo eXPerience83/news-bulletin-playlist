@@ -12,7 +12,7 @@ from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _multipart import import_upload as _multipart
 from test_playlist_import import donor, rewrite
-from test_source_admin_http import _Handler, _server
+from test_source_admin_http import _server
 from test_source_configuration_export import _forbid_effects
 
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
@@ -80,7 +80,7 @@ def test_preview_is_readonly_and_apply_is_single_offline_commit(tmp_path, monkey
         _request(server, "GET", "/admin/sources/new", cookie=cookie)
         before = _files(tmp_path)
         original_save = ManagedStateStore.save
-        _forbid_effects(monkeypatch, _Handler.source_admin_service)
+        _forbid_effects(monkeypatch, server.RequestHandlerClass.source_admin_service, server)
         page = preview(server, cookie, document)
         assert_valid_admin_html(page.decode())
         assert b"schema v10" not in page or b"v9" in page
@@ -257,7 +257,7 @@ def test_imported_editor_exact_seconds_exception_fields_and_no_oauth_activation(
         class Auth:
             get_access_token = forbidden
 
-        monkeypatch.setattr(_Handler, "managed_admin_auth", Auth())
+        monkeypatch.setattr(server.RequestHandlerClass, "managed_admin_auth", Auth())
         csrf = _csrf(_request(server, "GET", ROOT, cookie=cookie)[2])
         assert _request(
             server,
@@ -322,12 +322,12 @@ def test_import_and_edit_page_work_without_oauth_services(tmp_path, monkeypatch)
         owner = open_managed_state_store(tmp_path)
         cookie = _login(server)
         _request(server, "GET", ROOT, cookie=cookie)
-        source_service = _Handler.source_admin_service
+        source_service = server.RequestHandlerClass.source_admin_service
         real_save = ManagedStateStore.save
-        _forbid_effects(monkeypatch, source_service)
+        _forbid_effects(monkeypatch, source_service, server)
         monkeypatch.setattr(ManagedStateStore, "save", real_save)
-        monkeypatch.setattr(_Handler, "managed_admin_service", None)
-        monkeypatch.setattr(_Handler, "source_admin_service", None)
+        monkeypatch.setattr(server.RequestHandlerClass, "managed_admin_service", None)
+        monkeypatch.setattr(server.RequestHandlerClass, "source_admin_service", None)
         page = preview(server, cookie, document)
         assert _request(server, "POST", ROOT + "/apply", cookie=cookie, form=form(page))[0] == 200
         draft = owner.load_readonly().templates[0]

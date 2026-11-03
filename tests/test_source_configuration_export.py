@@ -6,6 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 from dataclasses import replace
 from http import HTTPStatus
+from http.server import HTTPServer
 
 import pytest
 from _admin_http import csrf as _csrf
@@ -14,7 +15,7 @@ from _admin_http import request as _request
 from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _managed_fixtures import _source
-from test_source_admin_http import _Handler, _server
+from test_source_admin_http import _server
 
 from news_bulletin_playlist import diagnostics_runtime
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
@@ -43,7 +44,7 @@ def installation(tmp_path):
             source_overrides=(ManagedSourceOverride(SourceId("rne"), PublicReleaseMode.DISABLED),),
         )
         store.save(state)
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         template = BUILTIN_CATALOG.playlists[0]
         service.provisioning_journal.save(
             ProvisioningIntent(
@@ -68,7 +69,7 @@ def installation(tmp_path):
         yield server, cookie, store, service, client, state
 
 
-def _forbid_effects(monkeypatch, service):
+def _forbid_effects(monkeypatch, service, server: HTTPServer):
     def forbidden(*args, **kwargs):
         pytest.fail("Portable download attempted an operational side effect")
 
@@ -83,11 +84,12 @@ def _forbid_effects(monkeypatch, service):
     monkeypatch.setattr(service.auth, "get_access_token", forbidden)
     monkeypatch.setattr(service, "client_factory", forbidden)
     monkeypatch.setattr(service.public_client, "observe_episode", forbidden)
-    monkeypatch.setattr(_Handler, "_spotify_state", forbidden)
-    monkeypatch.setattr(_Handler, "_spotify_metrics", forbidden)
-    monkeypatch.setattr(_Handler, "_admin_diagnostics", forbidden)
-    monkeypatch.setattr(_Handler.engine_lifecycle, "reconcile", forbidden)
-    monkeypatch.setattr(_Handler.engine_lifecycle, "wake", forbidden, raising=False)
+    monkeypatch.setattr(server.RequestHandlerClass, "_spotify_state", forbidden)
+    monkeypatch.setattr(server.RequestHandlerClass, "_spotify_metrics", forbidden)
+    monkeypatch.setattr(server.RequestHandlerClass, "_admin_diagnostics", forbidden)
+    lifecycle = server.RequestHandlerClass.engine_lifecycle
+    monkeypatch.setattr(lifecycle, "reconcile", forbidden)
+    monkeypatch.setattr(lifecycle, "wake", forbidden, raising=False)
     connect = socket.socket.connect
 
     def local_only(sock, address):
@@ -101,7 +103,7 @@ def _forbid_effects(monkeypatch, service):
 def test_all_sources_export_is_lossless_deterministic_and_readonly(installation, monkeypatch):
     server, cookie, store, service, client, state = installation
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     status, headers, body = _request(server, "GET", EXPORT, cookie=cookie)
     assert status == HTTPStatus.OK
     assert headers["Content-Type"] == "application/json"
@@ -140,7 +142,7 @@ def test_individual_source_download_preserves_every_capability(
 ):
     server, cookie, store, service, _, state = installation
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     status, headers, body = _request(
         server, "GET", f"{EXPORT}?source_id={source_id}", cookie=cookie
     )
@@ -160,7 +162,7 @@ def test_multiple_languages_and_countries_survive_http(installation):
         countries=(CountryCode("ES"), CountryCode("GB")),
         languages=(LanguageTag("es-ES"), LanguageTag("en")),
     )
-    _Handler.managed_admin_service.catalog = replace(
+    server.RequestHandlerClass.managed_admin_service.catalog = replace(
         BUILTIN_CATALOG, sources=(source, *BUILTIN_CATALOG.sources[1:])
     )
     status, _, body = _request(server, "GET", f"{EXPORT}?source_id=ser", cookie=cookie)
@@ -205,7 +207,7 @@ def test_invalid_or_ambiguous_selection_is_rejected_without_reading(
 def test_unknown_source_is_404_without_changes(installation, monkeypatch):
     server, cookie, store, service, _, _ = installation
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     status, _, body = _request(server, "GET", f"{EXPORT}?source_id=missing", cookie=cookie)
     assert status == HTTPStatus.NOT_FOUND
     assert body == b"Configured source not found"
@@ -242,7 +244,7 @@ def test_legacy_download_upgrades_only_in_memory(installation, monkeypatch, vers
         payload["templates"] = []
     store.path.write_text(json.dumps(payload, indent=4) + "\n\n")
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     status, _, body = _request(server, "GET", EXPORT, cookie=cookie)
     assert status == HTTPStatus.OK
     assert len(parse_sources(body)) == (13 if version < 3 else 14)
@@ -263,7 +265,7 @@ def test_corrupt_state_returns_sanitized_error_without_changes(installation, mon
     server, cookie, store, service, _, _ = installation
     store.path.write_bytes(raw)
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     status, headers, body = _request(server, "GET", EXPORT, cookie=cookie)
     assert status == HTTPStatus.INTERNAL_SERVER_ERROR
     assert body == b"Source export is unavailable"
@@ -283,7 +285,7 @@ def test_unsafe_state_path_is_rejected(installation, monkeypatch, kind):
         if kind == "symlink":
             target.write_bytes(original)
         store.path.symlink_to(target)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     status, _, body = _request(server, "GET", EXPORT, cookie=cookie)
     assert status == HTTPStatus.INTERNAL_SERVER_ERROR
     assert body == b"Source export is unavailable"
@@ -299,7 +301,7 @@ def test_missing_state_is_not_created(installation, monkeypatch):
     server, cookie, store, service, _, _ = installation
     store.path.unlink()
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     status, _, body = _request(server, "GET", EXPORT, cookie=cookie)
     assert status == HTTPStatus.OK
     assert len(parse_sources(body)) == 13
@@ -332,7 +334,7 @@ def test_snapshot_is_read_once_under_existing_configuration_lock(installation, m
 
     monkeypatch.setattr(service.synchronization, "hold", tracked_hold)
     monkeypatch.setattr(store, "load_readonly", tracked_read)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     assert _request(server, "GET", EXPORT, cookie=cookie)[0] == HTTPStatus.OK
     assert reads == 1
 
@@ -340,7 +342,7 @@ def test_snapshot_is_read_once_under_existing_configuration_lock(installation, m
 def test_sources_page_has_distinct_portable_download_links(installation):
     server, cookie, _, _, _, state = installation
     # A normal page currently uses the existing provisioning-aware snapshot.
-    _Handler.managed_admin_service.provisioning_journal.clear()
+    server.RequestHandlerClass.managed_admin_service.provisioning_journal.clear()
     status, _, body = _request(server, "GET", "/admin/sources", cookie=cookie)
     assert status == HTTPStatus.OK
     assert_valid_admin_html(body.decode())
@@ -356,7 +358,7 @@ def test_empty_installation_explains_unavailable_export(installation):
     store.save(ManagedState())
     service.provisioning_journal.clear()
     service.catalog = BuiltInCatalog((), ())
-    _Handler.managed_admin_service.catalog = service.catalog
+    server.RequestHandlerClass.managed_admin_service.catalog = service.catalog
     status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
     assert status == HTTPStatus.OK
     assert b"No sources are available to export. Add a source first." in page
@@ -396,7 +398,7 @@ def test_duplicate_show_state_does_not_export_partial_data(installation, monkeyp
     payload["sources"].append(payload["sources"][0])
     store.path.write_text(json.dumps(payload))
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     assert _request(server, "GET", EXPORT, cookie=cookie)[0] == HTTPStatus.INTERNAL_SERVER_ERROR
     assert _files(store.path.parent) == before
 
@@ -404,7 +406,7 @@ def test_duplicate_show_state_does_not_export_partial_data(installation, monkeyp
 def test_codec_incompatibility_returns_no_partial_download(installation, monkeypatch):
     server, cookie, store, service, _, _ = installation
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     monkeypatch.delitem(TITLE_PARSERS, "ser")
     status, headers, body = _request(server, "GET", EXPORT, cookie=cookie)
     assert status == HTTPStatus.INTERNAL_SERVER_ERROR
@@ -415,7 +417,7 @@ def test_codec_incompatibility_returns_no_partial_download(installation, monkeyp
 
 def test_missing_export_synchronization_is_unavailable(installation, monkeypatch):
     server, cookie, _, _, _, _ = installation
-    monkeypatch.setattr(_Handler, "configuration_synchronization", None)
+    monkeypatch.setattr(server.RequestHandlerClass, "configuration_synchronization", None)
     status, _, body = _request(server, "GET", EXPORT, cookie=cookie)
     assert status == HTTPStatus.SERVICE_UNAVAILABLE
     assert body == b"Source export is unavailable"
@@ -424,11 +426,11 @@ def test_missing_export_synchronization_is_unavailable(installation, monkeypatch
 def test_export_works_without_oauth_or_spotify_source_service(installation, monkeypatch):
     server, cookie, store, service, _, _ = installation
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
-    monkeypatch.setattr(_Handler, "source_admin_service", None)
-    monkeypatch.setattr(_Handler, "spotify_auth", None)
-    monkeypatch.setattr(_Handler, "managed_admin_auth", None)
-    monkeypatch.setattr(_Handler, "managed_admin_service", None)
+    _forbid_effects(monkeypatch, service, server)
+    monkeypatch.setattr(server.RequestHandlerClass, "source_admin_service", None)
+    monkeypatch.setattr(server.RequestHandlerClass, "spotify_auth", None)
+    monkeypatch.setattr(server.RequestHandlerClass, "managed_admin_auth", None)
+    monkeypatch.setattr(server.RequestHandlerClass, "managed_admin_service", None)
     status, _, body = _request(server, "GET", EXPORT, cookie=cookie)
     assert status == HTTPStatus.OK
     assert len(parse_sources(body)) == 14
@@ -442,7 +444,7 @@ def test_quarantined_draft_is_preserved_and_not_included(installation, monkeypat
     payload["templates"] = [{"id": "custom_broken", "secret": "private-token-sentinel"}]
     store.path.write_text(json.dumps(payload))
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     status, _, body = _request(server, "GET", EXPORT, cookie=cookie)
     assert status == HTTPStatus.OK
     assert len(parse_sources(body)) == 14
@@ -473,7 +475,7 @@ def test_v8_installed_capabilities_export_over_authenticated_http(installation, 
     state = replace(state, schema_version=8, sources=(*state.sources, source))
     store.save(state)
     before = _files(store.path.parent)
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     status, headers, body = _request(
         server, "GET", EXPORT + "?source_id=" + source.id, cookie=cookie
     )

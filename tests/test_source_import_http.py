@@ -15,7 +15,7 @@ from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _multipart import import_upload as _multipart
 from test_installed_sources import _rich_state
-from test_source_admin_http import _Handler, _server
+from test_source_admin_http import _server
 from test_source_configuration_export import _forbid_effects
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -69,7 +69,7 @@ def installation(tmp_path):
     with _server(tmp_path) as (server, client, store):
         state = _rich_state()
         store.save(state)
-        service = _Handler.source_admin_service
+        service = server.RequestHandlerClass.source_admin_service
         service.provisioning_journal.save(
             ProvisioningIntent(
                 ProvisioningState.REQUEST_STARTED,
@@ -90,9 +90,9 @@ def installation(tmp_path):
         yield server, cookie, store, service, client, state, page
 
 
-def _guard(monkeypatch, service):
+def _guard(monkeypatch, service, server):
     save = ManagedStateStore.save
-    _forbid_effects(monkeypatch, service)
+    _forbid_effects(monkeypatch, service, server)
     flags = {"allow_save": False, "saves": 0}
 
     def guarded(store, state):
@@ -120,7 +120,7 @@ def test_preview_is_readonly_and_explicit_apply_preserves_all_other_files(
 ):
     server, cookie, store, service, client, state, page = installation
     before = _files(store.path.parent)
-    flags = _guard(monkeypatch, service)
+    flags = _guard(monkeypatch, service, server)
     status, headers, body = _post(server, cookie, _document(), _csrf(page))
     assert status == 200
     assert headers["Cache-Control"] == "no-store"
@@ -179,7 +179,7 @@ def test_csrf_is_required_before_import_state_access(installation, monkeypatch, 
         status, _, body = _post(server, cookie, _document(), _csrf(page))
         assert status == 200
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
 
     def forbidden(*args, **kwargs):
         pytest.fail("Invalid CSRF must not read configuration")
@@ -199,7 +199,7 @@ def test_two_sessions_cannot_confirm_each_others_preview(installation, monkeypat
     server, cookie, store, service, client, state, page = installation
     second_cookie = _login(server)
     _, _, second_page = _request(server, "GET", ROOT, cookie=second_cookie)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     status, _, body = _post(server, cookie, _document(), _csrf(page))
     assert status == 200
     form = _form(body)
@@ -214,7 +214,7 @@ def test_two_sessions_cannot_confirm_each_others_preview(installation, monkeypat
 
 def test_superseded_preview_cannot_confirm_a_new_document(installation, monkeypatch):
     server, cookie, store, service, client, state, page = installation
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     _, _, first = _post(server, cookie, _document(display_name="First"), _csrf(page))
     _, _, second = _post(server, cookie, _document(display_name="Second"), _csrf(first))
     form = _form(first)
@@ -233,7 +233,7 @@ def test_stale_http_confirmation_requires_new_preview(installation, monkeypatch,
         intent = service.provisioning_journal.load()
         service.provisioning_journal.save(replace(intent, display_name="Changed pending"))
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     assert _request(server, "POST", ROOT + "/apply", cookie=cookie, form=_form(body))[0] == 409
     assert _files(store.path.parent) == before
 
@@ -243,7 +243,7 @@ def test_stale_http_confirmation_requires_new_preview(installation, monkeypatch,
 )
 def test_tampered_confirmation_does_not_install(installation, monkeypatch, change):
     server, cookie, store, service, client, state, page = installation
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     status, _, body = _post(server, cookie, _document(), _csrf(page))
     assert status == 200
     before = _files(store.path.parent)
@@ -267,7 +267,7 @@ def test_keep_local_conflict_and_cancel_are_explicit_no_ops(installation, monkey
     server, cookie, store, service, client, state, page = installation
     document = export_sources((replace(BUILTIN_CATALOG.sources[0], display_name="Foreign name"),))
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     status, _, body = _post(server, cookie, document, _csrf(page))
     assert status == 200
     assert b"conflict" in body and b"Foreign name" in body and b"Cadena SER" in body
@@ -291,7 +291,7 @@ def test_http_schema_upgrade_warning_and_acknowledgement(installation, monkeypat
     state = ManagedState(schema_version=version)
     store.save(state)
     before = _files(store.path.parent)
-    flags = _guard(monkeypatch, service)
+    flags = _guard(monkeypatch, service, server)
     _, _, body = _post(server, cookie, _document(), _csrf(page))
     assert b"Older images cannot" in body and b"complete production backup" in body
     form = _form(body)
@@ -312,14 +312,14 @@ def test_http_schema_upgrade_warning_and_acknowledgement(installation, monkeypat
 def test_bad_or_oversized_upload_has_no_side_effects(installation, monkeypatch, document, expected):
     server, cookie, store, service, client, state, page = installation
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     assert _post(server, cookie, document, _csrf(page))[0] == expected
     assert _files(store.path.parent) == before
 
 
 def test_unsupported_capability_is_visible_but_apply_is_rejected(installation, monkeypatch):
     server, cookie, store, service, client, state, page = installation
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     payload = json.loads(_document())
     payload["sources"][0]["processing"]["parser"]["id"] = "private-error-sentinel"
     before = _files(store.path.parent)
@@ -338,9 +338,9 @@ def test_import_escapes_untrusted_names_and_is_available_without_oauth_service(
     installation, monkeypatch
 ):
     server, cookie, store, service, client, state, page = installation
-    flags = _guard(monkeypatch, service)
-    monkeypatch.setattr(_Handler, "source_admin_service", None)
-    monkeypatch.setattr(_Handler, "managed_admin_service", None)
+    flags = _guard(monkeypatch, service, server)
+    monkeypatch.setattr(server.RequestHandlerClass, "source_admin_service", None)
+    monkeypatch.setattr(server.RequestHandlerClass, "managed_admin_service", None)
     name = '<script>alert("x")</script>'
     status, _, body = _post(server, cookie, _document(display_name=name), _csrf(page))
     assert status == 200
@@ -370,7 +370,7 @@ def test_strict_upload_headers_are_rejected_before_configuration(
     installation, monkeypatch, headers
 ):
     server, cookie, store, service, client, state, page = installation
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
 
     def forbidden(*args, **kwargs):
         pytest.fail("Invalid upload must not read state")
@@ -385,7 +385,7 @@ def test_post_replace_error_is_reported_with_readback_and_without_second_save(
     from news_bulletin_playlist import managed_state
 
     server, cookie, store, service, client, state, page = installation
-    flags = _guard(monkeypatch, service)
+    flags = _guard(monkeypatch, service, server)
     _, _, body = _post(server, cookie, _document(), _csrf(page))
 
     def interrupted(*args, **kwargs):
@@ -416,7 +416,7 @@ def test_full_hundred_conflict_decisions_fit_existing_confirmation_form_limit(
     document = export_sources(
         tuple(replace(s, display_name="Foreign " + str(i)) for i, s in enumerate(definitions))
     )
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     status, _, body = _post(server, cookie, document, _csrf(page))
     assert status == 200
     form = _form(body)
@@ -432,14 +432,14 @@ def test_preview_capacity_returns_retry_guidance_without_writes(installation, mo
     )
 
     server, cookie, store, service, client, state, page = installation
-    manager = admin_session_manager_for(_Handler.admin_security)
+    manager = admin_session_manager_for(server.RequestHandlerClass.admin_security)
     occupied = []
     for _ in range(MAX_SOURCE_IMPORT_PREVIEWS):
         session = manager.create_session()
         occupied.append(session)
         manager.stage_source_import(session, _document(), "configuration")
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     status, _, body = _post(server, cookie, _document(), _csrf(page))
     assert status == 503
     assert b"Too many source previews; cancel an existing preview or try later" in body
@@ -460,7 +460,7 @@ def test_preview_diagnoses_each_unsupported_contract_and_blocks_forged_apply(
 ):
     server, cookie, store, service, client, state, page = installation
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     payload = json.loads(_document(display_name="<script>preview-name</script>"))
     processing = payload["sources"][0]["processing"]
     if capability == "collection_filter":
@@ -519,7 +519,7 @@ def test_preview_reports_missing_installed_registry_capability(installation, mon
             "parameters": {},
         }
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     monkeypatch.delitem(
         TITLE_PARSERS if category == "parser" else COLLECTION_FILTERS,
         "ser" if category == "parser" else "un_news_es_minutes",
@@ -535,7 +535,7 @@ def test_mixed_preview_renders_all_statuses_and_no_partial_apply(installation, m
 
     server, cookie, store, service, client, state, page = installation
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     status, _, body = _post(server, cookie, _mixed_document(), _csrf(page))
     assert status == 200
     for status in ("create", "reuse", "identical", "conflict", "unsupported"):
@@ -557,7 +557,7 @@ def test_multiple_unsupported_rows_remain_deterministic_and_cancellable(installa
     payload["sources"][0]["processing"]["parser"]["parameters"] = {"unknown": "value"}
     payload["sources"].append(second)
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
     status, _, body = _post(server, cookie, json.dumps(payload).encode(), _csrf(page))
     assert status == 200 and b"2 unsupported source(s)" in body
     assert body.index(b"second-source") < body.index(b"foreign_source")
@@ -589,7 +589,7 @@ def test_unsupported_does_not_mask_invalid_uploaded_batch(installation, monkeypa
             second["spotify_show_id"] = "D" * 22
         payload["sources"].append(second)
     before = _files(store.path.parent)
-    _guard(monkeypatch, service)
+    _guard(monkeypatch, service, server)
 
     def forbidden(*args, **kwargs):
         pytest.fail("Malformed preview must fail before state reads")

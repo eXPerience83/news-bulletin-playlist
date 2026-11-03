@@ -9,7 +9,7 @@ from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
 from _html import assert_valid_admin_html
-from test_source_admin_http import _Handler, _server
+from test_source_admin_http import _server
 from test_source_import_http import ROOT, _form, _post
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -28,8 +28,8 @@ def test_empty_fresh_root_shows_downloadable_examples_without_oauth(
     assert store.catalog.sources == ()
     assert store.load_readonly().sources == ()
     with _server(tmp_path) as (server, client, _):
-        _Handler.managed_admin_service = None
-        _Handler.source_admin_service = None
+        server.RequestHandlerClass.managed_admin_service = None
+        server.RequestHandlerClass.source_admin_service = None
         cookie = _login(server)
         before = (tmp_path / V11_OPERATIONAL_FILENAME).read_bytes()
         assert _request(server, "GET", PRESET)[0] != 200
@@ -57,8 +57,8 @@ def test_explicit_preset_import_without_oauth_is_durable_and_idempotent(
 ) -> None:
     open_managed_state_store(tmp_path)
     with _server(tmp_path) as (server, client, _):
-        _Handler.managed_admin_service = None
-        _Handler.source_admin_service = None
+        server.RequestHandlerClass.managed_admin_service = None
+        server.RequestHandlerClass.source_admin_service = None
         cookie = _login(server)
         source_json = _request(server, "GET", PRESET, cookie=cookie)[2]
         page = _request(server, "GET", ROOT, cookie=cookie)[2]
@@ -105,8 +105,8 @@ def test_explicit_preset_import_without_oauth_is_durable_and_idempotent(
 def test_invalid_preset_selection_cannot_mutate_state(tmp_path: Path, query: str) -> None:
     open_managed_state_store(tmp_path)
     with _server(tmp_path) as (server, _, _):
-        _Handler.managed_admin_service = None
-        _Handler.source_admin_service = None
+        server.RequestHandlerClass.managed_admin_service = None
+        server.RequestHandlerClass.source_admin_service = None
         cookie = _login(server)
         before = (tmp_path / V11_OPERATIONAL_FILENAME).read_bytes()
         response = _request(server, "GET", "/admin/sources/preset.json?" + query, cookie=cookie)
