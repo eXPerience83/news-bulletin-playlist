@@ -1,0 +1,71 @@
+name: Test coverage audit (manual)
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - .github/workflows/issue-564-coverage.yml
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.15"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - name: Install isolated audit dependencies
+        run: pip install -e '.[dev]' 'pytest-cov>=6,<8'
+      - name: Collect case inventory
+        run: |
+          pytest --collect-only -q > /tmp/issue-564-collect.txt
+          tail -n 8 /tmp/issue-564-collect.txt
+      - name: Measure tests, slowest cases, lines and branches
+        run: |
+          pytest --cov=news_bulletin_playlist --cov-branch --cov-report=term --cov-report=json:coverage-564.json --durations=30
+      - name: Summarize missing coverage, no change to release gates
+        run: |
+          python - <<'PY'
+          import json
+          import platform
+          from pathlib import Path
+
+          report = json.loads(Path("coverage-564.json").read_text())
+          totals = report["totals"]
+          print("ISSUE 564 COVERAGE SUMMARY")
+          print("Python:", platform.python_version())
+          print("Coverage.py:", report.get("meta", {}).get("version"))
+          print("Line coverage: {}/{} ({:.2f}%)".format(
+              totals["covered_lines"], totals["num_statements"],
+              100 * totals["covered_lines"] / totals["num_statements"],
+          ))
+          branches = totals["num_branches"]
+          print("Branch coverage: {}/{} ({:.2f}%)".format(
+              totals["covered_branches"], branches,
+              100 * totals["covered_branches"] / branches if branches else 100.0,
+          ))
+          print("Top source files by uncovered branches/lines:")
+          ranked = sorted(
+              report["files"].items(),
+              key=lambda item: (
+                  item[1]["summary"]["missing_branches"],
+                  item[1]["summary"]["missing_lines"],
+              ),
+              reverse=True,
+          )
+          for filename, data in ranked[:25]:
+              summary = data["summary"]
+              print("{:4d} missing branches | {:4d} missing lines | {}".format(
+                  summary["missing_branches"], summary["missing_lines"], filename,
+              ))
+              print("  Missing lines (first 20):", data["missing_lines"][:20])
+              print("  Missing branch arcs (first 12):", data.get("missing_branches", [])[:12])
+          PY
