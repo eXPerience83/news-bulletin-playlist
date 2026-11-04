@@ -150,7 +150,8 @@ def test_admin_html_and_csrf_without_spotify_oauth_or_scheduler(tmp_path: Path) 
     from http import HTTPStatus
 
     from _html import assert_valid_admin_html
-    from test_managed_admin_runtime import _FakeLifecycle, _HandlerHarness, _response
+    from _http_handler import captured_response as _response
+    from _managed_admin_http_fixtures import _FakeLifecycle, _HandlerHarness
 
     from news_bulletin_playlist.lan_admin import LanAdminSecurity
 

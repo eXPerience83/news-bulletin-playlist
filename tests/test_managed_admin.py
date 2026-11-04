@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _managed_admin_fixtures import _Factory, _FakeSpotifyClient, _service
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog, PlaylistTemplate
 from news_bulletin_playlist.managed_admin import (
@@ -16,30 +17,6 @@ from news_bulletin_playlist.managed_admin import (
 from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
-
-
-class _FakeSpotifyClient:
-    def __init__(self, responses: list[dict[str, Any]]) -> None:
-        self.responses = responses
-        self.create_calls: list[tuple[str, str]] = []
-        self.update_calls: list[tuple[str, str, str]] = []
-
-    def create_playlist(
-        self, name: str, *, public: bool = True, description: str = ""
-    ) -> dict[str, Any]:
-        assert public is True
-        self.create_calls.append((name, description))
-        return self.responses.pop(0)
-
-    def change_playlist_details(
-        self,
-        playlist_id: str,
-        *,
-        name: str,
-        description: str,
-    ) -> dict[str, Any]:
-        self.update_calls.append((playlist_id, name, description))
-        return {}
 
 
 class _FailingCreateSpotifyClient(_FakeSpotifyClient):
@@ -72,16 +49,6 @@ class _FailingUpdateSpotifyClient(_FakeSpotifyClient):
         raise SpotifyTransportError("simulated update transport failure")
 
 
-class _Factory:
-    def __init__(self, responses: list[dict[str, Any]]) -> None:
-        self.client = _FakeSpotifyClient(responses)
-        self.tokens: list[str] = []
-
-    def __call__(self, access_token: str) -> _FakeSpotifyClient:
-        self.tokens.append(access_token)
-        return self.client
-
-
 class _FailingSaveStore(ManagedStateStore):
     def __init__(self, path: Path, *, fail_after: int = 0) -> None:
         super().__init__(path)
@@ -93,18 +60,6 @@ class _FailingSaveStore(ManagedStateStore):
             raise OSError("disk unavailable")
         self.saves += 1
         super().save(state)  # type: ignore[arg-type]
-
-
-def _service(
-    tmp_path: Path,
-    responses: list[dict[str, Any]],
-) -> tuple[ManagedAdminService, _Factory]:
-    factory = _Factory(responses)
-    service = ManagedAdminService(
-        ManagedStateStore(tmp_path / "managed-state.json"),
-        client_factory=factory,
-    )
-    return service, factory
 
 
 def test_snapshot_exposes_unmanaged_builtin_template(tmp_path: Path) -> None:
