@@ -18,6 +18,7 @@ from _installed_fixtures import EMPTY, _installed, _rich_state
 from _playlist_template_fixtures import _draft
 from _portable_playlist_fixtures import OTHER_UUID, UUID, _ready, donor, rewrite
 from _portable_playlist_fixtures import _service as export_service
+from _provisioning_fixtures import _request_intent
 
 from news_bulletin_playlist import managed_state
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
@@ -438,8 +439,6 @@ def test_atomic_state_faults_orphans_restart_and_retry(tmp_path, monkeypatch, st
 
 
 def test_state_and_pending_quarantine_preserved_stale_preview(tmp_path):
-    from test_managed_provisioning import _request_intent
-
     state = _rich_state()
     service = receiver(tmp_path, catalog=BUILTIN_CATALOG, state=state)
     service.provisioning.save(_request_intent())
