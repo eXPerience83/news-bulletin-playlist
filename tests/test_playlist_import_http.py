@@ -13,7 +13,7 @@ from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _multipart import import_upload as _multipart
 from _portable_playlist_fixtures import donor, rewrite
-from test_source_admin_http import _server
+from _source_admin_http_fixtures import _server
 
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
 from news_bulletin_playlist.playlist_import_web import imported_draft_editor
