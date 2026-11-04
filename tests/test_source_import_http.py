@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import http.client
 import json
-import re
 from dataclasses import replace
 
 import pytest
@@ -15,17 +13,15 @@ from _admin_http import request as _request
 from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _installed_fixtures import _rich_state
-from _multipart import import_upload as _multipart
 from _source_admin_http_fixtures import _server
 from _source_import_fixtures import _mixed_document
+from _source_import_http_fixtures import ROOT, _form, _post
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
 from news_bulletin_playlist.models import ExternalReference, SourceId
 from news_bulletin_playlist.portable_sources import export_sources
-
-ROOT = "/admin/sources/import"
 
 
 def _document(**changes):
@@ -35,34 +31,6 @@ def _document(**changes):
         external_references=(ExternalReference("spotify", "show", "B" * 22),),
     )
     return export_sources((replace(source, **changes),))
-
-
-def _post(server, cookie, document, token, *, path=ROOT + "/preview", modify=None):
-    content_type, body = _multipart(token, document)
-    headers = {"Content-Type": content_type}
-    if cookie:
-        headers["Cookie"] = cookie
-    if modify:
-        headers.update(modify)
-    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-    client.request("POST", path, body=body, headers=headers)
-    response = client.getresponse()
-    result = response.status, dict(response.getheaders()), response.read()
-    client.close()
-    return result
-
-
-def _form(body, **changes):
-    match = re.search(rb'name="preview_id" value="([A-Za-z0-9_-]+)"', body)
-    assert match
-    return dict(
-        csrf_token=_csrf(body),
-        preview_id=match[1].decode(),
-        action="apply",
-        confirm="1",
-        ack_v8="1",
-        **changes,
-    )
 
 
 @pytest.fixture

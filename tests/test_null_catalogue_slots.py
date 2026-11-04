@@ -306,7 +306,7 @@ def test_null_continuation_request_metrics_and_global_429(tmp_path, monkeypatch,
     import urllib.error
     import urllib.parse
 
-    from test_spotify_metrics import _Response
+    from _spotify_http_fixtures import _Response
 
     from news_bulletin_playlist.spotify.client import SpotifyClient
     from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics, SpotifyRequestOutcome
