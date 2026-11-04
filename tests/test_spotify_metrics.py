@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from _spotify_http_fixtures import _Response
 
 from news_bulletin_playlist.diagnostics_web import (
     DiagnosticFilters,
@@ -48,20 +49,6 @@ from news_bulletin_playlist.spotify_metrics import (
 NOW = datetime(2026, 9, 7, 10, 30, 45, tzinfo=UTC)
 TOKEN = "access-token-sentinel"
 BODY_SENTINEL = "provider-message-sentinel"
-
-
-class _Response:
-    def __init__(self, payload: bytes) -> None:
-        self.payload = payload
-
-    def __enter__(self) -> _Response:
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        return None
-
-    def read(self) -> bytes:
-        return self.payload
 
 
 class _ExecuteFailureContext:

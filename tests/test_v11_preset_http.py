@@ -10,7 +10,7 @@ from _admin_http import login as _login
 from _admin_http import request as _request
 from _html import assert_valid_admin_html
 from _source_admin_http_fixtures import _server
-from test_source_import_http import ROOT, _form, _post
+from _source_import_http_fixtures import ROOT, _form, _post
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.effective_config import load_effective_config

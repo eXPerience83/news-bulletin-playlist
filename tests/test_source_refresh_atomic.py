@@ -8,6 +8,7 @@ from datetime import timedelta
 
 import pytest
 from _catalogue_validation_fixtures import NOW, SOURCE, _Client, _item
+from _source_refresh_fixtures import TABLES, rows
 from _spotify_catalogue import catalogue_page
 
 import news_bulletin_playlist.spotify.first_persistence as persistence_module
@@ -15,12 +16,6 @@ from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.spotify.first_catalogue import fetch_source_catalogue
 from news_bulletin_playlist.spotify.first_models import RefreshReason
 from news_bulletin_playlist.spotify.first_persistence import SpotifyFirstJournal
-
-TABLES = (
-    "spotify_first_episode_state",
-    "spotify_first_episode_history",
-    "spotify_first_source_state",
-)
 
 
 def snapshot(items, *, now=NOW):
@@ -38,14 +33,6 @@ def apply(journal, value, *, now=NOW):
         detector_episode_id="D" * 22,
         coverage_cutoff_at=now - timedelta(days=2),
     )
-
-
-def rows(path):
-    with sqlite3.connect(path) as connection:
-        return {
-            table: connection.execute(f'SELECT * FROM "{table}" ORDER BY 1,2,3').fetchall()
-            for table in TABLES
-        }
 
 
 def setup(tmp_path):

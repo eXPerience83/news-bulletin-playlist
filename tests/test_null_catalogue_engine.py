@@ -8,8 +8,8 @@ from datetime import timedelta
 import pytest
 from _catalogue_validation_fixtures import NOW, SOURCE, _item
 from _reconciliation import _desired, _FakeSpotify, _playlist
+from _source_refresh_fixtures import rows
 from _spotify_catalogue import catalogue_page
-from test_source_refresh_atomic import rows
 
 import news_bulletin_playlist.engine as engine_module
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
