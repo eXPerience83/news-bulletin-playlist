@@ -6,9 +6,9 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
+from _reconciliation import _desired, _FakeSpotify, _playlist
 from _spotify_catalogue import catalogue_page
 from test_catalogue_validation_diagnostics import NOW, SOURCE, _item
-from test_reconciliation import _desired, _FakeSpotify, _playlist
 from test_source_refresh_atomic import rows
 
 import news_bulletin_playlist.engine as engine_module
