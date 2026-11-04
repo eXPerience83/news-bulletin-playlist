@@ -422,6 +422,45 @@ def test_runtime_emitter_rejects_unknown_refresh_reason(tmp_path: Path) -> None:
     assert sentinel not in rendered
 
 
+def test_runtime_emitter_validates_details_without_persistent_store() -> None:
+    output = io.StringIO()
+    logger = logging.Logger("test-no-diagnostic-store")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(logging.StreamHandler(output))
+    diagnostics = OperationalDiagnostics(None, logger=logger)
+    sentinel = "access-token-sentinel-never-log"
+
+    for details in (
+        {"cycle_in_progress": sentinel},
+        {"access_token": sentinel},
+    ):
+        diagnostics.emit(
+            occurred_at=NOW,
+            severity=DiagnosticSeverity.WARNING,
+            component="scheduler",
+            event_name="scheduler_shutdown_timeout",
+            details=details,
+        )
+
+    invalid_output = output.getvalue()
+    assert invalid_output.count("event=diagnostic_persistence_failed component=diagnostics") == 2
+    assert sentinel not in invalid_output
+    assert "cycle_in_progress=" not in invalid_output
+    assert "access_token=" not in invalid_output
+
+    diagnostics.emit(
+        occurred_at=NOW,
+        severity=DiagnosticSeverity.WARNING,
+        component="scheduler",
+        event_name="scheduler_shutdown_timeout",
+        details={"phase": "scheduler", "cycle_in_progress": True},
+    )
+    rendered = output.getvalue()
+    assert "cycle_in_progress=true" in rendered
+    assert "phase=scheduler" in rendered
+    assert sentinel not in rendered
+
+
 def test_serve_persists_runtime_lifecycle_events(tmp_path: Path) -> None:
     stop = threading.Event()
     stop.set()

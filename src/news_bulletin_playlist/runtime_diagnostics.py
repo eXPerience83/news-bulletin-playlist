@@ -14,6 +14,7 @@ from news_bulletin_playlist.diagnostics import (
     DiagnosticEventStore,
     DiagnosticSeverity,
     DiagnosticValue,
+    _normalize_details,
 )
 from news_bulletin_playlist.persistence import PersistenceError
 
@@ -94,10 +95,11 @@ class OperationalDiagnostics:
         failures therefore degrade to one fixed, non-secret logger event instead of
         propagating arbitrary exception text.
         """
-        normalized_details = dict(details or {})
         effective_cycle_id = cycle_id if cycle_id is not None else _CURRENT_CYCLE_ID.get()
-        if self.store is not None:
-            try:
+        try:
+            # One allowlist for durable events and stdout-only fallback.
+            normalized_details = _normalize_details(dict(details or {}))
+            if self.store is not None:
                 self.store.record(
                     occurred_at=occurred_at,
                     severity=severity,
@@ -108,9 +110,9 @@ class OperationalDiagnostics:
                     playlist_id=playlist_id,
                     details=normalized_details,
                 )
-            except PersistenceError, ValueError:
-                self.logger.error("event=diagnostic_persistence_failed component=diagnostics")
-                return
+        except PersistenceError, ValueError:
+            self.logger.error("event=diagnostic_persistence_failed component=diagnostics")
+            return
 
         fields = [
             f"event={event_name}",
