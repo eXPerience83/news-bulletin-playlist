@@ -5,7 +5,10 @@ import hashlib
 import io
 import json
 import logging
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime, timedelta
+from http.client import HTTPException
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -37,6 +40,7 @@ from news_bulletin_playlist.spotify.public_detector import (
     PublicShowResponseError,
     PublicShowResponseFailureReason,
     PublicShowTransportError,
+    UrllibPublicShowTransport,
     parse_public_show_embed,
     spotify_show_id,
 )
@@ -342,6 +346,156 @@ def test_public_show_client_reads_embed_and_oembed_without_auth_headers() -> Non
         (oembed_url, "application/json"),
     ]
     assert show_url in oembed_url.replace("%3A", ":").replace("%2F", "/")
+
+
+@pytest.mark.parametrize(
+    ("timeout_seconds", "max_response_bytes"),
+    [(0.0, 8), (-1.0, 8), (1.25, 0), (1.25, -1)],
+)
+def test_public_urllib_transport_rejects_nonpositive_time_and_size_limits(
+    timeout_seconds: float, max_response_bytes: int
+) -> None:
+    with pytest.raises(ValueError, match="public Spotify"):
+        UrllibPublicShowTransport(
+            timeout_seconds=timeout_seconds, max_response_bytes=max_response_bytes
+        )
+
+
+@pytest.mark.parametrize("payload", [b"12345678", b"123456789secret-provider-body"])
+def test_public_urllib_transport_sends_only_public_headers_and_bounds_response(
+    monkeypatch: pytest.MonkeyPatch, payload: bytes
+) -> None:
+    requested_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    read_limits: list[int] = []
+    requests: list[urllib.request.Request] = []
+
+    class Response(io.BytesIO):
+        status = 200
+        headers = {"Content-Type": "text/html"}
+
+        def read(self, size: int = -1) -> bytes:
+            read_limits.append(size)
+            return super().read(size)
+
+    response = Response(payload)
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> Response:
+        assert timeout == 1.25
+        requests.append(request)
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    transport = UrllibPublicShowTransport(timeout_seconds=1.25, max_response_bytes=8)
+    if len(payload) == 8:
+        result = transport.get(requested_url, accept="text/html")
+        assert result == PublicHttpResponse(200, "text/html", payload)
+    else:
+        with pytest.raises(PublicShowResponseError) as exc_info:
+            transport.get(requested_url, accept="text/html")
+        assert exc_info.value.reason is PublicShowResponseFailureReason.RESPONSE_TOO_LARGE
+        capture = exc_info.value.capture
+        assert capture is not None
+        assert capture.surface == "public"
+        assert capture.status == 200
+        assert capture.content_type == "text/html"
+        assert capture.body == payload[:8]
+        assert capture.truncated
+        assert b"secret-provider-body" not in capture.body
+        assert "secret-provider-body" not in str(exc_info.value)
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.full_url == requested_url
+    assert request.get_method() == "GET"
+    assert request.get_header("Accept") == "text/html"
+    assert request.get_header("User-agent") == "news-bulletin-playlist-public-detector/1"
+    assert request.get_header("Authorization") is None
+    assert read_limits == [9]
+    assert response.closed
+
+
+@pytest.mark.parametrize("failure_kind", ["http", "url", "timeout", "os", "protocol"])
+def test_public_urllib_transport_maps_failures_to_bounded_errors(
+    monkeypatch: pytest.MonkeyPatch, failure_kind: str
+) -> None:
+    requested_url = f"https://open.spotify.com/embed/show/{SHOW_ID}"
+    if failure_kind == "http":
+        failure: Exception = urllib.error.HTTPError(
+            requested_url, 429, "secret-provider-body", {}, None
+        )
+    elif failure_kind == "url":
+        failure = urllib.error.URLError("secret-provider-body")
+    elif failure_kind == "timeout":
+        failure = TimeoutError("secret-provider-body")
+    elif failure_kind == "os":
+        failure = OSError("secret-provider-body")
+    else:
+        failure = HTTPException("secret-provider-body")
+
+    def fake_urlopen(_request: object, *, timeout: float) -> None:
+        assert timeout == 1.25
+        raise failure
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    transport = UrllibPublicShowTransport(timeout_seconds=1.25)
+    expected = PublicShowHttpError if failure_kind == "http" else PublicShowTransportError
+    with pytest.raises(expected) as exc_info:
+        transport.get(requested_url, accept="application/json")
+
+    assert exc_info.value.__cause__ is failure
+    assert "secret-provider-body" not in str(exc_info.value)
+    if failure_kind == "http":
+        assert exc_info.value.status == 429
+
+
+def test_public_urllib_transport_rejects_non_200_status_without_provider_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RedirectResponse(io.BytesIO):
+        status = 302
+        headers = {"Content-Type": "text/plain"}
+
+    response = RedirectResponse(b"secret-provider-body")
+
+    def fake_urlopen(_request: object, *, timeout: float) -> RedirectResponse:
+        assert timeout == 1.25
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(PublicShowHttpError) as exc_info:
+        UrllibPublicShowTransport(timeout_seconds=1.25).get(
+            f"https://open.spotify.com/embed/show/{SHOW_ID}", accept="text/html"
+        )
+    assert exc_info.value.status == 302
+    assert "secret-provider-body" not in str(exc_info.value)
+    assert response.closed
+
+
+def test_public_urllib_transport_sanitizes_body_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingRead(io.BytesIO):
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def read(self, size: int = -1) -> bytes:
+            del size
+            raise OSError("secret-provider-body")
+
+    response = FailingRead(b"")
+
+    def fake_urlopen(_request: object, *, timeout: float) -> FailingRead:
+        assert timeout == 1.25
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(PublicShowTransportError) as exc_info:
+        UrllibPublicShowTransport(timeout_seconds=1.25).get(
+            f"https://open.spotify.com/embed/show/{SHOW_ID}", accept="application/json"
+        )
+    assert str(exc_info.value) == "Spotify public show request failed"
+    assert "secret-provider-body" not in str(exc_info.value)
+    assert response.closed
 
 
 def test_public_metrics_count_unchanged_embed_without_oembed(tmp_path: Path) -> None:
