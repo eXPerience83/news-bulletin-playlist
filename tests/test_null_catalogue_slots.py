@@ -11,8 +11,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
-from _spotify_catalogue import catalogue_page
-from test_catalogue_validation_diagnostics import (
+from _catalogue_validation_fixtures import (
     NOW,
     SOURCE,
     _Auth,
@@ -20,6 +19,7 @@ from test_catalogue_validation_diagnostics import (
     _item,
     _safe,
 )
+from _spotify_catalogue import catalogue_page
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity

@@ -7,8 +7,8 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
+from _catalogue_validation_fixtures import NOW, SOURCE, _Client, _item
 from _spotify_catalogue import catalogue_page
-from test_catalogue_validation_diagnostics import NOW, SOURCE, _Client, _item
 
 import news_bulletin_playlist.spotify.first_persistence as persistence_module
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
