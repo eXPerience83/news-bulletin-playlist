@@ -591,3 +591,106 @@ def test_diagnostics_routes_require_admin_and_public_status_hides_raw_errors(
             handler.diagnostic_timezone,
             handler.diagnostic_timezone_label,
         ) = previous
+
+
+def test_diagnostic_zip_requires_session_and_rejects_duplicate_filters_before_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticEventStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    security = AdminSecurity(PASSWORD)
+
+    def forbidden_read(**_kwargs: object) -> None:
+        raise AssertionError("diagnostic export must not read before authorization and validation")
+
+    monkeypatch.setattr(store, "list_events_for_export_with_truncation", forbidden_read)
+    monkeypatch.setattr(store, "retention_status", forbidden_read)
+
+    class ExportHandler(DiagnosticOperationalHealthHandler):
+        data_dir = tmp_path
+        admin_security = security
+        spotify_auth = None
+        operational_status = None
+        diagnostic_store = store
+
+    server = HTTPServer(("127.0.0.1", 0), ExportHandler)
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        thread = _serve_one(server)
+        try:
+            response = _no_redirect_open(
+                _request(f"{base_url}/admin/diagnostics/export.zip?hours=all")
+            )
+        finally:
+            thread.join(timeout=2)
+        assert response.code == HTTPStatus.SEE_OTHER
+        assert response.headers.get("Location") == "/admin/login"
+        assert response.headers.get("Content-Disposition") is None
+        response.close()
+
+        session_id = admin_session_manager_for(security).create_session()
+        cookie = f"{ADMIN_SESSION_COOKIE}={session_id}"
+        thread = _serve_one(server)
+        try:
+            response = _no_redirect_open(
+                _request(
+                    f"{base_url}/admin/diagnostics/export.zip?hours=all&hours=1",
+                    cookie=cookie,
+                )
+            )
+        finally:
+            thread.join(timeout=2)
+        assert response.code == HTTPStatus.BAD_REQUEST
+        assert response.read() == b"Invalid diagnostics filters"
+        assert response.headers.get("Content-Disposition") is None
+        response.close()
+    finally:
+        server.server_close()
+
+
+def test_diagnostic_zip_read_error_returns_sanitized_503_without_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiagnosticEventStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    security = AdminSecurity(PASSWORD)
+    leaked = f"{SECRET} {tmp_path / 'private-state.sqlite3'}"
+    reads: list[str] = []
+
+    def failed_read(**_kwargs: object) -> None:
+        reads.append("attempt")
+        raise PersistenceError(leaked)
+
+    def forbidden_retention() -> None:
+        raise AssertionError("export must stop after failed snapshot")
+
+    monkeypatch.setattr(store, "list_events_for_export_with_truncation", failed_read)
+    monkeypatch.setattr(store, "retention_status", forbidden_retention)
+
+    class ExportHandler(DiagnosticOperationalHealthHandler):
+        data_dir = tmp_path
+        admin_security = security
+        spotify_auth = None
+        operational_status = None
+        diagnostic_store = store
+
+    server = HTTPServer(("127.0.0.1", 0), ExportHandler)
+    session_id = admin_session_manager_for(security).create_session()
+    cookie = f"{ADMIN_SESSION_COOKIE}={session_id}"
+    url = f"http://127.0.0.1:{server.server_port}/admin/diagnostics/export.zip?hours=all"
+    try:
+        thread = _serve_one(server)
+        try:
+            response = _no_redirect_open(_request(url, cookie=cookie))
+        finally:
+            thread.join(timeout=2)
+        assert response.code == HTTPStatus.SERVICE_UNAVAILABLE
+        assert response.headers.get("Content-Type") == "text/plain; charset=utf-8"
+        assert response.headers.get("Content-Disposition") is None
+        response_body = response.read()
+        assert response_body == b"Diagnostic history is unavailable"
+        assert SECRET.encode() not in response_body
+        response.close()
+        assert reads == ["attempt"]
+    finally:
+        server.server_close()

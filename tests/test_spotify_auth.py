@@ -499,3 +499,65 @@ def test_reauthorization_marker_contains_no_refresh_secret(tmp_path: Path) -> No
     assert payload["status"] == CredentialStatus.REAUTH_REQUIRED
     assert payload["refresh_token"] is None
     assert "refresh-secret" not in store.path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "callback_suffix, expected_error",
+    [
+        ("state={state}&state={state}&code=secret-code", "duplicate state"),
+        ("state={state}&code=secret-code&code=other-code", "duplicate code"),
+        ("state={state}&error=access_denied&error=other", "duplicate error"),
+    ],
+)
+def test_duplicate_oauth_parameters_cannot_exchange_code_or_consume_pending_request(
+    tmp_path: Path, callback_suffix: str, expected_error: str
+) -> None:
+    service, transport, store = _service(tmp_path)
+    _, state = _start(service)
+
+    with pytest.raises(SpotifyOAuthCallbackError, match=expected_error):
+        service.complete_callback(callback_suffix.format(state=state), now=NOW)
+    assert transport.exchange_calls == []
+    assert not store.path.exists()
+
+    # A malformed external callback cannot invalidate a legitimate pending authorization.
+    service.complete_callback(
+        urllib.parse.urlencode({"state": state, "code": "legitimate-code"}),
+        now=NOW,
+    )
+    assert len(transport.exchange_calls) == 1
+    assert transport.exchange_calls[0]["code"] == "legitimate-code"
+    assert service.authorization_state() is AuthorizationState.CONNECTED
+
+
+def test_refresh_token_rotation_persistence_failure_does_not_cache_new_access_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    initial, _, store = _service(tmp_path)
+    _authorize(initial)
+    previous_record = store.load()
+    assert previous_record is not None
+
+    transport = _FakeTransport()
+    transport.refresh_response = TokenResponse(
+        access_token="access-rotated-secret",
+        expires_in=3600,
+        granted_scopes=PRODUCTION_SCOPES,
+        refresh_token="refresh-rotated-secret",
+    )
+    restarted, _, _ = _service(tmp_path, transport=transport, store=store)
+
+    def failed_save(record: SpotifyCredentialRecord) -> None:
+        assert record.refresh_token == "refresh-rotated-secret"
+        raise SpotifyCredentialStoreError("simulated rotation persistence failure")
+
+    monkeypatch.setattr(store, "save", failed_save)
+    with pytest.raises(SpotifyCredentialStoreError, match="rotation persistence failure") as exc:
+        restarted.get_access_token(now=NOW)
+
+    assert "access-rotated-secret" not in str(exc.value)
+    assert "refresh-rotated-secret" not in str(exc.value)
+    assert len(transport.refresh_calls) == 1
+    assert transport.refresh_calls[0]["refresh_token"] == previous_record.refresh_token
+    assert restarted._access_token is None
+    assert store.load() == previous_record
