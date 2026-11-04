@@ -12,6 +12,7 @@ from _installed_fixtures import _installed
 from _managed_fixtures import _state
 from _playlist_template_fixtures import _draft
 from _portable_playlist_fixtures import UUID, _ready, _service, _unpack
+from _provisioning_fixtures import _request_intent
 
 from news_bulletin_playlist import managed_state, portable_playlists
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
@@ -336,8 +337,6 @@ def test_lossy_or_missing_configuration_rejected(tmp_path, field, value):
 
 
 def test_v9_new_drafts_edits_and_managed_recovery_keep_distinct_identities(tmp_path):
-    from test_managed_provisioning import _request_intent
-
     from news_bulletin_playlist.managed_admin import ManagedAdminService
 
     store = ManagedStateStore(tmp_path / "managed-state.json")

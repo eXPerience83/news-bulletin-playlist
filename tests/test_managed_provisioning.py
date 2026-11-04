@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _provisioning_fixtures import _request_intent
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.managed_admin import (
@@ -132,21 +133,6 @@ def _activate(service: ManagedAdminService):  # type: ignore[no-untyped-def]
         cover_id=template.cover_id,
         source_ids=template.default_source_ids,
         access_token="token",
-    )
-
-
-def _request_intent() -> ProvisioningIntent:
-    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
-    return ProvisioningIntent(
-        state=ProvisioningState.REQUEST_STARTED,
-        template_id=template.id,
-        display_name=template.display_name,
-        description=template.description,
-        cover_id=template.cover_id,
-        source_ids=template.default_source_ids,
-        retention_hours=template.retention_hours,
-        max_episodes=template.max_episodes,
-        max_duration_seconds=1800,
     )
 
 
