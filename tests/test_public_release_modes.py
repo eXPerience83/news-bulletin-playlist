@@ -977,7 +977,7 @@ def test_disabled_history_failure_rolls_back_current_demotion(tmp_path):
 
 @pytest.mark.parametrize("operation", ["update", "set_enabled", "stop_managing", "activate"])
 def test_playlist_operations_preserve_builtin_overrides(tmp_path, operation):
-    from test_managed_admin import _service
+    from _managed_admin_fixtures import _service
 
     service, factory = _service(tmp_path, [{"id": "new-destination"}])
     overrides = (ManagedSourceOverride(SourceId("rne"), Mode.DISABLED),)
