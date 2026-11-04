@@ -35,6 +35,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import os
           import platform
           from pathlib import Path
 
@@ -68,4 +69,31 @@ jobs:
               ))
               print("  Missing lines (first 20):", data["missing_lines"][:20])
               print("  Missing branch arcs (first 12):", data.get("missing_branches", [])[:12])
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              lines_pct = 100 * totals["covered_lines"] / totals["num_statements"]
+              branch_pct = (
+                  100 * totals["covered_branches"] / branches if branches else 100.0
+              )
+              with Path(summary_path).open("a", encoding="utf-8") as summary_file:
+                  summary_file.write(
+                      "## Issue #564: Python 3.15 coverage audit\n\n"
+                      f"Python `{platform.python_version()}`; "
+                      f"Coverage.py `{report.get('meta', {}).get('version')}`.\n\n"
+                      "| Metric | Covered | Total | Coverage |\n"
+                      "| --- | ---: | ---: | ---: |\n"
+                      f"| Lines | {totals['covered_lines']} | {totals['num_statements']} | "
+                      f"{lines_pct:.2f}% |\n"
+                      f"| Branches | {totals['covered_branches']} | {branches} | "
+                      f"{branch_pct:.2f}% |\n\n"
+                      "### Top 10 uncovered source modules\n\n"
+                      "| Module | Missing branches | Missing lines |\n"
+                      "| --- | ---: | ---: |\n"
+                  )
+                  for filename, data in ranked[:10]:
+                      details = data["summary"]
+                      summary_file.write(
+                          f"| `{filename}` | {details['missing_branches']} | "
+                          f"{details['missing_lines']} |\n"
+                      )
           PY
