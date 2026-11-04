@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 
 import pytest
-from test_reconciliation import _FakeSpotify
+from _reconciliation import _FakeSpotify
 
 from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.partial_reconciliation import (
