@@ -22,7 +22,11 @@ from news_bulletin_playlist.custom_cover_assets import (
     is_uploaded_cover_id,
 )
 from news_bulletin_playlist.custom_playlist_templates import CUSTOM_DEFAULT_COVER_ID
-from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
+from news_bulletin_playlist.diagnostics import (
+    DiagnosticEventStore,
+    DiagnosticSeverity,
+    DiagnosticValue,
+)
 from news_bulletin_playlist.effective_config import (
     _reject_obsolete_configuration,
     load_effective_config,
@@ -208,7 +212,9 @@ class _MutableOperationalStatus(OperationalStatus):
         with self._lock:
             self._configured = configured
             if not configured:
-                self._running = False
+                # The scheduler may still be draining a cycle. Only its worker
+                # can mark that cycle finished; stopping new runs must not
+                # misreport an in-flight Spotify operation as already finished.
                 self._next_run_at = None
 
 
@@ -259,6 +265,7 @@ class EngineLifecycleController:
                 self._wake_scheduler_locked()
 
     def shutdown(self) -> None:
+        """Stop scheduling cooperatively; never cancel an in-flight provider write."""
         with self._lock:
             self.status.set_configured(False)
             self._request_scheduler_stop_locked()
@@ -272,7 +279,10 @@ class EngineLifecycleController:
             self._emit_scheduler(
                 DiagnosticSeverity.WARNING,
                 "scheduler_shutdown_timeout",
-                details={"phase": "scheduler"},
+                details={
+                    "phase": "scheduler",
+                    "cycle_in_progress": self.status.snapshot().running,
+                },
             )
 
     def _start_scheduler_locked(self) -> None:
@@ -333,7 +343,7 @@ class EngineLifecycleController:
         severity: DiagnosticSeverity,
         event_name: str,
         *,
-        details: dict[str, str] | None = None,
+        details: dict[str, DiagnosticValue] | None = None,
     ) -> None:
         diagnostics = self.diagnostics
         if diagnostics is None:
@@ -1608,7 +1618,7 @@ def _operational_status_page(
 
 def _engine_label(snapshot: OperationalStatusSnapshot) -> str:
     if not snapshot.configured:
-        return "Not configured"
+        return "Finishing in-flight cycle" if snapshot.running else "Not configured"
     return "Cycle running" if snapshot.running else "Scheduled"
 
 
