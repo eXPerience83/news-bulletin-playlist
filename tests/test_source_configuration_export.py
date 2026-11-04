@@ -13,7 +13,7 @@ from _admin_http import request as _request
 from _file_snapshots import snapshot_files as _files
 from _html import assert_valid_admin_html
 from _managed_fixtures import _source
-from test_source_admin_http import _server
+from _source_admin_http_fixtures import _server
 
 from news_bulletin_playlist import diagnostics_runtime
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
@@ -454,7 +454,7 @@ def test_v8_installed_capabilities_export_over_authenticated_http(installation, 
 def test_v8_source_http_edit_preserves_languages_countries_and_processing(
     installation, monkeypatch
 ):
-    from test_source_admin_http import _update_form
+    from _source_admin_http_fixtures import _update_form
 
     server, cookie, store, service, client, state = installation
     source = _installed_definition()

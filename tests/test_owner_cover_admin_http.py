@@ -12,8 +12,8 @@ import pytest
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
+from _source_admin_http_fixtures import _server
 from PIL import Image
-from test_source_admin_http import _server
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.custom_cover_assets import (

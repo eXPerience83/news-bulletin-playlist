@@ -13,7 +13,7 @@ from _admin_http import login as _login
 from _admin_http import request as _request
 from _managed_fixtures import _source, _state
 from _public_release_fixtures import EPISODE, NOW, OLD, SOURCE, evidence, fetch
-from test_source_admin_http import (
+from _source_admin_http_fixtures import (
     _configured_source,
     _create_form,
     _inspect,
@@ -494,7 +494,7 @@ def test_public_mode_participates_in_playlist_write_guard():
 )
 def test_http_custom_modes_create_edit_and_next_refresh_without_extra_io(tmp_path, mode, observed):
     from _html import assert_valid_admin_html
-    from test_source_admin_http import OTHER, SHOW
+    from _source_admin_http_fixtures import OTHER, SHOW
 
     with _server(tmp_path) as (server, client, store):
         cookie = _login(server)
@@ -701,7 +701,7 @@ def test_mode_diagnostics_current_snapshot_counts(tmp_path, mode):
     ],
 )
 def test_individual_audit_and_zip_share_mode_outcome_and_request_counts(tmp_path, mode, now):
-    from test_source_admin_http import OTHER
+    from _source_admin_http_fixtures import OTHER
 
     with _server(tmp_path) as (_server_unused, client, store):
         custom = _configured_source(_server_unused, store)
@@ -798,7 +798,7 @@ def test_recorded_sources_keep_literal_instant(source_id, raw, observed, day):
 
 
 def test_audit_all_uses_effective_builtin_override_and_custom_policy(tmp_path):
-    from test_source_admin_http import _PublicAudit
+    from _source_admin_http_fixtures import _PublicAudit
 
     with _server(tmp_path) as (_server_unused, client, store):
         custom = _configured_source(_server_unused, store)
