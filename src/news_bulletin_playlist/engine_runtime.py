@@ -1457,15 +1457,9 @@ def serve(
             signal.signal(signal.SIGINT, previous_sigint)
         diagnostics.emit(
             occurred_at=datetime.now(UTC),
-            severity=(
-                DiagnosticSeverity.INFO
-                if shutdown_complete
-                else DiagnosticSeverity.WARNING
-            ),
+            severity=(DiagnosticSeverity.INFO if shutdown_complete else DiagnosticSeverity.WARNING),
             component="runtime",
-            event_name=(
-                "runtime_stopped" if shutdown_complete else "runtime_shutdown_incomplete"
-            ),
+            event_name=("runtime_stopped" if shutdown_complete else "runtime_shutdown_incomplete"),
             details=(
                 {"next_state": "stopped"}
                 if shutdown_complete

@@ -541,7 +541,6 @@ def test_serve_persists_runtime_lifecycle_events(tmp_path: Path) -> None:
     assert all(event.component == "runtime" for event in events)
 
 
-
 def test_serve_reports_incomplete_shutdown_instead_of_clean_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -579,9 +578,7 @@ def test_serve_reports_incomplete_shutdown_instead_of_clean_stop(
         "build_engine_runtime_auth",
         lambda *_args, **_kwargs: (None, _Auth()),
     )
-    monkeypatch.setattr(
-        engine_runtime, "_load_runtime_config", lambda *_args: object()
-    )
+    monkeypatch.setattr(engine_runtime, "_load_runtime_config", lambda *_args: object())
     monkeypatch.setattr(
         engine_runtime, "_build_managed_admin_service", lambda *_args, **_kwargs: None
     )
