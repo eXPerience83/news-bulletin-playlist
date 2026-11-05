@@ -14,7 +14,10 @@ from news_bulletin_playlist.diagnostics import (
     DiagnosticEventStore,
     DiagnosticSeverity,
     DiagnosticValue,
+    _format_timestamp,
+    _identifier,
     _normalize_details,
+    _optional_identifier,
 )
 from news_bulletin_playlist.persistence import PersistenceError
 
@@ -97,17 +100,24 @@ class OperationalDiagnostics:
         """
         effective_cycle_id = cycle_id if cycle_id is not None else _CURRENT_CYCLE_ID.get()
         try:
-            # One allowlist for durable events and stdout-only fallback.
+            # The stdout-only fallback must enforce the same identifier and
+            # detail restrictions as SQLite, including its safe log labels.
+            _format_timestamp(occurred_at)
+            safe_component = _identifier(component, "component", max_length=64)
+            safe_event_name = _identifier(event_name, "event_name", max_length=96)
+            safe_cycle_id = _optional_identifier(effective_cycle_id, "cycle_id", max_length=128)
+            safe_source_id = _optional_identifier(source_id, "source_id", max_length=128)
+            safe_playlist_id = _optional_identifier(playlist_id, "playlist_id", max_length=128)
             normalized_details = _normalize_details(dict(details or {}))
             if self.store is not None:
                 self.store.record(
                     occurred_at=occurred_at,
                     severity=severity,
-                    component=component,
-                    event_name=event_name,
-                    cycle_id=effective_cycle_id,
-                    source_id=source_id,
-                    playlist_id=playlist_id,
+                    component=safe_component,
+                    event_name=safe_event_name,
+                    cycle_id=safe_cycle_id,
+                    source_id=safe_source_id,
+                    playlist_id=safe_playlist_id,
                     details=normalized_details,
                 )
         except PersistenceError, ValueError:
@@ -115,15 +125,15 @@ class OperationalDiagnostics:
             return
 
         fields = [
-            f"event={event_name}",
-            f"component={component}",
+            f"event={safe_event_name}",
+            f"component={safe_component}",
         ]
-        if effective_cycle_id is not None:
-            fields.append(f"cycle={effective_cycle_id}")
-        if source_id is not None:
-            fields.append(f"source={source_id}")
-        if playlist_id is not None:
-            fields.append(f"playlist={playlist_id}")
+        if safe_cycle_id is not None:
+            fields.append(f"cycle={safe_cycle_id}")
+        if safe_source_id is not None:
+            fields.append(f"source={safe_source_id}")
+        if safe_playlist_id is not None:
+            fields.append(f"playlist={safe_playlist_id}")
         for key in sorted(normalized_details):
             if key == "public_response_body_b64":
                 fields.append("public_response_body=<captured>")
