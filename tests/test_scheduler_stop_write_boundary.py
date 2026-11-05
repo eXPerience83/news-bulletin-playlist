@@ -21,6 +21,7 @@ from news_bulletin_playlist.engine import (
 )
 from news_bulletin_playlist.engine_runtime import (
     ConfigurationSynchronization,
+    EngineLifecycleController,
     ReloadingEngineCycleRunner,
 )
 from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition
@@ -257,3 +258,102 @@ def test_managed_cycle_without_stop_preserves_normal_write(
 
     assert result.ok
     assert spotify.writes == [(PLAYLIST_ID, ["spotify:episode:new"])]
+
+
+def test_process_stop_blocks_new_write_even_before_scheduler_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    playlist = _playlist(PLAYLIST_ID)
+    config = _valid_config(playlist)
+    spotify = _PrewriteHeldSpotify()
+    managed = _managed_runner(tmp_path, spotify, None, monkeypatch, lambda *_args: config)
+    process_stop = threading.Event()
+    scheduler_stop = threading.Event()
+    status = OperationalStatus(configured=True)
+    scheduler = EngineScheduler(
+        managed,
+        status,
+        interval=timedelta(hours=1),
+        process_stop_event=process_stop,
+    )
+    worker = threading.Thread(target=scheduler.run, args=(scheduler_stop,), daemon=True)
+    worker.start()
+
+    try:
+        assert spotify.read_entered.wait(timeout=2)
+        process_stop.set()
+        scheduler.wake()
+        assert not scheduler_stop.is_set()
+    finally:
+        spotify.release_read.set()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert spotify.writes == []
+    last = status.snapshot().last_cycle
+    assert last is not None
+    assert last.error == "unexpected engine failure: SpotifyReconciliationError"
+
+
+def test_reconcile_does_not_restart_scheduler_after_process_stop() -> None:
+    process_stop = threading.Event()
+    process_stop.set()
+
+    class _MustNotRun:
+        def run_cycle(self) -> EngineCycleResult:
+            raise AssertionError("stopped process must not start a scheduler")
+
+    controller = EngineLifecycleController(
+        _MustNotRun(), interval=timedelta(hours=1), process_stop_event=process_stop
+    )
+    controller.reconcile(configured=True)
+
+    assert controller.scheduler is None
+    assert controller.status.snapshot().configured is False
+
+
+class _HeldCycle:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def run_cycle(self) -> EngineCycleResult:
+        self.calls += 1
+        self.started.set()
+        if not self.release.wait(timeout=4):
+            raise AssertionError("test did not release the blocked cycle")
+        return EngineCycleResult(started_at=NOW, finished_at=NOW, ok=True, sources=(), playlists=())
+
+
+def test_process_stop_prevents_queued_restart_after_drain() -> None:
+    process_stop = threading.Event()
+    runner = _HeldCycle()
+    controller = EngineLifecycleController(
+        runner, interval=timedelta(hours=1), process_stop_event=process_stop
+    )
+    controller.reconcile(configured=True)
+    worker = controller._scheduler_thread
+    assert worker is not None
+
+    try:
+        assert runner.started.wait(timeout=2)
+        controller.reconcile(configured=False)
+        controller.reconcile(configured=True)
+        waiter = controller._restart_waiter
+        assert waiter is not None
+
+        process_stop.set()
+        runner.release.set()
+        worker.join(timeout=2)
+        waiter.join(timeout=2)
+
+        assert not worker.is_alive()
+        assert not waiter.is_alive()
+        assert controller.scheduler is None
+        assert controller.status.snapshot().configured is False
+        assert runner.calls == 1
+    finally:
+        process_stop.set()
+        runner.release.set()
+        worker.join(timeout=2)

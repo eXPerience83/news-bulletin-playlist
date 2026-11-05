@@ -36,8 +36,9 @@ def test_configured_scheduler_reconciles_only_after_runtime_ready(
             *,
             interval: timedelta,
             diagnostics: object | None = None,
+            process_stop_event: threading.Event | None = None,
         ) -> None:
-            del runner, interval, diagnostics
+            del runner, interval, diagnostics, process_stop_event
             self.status = OperationalStatus(configured=False)
 
         def reconcile(self, *, configured: bool) -> None:

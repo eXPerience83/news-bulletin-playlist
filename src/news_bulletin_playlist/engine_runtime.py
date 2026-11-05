@@ -222,10 +222,12 @@ class EngineLifecycleController:
         *,
         interval: timedelta,
         diagnostics: OperationalDiagnostics | None = None,
+        process_stop_event: threading.Event | None = None,
     ) -> None:
         self.runner = runner
         self.interval = interval
         self.diagnostics = diagnostics
+        self.process_stop_event = process_stop_event
         self.status = _MutableOperationalStatus(configured=False)
         self._scheduler: EngineScheduler | None = None
         self._scheduler_stop: threading.Event | None = None
@@ -233,6 +235,10 @@ class EngineLifecycleController:
         self._draining_threads: list[threading.Thread] = []
         self._restart_waiter: threading.Thread | None = None
         self._lock = threading.RLock()
+
+    def _process_stopping(self) -> bool:
+        event = self.process_stop_event
+        return event is not None and event.is_set()
 
     @property
     def scheduler(self) -> EngineScheduler | None:
@@ -242,6 +248,8 @@ class EngineLifecycleController:
     def reconcile(self, *, configured: bool) -> None:
         """Make scheduler existence match whether any effective playlist is active."""
         with self._lock:
+            if self._process_stopping():
+                configured = False
             self.status.set_configured(configured)
             self._prune_draining_locked()
             if configured:
@@ -281,6 +289,7 @@ class EngineLifecycleController:
             self.runner,
             self.status,
             interval=self.interval,
+            process_stop_event=self.process_stop_event,
         )
         scheduler_stop = threading.Event()
         scheduler_thread = threading.Thread(
@@ -367,7 +376,10 @@ class EngineLifecycleController:
                 self._prune_draining_locked()
                 if not self._draining_threads:
                     self._restart_waiter = None
-                    if self.status.snapshot().configured and self._scheduler is None:
+                    if self._process_stopping():
+                        # An in-flight stop may race with an already queued restart.
+                        self.status.set_configured(False)
+                    elif self.status.snapshot().configured and self._scheduler is None:
                         self._start_scheduler_locked()
                     return
                 draining = tuple(self._draining_threads)
@@ -1256,6 +1268,7 @@ def serve(
 ) -> int:
     """Run HTTP, OAuth and the production engine scheduler in one durable process."""
     env = os.environ if environ is None else environ
+    stopped = stop_event if stop_event is not None else threading.Event()
     _reject_obsolete_configuration(data_dir, env)
     # A pristine root must become v11 before SQLite, OAuth or journals write
     # durable files. Existing roots without state cannot be claimed fresh.
@@ -1361,6 +1374,7 @@ def serve(
             runner,
             interval=scheduler_interval,
             diagnostics=diagnostics,
+            process_stop_event=stopped,
         )
         status: OperationalStatus = lifecycle.status
     else:
@@ -1397,7 +1411,6 @@ def serve(
     handler_type.spotify_request_metrics = request_metrics
     server = HTTPServer((host, port), handler_type)
     server.timeout = 0.5
-    stopped = stop_event if stop_event is not None else threading.Event()
 
     def request_stop(signum: int, frame: FrameType | None) -> None:
         del signum, frame

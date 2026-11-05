@@ -101,15 +101,14 @@ _DESTINATION_VERIFICATION_EXACT = "exact"
 _DESTINATION_VERIFICATION_DEGRADED = "degraded"
 
 # Each scheduler worker retains its own cooperative stop event while draining.
-_SCHEDULER_CYCLE_STOP: ContextVar[threading.Event | None] = ContextVar(
-    "scheduler_cycle_stop", default=None
+_SCHEDULER_CYCLE_STOP: ContextVar[tuple[threading.Event, ...]] = ContextVar(
+    "scheduler_cycle_stop", default=()
 )
 
 
 def scheduler_stop_requested() -> bool:
-    """Whether the current scheduler cycle has been asked to stop."""
-    event = _SCHEDULER_CYCLE_STOP.get()
-    return event is not None and event.is_set()
+    """Whether this scheduler generation or its owning process is stopping."""
+    return any(event.is_set() for event in _SCHEDULER_CYCLE_STOP.get())
 
 
 class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
@@ -1407,6 +1406,7 @@ class EngineScheduler:
         *,
         interval: timedelta = DEFAULT_ENGINE_INTERVAL,
         clock: Clock | None = None,
+        process_stop_event: threading.Event | None = None,
     ) -> None:
         if interval <= timedelta(0):
             raise ValueError("engine interval must be positive")
@@ -1414,15 +1414,25 @@ class EngineScheduler:
         self.status = status
         self.interval = interval
         self.clock = clock or _utc_now
+        self.process_stop_event = process_stop_event
         self._wake_event = threading.Event()
+
+    def _stop_requested(self, scheduler_stop: threading.Event) -> bool:
+        process_stop = self.process_stop_event
+        return scheduler_stop.is_set() or (process_stop is not None and process_stop.is_set())
 
     def wake(self) -> None:
         self._wake_event.set()
 
     def run(self, stop_event: threading.Event) -> None:
-        while not stop_event.is_set():
+        while not self._stop_requested(stop_event):
             self.status.begin_cycle()
-            token = _SCHEDULER_CYCLE_STOP.set(stop_event)
+            cycle_stop_events = (
+                (stop_event,)
+                if self.process_stop_event is None
+                else (stop_event, self.process_stop_event)
+            )
+            token = _SCHEDULER_CYCLE_STOP.set(cycle_stop_events)
             try:
                 result = self.runner.run_cycle()
             except Exception as exc:  # noqa: BLE001
@@ -1438,7 +1448,7 @@ class EngineScheduler:
             finally:
                 _SCHEDULER_CYCLE_STOP.reset(token)
 
-            if stop_event.is_set():
+            if self._stop_requested(stop_event):
                 self.status.finish_cycle(result, next_run_at=None)
                 break
 
@@ -1452,7 +1462,7 @@ class EngineScheduler:
 
     def _wait_for_wake_or_stop(self, stop_event: threading.Event) -> None:
         deadline = time.monotonic() + self.interval.total_seconds()
-        while not stop_event.is_set():
+        while not self._stop_requested(stop_event):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return
