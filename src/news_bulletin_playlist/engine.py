@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -98,6 +99,17 @@ SPOTIFY_FIRST_STATE_RETENTION = timedelta(days=30)
 
 _DESTINATION_VERIFICATION_EXACT = "exact"
 _DESTINATION_VERIFICATION_DEGRADED = "degraded"
+
+# Each scheduler worker retains its own cooperative stop event while draining.
+_SCHEDULER_CYCLE_STOP: ContextVar[threading.Event | None] = ContextVar(
+    "scheduler_cycle_stop", default=None
+)
+
+
+def scheduler_stop_requested() -> bool:
+    """Whether the current scheduler cycle has been asked to stop."""
+    event = _SCHEDULER_CYCLE_STOP.get()
+    return event is not None and event.is_set()
 
 
 class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
@@ -1410,6 +1422,7 @@ class EngineScheduler:
     def run(self, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
             self.status.begin_cycle()
+            token = _SCHEDULER_CYCLE_STOP.set(stop_event)
             try:
                 result = self.runner.run_cycle()
             except Exception as exc:  # noqa: BLE001
@@ -1422,6 +1435,8 @@ class EngineScheduler:
                     playlists=(),
                     error=f"unexpected engine failure: {type(exc).__name__}",
                 )
+            finally:
+                _SCHEDULER_CYCLE_STOP.reset(token)
 
             if stop_event.is_set():
                 self.status.finish_cycle(result, next_run_at=None)

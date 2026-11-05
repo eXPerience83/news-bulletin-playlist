@@ -38,6 +38,7 @@ from news_bulletin_playlist.engine import (
     OperationalStatusSnapshot,
     SpotifyAuthProvider,
     SpotifyClientFactory,
+    scheduler_stop_requested,
 )
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
@@ -468,11 +469,21 @@ class ReloadingEngineCycleRunner:
     ) -> Iterator[None]:
         synchronization = self.configuration_synchronization
         if synchronization is None:
+            if scheduler_stop_requested():
+                raise SpotifyReconciliationError(
+                    "scheduler stopping before write; Spotify destination preserved"
+                )
             yield
             return
 
         expected_contract = _playlist_write_contract(expected_config, expected_playlist.id)
         with synchronization.hold():
+            # Check *after* the lock wait too, so an Admin config operation
+            # cannot hide a stop request that arrived while we were blocked.
+            if scheduler_stop_requested():
+                raise SpotifyReconciliationError(
+                    "scheduler stopping before write; Spotify destination preserved"
+                )
             try:
                 current_config = _load_runtime_config(self.data_dir, self.environ)
             except RuntimeError as exc:
