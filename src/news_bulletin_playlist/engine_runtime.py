@@ -272,8 +272,12 @@ class EngineLifecycleController:
             if self._scheduler is not None:
                 self._wake_scheduler_locked()
 
-    def shutdown(self) -> None:
-        """Stop scheduling cooperatively; never cancel an in-flight provider write."""
+    def shutdown(self) -> bool:
+        """Return whether all scheduler workers drained before the bounded wait.
+
+        A false result does not cancel an in-flight write and must not be
+        reported as a completed runtime shutdown.
+        """
         with self._lock:
             self.status.set_configured(False)
             self._request_scheduler_stop_locked()
@@ -292,6 +296,7 @@ class EngineLifecycleController:
                     "cycle_in_progress": self.status.snapshot().running,
                 },
             )
+        return not still_running
 
     def _start_scheduler_locked(self) -> None:
         scheduler = EngineScheduler(
@@ -1452,6 +1457,7 @@ def serve(
         while not stopped.is_set():
             server.handle_request()
     finally:
+        shutdown_complete = True
         diagnostics.emit(
             occurred_at=datetime.now(UTC),
             severity=DiagnosticSeverity.INFO,
@@ -1465,7 +1471,7 @@ def serve(
             handler_type.source_audit_jobs.close()
             handler_type.source_audit_jobs = None
         if lifecycle is not None:
-            lifecycle.shutdown()
+            shutdown_complete = lifecycle.shutdown() is not False
         handler_type.engine_lifecycle = None
         handler_type.auth_synchronization = None
         handler_type.configuration_synchronization = None
@@ -1479,10 +1485,19 @@ def serve(
             signal.signal(signal.SIGINT, previous_sigint)
         diagnostics.emit(
             occurred_at=datetime.now(UTC),
-            severity=DiagnosticSeverity.INFO,
+            severity=(DiagnosticSeverity.INFO if shutdown_complete else DiagnosticSeverity.WARNING),
             component="runtime",
-            event_name="runtime_stopped",
-            details={"next_state": "stopped"},
+            event_name=("runtime_stopped" if shutdown_complete else "runtime_shutdown_incomplete"),
+            details=(
+                {"next_state": "stopped"}
+                if shutdown_complete
+                else {
+                    "phase": "scheduler",
+                    "cycle_in_progress": (
+                        lifecycle is not None and lifecycle.status.snapshot().running
+                    ),
+                }
+            ),
         )
     return 0
 

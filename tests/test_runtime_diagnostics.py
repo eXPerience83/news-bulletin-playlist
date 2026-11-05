@@ -541,6 +541,78 @@ def test_serve_persists_runtime_lifecycle_events(tmp_path: Path) -> None:
     assert all(event.component == "runtime" for event in events)
 
 
+def test_serve_reports_incomplete_shutdown_instead_of_clean_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from news_bulletin_playlist import engine_runtime
+    from news_bulletin_playlist.engine import OperationalStatus
+
+    class _Auth:
+        def set_request_metrics(self, _metrics: object) -> None:
+            pass
+
+    class _Lifecycle:
+        def __init__(
+            self,
+            runner: object,
+            *,
+            interval: timedelta,
+            diagnostics: object | None = None,
+        ) -> None:
+            del runner, interval, diagnostics
+            self.status = OperationalStatus(configured=True)
+
+        def reconcile(self, *, configured: bool) -> None:
+            assert configured
+            self.status.begin_cycle()
+
+        def shutdown(self) -> bool:
+            # A still-running daemon cannot be considered safely terminated.
+            return False
+
+    class _Handler(engine_runtime.OperationalHealthHandler):
+        pass
+
+    monkeypatch.setattr(
+        engine_runtime,
+        "build_engine_runtime_auth",
+        lambda *_args, **_kwargs: (None, _Auth()),
+    )
+    monkeypatch.setattr(engine_runtime, "_load_runtime_config", lambda *_args: object())
+    monkeypatch.setattr(
+        engine_runtime, "_build_managed_admin_service", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(engine_runtime, "EngineLifecycleController", _Lifecycle)
+
+    stop = threading.Event()
+    stop.set()
+    assert (
+        serve(
+            host="127.0.0.1",
+            port=0,
+            data_dir=tmp_path,
+            stop_event=stop,
+            environ={},
+            handler_type=_Handler,
+        )
+        == 0
+    )
+
+    store = DiagnosticEventStore(tmp_path / DEFAULT_DB_FILENAME)
+    store.initialize()
+    events = list(reversed(store.list_events(limit=10)))
+    assert [event.event_name for event in events] == [
+        "runtime_ready",
+        "runtime_stopping",
+        "runtime_shutdown_incomplete",
+    ]
+    assert events[-1].severity is DiagnosticSeverity.WARNING
+    assert events[-1].details == {
+        "phase": "scheduler",
+        "cycle_in_progress": True,
+    }
+
+
 def test_duration_policy_decisions_emit_sanitized_eligibility_events(tmp_path: Path) -> None:
     diagnostics, store, output = _diagnostics(tmp_path)
     result = EngineCycleResult(
