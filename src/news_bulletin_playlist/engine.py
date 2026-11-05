@@ -111,6 +111,13 @@ def scheduler_stop_requested() -> bool:
     return any(event.is_set() for event in _SCHEDULER_CYCLE_STOP.get())
 
 
+def _abort_partial_write_if_stopping() -> None:
+    if scheduler_stop_requested():
+        raise SpotifyReconciliationError(
+            "scheduler stopping before write; Spotify destination preserved"
+        )
+
+
 class SpotifyAuthProvider(SpotifyBackoffAuthProvider, Protocol):
     def acquire_provider_session(
         self,
@@ -925,6 +932,7 @@ class EngineRunner:
                     playlist,
                     session.authorization_context,
                 ),
+                before_write=_abort_partial_write_if_stopping,
             )
         except (
             SpotifyReconciliationError,

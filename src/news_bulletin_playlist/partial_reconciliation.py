@@ -176,6 +176,7 @@ def reconcile_partial_additions(
     max_items: int,
     store: SQLiteStore,
     mutation_guard: Callable[[], AbstractContextManager[None]],
+    before_write: Callable[[], None] | None = None,
 ) -> PartialAddResult:
     """Append-only recovery, with exact prewrite/readback and a durable retry fence.
 
@@ -215,6 +216,14 @@ def reconcile_partial_additions(
 
         expected = additions + current
         journal.begin(playlist_id, destination_id, expected)
+        if before_write is not None:
+            try:
+                # Reads and the durable intent can outlive a stop request. Fence
+                # the POST at its own boundary, and clear a never-sent intent.
+                before_write()
+            except SpotifyReconciliationError:
+                journal.clear(playlist_id, expected)
+                raise
         try:
             response = client.add_playlist_items(destination_id, list(additions), position=0)
         except SpotifyApiError as exc:

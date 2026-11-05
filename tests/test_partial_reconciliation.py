@@ -181,3 +181,32 @@ def test_post_readback_mismatch_retains_intent_and_no_replace(store):
     client.failure = ""
     assert apply(client, store, (uri(9),)).status == "pending"
     assert len(client.additions) == 1
+
+
+def test_stop_before_partial_post_does_not_leave_never_sent_intent(store):
+    client = Client((uri(1),))
+    calls = 0
+
+    def stop_before_post():
+        nonlocal calls
+        calls += 1
+        raise SpotifyReconciliationError("scheduler stopping before write; destination preserved")
+
+    with pytest.raises(SpotifyReconciliationError, match="scheduler stopping"):
+        reconcile_partial_additions(
+            client,
+            playlist_id=ID,
+            destination_id="dependent",
+            candidate_uris=(uri(9),),
+            max_items=100,
+            store=store,
+            mutation_guard=nullcontext,
+            before_write=stop_before_post,
+        )
+
+    assert calls == 1
+    assert client.additions == []
+    assert client.states["dependent"] == [uri(1)]
+    # Intent was removed before a POST existed; a future cycle can now write.
+    assert apply(client, store, (uri(9),)).status == "added"
+    assert client.additions == [(uri(9),)]
