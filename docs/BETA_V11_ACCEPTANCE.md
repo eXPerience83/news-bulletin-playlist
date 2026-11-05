@@ -24,6 +24,8 @@
 3. Review the breaking notes, v11 source/playlist opt-in UI, issue #527/#528 outcomes and #562 negative cases (capacity, 429, ambiguous POST, stale partial catalogue, exact readback). Existing four real playlists must never be treated as disposable test fixtures.
 4. Obtain **explicit operator permission** before any GHCR workflow, release/tag, TrueNAS update, OAuth activity or real Spotify write. The normal **Publish edge AMD64** workflow moves `edge`/`edge-amd64`, not merely an immutable beta-only channel. The PR-candidate workflow is for a reviewed **open PR**, not already merged `main`. Do not silently invoke either as a substitute for approval. Do **not** create a stable `vMAJOR.MINOR.PATCH` tag or move `stable`/`latest` for this beta.
 
+For an interrupted authority publication or an uncertain Spotify mutation, follow the [v11 upgrade and incident runbook](V11_UPGRADE_INCIDENT_RUNBOOK.md) **before** any retry or new instance. Its steps are for operator review and do not authorize production changes.
+
 ## Separate operator-controlled TrueNAS acceptance (NOT executed)
 
 1. Record running image ID/digest and sanitized installed state, including the **four existing Spotify destination IDs**, source assignments, descriptions, cover choices, duration/cap/retention policies and pending journals. Never put OAuth tokens, secrets or raw private `/data` in issues.
