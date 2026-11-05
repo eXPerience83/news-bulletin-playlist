@@ -68,7 +68,7 @@ def test_shutdown_timeout_reports_in_flight_cycle_without_interrupting_it(
     assert worker is not None
 
     try:
-        controller.shutdown()
+        assert controller.shutdown() is False
 
         assert worker.is_alive()
         assert controller.scheduler is None
@@ -164,3 +164,26 @@ def test_scheduler_shutdown_cycle_flag_rejects_untrusted_text(tmp_path: Path) ->
         )
     assert store.list_events() == ()
     assert b"access-token-sentinel" not in store.path.read_bytes()
+
+
+def test_clean_scheduler_shutdown_reports_completed_without_waiting_for_timeout(
+    tmp_path: Path,
+) -> None:
+    diagnostics, _, _ = _diagnostics(tmp_path)
+    runner = _ControlledCycleRunner()
+    controller = EngineLifecycleController(  # type: ignore[arg-type]
+        runner, interval=timedelta(hours=1), diagnostics=diagnostics
+    )
+    controller.reconcile(configured=True)
+    worker = controller._scheduler_thread
+    assert worker is not None
+
+    try:
+        assert runner.started.wait(timeout=2)
+        runner.release.set()
+        worker.join(timeout=2)
+        assert runner.completions == 1
+        assert controller.shutdown() is True
+    finally:
+        runner.release.set()
+        worker.join(timeout=2)
