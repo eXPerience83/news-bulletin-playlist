@@ -36,8 +36,9 @@ def test_configured_scheduler_reconciles_only_after_runtime_ready(
             *,
             interval: timedelta,
             diagnostics: object | None = None,
+            process_stop_event: threading.Event | None = None,
         ) -> None:
-            del runner, interval, diagnostics
+            del runner, interval, diagnostics, process_stop_event
             self.status = OperationalStatus(configured=False)
 
         def reconcile(self, *, configured: bool) -> None:
@@ -91,3 +92,87 @@ def test_configured_scheduler_reconciles_only_after_runtime_ready(
 
     assert auth.metrics is not None
     assert observed_at_reconcile == ["runtime_ready"]
+
+
+def test_sigterm_handler_does_not_call_lifecycle_or_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The signal callback is a lightweight stop notification, not a lifecycle operation."""
+    handlers: dict[int, object] = {}
+    lifecycle_instances: list[object] = []
+    auth = _Auth()
+    handle_calls = 0
+
+    class _Lifecycle:
+        def __init__(
+            self,
+            runner: object,
+            *,
+            interval: timedelta,
+            diagnostics: object | None = None,
+            process_stop_event: threading.Event | None = None,
+        ) -> None:
+            del runner, interval, diagnostics
+            assert process_stop_event is not None
+            self.stopped = process_stop_event
+            self.status = OperationalStatus(configured=False)
+            self.shutdown_calls = 0
+            lifecycle_instances.append(self)
+
+        def reconcile(self, *, configured: bool) -> None:
+            assert configured
+
+        def wake(self) -> None:
+            raise AssertionError("signal handler must not call lifecycle.wake()")
+
+        def shutdown(self) -> None:
+            self.shutdown_calls += 1
+
+    class _Handler(engine_runtime.OperationalHealthHandler):
+        pass
+
+    def build_auth(_data_dir: Path, *, environ: object) -> tuple[None, _Auth]:
+        del environ
+        return None, auth
+
+    def capture_signal(signum: int, handler: object) -> None:
+        handlers[signum] = handler
+
+    def handle_request(_server: object) -> None:
+        nonlocal handle_calls
+        handle_calls += 1
+        signal_handler = handlers[engine_runtime.signal.SIGTERM]
+        assert callable(signal_handler)
+        signal_handler(engine_runtime.signal.SIGTERM, None)
+        assert len(lifecycle_instances) == 1
+        assert lifecycle_instances[0].stopped.is_set()
+
+    monkeypatch.setattr(engine_runtime, "build_engine_runtime_auth", build_auth)
+    monkeypatch.setattr(engine_runtime, "_load_runtime_config", lambda _data_dir, _env: object())
+    monkeypatch.setattr(
+        engine_runtime, "_build_managed_admin_service", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(engine_runtime, "EngineLifecycleController", _Lifecycle)
+    monkeypatch.setattr(engine_runtime.signal, "signal", capture_signal)
+    monkeypatch.setattr(engine_runtime.HTTPServer, "handle_request", handle_request)
+
+    assert (
+        engine_runtime.serve(
+            host="127.0.0.1",
+            port=0,
+            data_dir=tmp_path,
+            environ={},
+            handler_type=_Handler,
+        )
+        == 0
+    )
+    assert handle_calls == 1
+    assert lifecycle_instances[0].shutdown_calls == 1
+
+    diagnostic_store = DiagnosticEventStore(tmp_path / DEFAULT_DB_FILENAME)
+    diagnostic_store.initialize()
+    assert [event.event_name for event in reversed(diagnostic_store.list_events(limit=10))] == [
+        "runtime_ready",
+        "runtime_stopping",
+        "runtime_stopped",
+    ]
