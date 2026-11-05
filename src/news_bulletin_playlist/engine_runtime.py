@@ -1414,9 +1414,11 @@ def serve(
 
     def request_stop(signum: int, frame: FrameType | None) -> None:
         del signum, frame
+        # A Python signal handler runs on the main thread and can interrupt
+        # logging or a held lifecycle lock. Only flip the shared stop event:
+        # the scheduler checks it directly, including while idle (<=250 ms).
+        # Do not call lifecycle.wake(), which can emit SQLite diagnostics.
         stopped.set()
-        if lifecycle is not None:
-            lifecycle.wake()
 
     handlers_installed = (
         stop_event is None and threading.current_thread() is threading.main_thread()
