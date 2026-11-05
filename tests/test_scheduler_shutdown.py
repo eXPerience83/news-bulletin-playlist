@@ -13,7 +13,7 @@ import pytest
 from news_bulletin_playlist import engine_runtime
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore, DiagnosticSeverity
 from news_bulletin_playlist.engine import EngineCycleResult
-from news_bulletin_playlist.engine_runtime import EngineLifecycleController
+from news_bulletin_playlist.engine_runtime import EngineLifecycleController, _engine_label
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
 
 NOW = datetime(2026, 11, 4, 20, 0, tzinfo=UTC)
@@ -68,15 +68,14 @@ def test_shutdown_timeout_reports_in_flight_cycle_without_interrupting_it(
     assert worker is not None
 
     try:
-        controller.shutdown()
+        assert controller.shutdown() is False
 
         assert worker.is_alive()
         assert controller.scheduler is None
         snapshot = controller.status.snapshot()
         assert snapshot.configured is False
-        # Disabling the scheduler currently clears the public running indicator,
-        # even while its worker is alive. Do not make that misleading flag part
-        # of the shutdown contract; thread lifecycle is checked above and below.
+        assert snapshot.running is True
+        assert _engine_label(snapshot) == "Finishing in-flight cycle"
         assert snapshot.last_cycle is None
         assert runner.calls == 1
         assert runner.completions == 0
@@ -88,8 +87,9 @@ def test_shutdown_timeout_reports_in_flight_cycle_without_interrupting_it(
         ]
         timeout = events[-1]
         assert timeout.severity is DiagnosticSeverity.WARNING
-        assert timeout.details == {"phase": "scheduler"}
+        assert timeout.details == {"phase": "scheduler", "cycle_in_progress": True}
         assert "scheduler_shutdown_timeout" in output.getvalue()
+        assert "cycle_in_progress=true" in output.getvalue()
         assert "access-token-sentinel" not in output.getvalue()
     finally:
         runner.release.set()
@@ -100,6 +100,7 @@ def test_shutdown_timeout_reports_in_flight_cycle_without_interrupting_it(
     assert runner.calls == 1
     assert controller.status.snapshot().running is False
     assert controller.status.snapshot().next_run_at is None
+    assert _engine_label(controller.status.snapshot()) == "Not configured"
 
 
 def test_final_shutdown_cancels_queued_restart_until_blocked_cycle_drains(
@@ -126,6 +127,7 @@ def test_final_shutdown_cancels_queued_restart_until_blocked_cycle_drains(
 
         controller.shutdown()
         assert controller.status.snapshot().configured is False
+        assert controller.status.snapshot().running is True
         assert controller.scheduler is None
         assert worker.is_alive()
 
@@ -142,6 +144,46 @@ def test_final_shutdown_cancels_queued_restart_until_blocked_cycle_drains(
             for event in store.list_events(limit=10)
             if event.event_name == "scheduler_started"
         ] == ["scheduler_started"]
+    finally:
+        runner.release.set()
+        worker.join(timeout=2)
+
+
+def test_scheduler_shutdown_cycle_flag_rejects_untrusted_text(tmp_path: Path) -> None:
+    _, store, _ = _diagnostics(tmp_path)
+    with pytest.raises(ValueError, match="diagnostic cycle state must be boolean"):
+        store.record(
+            occurred_at=NOW,
+            severity=DiagnosticSeverity.WARNING,
+            component="scheduler",
+            event_name="scheduler_shutdown_timeout",
+            details={
+                "phase": "scheduler",
+                "cycle_in_progress": "access-token-sentinel",
+            },
+        )
+    assert store.list_events() == ()
+    assert b"access-token-sentinel" not in store.path.read_bytes()
+
+
+def test_clean_scheduler_shutdown_reports_completed_without_waiting_for_timeout(
+    tmp_path: Path,
+) -> None:
+    diagnostics, _, _ = _diagnostics(tmp_path)
+    runner = _ControlledCycleRunner()
+    controller = EngineLifecycleController(  # type: ignore[arg-type]
+        runner, interval=timedelta(hours=1), diagnostics=diagnostics
+    )
+    controller.reconcile(configured=True)
+    worker = controller._scheduler_thread
+    assert worker is not None
+
+    try:
+        assert runner.started.wait(timeout=2)
+        runner.release.set()
+        worker.join(timeout=2)
+        assert runner.completions == 1
+        assert controller.shutdown() is True
     finally:
         runner.release.set()
         worker.join(timeout=2)
