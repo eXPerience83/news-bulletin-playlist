@@ -36,6 +36,7 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "null_item_count",
         "catalogue_complete",
         "coverage_proven",
+        "cycle_in_progress",
         "item_value_kind",
         "requested_offset",
         "item_index",
@@ -770,6 +771,8 @@ def _normalize_details(
             raise ValueError("diagnostic null count must be an integer in 0..200")
         if key in {"catalogue_complete", "coverage_proven"} and type(value) is not bool:
             raise ValueError("diagnostic catalogue authority must be boolean")
+        if key == "cycle_in_progress" and type(value) is not bool:
+            raise ValueError("diagnostic cycle state must be boolean")
         if key in {"catalogue_reason", "item_value_kind"} and (
             not isinstance(value, str) or value not in _ALLOWED_DETAIL_STRING_VALUES[key]
         ):
