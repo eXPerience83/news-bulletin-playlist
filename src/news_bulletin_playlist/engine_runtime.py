@@ -444,9 +444,7 @@ class ReloadingEngineCycleRunner:
                 error="production engine configuration is no longer available",
             )
 
-        playlist_mutation_guard = (
-            None if synchronization is None else partial(self._playlist_mutation_guard, config)
-        )
+        playlist_mutation_guard = partial(self._playlist_mutation_guard, config)
         return EngineRunner(
             config,
             self.store,
@@ -500,6 +498,11 @@ class ReloadingEngineCycleRunner:
                 raise SpotifyReconciliationError(
                     f"playlist {expected_playlist.id} configuration changed during cycle; "
                     "Spotify destination preserved"
+                )
+            # A stop may also arrive during the configuration reload itself.
+            if scheduler_stop_requested():
+                raise SpotifyReconciliationError(
+                    "scheduler stopping before write; Spotify destination preserved"
                 )
             yield
 

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import threading
-from contextlib import nullcontext
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from _reconciliation import _desired, _FakeSpotify, _playlist
 
 from news_bulletin_playlist import engine_runtime
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.engine import (
     EngineCycleResult,
     EngineScheduler,
@@ -21,11 +23,16 @@ from news_bulletin_playlist.engine_runtime import (
     ConfigurationSynchronization,
     ReloadingEngineCycleRunner,
 )
-from news_bulletin_playlist.models import EngineConfig
+from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition
 from news_bulletin_playlist.reconciliation import reconcile_spotify_playlist
 
 NOW = datetime(2026, 11, 5, 8, 0, tzinfo=UTC)
 PLAYLIST_ID = "stop-boundary"
+_STOP_SOURCE = next(source for source in BUILTIN_CATALOG.sources if source.id == "ser")
+
+
+def _valid_config(playlist: PlaylistDefinition) -> EngineConfig:
+    return EngineConfig(sources=(_STOP_SOURCE,), playlists=(playlist,))
 
 
 class _PrewriteHeldSpotify(_FakeSpotify):
@@ -53,7 +60,7 @@ class _GuardedRunner:
         self.spotify = spotify
         self.playlist = _playlist(PLAYLIST_ID)
         self.desired = _desired(self.playlist, "spotify:episode:new")
-        self.config = EngineConfig(sources=(), playlists=(self.playlist,))
+        self.config = _valid_config(self.playlist)
         self.guard = object.__new__(ReloadingEngineCycleRunner)
         self.guard.data_dir = tmp_path
         self.guard.environ = {}
@@ -108,3 +115,145 @@ def test_stop_during_prewrite_blocks_new_mutation(
     assert last is not None
     assert last.ok is False
     assert last.error == "unexpected engine failure: SpotifyReconciliationError"
+
+
+class _ActualManagedReconciliation:
+    """Stub only EngineRunner; exercise the real managed runner and reconciliation."""
+
+    def __init__(
+        self,
+        spotify: _FakeSpotify,
+        guard: Callable[[object], AbstractContextManager[None]] | None,
+    ) -> None:
+        self.spotify = spotify
+        self.guard = guard
+
+    def run_cycle(self) -> EngineCycleResult:
+        playlist = _playlist(PLAYLIST_ID)
+        reconcile_spotify_playlist(
+            self.spotify,
+            playlist,
+            _desired(playlist, "spotify:episode:new"),
+            mutation_guard=None if self.guard is None else lambda: self.guard(playlist),
+        )
+        return EngineCycleResult(started_at=NOW, finished_at=NOW, ok=True, sources=(), playlists=())
+
+
+def _managed_runner(
+    tmp_path: Path,
+    spotify: _FakeSpotify,
+    synchronization: ConfigurationSynchronization | None,
+    monkeypatch: pytest.MonkeyPatch,
+    load_config: Callable[..., EngineConfig],
+) -> ReloadingEngineCycleRunner:
+    placeholder = cast(Any, object())
+    managed = ReloadingEngineCycleRunner(
+        tmp_path,
+        {},
+        placeholder,
+        placeholder,
+        placeholder,
+        placeholder,
+        placeholder,
+        synchronization,
+    )
+    monkeypatch.setattr(engine_runtime, "_load_runtime_config", load_config)
+
+    def fake_engine(*_args: object, **kwargs: object) -> _ActualManagedReconciliation:
+        guard = cast(
+            Callable[[object], AbstractContextManager[None]] | None,
+            kwargs.get("playlist_mutation_guard"),
+        )
+        return _ActualManagedReconciliation(spotify, guard)
+
+    monkeypatch.setattr(engine_runtime, "EngineRunner", fake_engine)
+    return managed
+
+
+def test_managed_cycle_installs_stop_guard_without_configuration_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    playlist = _playlist(PLAYLIST_ID)
+    config = _valid_config(playlist)
+    spotify = _PrewriteHeldSpotify()
+    managed = _managed_runner(tmp_path, spotify, None, monkeypatch, lambda *_args: config)
+    stop = threading.Event()
+    status = OperationalStatus(configured=True)
+    scheduler = EngineScheduler(managed, status, interval=timedelta(hours=1))
+    worker = threading.Thread(target=scheduler.run, args=(stop,), daemon=True)
+    worker.start()
+
+    try:
+        assert spotify.read_entered.wait(timeout=2)
+        stop.set()
+        scheduler.wake()
+    finally:
+        spotify.release_read.set()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert spotify.writes == []
+    last = status.snapshot().last_cycle
+    assert last is not None
+    assert last.ok is False
+    assert last.error == "unexpected engine failure: SpotifyReconciliationError"
+
+
+def test_stop_arriving_during_configuration_reload_blocks_new_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    playlist = _playlist(PLAYLIST_ID)
+    config = _valid_config(playlist)
+    spotify = _FakeSpotify({PLAYLIST_ID: ["spotify:episode:old"]})
+    reload_entered = threading.Event()
+    release_reload = threading.Event()
+    calls = 0
+
+    def load_config(*_args: object) -> EngineConfig:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            reload_entered.set()
+            if not release_reload.wait(timeout=4):
+                raise AssertionError("configuration reload was not released")
+        return config
+
+    managed = _managed_runner(
+        tmp_path, spotify, ConfigurationSynchronization(), monkeypatch, load_config
+    )
+    stop = threading.Event()
+    status = OperationalStatus(configured=True)
+    scheduler = EngineScheduler(managed, status, interval=timedelta(hours=1))
+    worker = threading.Thread(target=scheduler.run, args=(stop,), daemon=True)
+    worker.start()
+
+    try:
+        assert reload_entered.wait(timeout=2)
+        stop.set()
+        scheduler.wake()
+    finally:
+        release_reload.set()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert calls == 2
+    assert spotify.writes == []
+    assert spotify.states[PLAYLIST_ID] == ["spotify:episode:old"]
+    last = status.snapshot().last_cycle
+    assert last is not None
+    assert last.ok is False
+    assert last.error == "unexpected engine failure: SpotifyReconciliationError"
+
+
+def test_managed_cycle_without_stop_preserves_normal_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    playlist = _playlist(PLAYLIST_ID)
+    config = _valid_config(playlist)
+    spotify = _FakeSpotify({PLAYLIST_ID: ["spotify:episode:old"]})
+    managed = _managed_runner(tmp_path, spotify, None, monkeypatch, lambda *_args: config)
+
+    result = managed.run_cycle()
+
+    assert result.ok
+    assert spotify.writes == [(PLAYLIST_ID, ["spotify:episode:new"])]
