@@ -558,8 +558,9 @@ def test_serve_reports_incomplete_shutdown_instead_of_clean_stop(
             *,
             interval: timedelta,
             diagnostics: object | None = None,
+            process_stop_event: threading.Event | None = None,
         ) -> None:
-            del runner, interval, diagnostics
+            del runner, interval, diagnostics, process_stop_event
             self.status = OperationalStatus(configured=True)
 
         def reconcile(self, *, configured: bool) -> None:
