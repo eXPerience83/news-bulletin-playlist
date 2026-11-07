@@ -41,9 +41,9 @@ def test_exact_historical_covers_survive_without_future_bundles(tmp_path: Path, 
     root, preview = _legacy_root(tmp_path, schema)
     original = (root / "managed-state.json").read_bytes()
     covers = PortableCoverLoader(root)
-    required = {
-        item.definition.cover_id for item in preview.template_snapshots
-    } | {item.cover_id for item in preview.original_state.playlists}
+    required = {item.definition.cover_id for item in preview.template_snapshots} | {
+        item.cover_id for item in preview.original_state.playlists
+    }
     before = {item: covers.load(item) for item in required}
     installed = V11OperationalStore(root).initialize_from_legacy()
     assert installed.runtime == preview.original_runtime
@@ -104,6 +104,4 @@ def test_fresh_v11_installs_no_curated_cover_assets(tmp_path: Path):
     assert not (root / MIGRATED_COVERS_DIR).exists()
     assert not (root / "custom-covers").exists()
     with pytest.raises(PlaylistExportError):
-        PortableCoverLoader(root, bundled_roots=(tmp_path / "missing",)).load(
-            "spain_spanish_news"
-        )
+        PortableCoverLoader(root, bundled_roots=(tmp_path / "missing",)).load("spain_spanish_news")

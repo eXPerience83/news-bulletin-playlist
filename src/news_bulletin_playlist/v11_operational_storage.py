@@ -159,11 +159,11 @@ class V11OperationalStore:
                 )
                 if _read_regular(dir_fd, _LEGACY_FILENAME, 12 * 1024 * 1024) != original:
                     raise V11StoreError("legacy state changed during forward migration")
-                inherited_covers = {
-                    item.definition.cover_id for item in preview.template_snapshots
-                } | {item.cover_id for item in preview.original_state.playlists} | {
-                    item.cover_id for item in preview.original_state.templates
-                }
+                inherited_covers = (
+                    {item.definition.cover_id for item in preview.template_snapshots}
+                    | {item.cover_id for item in preview.original_state.playlists}
+                    | {item.cover_id for item in preview.original_state.templates}
+                )
                 # Preserve the *exact* original JPEG and attribution under /data
                 # before the irreversible v11 authority marker can exist.
                 MigratedCoverAssets(self.root).materialize(
