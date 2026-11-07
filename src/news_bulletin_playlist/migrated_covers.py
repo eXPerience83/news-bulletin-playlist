@@ -89,7 +89,9 @@ class MigratedCoverAssets:
             try:
                 mode = os.fstat(fd).st_mode
                 if not stat.S_ISREG(mode) or stat.S_IMODE(mode) & 0o077:
-                    raise MigratedCoverError("Migrated cover manifest is not a private regular file")
+                    raise MigratedCoverError(
+                        "Migrated cover manifest is not a private regular file"
+                    )
                 with os.fdopen(fd, "rb", closefd=False) as stream:
                     raw = stream.read(_MAX_INDEX_BYTES + 1)
             finally:
@@ -215,7 +217,7 @@ class MigratedCoverAssets:
                     if existing != {
                         e["cover_id"]: (e["asset_id"], e["attribution"]) for e in entries
                     }:
-                        raise MigratedCoverError("Conflicting inherited cover manifest")
+                        raise MigratedCoverError("Conflicting inherited cover manifest") from None
                 os.fsync(directory)
             finally:
                 with suppress(FileNotFoundError):

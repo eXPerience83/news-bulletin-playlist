@@ -17,7 +17,7 @@ from news_bulletin_playlist.migrated_covers import (
     MigratedCoverAssets,
     MigratedCoverError,
 )
-from news_bulletin_playlist.portable_playlists import PortableCoverLoader, PlaylistExportError
+from news_bulletin_playlist.portable_playlists import PlaylistExportError, PortableCoverLoader
 from news_bulletin_playlist.v11_operational_storage import (
     V11_AUTHORITY_FILENAME,
     V11_OPERATIONAL_FILENAME,

@@ -16,7 +16,6 @@ from types import FrameType
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.migrated_covers import MigratedCoverAssets, MigratedCoverError
 from news_bulletin_playlist.custom_cover_assets import (
     CustomCoverAssetError,
     CustomCoverAssetStore,
@@ -65,6 +64,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     effective_sources,
 )
+from news_bulletin_playlist.migrated_covers import MigratedCoverAssets, MigratedCoverError
 from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.owner_cover_upload import (
     MAX_MULTIPART_BYTES,

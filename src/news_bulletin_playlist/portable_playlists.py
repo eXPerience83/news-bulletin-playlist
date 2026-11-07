@@ -25,7 +25,6 @@ from news_bulletin_playlist.custom_playlist_templates import (
     LocalPlaylistTemplate,
     effective_playlist_templates,
 )
-from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
 from news_bulletin_playlist.managed_state import (
     PORTABLE_PLAYLIST_SCHEMA_VERSION,
     ManagedPlaylist,
@@ -38,6 +37,7 @@ from news_bulletin_playlist.managed_state import (
     serialize_managed_state,
     template_suspended_by_quarantine,
 )
+from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
 from news_bulletin_playlist.portable_identity import portable_id
 from news_bulletin_playlist.portable_sources import export_sources
 
