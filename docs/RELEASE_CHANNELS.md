@@ -46,8 +46,8 @@ Use `dev-amd64` only when deliberately validating unmerged code. Record the immu
 ## Beta: isolated immutable 0.3.0b1 candidate
 
 The optional **Publish beta 0.3.0b1 AMD64 (immutable only)** workflow is a
-**manual** `workflow_dispatch` operation on the exact current `main` SHA.
-The operator must provide that full 40-character SHA, which must match both
+**manual**, repository-owner-only `workflow_dispatch` operation on the exact
+current `main` SHA. The operator must provide that full 40-character SHA, which must match both
 the checked-out revision and the remote current main before building **and**
 before publishing. The workflow verifies package metadata, builds and
 smoke-tests the same image and publishes only:
@@ -56,7 +56,12 @@ smoke-tests the same image and publishes only:
 
 It verifies the corresponding immutable GHCR manifest digest and prints
 `ghcr.io/experience83/news-bulletin-playlist@sha256:<digest>` in the Actions
-summary. A conflicting pre-existing tag fails closed. **It never moves**
+summary. A conflicting pre-existing tag fails closed. The workflow **treats**
+the beta tag as immutable and serializes its own executions, but GHCR tag
+immutability against *other* writers is not established here: a separate
+authorized publisher may still be able to overwrite the tag. Always save and
+deploy by the verified `@sha256:<digest>`, not by trusting a tag to remain
+unchanged indefinitely. **It never moves**
 `edge`, `edge-amd64`, `stable`, `stable-amd64`, `latest`, `dev`
 or `dev-amd64`, and does not deploy to TrueNAS.
 

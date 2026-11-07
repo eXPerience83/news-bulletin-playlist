@@ -24,6 +24,15 @@ def test_beta_publication_is_manual_main_only_with_explicit_sha() -> None:
     assert data["concurrency"] == {"group": "publish-beta-amd64", "cancel-in-progress": "false"}
 
     scripts = {step["name"]: step["run"] for step in job["steps"] if "run" in step}
+    owner_guard = scripts["Require repository owner to authorize beta publication"]
+    owner_step = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Require repository owner to authorize beta publication"
+    )
+    assert "github.actor" in owner_step["env"]["DISPATCH_ACTOR"]
+    assert "github.repository_owner" in owner_step["env"]["REPOSITORY_OWNER"]
+    assert '"$DISPATCH_ACTOR" != "$REPOSITORY_OWNER"' in owner_guard
     main_guard = scripts["Require main branch"]
     metadata = scripts["Resolve publication metadata"]
     prebuild = scripts["Refuse a queued stale main revision before building"]

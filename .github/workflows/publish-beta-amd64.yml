@@ -28,6 +28,17 @@ jobs:
       packages: write
 
     steps:
+      - name: Require repository owner to authorize beta publication
+        env:
+          DISPATCH_ACTOR: ${{ github.actor }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [[ "$DISPATCH_ACTOR" != "$REPOSITORY_OWNER" ]]; then
+            echo "ERROR: only the repository owner can authorize beta publication" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
