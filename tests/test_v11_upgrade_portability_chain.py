@@ -30,6 +30,8 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
         pytest.fail("Portability acceptance must never contact Spotify or other networks")
 
     monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket.socket, "connect_ex", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
 
 
 @pytest.mark.parametrize("schema", [6, 7, 8, 9, 10])
@@ -80,7 +82,8 @@ def test_four_legacy_playlists_and_all_sources_remain_portable_after_v11(
         assert bundle.playlist["kind"] == "managed"
         assert bundle.playlist["configuration"]["enabled"] is playlist.enabled
         assert bundle.playlist["source_ids"] == list(playlist.source_ids)
-        assert b"PRIVATE-DESTINATION" not in archive
+        for private_bytes in original_private_files.values():
+            assert private_bytes not in archive
         assert playlist.destination.external_id.encode() not in archive
         archives[identifier] = archive
 
