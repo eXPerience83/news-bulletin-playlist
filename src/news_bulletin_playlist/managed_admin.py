@@ -517,13 +517,16 @@ class ManagedAdminService:
             raise ManagedAdminError("unknown installation-owned playlist template")
         return match
 
-    def check_activation_allowed(self, template_id: str) -> None:
+    def check_activation_allowed(
+        self, template_id: str, *, confirm_imported_new: bool = False
+    ) -> None:
         if any(
             t.id == template_id and t.portable_metadata is not None
             for t in self.store.load_readonly().templates
-        ):
+        ) and not confirm_imported_new:
             raise ManagedAdminError(
-                "Imported portable drafts are edit/export only; activation is unavailable"
+                "Creating a NEW Spotify playlist from an imported draft requires "
+                "explicit confirmation; this does not relink the original destination"
             )
 
     def activate(
@@ -539,6 +542,7 @@ class ManagedAdminService:
         min_duration_seconds: int | None = None,
         min_duration_minutes: int | None = None,
         max_duration_minutes: int | None = None,
+        confirm_imported_new: bool = False,
     ) -> ManagedPlaylist:
         self.last_initial_cover_error = None
         if self.provisioning_journal.load() is not None:
@@ -546,9 +550,10 @@ class ManagedAdminService:
         state = self.store.load()
         template = self._template(template_id, state=state)
         local = next((item for item in state.templates if item.id == template_id), None)
-        if local is not None and local.portable_metadata is not None:
+        if local is not None and local.portable_metadata is not None and not confirm_imported_new:
             raise ManagedAdminError(
-                "Imported portable drafts are edit/export only; activation is unavailable"
+                "Imported configuration requires confirmation to create a NEW Spotify "
+                "playlist; recovering its old destination is a separate operation"
             )
         if local is not None and local.hidden:
             raise ManagedAdminError("hidden custom template cannot be activated")
@@ -563,6 +568,26 @@ class ManagedAdminService:
             current_max=template.duration_policy.default_max_seconds,
             activating=True,
         )
+        if local is not None and local.portable_metadata is not None:
+            # Portable metadata is observational, never authority over Spotify IDs.
+            # Require the operator to publish the exact validated local draft, not
+            # a client-supplied policy that bypasses import review or loses seconds.
+            if (
+                display_name != local.display_name
+                or description != local.description
+                or cover_id != local.cover_id
+                or tuple(str(item) for item in source_ids)
+                != tuple(str(item) for item in local.default_source_ids)
+                or (duration_min, duration_max)
+                != (local.min_duration_seconds, local.max_duration_seconds)
+            ):
+                raise ManagedAdminError(
+                    "Imported playlist activation must match the saved draft exactly; "
+                    "edit and save the draft before creating a NEW Spotify playlist"
+                )
+            # Fail before journal/provider I/O when the imported settings,
+            # capabilities or references cannot compile as runtime configuration.
+            self._validate_state(state)
         intent = ProvisioningIntent(
             state=ProvisioningState.REQUEST_STARTED,
             template_id=template.id,
