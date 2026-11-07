@@ -252,7 +252,14 @@ def test_only_imported_draft_may_relink_and_admin_form_is_explicit(tmp_path: Pat
     assert 'action="/admin/playlists/relink"' in page
     assert 'name="confirm_existing" value="1" required' in page
     assert 'pattern="[A-Za-z0-9]{22}"' in page
-    plain = replace(draft, id=PlaylistId("custom_plain"), portable_metadata=None, portable_id=OTHER_UUID)
+    plain = replace(
+        draft,
+        id=PlaylistId("custom_plain"),
+        portable_metadata=None,
+        portable_id=OTHER_UUID,
+    )
+    state = service.store.load_readonly()
+    service.store.save(replace(state, templates=(draft, plain)))
     with pytest.raises(ManagedAdminError, match="Only imported"):
         service.relink_imported_destination(
             template_id=plain.id,
