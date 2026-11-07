@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from _installed_fixtures import _rich_state
 from _legacy_dataset import legacy_root as _legacy_root
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
@@ -105,3 +106,19 @@ def test_fresh_v11_installs_no_curated_cover_assets(tmp_path: Path):
     assert not (root / "custom-covers").exists()
     with pytest.raises(PlaylistExportError):
         PortableCoverLoader(root, bundled_roots=(tmp_path / "missing",)).load("spain_spanish_news")
+
+
+def test_unavailable_uploaded_art_for_unused_local_draft_is_retained_not_required(
+    tmp_path: Path,
+):
+    root = tmp_path / "legacy"
+    root.mkdir()
+    state = _rich_state()
+    assert state.templates[0].cover_id.startswith("uploaded_")
+    assert not (root / "custom-covers").exists()
+    store = ManagedStateStore(root / "managed-state.json")
+    store.save(state)
+    result = V11OperationalStore(root).initialize_from_legacy()
+    assert result.managed_overlay.templates[0].cover_id == state.templates[0].cover_id
+    assert (root / V11_OPERATIONAL_FILENAME).exists()
+    assert (root / V11_AUTHORITY_FILENAME).exists()
