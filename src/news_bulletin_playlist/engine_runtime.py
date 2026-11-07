@@ -16,6 +16,7 @@ from types import FrameType
 
 from news_bulletin_playlist import __version__
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.migrated_covers import MigratedCoverAssets, MigratedCoverError
 from news_bulletin_playlist.custom_cover_assets import (
     CustomCoverAssetError,
     CustomCoverAssetStore,
@@ -757,6 +758,8 @@ class OperationalHealthHandler(LanAdminHandler):
             return
         cover_id = filename[:-4]
         allowed = {template.cover_id for template in BUILTIN_CATALOG.playlists}
+        if self.managed_admin_service is not None:
+            allowed.update(item.cover_id for item in self.managed_admin_service.catalog.playlists)
         allowed.add(CUSTOM_DEFAULT_COVER_ID)
         if cover_id not in allowed:
             self._reply(
@@ -764,6 +767,14 @@ class OperationalHealthHandler(LanAdminHandler):
                 b"Not found",
                 content_type="text/plain; charset=utf-8",
             )
+            return
+        try:
+            owned = MigratedCoverAssets(self.data_dir).load(cover_id)
+        except MigratedCoverError:
+            self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, b"Persisted cover is invalid")
+            return
+        if owned is not None:
+            self._reply(HTTPStatus.OK, owned[0], content_type="image/jpeg")
             return
         cover_path = _bundled_cover_path(filename)
         if cover_path is None:
@@ -1527,6 +1538,9 @@ def _build_managed_admin_service(
     def cover_loader(cover_id: str) -> bytes:
         if is_uploaded_cover_id(cover_id):
             return owner_covers.load(cover_id)
+        persisted = MigratedCoverAssets(data_dir).load(cover_id)
+        if persisted is not None:
+            return persisted[0]
         return _load_bundled_cover(cover_id)
 
     store = open_managed_state_store(data_dir)
