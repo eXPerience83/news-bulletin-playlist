@@ -696,6 +696,93 @@ class ManagedAdminService:
         assert result is not None
         return result
 
+    def relink_imported_destination(
+        self,
+        *,
+        template_id: PlaylistId | str,
+        destination_id: str,
+        access_token: str,
+        confirm_existing: bool,
+    ) -> ManagedPlaylist:
+        """Link an imported configuration to an already-owned Spotify playlist.
+
+        No playlist create, update, cover upload or other provider mutation. The
+        caller must hold the normal configuration lock, as for Admin adoption.
+        A successful relink starts PAUSED; resuming is a separate explicit step.
+        """
+        if not confirm_existing:
+            raise ManagedAdminError("Explicit confirmation is required to relink Spotify")
+        if self.provisioning_journal.load() is not None:
+            raise PlaylistProvisioningRecoveryRequired()
+        state = self.store.load()
+        local = self._local_template(state, template_id)
+        if local.portable_metadata is None:
+            raise ManagedAdminError("Only imported playlist drafts can be relinked")
+        if local.hidden:
+            raise ManagedAdminError("Unhide the imported draft before relinking")
+        if any(playlist.template_id == local.id for playlist in state.playlists):
+            raise ManagedAdminError("Imported draft already has a managed destination")
+
+        # The remote ID must be supplied and confirmed by the operator. A ZIP's
+        # original_id / provenance is never a Spotify destination authority.
+        candidate = _spotify_playlist_id_text(destination_id)
+        if any(
+            str(playlist.destination.adapter_id) == "spotify"
+            and playlist.destination.external_id == candidate
+            for playlist in state.playlists
+        ):
+            raise ManagedAdminError("Spotify destination is already locally managed")
+        selected = self._source_ids(
+            local.default_source_ids,
+            state=state,
+            allow_empty=True,
+            existing=local.default_source_ids,
+        )
+        cover = self._cover_id(local.cover_id)
+        template = self._template(local.id, state=state)
+        self._validate_state(state)
+
+        client = self.client_factory(access_token)
+        try:
+            account_id = _spotify_user_id(client.current_user())
+        except SpotifyApiError as exc:
+            if exc.status in {401, 403}:
+                raise ManagedAdminError(
+                    "Spotify ownership verification requires reconnecting Spotify "
+                    "with the user-read-private permission"
+                ) from exc
+            raise
+        owner_id = _spotify_playlist_owner_id(
+            client.playlist_details(candidate),
+            expected_playlist_id=candidate,
+            expected_name=local.display_name,
+        )
+        if account_id != owner_id:
+            raise ManagedAdminError("Spotify playlist is not owned by the authorized user")
+
+        # A remote read must not authorize an edit based on an obsolete draft.
+        # The caller holds configuration synchronization; the v11 store also
+        # protects the durable replacement with an exact-byte CAS.
+        if self.provisioning_journal.load() is not None or self.store.load() != state:
+            raise ManagedAdminError("Playlist configuration changed during Spotify verification")
+        managed = replace(
+            activate_template(template, candidate),
+            enabled=False,
+            portable_id=allocate_portable_id(state)
+            if state.schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION
+            else None,
+            display_name=local.display_name,
+            description=local.description,
+            cover_id=cover,
+            source_ids=selected,
+            retention_hours=local.retention_hours,
+            max_episodes=local.max_episodes,
+            min_duration_seconds=local.min_duration_seconds,
+            max_duration_seconds=local.max_duration_seconds,
+        )
+        self._save_validated(replace(state, playlists=state.playlists + (managed,)))
+        return managed
+
     def clear_uncertain_provisioning(self) -> None:
         intent = self.provisioning_journal.load()
         if intent is None or intent.state is not ProvisioningState.REQUEST_STARTED:

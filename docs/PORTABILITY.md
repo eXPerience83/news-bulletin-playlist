@@ -627,8 +627,16 @@ attribution are displayed as escaped inert text. Original attribution is reused 
 re-export only while the JPEG digest matches; replacing artwork retains the original
 provenance record but derives current artwork attribution from the selected asset.
 
-**Imported drafts are edit/export only in this release.** Their activation is blocked
-in the UI, domain service and both HTTP activation handlers before OAuth lookup.
+**Imported ZIP import remains provider-free and cannot activate itself.** New
+Spotify creation from imported drafts is separate work (#635). A second,
+independent explicit recovery operation in Admin can link a locally imported
+draft to an **already existing** Spotify playlist, but only after the owner
+manually enters its 22-character ID, confirms the action, and the application
+verifies the connected user's Spotify identity, playlist ID, playlist owner
+and exact playlist name. The action creates a **PAUSED local destination**;
+there are no Spotify playlist creation, metadata, cover or track writes.
+A destination already managed (even if disabled) is rejected. ZIP provenance
+does not authorize any destination ID. Resume is a separate Admin action.
 This deliberately separates representable portable policies from current Spotify
 activation/editor limits. There is no implicit conversion to a managed destination.
 A future reviewed activation policy must handle exact imported values explicitly;

@@ -702,6 +702,29 @@ def _custom_draft_card(
         target_id=str(draft.id),
         active_on_spotify=False,
     )
+    relink = ""
+    if (
+        draft.portable_metadata is not None
+        and not referenced
+        and not draft.hidden
+        and provisioning_intent is None
+        and spotify_connected
+    ):
+        relink = f"""
+<form method="post" action="/admin/playlists/relink">
+  {_hidden_input("csrf_token", csrf_token)}
+  {_hidden_input("template_id", str(draft.id))}
+  <label>Existing Spotify playlist ID (22 characters; enter manually)
+    <input name="destination_id" pattern="[A-Za-z0-9]{{22}}"
+           minlength="22" maxlength="22" required autocomplete="off">
+  </label>
+  <label><input type="checkbox" name="confirm_existing" value="1" required>
+    I have checked this existing Spotify playlist ID. Verify ownership and
+    matching playlist name, then link it locally PAUSED. Do not create a new
+    playlist or change anything in Spotify.</label>
+  <button class="button" type="submit">Link existing Spotify playlist (paused)</button>
+</form>
+"""
     editor = (
         imported_draft_editor(draft, csrf_token)
         if draft.portable_metadata is not None
@@ -728,6 +751,7 @@ def _custom_draft_card(
   {portable_controls("draft", str(draft.id), draft.portable_id)}
   {upload_form}
   {publish}
+  {relink}
   {delete_control}
 </article>
 """
