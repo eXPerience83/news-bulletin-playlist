@@ -233,7 +233,7 @@ class PlaylistImportService:
             source_preview,
             candidate,
             "create",
-            "Create one editable local draft; Spotify activation is blocked",
+            "Create an editable local draft; a NEW Spotify destination needs explicit activation",
         )
 
     def apply(
