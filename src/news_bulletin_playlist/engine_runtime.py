@@ -1142,7 +1142,11 @@ class OperationalHealthHandler(LanAdminHandler):
         service: ManagedAdminService,
         form: Mapping[str, list[str]],
     ) -> str:
-        service.check_activation_allowed(single_form_value(form, "template_id"))
+        confirm_imported_new = form.get("confirm_imported_new") == ["1"]
+        service.check_activation_allowed(
+            single_form_value(form, "template_id"),
+            confirm_imported_new=confirm_imported_new,
+        )
         auth = self.managed_admin_auth
         if auth is None:
             raise ManagedAdminError("Spotify authorization is required to create a playlist")
@@ -1156,6 +1160,7 @@ class OperationalHealthHandler(LanAdminHandler):
             access_token=access_token,
             min_duration_minutes=duration_minutes_from_form(form, "min"),
             max_duration_minutes=duration_minutes_from_form(form, "max"),
+            confirm_imported_new=confirm_imported_new,
         )
         return str(managed.id)
 
