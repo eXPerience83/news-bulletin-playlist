@@ -637,7 +637,12 @@ The existing durable creation journal prevents blind retries after ambiguous
 Spotify writes; cover upload follows durable destination persistence. Policy
 exceptions remain attached to the validated imported template. ZIP metadata
 is observational only: the original destination ID is not trusted or restored.
-Relinking an **existing** Spotify playlist remains out of scope, tracked by #634.
+Existing-destination **relinking** separately requires manual canonical Spotify
+ID entry, explicit confirmation, and read-only verification of the current
+Spotify account, owner, ID and exact playlist name. Duplicate destinations,
+including paused ones, and pending provisioning are rejected. The recovered
+local destination is PAUSED, without remote Spotify creation or modification;
+the operator must resume it separately. ZIP metadata grants no remote ID.
 Imported large historical values incompatible with Spotify creation are rejected
 clearly, not truncated or silently altered to fit the activation limits.
 

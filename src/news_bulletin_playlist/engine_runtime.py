@@ -129,6 +129,10 @@ _ADMIN_NOTICE_MESSAGES = {
     "spotify-sync-applied": "Spotify metadata and cover applied successfully.",
     "playlist-stopped": "Playlist is no longer managed.",
     "playlist-provisioning-adopted": "Existing Spotify playlist adopted successfully.",
+    "playlist-existing-relinked": (
+        "Existing Spotify playlist linked to the imported draft in PAUSED mode. "
+        "No Spotify data was changed. Resume it explicitly after reviewing the settings."
+    ),
     "playlist-provisioning-cleared": "Uncertain playlist creation state cleared successfully.",
     "local-draft-created": "Custom playlist draft saved locally.",
     "local-example-created": "Playlist example saved as a local draft; Spotify was not contacted.",
@@ -142,6 +146,7 @@ _ADMIN_NOTICE_MESSAGES = {
 }
 _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/activate": "playlist-activated",
+    "/admin/playlists/relink": "playlist-existing-relinked",
     "/admin/playlists/update": "playlist-settings-saved",
     "/admin/playlists/sync": "spotify-sync-applied",
     "/admin/playlists/stop": "playlist-stopped",
@@ -981,6 +986,10 @@ class OperationalHealthHandler(LanAdminHandler):
                         playlist_id_for_event = self._activate_managed_playlist(service, form)
                         event_name = "admin_playlist_activated"
                         next_state = "enabled"
+                    elif path == "/admin/playlists/relink":
+                        playlist_id_for_event = self._relink_imported_playlist(service, form)
+                        event_name = "admin_playlist_relinked"
+                        next_state = "disabled"
                     elif path == "/admin/playlists/update":
                         playlist_id_for_event, enabled = self._update_managed_playlist(
                             service, form
@@ -1136,6 +1145,29 @@ class OperationalHealthHandler(LanAdminHandler):
             hidden=bool(hidden_values),
         )
         return str(draft.id)
+
+    def _relink_imported_playlist(
+        self,
+        service: ManagedAdminService,
+        form: Mapping[str, list[str]],
+    ) -> str:
+        if set(form) != {
+            "csrf_token",
+            "template_id",
+            "destination_id",
+            "confirm_existing",
+        } or form.get("confirm_existing") != ["1"]:
+            raise ValueError("Relinking requires an explicit, complete confirmation")
+        auth = self.managed_admin_auth
+        if auth is None:
+            raise ManagedAdminError("Spotify authorization is required to verify ownership")
+        result = service.relink_imported_destination(
+            template_id=single_form_value(form, "template_id"),
+            destination_id=single_form_value(form, "destination_id"),
+            access_token=auth.get_access_token(),
+            confirm_existing=True,
+        )
+        return str(result.id)
 
     def _activate_managed_playlist(
         self,
