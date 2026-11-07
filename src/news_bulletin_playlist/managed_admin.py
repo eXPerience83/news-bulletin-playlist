@@ -555,7 +555,7 @@ class ManagedAdminService:
         local = next((item for item in state.templates if item.id == template_id), None)
         if local is not None and local.portable_metadata is not None and not confirm_imported_new:
             raise ManagedAdminError(
-                "Imported configuration requires confirmation to create a NEW Spotify "
+                "Imported playlist activation requires confirmation to create a NEW Spotify "
                 "playlist; recovering its old destination is a separate operation"
             )
         if local is not None and local.hidden:
