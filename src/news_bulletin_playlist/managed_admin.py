@@ -588,6 +588,13 @@ class ManagedAdminService:
                     "Imported playlist activation must match the saved draft exactly; "
                     "edit and save the draft before creating a NEW Spotify playlist"
                 )
+            # Reject silent footer normalization: preserve the imported base
+            # description exactly or require an explicit edit first.
+            if _playlist_description(description) != local.description:
+                raise ManagedAdminError(
+                    "Imported playlist description requires an explicit draft edit "
+                    "before NEW Spotify activation"
+                )
             # Fail before journal/provider I/O when the imported settings,
             # capabilities or references cannot compile as runtime configuration.
             self._validate_state(state)
