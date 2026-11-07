@@ -32,7 +32,7 @@ def forbid_operational_io(monkeypatch: pytest.MonkeyPatch) -> None:
         pytest.fail("v11 cover ownership contacted a provider or SQLite")
 
     monkeypatch.setattr(socket.socket, "connect", blocked)
-    monkeypatch.setattr(socket.socket, "getaddrinfo", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
     monkeypatch.setattr(sqlite3, "connect", blocked)
 
 
