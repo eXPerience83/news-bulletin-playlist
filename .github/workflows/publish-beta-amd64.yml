@@ -1,0 +1,221 @@
+name: Publish beta 0.3.0b1 AMD64 (immutable only)
+
+on:
+  # Explicit owner-initiated beta only; never publish automatically.
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character current main SHA to publish as an immutable beta
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-beta-amd64
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/experience83/news-bulletin-playlist
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Require main branch
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "ERROR: beta may only be published from main; got $GITHUB_REF" >&2
+            exit 1
+          fi
+
+      - name: Resolve publication metadata
+        id: meta
+        env:
+          INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: invalid main revision: $GITHUB_SHA" >&2
+            exit 1
+          fi
+          if [[ ! "$INPUT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ || "$INPUT_SOURCE_SHA" != "$GITHUB_SHA" ]]; then
+            echo "ERROR: explicitly authorized SHA must match the checked-out main revision" >&2
+            exit 1
+          fi
+          grep -Fxq 'version = "0.3.0b1"' pyproject.toml || { echo 'ERROR: package beta version differs' >&2; exit 1; }
+          grep -Fxq '__version__ = "0.3.0b1"' src/news_bulletin_playlist/__init__.py || { echo 'ERROR: runtime beta version differs' >&2; exit 1; }
+          echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a queued stale main revision before building
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          if [[ "$current_main" != "$SOURCE_SHA" ]]; then
+            echo "ERROR: refusing stale queued beta build; current main is $current_main, candidate is $SOURCE_SHA" >&2
+            exit 1
+          fi
+
+      - name: Validate configuration
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml config --quiet
+          docker compose -f deploy/truenas.yaml config --quiet
+
+      - name: Build exact beta candidate
+        run: |
+          set -euo pipefail
+          docker build \
+            --platform linux/amd64 \
+            --build-arg "SOURCE_REVISION=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=0.3.0b1" \
+            --tag news-bulletin-playlist:beta-candidate \
+            .
+
+      - name: Smoke test exact beta candidate
+        run: |
+          set -euo pipefail
+          docker volume create news-bulletin-beta-data
+          docker run --detach --rm \
+            --name news-bulletin-playlist-beta \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --publish 127.0.0.1:18790:8080 \
+            --mount source=news-bulletin-beta-data,target=/data \
+            news-bulletin-playlist:beta-candidate
+
+          remaining=20
+          while [ "$remaining" -gt 0 ]; do
+            status="$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-beta)"
+            if [ "$status" = healthy ]; then
+              break
+            fi
+            if [ "$status" = unhealthy ]; then
+              docker logs news-bulletin-playlist-beta
+              exit 1
+            fi
+            remaining=$((remaining - 1))
+            sleep 1
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' news-bulletin-playlist-beta)" = healthy
+
+          status_page="$(mktemp)"
+          healthz_response="$(mktemp)"
+          trap 'rm -f "$status_page" "$healthz_response"' EXIT
+
+          curl --fail --silent --show-error --output "$status_page" http://127.0.0.1:18790/
+          grep -Fq 'News Bulletin Playlists' "$status_page"
+
+          curl --fail --silent --show-error --output "$healthz_response" http://127.0.0.1:18790/healthz
+          grep -Fq '"status":"ok"' "$healthz_response"
+
+      - name: Stop beta candidate
+        if: always()
+        run: |
+          docker stop news-bulletin-playlist-beta 2>/dev/null || true
+          docker volume rm news-bulletin-beta-data 2>/dev/null || true
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Require source revision to remain current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          if [[ "$current_main" != "$SOURCE_SHA" ]]; then
+            echo "ERROR: refusing stale beta publication; current main is $current_main, candidate is $SOURCE_SHA" >&2
+            exit 1
+          fi
+
+      - name: Publish or reuse immutable beta SHA tag
+        id: immutable
+        env:
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE_NAME}"
+          beta_tag="beta-0.3.0b1-${SOURCE_SHA}"
+          sha_ref="${image}:${beta_tag}"
+          local_id="$(docker image inspect news-bulletin-playlist:beta-candidate --format '{{.Id}}')"
+
+          inspect_error="$(mktemp)"
+          trap 'rm -f "$inspect_error"' EXIT
+          if digest="$(docker buildx imagetools inspect "$sha_ref" --format '{{json .Manifest.Digest}}' 2>"$inspect_error" | tr -d '"')"; then
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: existing SHA tag returned invalid digest: $digest" >&2
+              exit 1
+            fi
+          else
+            if ! grep -Fqi 'manifest unknown' "$inspect_error" && ! grep -Fqi "${sha_ref}: not found" "$inspect_error"; then
+              cat "$inspect_error" >&2
+              echo "ERROR: could not safely determine whether ${beta_tag} exists" >&2
+              exit 1
+            fi
+            docker tag news-bulletin-playlist:beta-candidate "$sha_ref"
+            docker push "$sha_ref"
+            digest="$(docker buildx imagetools inspect "$sha_ref" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: invalid published SHA digest: $digest" >&2
+              exit 1
+            fi
+          fi
+
+          resolved_ref="${image}@${digest}"
+          docker pull "$resolved_ref"
+          resolved_id="$(docker image inspect "$resolved_ref" --format '{{.Id}}')"
+          if [[ "$resolved_id" != "$local_id" ]]; then
+            echo "ERROR: immutable ${beta_tag} digest does not match the tested image" >&2
+            exit 1
+          fi
+
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "beta_ref=$sha_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Validate immutable beta reference and publish digest summary
+        env:
+          IMAGE_DIGEST: ${{ steps.immutable.outputs.digest }}
+          BETA_REF: ${{ steps.immutable.outputs.beta_ref }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          resolved="$(docker buildx imagetools inspect "$BETA_REF" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          if [[ "$resolved" != "$IMAGE_DIGEST" ]]; then
+            echo "ERROR: immutable beta tag digest changed unexpectedly" >&2
+            exit 1
+          fi
+          {
+            echo '## Beta 0.3.0b1 — immutable only'
+            echo "- Commit: \`$SOURCE_SHA\`"
+            echo "- Image: \`$BETA_REF\`"
+            echo "- Digest: \`$IMAGE_DIGEST\`"
+            echo "- Deploy reference: \`${IMAGE_NAME}@${IMAGE_DIGEST}\`"
+            echo '- Mutable tags (edge/stable/latest/dev): unchanged'
+            echo '- No TrueNAS update and no Spotify request was performed'
+          } >> "$GITHUB_STEP_SUMMARY"

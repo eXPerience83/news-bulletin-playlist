@@ -43,6 +43,29 @@ The transfer cache has no fallback restore keys and a rerun cannot reuse a previ
 
 Use `dev-amd64` only when deliberately validating unmerged code. Record the immutable registry digest when exact reproduction or rollback evidence matters.
 
+## Beta: isolated immutable 0.3.0b1 candidate
+
+The optional **Publish beta 0.3.0b1 AMD64 (immutable only)** workflow is a
+**manual** `workflow_dispatch` operation on the exact current `main` SHA.
+The operator must provide that full 40-character SHA, which must match both
+the checked-out revision and the remote current main before building **and**
+before publishing. The workflow verifies package metadata, builds and
+smoke-tests the same image and publishes only:
+
+`ghcr.io/experience83/news-bulletin-playlist:beta-0.3.0b1-<full-main-sha>`
+
+It verifies the corresponding immutable GHCR manifest digest and prints
+`ghcr.io/experience83/news-bulletin-playlist@sha256:<digest>` in the Actions
+summary. A conflicting pre-existing tag fails closed. **It never moves**
+`edge`, `edge-amd64`, `stable`, `stable-amd64`, `latest`, `dev`
+or `dev-amd64`, and does not deploy to TrueNAS.
+
+This is an **available workflow only**, not authorization to run it or to
+change production. Its beta image inherits forward-only v11 behavior; the
+owner's specific no-backup cutover decision and the separate production
+GO/NO-GO contract are recorded in [beta acceptance](BETA_V11_ACCEPTANCE.md)
+and [issue #565](https://github.com/eXPerience83/news-bulletin-playlist/issues/565).
+
 ## Edge: integrated main
 
 `edge` is published deliberately from the current `main` tip by manually running **Publish edge AMD64** in GitHub Actions. A successful run publishes:

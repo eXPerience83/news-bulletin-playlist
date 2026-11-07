@@ -19,11 +19,13 @@ is then authoritative, and `managed-state.json` remains **inert evidence**.
 Missing, corrupt or ambiguous v11 state must fail closed, never reimport
 legacy state as a fallback. No support for booting an old image after migration.
 
-Before a future **explicitly authorized live upgrade**, take a separate,
-one-time **complete /data backup** (SQLite/WAL, OAuth, journals and covers).
-Portable source JSON and playlist ZIP are not substitutes for that backup.
-This changelog and version bump do not authorize Spotify access, release tags,
-GHCR publication, edge/stable/latest movement or TrueNAS deployment.
+A complete independent /data backup would reduce the risk of irreversible loss.
+For the owner's planned 0.2.3b1 → 0.3.0b1 cutover, however, **the backup and
+copy-based rehearsal have explicitly been declined**: local configuration,
+identities, OAuth, journals or artwork could require manual reconstruction if
+migration fails. Portable JSON and ZIP are not backup substitutes. This
+changelog and version bump do not authorize Spotify access, GHCR publication,
+release tags, edge/stable/latest movement or TrueNAS deployment.
 
 A successful candidate CI/Container check **does not prove the live RNE
 incident is resolved**. The null-bearing source permits only add-only
