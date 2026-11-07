@@ -627,12 +627,19 @@ attribution are displayed as escaped inert text. Original attribution is reused 
 re-export only while the JPEG digest matches; replacing artwork retains the original
 provenance record but derives current artwork attribution from the selected asset.
 
-**Imported drafts are edit/export only in this release.** Their activation is blocked
-in the UI, domain service and both HTTP activation handlers before OAuth lookup.
-This deliberately separates representable portable policies from current Spotify
-activation/editor limits. There is no implicit conversion to a managed destination.
-A future reviewed activation policy must handle exact imported values explicitly;
-#551 does not truncate them to make Spotify activation fit.
+**An imported ZIP creates only a local draft; Spotify is unchanged at import time.**
+A separate authenticated and CSRF-protected action can explicitly create a **NEW**
+Spotify playlist after confirming it will not relink or overwrite the original
+destination. The selected saved draft's name, description, source order, exact
+duration seconds and cover must match the activation request, with normal
+Spotify limits enforced before any provisioning journal or provider request.
+The existing durable creation journal prevents blind retries after ambiguous
+Spotify writes; cover upload follows durable destination persistence. Policy
+exceptions remain attached to the validated imported template. ZIP metadata
+is observational only: the original destination ID is not trusted or restored.
+Relinking an **existing** Spotify playlist remains out of scope, tracked by #634.
+Imported large historical values incompatible with Spotify creation are rejected
+clearly, not truncated or silently altered to fit the activation limits.
 
 | On-disk schema | Reads/preview/no-op | Confirmed creation import | Rollback |
 | --- | --- | --- | --- |
