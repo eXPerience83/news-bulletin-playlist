@@ -69,9 +69,7 @@ def setup_import(tmp_path: Path, client: FakeSpotify):
     store.save(ManagedState(schema_version=10))
     journal = ProvisioningJournal(receiver / "provisioning.json")
     covers = PortableCoverLoader(receiver)
-    importer = PlaylistImportService(
-        store, ConfigurationSynchronization(), journal, covers
-    )
+    importer = PlaylistImportService(store, ConfigurationSynchronization(), journal, covers)
     preview = importer.preview(archive)
     assert preview.status == "create"
     result = importer.apply(
@@ -129,9 +127,7 @@ def test_imported_zip_creates_one_new_destination_without_relinking(tmp_path: Pa
     assert managed.source_ids == draft.default_source_ids
     assert managed.min_duration_seconds == draft.min_duration_seconds
     assert managed.max_duration_seconds == draft.max_duration_seconds
-    assert client.creates == [
-        (draft.display_name, render_spotify_description(draft.description))
-    ]
+    assert client.creates == [(draft.display_name, render_spotify_description(draft.description))]
     assert client.covers == [(NEW_DESTINATION, covers.load(draft.cover_id)[0])]
     assert service.provisioning_journal.load() is None
     assert len(service.store.load_readonly().playlists) == 1
