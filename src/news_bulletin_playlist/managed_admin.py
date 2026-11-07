@@ -688,6 +688,14 @@ class ManagedAdminService:
             # Keep the journal for explicit operator recovery.
             return None
         template = self._template(intent.template_id, state=state)
+        imported = next(
+            (
+                draft
+                for draft in state.templates
+                if draft.id == intent.template_id and draft.portable_metadata is not None
+            ),
+            None,
+        )
         managed = replace(
             activate_template(template, intent.destination_id),
             portable_id=allocate_portable_id(state)
@@ -696,7 +704,12 @@ class ManagedAdminService:
             display_name=intent.display_name,
             description=intent.description,
             cover_id=intent.cover_id,
-            source_ids=self._source_ids(intent.source_ids, state=state, allow_empty=False),
+            source_ids=self._source_ids(
+                intent.source_ids,
+                state=state,
+                allow_empty=False,
+                existing=imported.default_source_ids if imported is not None else (),
+            ),
             retention_hours=intent.retention_hours,
             max_episodes=intent.max_episodes,
             max_duration_seconds=intent.max_duration_seconds,
