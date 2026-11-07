@@ -151,9 +151,7 @@ def test_relink_existing_destination_is_paused_and_never_mutates_spotify(tmp_pat
 
 
 @pytest.mark.parametrize("problem", ["no_confirm", "wrong_owner", "wrong_name", "wrong_id"])
-def test_relink_rejects_unverified_destination_before_local_write(
-    tmp_path: Path, problem: str
-):
+def test_relink_rejects_unverified_destination_before_local_write(tmp_path: Path, problem: str):
     service, draft, client = fixture(tmp_path)
     if problem == "wrong_owner":
         client.owner = "other-user"
@@ -189,9 +187,7 @@ def test_invalid_id_and_pending_creation_fail_without_provider_reads(tmp_path: P
     "error",
     [SpotifyApiError(403, "no user scope"), SpotifyTransportError("unavailable")],
 )
-def test_provider_unavailable_cannot_create_local_binding(
-    tmp_path: Path, error: Exception
-):
+def test_provider_unavailable_cannot_create_local_binding(tmp_path: Path, error: Exception):
     service, draft, client = fixture(tmp_path)
     client.error = error
     before = service.store.path.read_bytes()
@@ -215,9 +211,7 @@ def test_relink_rejects_duplicate_disabled_destination_before_remote_read(tmp_pa
         enabled=False,
         portable_id=None,
     )
-    service.store.save(
-        replace(state, templates=(draft, other), playlists=(occupied,))
-    )
+    service.store.save(replace(state, templates=(draft, other), playlists=(occupied,)))
     with pytest.raises(ManagedAdminError, match="already locally managed"):
         relink(service, draft)
     assert not client.calls
