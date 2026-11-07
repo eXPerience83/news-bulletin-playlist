@@ -520,10 +520,13 @@ class ManagedAdminService:
     def check_activation_allowed(
         self, template_id: str, *, confirm_imported_new: bool = False
     ) -> None:
-        if any(
-            t.id == template_id and t.portable_metadata is not None
-            for t in self.store.load_readonly().templates
-        ) and not confirm_imported_new:
+        if (
+            any(
+                t.id == template_id and t.portable_metadata is not None
+                for t in self.store.load_readonly().templates
+            )
+            and not confirm_imported_new
+        ):
             raise ManagedAdminError(
                 "Creating a NEW Spotify playlist from an imported draft requires "
                 "explicit confirmation; this does not relink the original destination"
