@@ -661,12 +661,7 @@ def _custom_draft_card(
     eligible_sources = len(selected_sources) == len(draft.default_source_ids) and all(
         source.enabled for source in selected_sources
     )
-    if draft.portable_metadata is not None:
-        publish = (
-            '<p class="notice">Imported portable draft: edit/export only; '
-            "Spotify activation is blocked.</p>"
-        )
-    elif referenced:
+    if referenced:
         publish = '<p class="muted">This draft already has a managed Spotify destination.</p>'
     elif draft.hidden:
         publish = '<p class="muted">Unhide and save this draft before publishing.</p>'
@@ -680,6 +675,13 @@ def _custom_draft_card(
         source_fields = "".join(
             _hidden_input("source_id", str(source_id)) for source_id in draft.default_source_ids
         )
+        imported_confirmation = (
+            '<label><input type="checkbox" name="confirm_imported_new" value="1" required>'
+            'I confirm that this creates a NEW Spotify playlist. It will NOT recover '
+            'or overwrite the original Spotify destination.</label>'
+            if draft.portable_metadata is not None
+            else ""
+        )
         publish = f"""
 <form method="post" action="/admin/playlists/activate">
   {_hidden_input("csrf_token", csrf_token)}
@@ -690,6 +692,7 @@ def _custom_draft_card(
   {_hidden_input("min_duration_minutes", str(draft.min_duration_seconds // 60))}
   {_hidden_input("max_duration_minutes", str(draft.max_duration_seconds // 60))}
   {source_fields}
+  {imported_confirmation}
   <p class="muted">Creates a public Spotify playlist with initial project attribution;
      attempts to upload the selected cover once. Later image changes require
      the separate Apply Spotify metadata &amp; cover action.</p>
