@@ -7,6 +7,7 @@ The old destination ID is intentionally never read or adopted.
 from __future__ import annotations
 
 import socket
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -177,3 +178,32 @@ def test_ambiguous_new_spotify_creation_keeps_journal_and_never_retries(
     with pytest.raises(ManagedAdminError):
         publish(service, draft, confirm=True)
     assert len(client.creates) == 1
+
+
+def test_imported_activation_retains_dormant_sources(tmp_path: Path) -> None:
+    client = FakeSpotify()
+    service, draft, _ = setup_import(tmp_path, client)
+    state = service.store.load_readonly()
+    assert len(state.sources) > 1
+    dormant = replace(state.sources[0], enabled=False)
+    service.store.save(replace(state, sources=(dormant, *state.sources[1:])))
+    published = publish(service, draft, confirm=True)
+    assert published.source_ids == draft.default_source_ids
+    assert dormant.id in published.source_ids
+    assert service.store.load_readonly().sources[0].enabled is False
+    assert len(client.creates) == 1
+
+
+def test_imported_activation_with_every_source_disabled_fails_before_provider(
+    tmp_path: Path,
+) -> None:
+    client = FakeSpotify()
+    service, draft, _ = setup_import(tmp_path, client)
+    state = service.store.load_readonly()
+    service.store.save(
+        replace(state, sources=tuple(replace(source, enabled=False) for source in state.sources))
+    )
+    with pytest.raises(ManagedAdminError, match="at least one enabled source"):
+        publish(service, draft, confirm=True)
+    assert not client.creates
+    assert service.provisioning_journal.load() is None
