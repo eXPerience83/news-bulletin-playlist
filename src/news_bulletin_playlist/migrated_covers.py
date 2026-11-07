@@ -165,14 +165,17 @@ class MigratedCoverAssets:
             for cover_id in prior:
                 if self.load(cover_id) is None:
                     raise MigratedCoverError("Inherited cover unexpectedly missing")
-            for cover_id in cover_ids - requested:
-                self.assets.load(cover_id)
+            # Existing uploaded_<digest> resources already belong to /data.
+            # Retain their references verbatim: some historical local drafts
+            # intentionally point to not-yet-uploaded artwork.
             return
 
         entries: list[dict[str, object]] = []
         for cover_id in sorted(cover_ids):
             if is_uploaded_cover_id(cover_id):
-                self.assets.load(cover_id)
+                # No bundling or migration is needed for an owner-uploaded
+                # resource. Do not turn a pre-existing orphan/draft reference
+                # into a hard v11 cutover blocker.
                 continue
             if _COVER_ID.fullmatch(cover_id) is None:
                 raise MigratedCoverError("Unsafe inherited cover identifier")
