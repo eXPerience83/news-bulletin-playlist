@@ -677,8 +677,8 @@ def _custom_draft_card(
         )
         imported_confirmation = (
             '<label><input type="checkbox" name="confirm_imported_new" value="1" required>'
-            'I confirm that this creates a NEW Spotify playlist. It will NOT recover '
-            'or overwrite the original Spotify destination.</label>'
+            "I confirm that this creates a NEW Spotify playlist. It will NOT recover "
+            "or overwrite the original Spotify destination.</label>"
             if draft.portable_metadata is not None
             else ""
         )
