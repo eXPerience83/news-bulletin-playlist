@@ -604,7 +604,14 @@ class ManagedAdminService:
             display_name=_playlist_name(display_name),
             description=_playlist_description(description),
             cover_id=self._cover_id(cover_id),
-            source_ids=self._source_ids(source_ids, state=state, allow_empty=False),
+            source_ids=self._source_ids(
+                source_ids,
+                state=state,
+                allow_empty=False,
+                existing=local.default_source_ids
+                if local is not None and local.portable_metadata is not None
+                else (),
+            ),
             retention_hours=template.retention_hours,
             max_episodes=template.max_episodes,
             max_duration_seconds=duration_max,
