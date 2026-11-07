@@ -406,6 +406,11 @@ prefer these persistent copies, even when future image bundles remove old JPEGs.
 This does not regenerate images, modify provider artwork or create destinations.
 Incomplete or corrupt persisted copies must fail rather than silently fall back.
 
+References to pre-existing `uploaded_<digest>` artwork remain unchanged and
+are not copied or required to exist for an unused historical draft. Uploaded
+artwork already belongs to `/data/custom-covers`; a missing historical draft
+asset remains missing rather than silently being replaced.
+
 This addresses **only the cover resource** subproblem of #633. Historic source
 and playlist-template definitions still use a frozen per-installation catalog,
 not fully editable owner records; source ordering and full template ownership
