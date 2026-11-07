@@ -1,0 +1,164 @@
+"""End-to-end legacy→v11→portable interchange, excluding Spotify destination recovery.
+
+This is deliberately NOT a proof that imported ZIPs are live managed playlists:
+the current supported importer creates local drafts without the old remote IDs.
+"""
+
+from __future__ import annotations
+
+import socket
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+from _legacy_dataset import legacy_root
+
+from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
+from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
+from news_bulletin_playlist.managed_state import effective_sources
+from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle
+from news_bulletin_playlist.playlist_import import PlaylistImportService
+from news_bulletin_playlist.portable_playlists import PlaylistExportService, PortableCoverLoader
+from news_bulletin_playlist.portable_sources import export_sources, parse_sources
+from news_bulletin_playlist.source_import import SourceImportService
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def blocked(*args: object, **kwargs: object) -> None:
+        pytest.fail("Portability acceptance must never contact Spotify or other networks")
+
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+
+
+@pytest.mark.parametrize("schema", [6, 7, 8, 9, 10])
+def test_four_legacy_playlists_and_all_sources_remain_portable_after_v11(
+    tmp_path: Path, schema: int
+) -> None:
+    donor, legacy = legacy_root(tmp_path, schema)
+    original_legacy_json = (donor / "managed-state.json").read_bytes()
+    original_private_files = {
+        name: (donor / name).read_bytes()
+        for name in ("oauth-private", "history.sqlite3", "pending-post.json")
+    }
+
+    # A single direct migration; the image's original catalogue is frozen in
+    # /data and the existing runtime, source order and destination IDs survive.
+    original_runtime = legacy.original_runtime
+    store = open_managed_state_store(donor)
+    assert store.catalog.sources
+    assert store.load_readonly() == legacy.original_state
+    assert tuple(s.id for s in effective_sources(store.catalog, store.load())) == tuple(
+        s.id for s in original_runtime.sources
+    )
+    assert tuple(p.destination.external_id for p in store.load().playlists) == tuple(
+        p.destination.external_id for p in legacy.original_state.playlists
+    )
+
+    synchronization = ConfigurationSynchronization()
+    exporter = PlaylistExportService(store, synchronization, PortableCoverLoader(donor))
+
+    # Read-only source JSON covers ALL effective sources, not only the ones
+    # referenced by the four playlists; caller must save this separately.
+    effective = effective_sources(store.catalog, store.load_readonly())
+    source_json = export_sources(
+        effective, built_in_ids={source.id for source in store.catalog.sources}
+    )
+    parsed = parse_sources(source_json)
+    assert {source.source.id for source in parsed} == {source.id for source in effective}
+    assert len(parsed) == 13
+
+    archives: dict[str, bytes] = {}
+    for playlist in legacy.original_state.playlists:
+        identifier = str(playlist.id)
+        fingerprint, _, identity = exporter.preparation("managed", identifier)
+        assert identity is None
+        assert exporter.prepare("managed", identifier, fingerprint, acknowledge_v9=True)
+        _, archive = exporter.export("managed", identifier)
+        bundle = inspect_playlist_bundle(archive)
+        assert bundle.playlist["kind"] == "managed"
+        assert bundle.playlist["configuration"]["enabled"] is playlist.enabled
+        assert bundle.playlist["source_ids"] == list(playlist.source_ids)
+        assert b"PRIVATE-DESTINATION" not in archive
+        assert playlist.destination.external_id.encode() not in archive
+        archives[identifier] = archive
+
+    assert len(archives) == 4
+    assert (donor / "managed-state.json").read_bytes() == original_legacy_json
+    for name, original_bytes in original_private_files.items():
+        assert (donor / name).read_bytes() == original_bytes
+
+    # A pristine v11 installation has zero built-in configured sources and
+    # zero managed destinations; import the global sources and four ZIPs.
+    recipient = tmp_path / "recipient"
+    recipient.mkdir()
+    restored = open_managed_state_store(recipient)
+    assert restored.catalog.sources == ()
+    assert restored.catalog.playlists == ()
+    assert restored.load_readonly().playlists == ()
+    target_sync = ConfigurationSynchronization()
+    journal = ProvisioningJournal(recipient / "managed-playlist-provisioning.json")
+    sources = SourceImportService(restored, target_sync, journal)
+    source_preview = sources.preview(source_json)
+    assert (
+        sources.apply(
+            source_json,
+            source_preview.fingerprint,
+            keep_local=frozenset(),
+            confirm_v8=False,
+        ).created
+        == 13
+    )
+    playlists = PlaylistImportService(
+        restored, target_sync, journal, PortableCoverLoader(recipient)
+    )
+
+    for archive in archives.values():
+        preview = playlists.preview(archive)
+        assert preview.status == "create"
+        result = playlists.apply(
+            archive,
+            preview.sources.fingerprint,
+            keep_local=preview.sources.conflicts,
+            confirm_schema=False,
+        )
+        assert result.created_draft
+
+    before = {source.external_references[0].external_id: source for source in effective}
+    after = {
+        source.external_references[0].external_id: source
+        for source in effective_sources(restored.catalog, restored.load_readonly())
+    }
+    assert set(before) == set(after)
+    for show_id, original in before.items():
+        assert replace(after[show_id], id=original.id) == original
+
+    final = restored.load_readonly()
+    assert len(final.templates) == len(archives)
+    assert len(final.sources) == len(effective)
+    assert not final.playlists  # Current portable import does NOT rebind Spotify.
+    local_sources = {source.id: source for source in effective_sources(restored.catalog, final)}
+    originals = {str(p.id): p for p in legacy.original_state.playlists}
+    for identifier, archive in archives.items():
+        bundle = inspect_playlist_bundle(archive)
+        original = originals[identifier]
+        candidate = next(
+            template
+            for template in final.templates
+            if template.portable_id == bundle.playlist["portable_id"]
+        )
+        assert candidate.display_name == original.display_name
+        assert candidate.description == original.description
+        assert candidate.retention_hours == original.retention_hours
+        assert candidate.max_episodes == original.max_episodes
+        assert candidate.min_duration_seconds == original.min_duration_seconds
+        assert candidate.max_duration_seconds == original.max_duration_seconds
+        assert tuple(
+            local_sources[source_id].external_references[0].external_id
+            for source_id in candidate.default_source_ids
+        ) == tuple(
+            next(s for s in effective if s.id == source_id).external_references[0].external_id
+            for source_id in original.source_ids
+        )
+        assert playlists.covers.load(candidate.cover_id)[0] == bundle.jpeg
