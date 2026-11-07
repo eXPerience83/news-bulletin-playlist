@@ -64,7 +64,7 @@ value="apply" type="submit">Apply import</button>"""
 <p>JPEG verified
 byte for byte; a durable content-addressed copy will be prepared before the state commit.
 Imported drafts retain exact seconds, exceptions and provenance.
-Publishing requires a later explicit confirmation to create a NEW Spotify playlist; the original destination is never restored automatically.</p>
+Publishing later requires explicit confirmation to create a NEW Spotify playlist.\nThe original Spotify destination is never restored automatically.</p>
 <details>
 <summary>Complete imported playlist configuration and attribution</summary>
 <pre>{details}</pre></details>
