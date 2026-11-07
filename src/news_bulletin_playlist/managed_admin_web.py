@@ -658,13 +658,10 @@ def _custom_draft_card(
         else status_badge("Draft", tone="muted")
     )
     selected_sources = tuple(source for source in sources if source.id in draft.default_source_ids)
-    eligible_sources = (
-        len(selected_sources) == len(draft.default_source_ids)
-        and (
-            any(source.enabled for source in selected_sources)
-            if draft.portable_metadata is not None
-            else all(source.enabled for source in selected_sources)
-        )
+    eligible_sources = len(selected_sources) == len(draft.default_source_ids) and (
+        any(source.enabled for source in selected_sources)
+        if draft.portable_metadata is not None
+        else all(source.enabled for source in selected_sources)
     )
     if referenced:
         publish = '<p class="muted">This draft already has a managed Spotify destination.</p>'
