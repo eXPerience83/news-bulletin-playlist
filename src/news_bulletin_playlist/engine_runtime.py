@@ -1670,6 +1670,13 @@ def _operational_status_page(
     next_run = "—" if snapshot.next_run_at is None else _format_time(snapshot.next_run_at)
     source_rows = _source_rows(cycle)
     playlist_rows = _playlist_rows(cycle)
+    inspection_banner = (
+        '<p role="alert"><strong>INSPECTION HOLD ACTIVE:</strong> Spotify reconciliation '
+        "is suspended across restarts. HTTP health does not certify readiness. "
+        "Release requires a state-hash-confirmed CLI action and a restart.</p>"
+        if inspection_hold
+        else ""
+    )
 
     document = f"""<!doctype html>
 <html lang="en">
@@ -1690,13 +1697,7 @@ def _operational_status_page(
 </head>
 <body>
   <h1>News Bulletin Playlists</h1>
-  {
-      '<p role="alert"><strong>INSPECTION HOLD ACTIVE:</strong> Spotify reconciliation '
-      'is suspended across restarts. HTTP health does not certify readiness. '
-      'Release requires a state-hash-confirmed CLI action and a restart.</p>'
-      if inspection_hold
-      else ''
-  }
+  {inspection_banner}
   <p>This page is read-only. Administrative actions remain isolated under the
      authenticated <code>/admin/</code> surface.</p>
   <dl>

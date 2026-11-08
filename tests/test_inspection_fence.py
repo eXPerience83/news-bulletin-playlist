@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -78,9 +79,7 @@ def test_release_requires_operator_confirmation_and_exact_inspected_bytes(tmp_pa
             release_gate(root, expected_sha256=wrong_hash, confirm=confirm)
         assert path.read_bytes() == held_bytes
 
-    released = release_gate(
-        root, expected_sha256=status.state_sha256, confirm=RELEASE_CONFIRMATION
-    )
+    released = release_gate(root, expected_sha256=status.state_sha256, confirm=RELEASE_CONFIRMATION)
     assert released.state == "released"
     assert not startup_gate(root, requested=False)
     assert inspect_gate(root).original_release_sha256 == status.state_sha256
@@ -98,11 +97,12 @@ def test_changed_v11_state_invalidates_operator_release(tmp_path: Path):
     owner.initialize_from_legacy()
     previous = inspect_gate(root).state_sha256
     managed = owner.load().managed_overlay
-    from dataclasses import replace
-
-    owner.save(replace(managed, playlists=tuple(
-        replace(item, enabled=False) for item in managed.playlists
-    )), expected_bytes=owner.load_bytes())
+    owner.save(
+        replace(
+            managed, playlists=tuple(replace(item, enabled=False) for item in managed.playlists)
+        ),
+        expected_bytes=owner.load_bytes(),
+    )
     assert inspect_gate(root).state_sha256 != previous
     with pytest.raises(InspectionGateError, match="changed"):
         release_gate(root, expected_sha256=previous, confirm=RELEASE_CONFIRMATION)
@@ -116,9 +116,7 @@ def test_invalid_inspection_mode_is_not_silently_ignored(value: str):
 
 
 @pytest.mark.parametrize("tamper", ["symlink", "public", "bad_json", "noncanonical", "directory"])
-def test_corrupt_inspection_marker_blocks_normal_start_and_release(
-    tmp_path: Path, tamper: str
-):
+def test_corrupt_inspection_marker_blocks_normal_start_and_release(tmp_path: Path, tamper: str):
     root = tmp_path / "data"
     root.mkdir()
     startup_gate(root, requested=True)
@@ -191,9 +189,7 @@ def test_inspection_http_status_and_all_admin_posts_are_blocked(tmp_path: Path):
                 "/admin/owner-covers/upload",
                 "/admin/provisioning/adopt",
             ):
-                result = _request(
-                    server, "POST", target, cookie=cookie, form={"csrf_token": "bad"}
-                )
+                result = _request(server, "POST", target, cookie=cookie, form={"csrf_token": "bad"})
                 assert result[0] == 423, target
             result = _request(
                 server, "GET", "/admin/spotify/callback?code=private&state=private", cookie=cookie
@@ -229,11 +225,13 @@ def test_serve_direct_cutover_and_next_restart_do_not_run_enabled_playlists(
     )
     # Failure here would mean an automatic first playlist write was possible.
     monkeypatch.setattr(
-        engine_runtime.EngineLifecycleController, "_start_scheduler_locked",
+        engine_runtime.EngineLifecycleController,
+        "_start_scheduler_locked",
         lambda _self: pytest.fail("inspection startup scheduled an engine cycle"),
     )
     monkeypatch.setattr(
-        engine_runtime.ManagedAdminService, "finalize_known_provisioning",
+        engine_runtime.ManagedAdminService,
+        "finalize_known_provisioning",
         lambda _self: pytest.fail("inspection startup finalized pending Spotify creation"),
     )
 
@@ -242,20 +240,34 @@ def test_serve_direct_cutover_and_next_restart_do_not_run_enabled_playlists(
 
     stop = threading.Event()
     stop.set()
-    assert engine_runtime.serve(
-        host="127.0.0.1", port=0, data_dir=root, stop_event=stop,
-        environ={INSPECTION_ENV: "1"}, handler_type=Handler
-    ) == 0
+    assert (
+        engine_runtime.serve(
+            host="127.0.0.1",
+            port=0,
+            data_dir=root,
+            stop_event=stop,
+            environ={INSPECTION_ENV: "1"},
+            handler_type=Handler,
+        )
+        == 0
+    )
     assert V11OperationalStore(root).load().runtime == original.original_runtime
     assert inspect_gate(root).held
     assert Handler.inspection_hold is False
     assert auth.calls == 0
 
     # The flag can disappear entirely; an unreviewed next boot remains PAUSED.
-    assert engine_runtime.serve(
-        host="127.0.0.1", port=0, data_dir=root, stop_event=stop,
-        environ={}, handler_type=Handler
-    ) == 0
+    assert (
+        engine_runtime.serve(
+            host="127.0.0.1",
+            port=0,
+            data_dir=root,
+            stop_event=stop,
+            environ={},
+            handler_type=Handler,
+        )
+        == 0
+    )
     assert inspect_gate(root).held
     assert auth.calls == 0
 
@@ -268,11 +280,20 @@ def test_cli_status_is_read_only_and_release_is_explicit(tmp_path: Path, capsys)
     assert main(["inspection-status", "--data-dir", str(root)]) == 0
     assert inspect_gate(root).state_sha256 in capsys.readouterr().out
     assert (root / "managed-state-v11.json").read_bytes() == before
-    assert main([
-        "inspection-release", "--data-dir", str(root),
-        "--state-sha256", inspect_gate(root).state_sha256,
-        "--confirm", RELEASE_CONFIRMATION,
-    ]) == 0
+    assert (
+        main(
+            [
+                "inspection-release",
+                "--data-dir",
+                str(root),
+                "--state-sha256",
+                inspect_gate(root).state_sha256,
+                "--confirm",
+                RELEASE_CONFIRMATION,
+            ]
+        )
+        == 0
+    )
     assert "normal restart" in capsys.readouterr().out
     assert not inspect_gate(root).held
     assert (root / "managed-state-v11.json").read_bytes() == before

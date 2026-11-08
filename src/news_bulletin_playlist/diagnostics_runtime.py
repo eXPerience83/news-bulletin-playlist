@@ -1815,9 +1815,9 @@ def _safe_operational_status_page(
 
     inspection_banner = (
         '<p class="hero-copy" role="alert"><strong>Inspection hold active:</strong> '
-        'the scheduler and all administration writes are suspended. '
-        'The healthcheck only certifies HTTP/storage availability. '
-        'A separate exact-state CLI release and normal restart are required.</p>'
+        "the scheduler and all administration writes are suspended. "
+        "The healthcheck only certifies HTTP/storage availability. "
+        "A separate exact-state CLI release and normal restart are required.</p>"
         if inspection_hold
         else ""
     )
