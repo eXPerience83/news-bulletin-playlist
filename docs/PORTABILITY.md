@@ -24,14 +24,21 @@ Acceptance on isolated synthetic roots is tracked by #553 and later beta gates b
 
 ## ZIP v1 safety boundary before complete v2 (#638)
 
-Managed ZIP v1 can faithfully describe the current selection, but it has no
-separate representation of the original template's full source closure or
-future-use duration exceptions. Where a managed playlist no longer assigns
-every template-default source in the original order, or a template exception
-would be dropped because it currently falls below the managed maximum, export
-now **fails explicitly** with a ZIP v2 requirement rather than silently
-producing a misleading archive. No source or playlist is changed by this check.
-The existing ZIP v1 format and successful representable exports remain unchanged.
+Managed ZIP v1 can faithfully describe the current destination selection,
+but it has no separate representation of the original template's full source
+closure or future-use duration exceptions. If a template exception would be
+dropped because it falls below the current managed maximum or refers to a
+temporarily unassigned source, export now **fails explicitly** with a ZIP v2
+requirement rather than silently discarding those exception selectors. No source
+or playlist is changed by this check. The existing ZIP v1 format and successful
+representable exports remain unchanged.
+
+For compatibility, a managed destination whose selected sources are a **subset
+or a different order** of the original template can still export a ZIP v1
+snapshot of its current selection. Such a ZIP does **not** carry omitted
+template-default sources or their configuration. **Do not call it a complete
+backup of the original template.** A full owner-portable source closure
+still requires ZIP v2 (#638).
 
 This is an interim **loss-prevention guard**, not a solution to #638: ZIP v2
 must preserve the full editable owner template and all dormant exceptions,
