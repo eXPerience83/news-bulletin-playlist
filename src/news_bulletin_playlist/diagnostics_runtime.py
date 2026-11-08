@@ -251,6 +251,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self.inspection_hold:
+            self._inspection_locked()
+            return
         try:
             path = urllib.parse.urlsplit(self.path).path
         except ValueError:
@@ -1511,6 +1514,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             spotify_state=self._spotify_state(),
             status=self.operational_status,
             build_revision=self.build_revision,
+            inspection_hold=self.inspection_hold,
         )
         self._reply(
             HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
@@ -1765,6 +1769,7 @@ def _safe_operational_status_page(
     spotify_state: AuthorizationState | None,
     status: OperationalStatus | None,
     build_revision: str = "dev",
+    inspection_hold: bool = False,
 ) -> bytes:
     snapshot = (
         OperationalStatus(configured=False).snapshot() if status is None else status.snapshot()
@@ -1776,6 +1781,9 @@ def _safe_operational_status_page(
     if snapshot.configured:
         engine_label = "Cycle running" if snapshot.running else "Scheduled"
         engine_tone = "accent" if snapshot.running else "success"
+    if inspection_hold:
+        engine_label = "INSPECTION HOLD - Spotify writes suspended"
+        engine_tone = "warning"
 
     cycle = snapshot.last_cycle
     cycle_result = "Not run yet" if cycle is None else ("Success" if cycle.ok else "Failed")
@@ -1792,7 +1800,10 @@ def _safe_operational_status_page(
     runtime_tone: BadgeTone = "success" if ready else "danger"
     overall_label = "Operational"
     overall_tone: BadgeTone = "success"
-    if not ready:
+    if inspection_hold:
+        overall_label = "Operator inspection - NOT production ready"
+        overall_tone = "warning"
+    elif not ready:
         overall_label = "Runtime degraded"
         overall_tone = "danger"
     elif cycle is not None and not cycle.ok:
@@ -1802,6 +1813,14 @@ def _safe_operational_status_page(
         overall_label = "Cycle running"
         overall_tone = "accent"
 
+    inspection_banner = (
+        '<p class="hero-copy" role="alert"><strong>Inspection hold active:</strong> '
+        'the scheduler and all administration writes are suspended. '
+        'The healthcheck only certifies HTTP/storage availability. '
+        'A separate exact-state CLI release and normal restart are required.</p>'
+        if inspection_hold
+        else ""
+    )
     document = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1830,6 +1849,7 @@ def _safe_operational_status_page(
             A read-only view of the engine, Spotify connection, sources and published playlists.
             Detailed failure context stays inside authenticated administration.
           </p>
+          {inspection_banner}
           <p class="hero-copy">
             Pre-release: built-in playlist templates and custom sources are supported;
             creating arbitrary new playlist templates is not available yet.
