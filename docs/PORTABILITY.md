@@ -22,6 +22,23 @@ copy is prudent; **portable JSON and ZIP are not production backups**.
 Acceptance on isolated synthetic roots is tracked by #553 and later beta gates by
 #565. No release/image or live migration is implied by code merged into `main`.
 
+## ZIP v1 safety boundary before complete v2 (#638)
+
+Managed ZIP v1 can faithfully describe the current selection, but it has no
+separate representation of the original template's full source closure or
+future-use duration exceptions. Where a managed playlist no longer assigns
+every template-default source in the original order, or a template exception
+would be dropped because it currently falls below the managed maximum, export
+now **fails explicitly** with a ZIP v2 requirement rather than silently
+producing a misleading archive. No source or playlist is changed by this check.
+The existing ZIP v1 format and successful representable exports remain unchanged.
+
+This is an interim **loss-prevention guard**, not a solution to #638: ZIP v2
+must preserve the full editable owner template and all dormant exceptions,
+including policy defaults, even where the current managed selection differs.
+Do not approve #631 or export-recovery acceptance until v2 import+export and
+functional edit/reassignment tests have passed.
+
 ## Dependency and risk matrix
 
 This matrix was established before choosing the interchange representation.
