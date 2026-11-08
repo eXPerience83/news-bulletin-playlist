@@ -59,7 +59,7 @@ def test_inactive_template_exception_does_not_disappear_from_export(tmp_path):
     assert restored.exceptions[0].edition_local_time.microsecond == 123456
 
 
-def test_unassigned_template_source_does_not_disappear_from_managed_zip(tmp_path):
+def test_v1_managed_source_subset_exports_current_selection_not_full_template(tmp_path):
     template = BUILTIN_CATALOG.playlists[0]
     playlist = replace(
         activate_template(template, "PRIVATE"),
@@ -67,11 +67,18 @@ def test_unassigned_template_source_does_not_disappear_from_managed_zip(tmp_path
         source_ids=(template.default_source_ids[0],),
     )
     service, _ = _prepared(tmp_path, template, playlist=playlist)
-    with pytest.raises(PlaylistExportError, match="unassigned sources"):
-        service.export("managed", str(playlist.id))
+    from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle
+
+    # v1 is a snapshot of the *managed destination*, not a template backup.
+    # Keep existing snapshot export support until a full v2 owner closure exists.
+    _, archive = service.export("managed", str(playlist.id))
+    restored = inspect_playlist_bundle(archive)
+    assert restored.playlist["source_ids"] == list(playlist.source_ids)
+    assert len(restored.sources) == 1
+    assert tuple(restored.playlist["source_ids"]) != template.default_source_ids
 
 
-def test_reordered_template_sources_are_not_exported_as_original_default_order(tmp_path):
+def test_v1_managed_source_order_remains_current_owner_selection(tmp_path):
     template = BUILTIN_CATALOG.playlists[0]
     playlist = replace(
         activate_template(template, "PRIVATE"),
@@ -79,8 +86,11 @@ def test_reordered_template_sources_are_not_exported_as_original_default_order(t
         source_ids=tuple(reversed(template.default_source_ids)),
     )
     service, _ = _prepared(tmp_path, template, playlist=playlist)
-    with pytest.raises(PlaylistExportError, match="source order"):
-        service.export("managed", str(playlist.id))
+    from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle
+
+    # Preserve intentional managed-source order even when its template differs.
+    _, archive = service.export("managed", str(playlist.id))
+    assert inspect_playlist_bundle(archive).playlist["source_ids"] == list(playlist.source_ids)
 
 
 def test_currently_active_exception_can_roundtrip_without_loss(tmp_path):
