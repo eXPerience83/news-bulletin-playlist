@@ -222,16 +222,30 @@ def test_fresh_admin_session_can_login_inspect_and_logout_during_hold(tmp_path: 
             assert status == 200 and b"Startup inspection hold" in page
             for readonly in ("/admin/sources", "/admin/diagnostics"):
                 assert _request(server, "GET", readonly, cookie=cookie)[0] == 200
-            assert _request(
-                server, "POST", "/admin/playlists/activate",
-                cookie=cookie, form={"csrf_token": "bad"},
-            )[0] == 423
-            assert _request(
-                server, "POST", "/admin/login?unexpected=1",
-                form={"username": "admin", "password": "wrong"},
-            )[0] == 423
+            assert (
+                _request(
+                    server,
+                    "POST",
+                    "/admin/playlists/activate",
+                    cookie=cookie,
+                    form={"csrf_token": "bad"},
+                )[0]
+                == 423
+            )
+            assert (
+                _request(
+                    server,
+                    "POST",
+                    "/admin/login?unexpected=1",
+                    form={"username": "admin", "password": "wrong"},
+                )[0]
+                == 423
+            )
             status, headers, _ = _request(
-                server, "POST", "/admin/logout", cookie=cookie,
+                server,
+                "POST",
+                "/admin/logout",
+                cookie=cookie,
                 form={"csrf_token": _csrf(page)},
             )
             assert status == 303 and headers["Location"] == "/admin/login"
