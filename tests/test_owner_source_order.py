@@ -21,6 +21,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedState,
     ManagedStateStore,
     compile_engine_config,
+    source_definition,
 )
 from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.owner_source_order import (
@@ -81,12 +82,9 @@ def test_old_runtime_definitions_and_order_survive_as_full_owner_records(tmp_pat
 
 
 def test_owner_order_preserves_edits_removals_and_appends_new_ids_deterministically():
-    runtime = BUILTIN_CATALOG.sources[:4] + (_source().id and tuple((
-        # A new manual source is materialized to the same full-record type.
-        __import__("news_bulletin_playlist.managed_state", fromlist=["source_definition"]).source_definition(
-            _source()
-        ),
-    )))
+    # A legacy manually configured source is materialized into the same
+    # complete owner-record type as the historical image presets.
+    runtime = BUILTIN_CATALOG.sources[:4] + (source_definition(_source()),)
     order, records = materialize_owner_sources(runtime)
     old_count = len(records)
     changed = tuple(
