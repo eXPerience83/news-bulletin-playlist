@@ -694,11 +694,14 @@ class OperationalHealthHandler(LanAdminHandler):
             return
 
         if self.inspection_hold and parsed.path == "/healthz":
+            # Preserve the original liveness/storage-health contract: an
+            # inspection hold must not mask an unwritable persistent root.
+            ready = _data_dir_ready(self.data_dir)
             self._reply(
-                HTTPStatus.OK,
+                HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
                 json.dumps(
                     {
-                        "status": "ok",
+                        "status": "ok" if ready else "degraded",
                         "version": __version__,
                         "spotify_reconciliation": "inspection_held",
                     },
