@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
 from _legacy_dataset import legacy_root as _legacy_root
@@ -197,6 +198,45 @@ def test_inspection_http_status_and_all_admin_posts_are_blocked(tmp_path: Path):
             assert result[0] == 423
             assert client.calls == []
             assert store.load_readonly().playlists == ()
+        finally:
+            server.RequestHandlerClass.inspection_hold = False
+
+
+def test_fresh_admin_session_can_login_inspect_and_logout_during_hold(tmp_path: Path):
+    """The login path is the sole essential POST exception for inspecting v11."""
+    with _server(tmp_path) as (server, client, store):
+        server.RequestHandlerClass.inspection_hold = True
+        try:
+            status, headers, _ = _request(server, "GET", "/admin/")
+            assert status == 303 and headers["Location"] == "/admin/login"
+            assert _request(server, "GET", "/admin/login")[0] == 200
+            wrong = _request(
+                server,
+                "POST",
+                "/admin/login",
+                form={"username": "admin", "password": "wrong"},
+            )
+            assert wrong[0] == 401
+            cookie = _login(server)
+            status, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+            assert status == 200 and b"Startup inspection hold" in page
+            for readonly in ("/admin/sources", "/admin/diagnostics"):
+                assert _request(server, "GET", readonly, cookie=cookie)[0] == 200
+            assert _request(
+                server, "POST", "/admin/playlists/activate",
+                cookie=cookie, form={"csrf_token": "bad"},
+            )[0] == 423
+            assert _request(
+                server, "POST", "/admin/login?unexpected=1",
+                form={"username": "admin", "password": "wrong"},
+            )[0] == 423
+            status, headers, _ = _request(
+                server, "POST", "/admin/logout", cookie=cookie,
+                form={"csrf_token": _csrf(page)},
+            )
+            assert status == 303 and headers["Location"] == "/admin/login"
+            assert _request(server, "GET", "/admin/", cookie=cookie)[0] == 303
+            assert client.calls == [] and store.load_readonly().playlists == ()
         finally:
             server.RequestHandlerClass.inspection_hold = False
 
