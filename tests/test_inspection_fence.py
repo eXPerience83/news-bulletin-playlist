@@ -201,6 +201,22 @@ def test_inspection_http_status_and_all_admin_posts_are_blocked(tmp_path: Path):
             server.RequestHandlerClass.inspection_hold = False
 
 
+def test_inspection_health_preserves_degraded_storage_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    with _server(tmp_path) as (server, _client, _store):
+        server.RequestHandlerClass.inspection_hold = True
+        monkeypatch.setattr(engine_runtime, "_data_dir_ready", lambda _path: False)
+        try:
+            status, _, payload = _request(server, "GET", "/healthz")
+            assert status == 503
+            result = json.loads(payload)
+            assert result["status"] == "degraded"
+            assert result["spotify_reconciliation"] == "inspection_held"
+        finally:
+            server.RequestHandlerClass.inspection_hold = False
+
+
 class _FakeAuth:
     def __init__(self) -> None:
         self.calls = 0
