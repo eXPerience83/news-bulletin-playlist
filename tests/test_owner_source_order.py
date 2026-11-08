@@ -39,7 +39,7 @@ def no_provider_network(monkeypatch: pytest.MonkeyPatch) -> None:
         pytest.fail("Pure owner-source projection attempted network or operational DB I/O")
 
     monkeypatch.setattr(socket.socket, "connect", blocked)
-    monkeypatch.setattr(socket.socket, "getaddrinfo", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
     monkeypatch.setattr(sqlite3, "connect", blocked)
 
 
