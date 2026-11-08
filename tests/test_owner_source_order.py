@@ -120,11 +120,23 @@ def test_owner_order_preserves_edits_removals_and_appends_new_ids_deterministica
         b"{",
         b"",
         b" " * 65537,
-        b'{"format":"news-bulletin-playlist.owner-source-order","version":1,"source_ids":["a","a"]}\n',
-        b'{"format":"news-bulletin-playlist.owner-source-order","version":1,"source_ids":["bad/id"]}\n',
+        (
+            b'{"format":"news-bulletin-playlist.owner-source-order",'
+            b'"version":1,"source_ids":["a","a"]}\n'
+        ),
+        (
+            b'{"format":"news-bulletin-playlist.owner-source-order",'
+            b'"version":1,"source_ids":["bad/id"]}\n'
+        ),
         b'{"format":"news-bulletin-playlist.owner-source-order","version":true,"source_ids":[]}\n',
-        b'{"format":"news-bulletin-playlist.owner-source-order","version":1,"source_ids":[],"extra":1}\n',
-        b'{"format":"news-bulletin-playlist.owner-source-order","version":1,"source_ids":[],"version":1}\n',
+        (
+            b'{"format":"news-bulletin-playlist.owner-source-order",'
+            b'"version":1,"source_ids":[],"extra":1}\n'
+        ),
+        (
+            b'{"format":"news-bulletin-playlist.owner-source-order",'
+            b'"version":1,"source_ids":[],"version":1}\n'
+        ),
         b'{"format":"news-bulletin-playlist.owner-source-order","version":1,"source_ids":[]}',
     ],
 )
