@@ -136,7 +136,7 @@ def render_managed_admin_page(
                 '<section class="warning" role="alert">'
                 "<h2>Startup inspection hold: Spotify writes are suspended</h2>"
                 "<p>The original playlists and source policies can be inspected here. "
-                "The scheduler is not running, Admin forms and OAuth callback are blocked, "
+                "The scheduler is not running, Admin write forms and OAuth callback are blocked, "
                 "and healthz only reports service health, not production readiness. "
                 "Release requires an exact v11 SHA-256 confirmation using the CLI "
                 "and a normal process restart. No Spotify write was authorized by migration."

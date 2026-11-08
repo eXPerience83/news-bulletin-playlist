@@ -33,9 +33,12 @@ No private /data backup is required by the owner.
 
 The hold survives process termination, configuration edits and restart
 **even when the environment variable is later removed**. During inspection,
-the scheduler cannot start, wake or reconcile, the OAuth callback and **all**
-Admin POST operations are denied with HTTP 423, and automatic pending
-provisioning finalization is deferred. GET status/Admin/diagnostics remain
+the scheduler cannot start, wake or reconcile, the OAuth callback and
+**all Admin configuration/provider POST operations** are denied with HTTP 423,
+and automatic pending provisioning finalization is deferred. The
+`POST /admin/login` and `POST /admin/logout` operations are allowed through
+their existing credential/CSRF/session validation **solely to enable authenticated
+read-only inspection** after a restart. GET status/Admin/diagnostics remain
 usable. The HTTP healthcheck still answers `status: ok` for container liveness
 but includes `spotify_reconciliation: inspection_held`; a green Docker
 healthcheck is **not** permission to sync Spotify. The public and Admin

@@ -251,7 +251,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        if self.inspection_hold:
+        # Local login/logout sessions are necessary to reach read-only Admin
+        # after a restart; all configuration and provider writes remain locked.
+        if self.inspection_hold and self.path not in {"/admin/login", "/admin/logout"}:
             self._inspection_locked()
             return
         try:

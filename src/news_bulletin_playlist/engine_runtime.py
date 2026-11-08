@@ -658,7 +658,7 @@ class OperationalHealthHandler(LanAdminHandler):
             super()._handle_spotify_callback(query)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        if self.inspection_hold:
+        if self.inspection_hold and self.path not in {"/admin/login", "/admin/logout"}:
             self._inspection_locked()
             return
         try:

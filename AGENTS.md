@@ -22,7 +22,9 @@ When `NEWS_PLAYLIST_STARTUP_INSPECTION=1` is set, a private durable hold marker
 must be published before any v6-v10 -> v11 conversion or Spotify cycle; it must
 survive restart even when the env setting is absent. Never automatically start,
 wake or reconcile a scheduler, finalize uncertain provisioning or accept Admin
-POST/OAuth writes while this process is held. All GET status and Admin views
+configuration/provider POST/OAuth writes while this process is held. Only the
+existing session login/logout POST routes may proceed to provide authenticated
+read-only inspection after a restart. All GET status and Admin views
 must disclose held/not-production-ready status; healthcheck is only liveness.
 Release requires the exact current v11 SHA-256 and a fixed explicit CLI
 acknowledgment under the state lock; a running held process never releases
