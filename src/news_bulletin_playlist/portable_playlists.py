@@ -192,19 +192,10 @@ def playlist_bundle(
         if template is None:
             raise PlaylistExportError("The playlist template is unavailable")
         source_ids = target.source_ids
-        # ZIP v1 has only ONE source list and ONE duration policy. A managed
-        # destination can override a template's source selection and maximum.
-        # The old exporter silently dropped template-only sources and exceptions
-        # that could become active again after a later owner edit. Never provide
-        # such an archive as if it could recover all owner-specific behavior.
-        template_source_order = tuple(
-            source_id for source_id in source_ids if source_id in template.default_source_ids
-        )
-        if template_source_order != template.default_source_ids:
-            raise PlaylistExportError(
-                "ZIP v1 cannot preserve the template source order and unassigned sources; "
-                "lossless ZIP v2 is required (#638)"
-            )
+        # ZIP v1 has only one policy. It must not silently omit template
+        # exceptions that would become effective after editing the managed max.
+        # Preserve existing source-subset/reordering export behavior for
+        # compatibility: full template source closure requires ZIP v2 (#638).
         if any(
             e.source_id not in source_ids or e.max_seconds <= target.max_duration_seconds
             for e in template.duration_policy.exceptions
