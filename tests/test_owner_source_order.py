@@ -157,8 +157,8 @@ def test_unordered_catalog_state_cannot_be_assumed_to_be_original_order(tmp_path
     assert observed == BUILTIN_CATALOG.sources
     malformed = json.loads(order.serialize())
     malformed["source_ids"].pop()
-    invalid_evidence = (
-        json.dumps(malformed, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode("utf-8")
+    invalid_evidence = (json.dumps(malformed, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "utf-8"
+    )
     with pytest.raises(OwnerSourceOrderError, match="records do not match"):
         OwnerSourceOrder.parse(invalid_evidence).definitions(canonical_state.sources)

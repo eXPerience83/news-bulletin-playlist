@@ -41,8 +41,7 @@ class OwnerSourceOrder:
             or len(self.ids) > _MAX_OWNER_SOURCES
             or len(self.ids) != len(set(self.ids))
             or any(
-                not isinstance(item, str) or _SOURCE_ID.fullmatch(item) is None
-                for item in self.ids
+                not isinstance(item, str) or _SOURCE_ID.fullmatch(item) is None for item in self.ids
             )
         ):
             raise OwnerSourceOrderError("Owner source order is invalid or contains duplicate IDs")
