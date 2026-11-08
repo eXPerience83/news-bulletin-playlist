@@ -8,7 +8,6 @@ from pathlib import Path
 
 from news_bulletin_playlist.diagnostics_runtime import serve
 from news_bulletin_playlist.inspection_fence import (
-    INSPECTION_FILENAME,
     InspectionGateError,
     inspect_gate,
     release_gate,

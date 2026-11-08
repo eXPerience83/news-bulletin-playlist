@@ -88,7 +88,7 @@ def test_release_requires_operator_confirmation_and_exact_inspected_bytes(tmp_pa
         release_gate(root, expected_sha256=status.state_sha256, confirm=RELEASE_CONFIRMATION)
     assert startup_gate(root, requested=True)
     assert inspect_gate(root).held
-    assert not startup_gate(root, requested=False) is False
+    assert startup_gate(root, requested=False)
 
 
 def test_changed_v11_state_invalidates_operator_release(tmp_path: Path):

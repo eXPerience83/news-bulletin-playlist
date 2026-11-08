@@ -15,6 +15,7 @@ import re
 import stat
 import uuid
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -136,10 +137,8 @@ def _write(fd: int, state: str, release_sha256: str | None = None) -> None:
             "Inspection gate publication is uncertain; inspect before retry"
         ) from exc
     finally:
-        try:
+        with suppress(FileNotFoundError):
             os.unlink(temporary, dir_fd=fd)
-        except FileNotFoundError:
-            pass
 
 
 def startup_gate(data_dir: Path, *, requested: bool) -> bool:

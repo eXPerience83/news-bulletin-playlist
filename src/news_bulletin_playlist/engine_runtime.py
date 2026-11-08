@@ -47,12 +47,7 @@ from news_bulletin_playlist.engine import (
 )
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
-from news_bulletin_playlist.inspection_fence import (
-    INSPECTION_ENV,
-    InspectionGateError,
-    inspection_requested,
-    startup_gate,
-)
+from news_bulletin_playlist.inspection_fence import inspection_requested, startup_gate
 from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
