@@ -75,7 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(str(exc))
         print(
             f"Reconciliation release acknowledged for {status.state_sha256}. "
-            "Stop inspection runtime and perform a normal restart without " 
+            "Stop inspection runtime and perform a normal restart without "
             "NEWS_PLAYLIST_STARTUP_INSPECTION=1."
         )
         return 0
