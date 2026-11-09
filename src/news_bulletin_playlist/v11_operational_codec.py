@@ -133,8 +133,20 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
     # An owner inventory is mandatory: accepting missing data as an old beta
     # would silently revert its source/template ownership to frozen presets.
     # Older v11 beta authority requires an explicit reviewed conversion.
-    if not isinstance(document, dict) or set(document) != required_fields:
+    if not isinstance(document, dict):
         raise V11OperationalError("missing or invalid v11 owner inventory fields")
+    # An unedited conversion requires exact match with the immutable legacy
+    # witness. Only a versioned owner mutation can diverge subsequently.
+    owner_revision = document.get("owner_revision")
+    if owner_revision is None:
+        if set(document) != required_fields:
+            raise V11OperationalError("missing or invalid v11 owner inventory fields")
+    elif (
+        set(document) != required_fields | {"owner_revision"}
+        or type(owner_revision) is not int
+        or not 1 <= owner_revision <= 1_000_000
+    ):
+        raise V11OperationalError("invalid versioned owner inventory revision")
     if (
         document["format"] != OPERATIONAL_FORMAT
         or type(document["schema_version"]) is not int
@@ -152,7 +164,8 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         if snapshot.source_order is None:
             raise V11OperationalError("v11 requires verified historical source order")
         owner_inventory = OwnerInventory.parse(document["owner_inventory"])
-        owner_inventory.validate_against(snapshot)
+        if owner_revision is None:
+            owner_inventory.validate_against(snapshot)
         digest = document["migration_origin_sha256"]
         if digest != snapshot.managed_state_sha256:
             raise V11OperationalError("v11 historical origin digest mismatch")
@@ -235,6 +248,37 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
     if verified.owner_inventory != current.owner_inventory:
         raise V11OperationalError("v11 overlay edit changed installed owner inventory")
     return next_payload
+
+
+
+
+def update_v11_owner_inventory(payload: bytes, edited: OwnerInventory) -> bytes:
+    """Publish a validated owner-inventory revision without rewriting legacy evidence.
+
+    A revision is explicit and strictly increasing. The initial conversion is
+    still required to exactly match its immutable historical witness.
+    """
+    current = parse_v11_operational(payload)
+    if not isinstance(edited, OwnerInventory):
+        raise V11OperationalError("invalid owner inventory edit")
+    if edited == current.owner_inventory:
+        return payload
+    try:
+        document = json.loads(payload)
+        document["owner_inventory"] = edited.to_document()
+        document["owner_revision"] = document.get("owner_revision", 0) + 1
+        candidate = _canonical(document)
+        verified = parse_v11_operational(candidate)
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise V11OperationalError("owner inventory edit is not valid") from exc
+    if (
+        verified.managed_overlay != current.managed_overlay
+        or verified.migration_origin_sha256 != current.migration_origin_sha256
+        or verified.historical_catalog != current.historical_catalog
+        or verified.owner_inventory != edited
+    ):
+        raise V11OperationalError("owner edit changed historical evidence or managed policy")
+    return candidate
 
 
 def _owner_active_catalog(

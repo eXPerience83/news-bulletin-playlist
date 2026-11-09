@@ -7,10 +7,12 @@ in v11, without creating any Spotify managed destination automatically.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
+    InstalledSource,
     ManagedState,
     ManagedStateError,
     ManagedStateStore,
@@ -62,6 +64,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             raw = self._owner.load_bytes()
             owned = parse_v11_operational(raw)
             self._expected_bytes = raw
+            self.catalog = owned.active_catalog
             return owned.managed_overlay
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner state is missing or corrupt") from exc
@@ -71,6 +74,45 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             self._expected_bytes = self._owner.save(state, expected_bytes=self._expected_bytes)
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner state could not be saved") from exc
+
+
+
+    def save_owner_source(self, edited: InstalledSource) -> None:
+        """Edit a historical owner source without replacing specialized processing."""
+        if not isinstance(edited, InstalledSource):
+            raise ManagedStateError("historical source edit requires complete metadata")
+        try:
+            current = parse_v11_operational(self._expected_bytes)
+            if edited.id not in {item.id for item in current.active_catalog.sources}:
+                raise ManagedStateError("source is not owned by historical inventory")
+            original = next(
+                item for item in current.owner_inventory.sources if item.id == edited.id
+            )
+            if (
+                edited.id != original.id
+                or edited.spotify_show_id != original.spotify_show_id
+                or edited.parser_id != original.parser_id
+                or edited.collection_filter_id != original.collection_filter_id
+                or edited.timezone != original.timezone
+                or edited.countries != original.countries
+                or edited.languages[1:] != original.languages[1:]
+                or edited.enabled != original.enabled
+            ):
+                raise ManagedStateError("historical source identity or detector cannot be edited here")
+            inventory = replace(
+                current.owner_inventory,
+                sources=tuple(
+                    edited if item.id == edited.id else item
+                    for item in current.owner_inventory.sources
+                ),
+            )
+            next_bytes = self._owner.save_owner_inventory(
+                inventory, expected_bytes=self._expected_bytes
+            )
+            self._expected_bytes = next_bytes
+            self.catalog = parse_v11_operational(next_bytes).active_catalog
+        except (V11StoreError, OSError, ValueError) as exc:
+            raise ManagedStateError("v11 owner source could not be saved") from exc
 
 
 class ReadOnlyLegacyStateStore(ManagedStateStore):

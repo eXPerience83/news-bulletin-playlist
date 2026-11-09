@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -139,3 +140,34 @@ def test_unknown_occupied_root_must_not_be_reclaimed_fresh(tmp_path: Path) -> No
         open_managed_state_store(tmp_path)
     assert prior.read_bytes() == b"prior installation"
     assert not (tmp_path / V11_OPERATIONAL_FILENAME).exists()
+
+
+
+def test_historical_source_metadata_edit_survives_restart_without_detector_change(tmp_path: Path):
+    from news_bulletin_playlist.managed_state import InstalledSource
+
+    root, preview = _root(tmp_path)
+    store = open_managed_state_store(root)
+    assert isinstance(store, ForwardOnlyManagedStateStore)
+    original = store.catalog.sources[0]
+    original_runtime = preview.original_runtime
+    before = (root / "managed-state.json").read_bytes()
+    old_v11 = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    edited = replace(
+        InstalledSource.from_definition(original),
+        display_name="Renamed owner station",
+    )
+    store.save_owner_source(edited)
+    now = open_managed_state_store(root)
+    assert now.catalog.sources[0].display_name == "Renamed owner station"
+    assert now.catalog.sources[0].parser_id == original.parser_id
+    assert now.catalog.sources[0].collection_filter_id == original.collection_filter_id
+    assert now.catalog.sources[0].temporal_strategy == original.temporal_strategy
+    assert (root / "managed-state.json").read_bytes() == before
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() != old_v11
+    assert json.loads((root / V11_OPERATIONAL_FILENAME).read_bytes())["owner_revision"] == 1
+    assert tuple(source.id for source in load_effective_config(root, {}).sources) == tuple(
+        source.id for source in original_runtime.sources
+    )
+    with pytest.raises(ManagedStateError, match="could not be saved"):
+        store.save_owner_source(edited)
