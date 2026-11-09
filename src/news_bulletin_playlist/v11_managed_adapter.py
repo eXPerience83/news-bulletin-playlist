@@ -75,7 +75,6 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner state could not be saved") from exc
 
-
     def save_owner_source(self, edited: InstalledSource) -> None:
         """Edit a historical owner source without replacing specialized processing."""
         if not isinstance(edited, InstalledSource):

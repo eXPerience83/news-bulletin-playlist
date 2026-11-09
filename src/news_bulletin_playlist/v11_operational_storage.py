@@ -292,7 +292,6 @@ class V11OperationalStore:
                 raise V11StoreError("v11 write durability uncertain; inspect before retry") from exc
             return next_bytes
 
-
     def save_owner_inventory(self, inventory: OwnerInventory, *, expected_bytes: bytes) -> bytes:
         """CAS owner definitions; never modify the forensic catalog or legacy file."""
         with _locked_root(self.root) as dir_fd:

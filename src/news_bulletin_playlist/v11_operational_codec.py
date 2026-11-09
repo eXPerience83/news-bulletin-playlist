@@ -250,7 +250,6 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
     return next_payload
 
 
-
 def update_v11_owner_inventory(payload: bytes, edited: OwnerInventory) -> bytes:
     """Publish a validated owner-inventory revision without rewriting legacy evidence.
 
