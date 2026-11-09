@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
@@ -50,9 +51,14 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
             owned_raw = _read_regular(directory, V11_OPERATIONAL_FILENAME, MAX_OPERATIONAL_BYTES)
             operational = parse_v11_operational(owned_raw)
             try:
-                legacy_raw = _read_regular(directory, MANAGED_STATE_FILENAME, MAX_OPERATIONAL_BYTES)
+                os.stat(MANAGED_STATE_FILENAME, dir_fd=directory, follow_symlinks=False)
             except FileNotFoundError:
                 legacy_raw = None
+            else:
+                # Only a genuinely missing file is a clean-install candidate.
+                # The checked reader must reject symlinks, FIFOs, permissions
+                # and any other malformed existing legacy-file evidence.
+                legacy_raw = _read_regular(directory, MANAGED_STATE_FILENAME, MAX_OPERATIONAL_BYTES)
         # All state-bearing inputs above were captured under the same lock.
         if legacy_raw is None:
             # Only a genuinely pristine first install lacks legacy bytes.
