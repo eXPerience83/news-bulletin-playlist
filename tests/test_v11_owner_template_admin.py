@@ -20,8 +20,10 @@ from news_bulletin_playlist.v11_managed_adapter import (
     ForwardOnlyManagedStateStore,
     open_managed_state_store,
 )
-from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
-from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
+from news_bulletin_playlist.v11_operational_storage import (
+    V11_OPERATIONAL_FILENAME,
+    V11OperationalStore,
+)
 
 
 def test_owner_template_admin_edit_persists_without_spotify_or_lost_sources(
@@ -68,10 +70,13 @@ def test_owner_template_admin_edit_persists_without_spotify_or_lost_sources(
         assert not client.calls
         payload = (root / V11_OPERATIONAL_FILENAME).read_bytes()
         assert json.loads(payload)["owner_revision"] == 1
+        status, _, refreshed = _request(server, "GET", "/admin/", cookie=cookie)
+        assert status == 200
+        form["csrf_token"] = _csrf(refreshed)
         status, _, _ = _request(
             server, "POST", "/admin/playlists/templates/owner/update", cookie=cookie, form=form
         )
-        assert status in (403, 409)
+        assert status == 409
         assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == payload
     assert (root / "managed-state.json").read_bytes() == legacy_before
     assert len(preview.original_runtime.playlists) == 4

@@ -114,6 +114,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             self.catalog = parse_v11_operational(next_bytes).active_catalog
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner source could not be saved") from exc
+
     def save_owner_template(self, edited: PlaylistTemplate) -> None:
         """CAS a historical template preserving source closure and dormant exceptions."""
         if not isinstance(edited, PlaylistTemplate):

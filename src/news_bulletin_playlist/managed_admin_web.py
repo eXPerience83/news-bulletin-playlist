@@ -238,9 +238,9 @@ def render_managed_admin_page(
     )
 
 
-
 def _owner_template_edit_form(template: PlaylistTemplate, *, csrf_token: str) -> str:
     """Never discard dormant exceptions by flattening historical templates."""
+
     def esc(value: object) -> str:
         return html.escape(str(value), quote=True)
 
