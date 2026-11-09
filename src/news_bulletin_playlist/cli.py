@@ -13,16 +13,16 @@ from news_bulletin_playlist.inspection_fence import (
     inspect_gate,
     release_gate,
 )
-from news_bulletin_playlist.upgrade_inspection_report import (
-    UpgradeInspectionError,
-    upgrade_inspection_report,
-)
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
     DEFAULT_HEALTH_PORT,
     DEFAULT_HEALTH_URL,
     healthcheck,
+)
+from news_bulletin_playlist.upgrade_inspection_report import (
+    UpgradeInspectionError,
+    upgrade_inspection_report,
 )
 
 

@@ -193,4 +193,6 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
         ManagedStateError,
         V11OperationalError,
     ) as exc:
-        raise UpgradeInspectionError("Could not safely inspect and compare the v11 installation") from exc
+        raise UpgradeInspectionError(
+            "Could not safely inspect and compare the v11 installation"
+        ) from exc
