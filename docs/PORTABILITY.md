@@ -88,6 +88,51 @@ materialization and attribution are addressed separately in PR #637.
 Code from specialized parsers remains in the application and must stay
 version-capability validated, never imported as executable content.
 
+## Explicit first-boot Spotify inspection hold (#630)
+
+For the operator-approved forward-only `0.2.3b1 -> 0.3.0b1` upgrade,
+set `NEWS_PLAYLIST_STARTUP_INSPECTION=1` **before first launch** of the new
+image. The application durably writes `/data/.spotify-reconciliation-inspection.json`
+**before converting existing v6-v10 state to v11**. This is a one-time
+deliberate inspection mode, not an automatic production-ready upgrade.
+No private /data backup is required by the owner.
+
+The hold survives process termination, configuration edits and restart
+**even when the environment variable is later removed**. During inspection,
+the scheduler cannot start, wake or reconcile, the OAuth callback and
+**all Admin configuration/provider POST operations** are denied with HTTP 423,
+and automatic pending provisioning finalization is deferred. The
+`POST /admin/login` and `POST /admin/logout` operations are allowed through
+their existing credential/CSRF/session validation **solely to enable authenticated
+read-only inspection** after a restart. GET status/Admin/diagnostics remain
+usable. The HTTP healthcheck still answers `status: ok` for container liveness
+but includes `spotify_reconciliation: inspection_held`; a green Docker
+healthcheck is **not** permission to sync Spotify. The public and Admin
+status pages show an explicit inspection warning.
+
+After independently inspecting the four original Spotify destinations, order,
+radio detector identifiers, source selection, retention/duration settings and
+any unknown pending provider writes, **stop** the service and run:
+
+```sh
+news-playlist inspection-status --data-dir /data
+news-playlist inspection-release --data-dir /data \
+  --state-sha256 <the-exact-64-character-value-from-inspection-status> \
+  --confirm I-REVIEWED-V11-ENABLE-SPOTIFY-WRITES
+```
+
+The second command checks exact current canonical v11 bytes under the shared
+state lock and records an atomic private release. If the state has changed
+since inspection, re-check it; there is no override. Then remove the environment
+setting (or set it to `0`) and perform a **normal restart**. Releasing the
+marker does not wake a running held process. A future explicit `=1` request
+engages a new persistent hold. The CLI does not perform Spotify I/O.
+This gate is not a fence for a previously dispatched Spotify HTTP request;
+an ambiguous in-flight write remains a separate #421 hard stop.
+
+This work does not authorize production activation, and does not by itself
+solve #633 owner-controlled historical sources or #638 full portable ZIP v2.
+
 ## Dependency and risk matrix
 
 This matrix was established before choosing the interchange representation.

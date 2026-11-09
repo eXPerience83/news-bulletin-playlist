@@ -49,6 +49,7 @@ def render_managed_admin_page(
     state: ManagedState,
     notice: str | None = None,
     error: str | None = None,
+    inspection_hold: bool = False,
 ) -> bytes:
     """Render playlist policy and lifecycle controls in the shared admin shell."""
 
@@ -131,6 +132,18 @@ def render_managed_admin_page(
             render_lan_warning() if lan_mode else "",
             _message("notice", notice),
             _message("error", error),
+            (
+                '<section class="warning" role="alert">'
+                "<h2>Startup inspection hold: Spotify writes are suspended</h2>"
+                "<p>The original playlists and source policies can be inspected here. "
+                "The scheduler is not running, Admin write forms and OAuth callback are blocked, "
+                "and healthz only reports service health, not production readiness. "
+                "Release requires an exact v11 SHA-256 confirmation using the CLI "
+                "and a normal process restart. No Spotify write was authorized by migration."
+                "</p></section>"
+                if inspection_hold
+                else ""
+            ),
             (
                 '<section class="warning" role="alert">'
                 "<h2>Custom playlist drafts require repair</h2>"

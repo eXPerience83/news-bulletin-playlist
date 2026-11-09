@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import signal
 import threading
@@ -46,6 +47,7 @@ from news_bulletin_playlist.engine import (
 )
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
+from news_bulletin_playlist.inspection_fence import inspection_requested, startup_gate
 from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
@@ -239,6 +241,7 @@ class EngineLifecycleController:
         self._scheduler_thread: threading.Thread | None = None
         self._draining_threads: list[threading.Thread] = []
         self._restart_waiter: threading.Thread | None = None
+        self._inspection_held = False
         self._lock = threading.RLock()
 
     def _process_stopping(self) -> bool:
@@ -250,10 +253,22 @@ class EngineLifecycleController:
         with self._lock:
             return self._scheduler
 
+    def hold_for_inspection(self) -> None:
+        """Prevent all scheduler starts/wakes until a separate process restart.
+
+        This process-scoped latch cannot be released through an Admin action or
+        by removing the durable marker while the runtime remains active.
+        """
+        with self._lock:
+            if self._scheduler is not None or self._draining_threads:
+                raise RuntimeError("Cannot inspect after starting a scheduler")
+            self._inspection_held = True
+            self.status.set_configured(False)
+
     def reconcile(self, *, configured: bool) -> None:
         """Make scheduler existence match whether any effective playlist is active."""
         with self._lock:
-            if self._process_stopping():
+            if self._process_stopping() or self._inspection_held:
                 configured = False
             self.status.set_configured(configured)
             self._prune_draining_locked()
@@ -269,6 +284,8 @@ class EngineLifecycleController:
 
     def wake(self) -> None:
         with self._lock:
+            if self._inspection_held:
+                return
             if self._scheduler is not None:
                 self._wake_scheduler_locked()
 
@@ -611,6 +628,16 @@ class OperationalHealthHandler(LanAdminHandler):
     diagnostic_store: DiagnosticEventStore | None = None
     spotify_request_metrics: SpotifyRequestMetrics | None = None
     operational_diagnostics: OperationalDiagnostics | None = None
+    inspection_hold: bool = False
+
+    def _inspection_locked(self) -> None:
+        self._reply(
+            HTTPStatus.LOCKED,
+            b"Spotify reconciliation inspection is active. "
+            b"All administration writes are blocked until the separately confirmed "
+            b"inspection release and a normal restart.",
+            content_type="text/plain; charset=utf-8",
+        )
 
     def _spotify_state(self) -> AuthorizationState | None:
         synchronization = self.auth_synchronization
@@ -620,6 +647,9 @@ class OperationalHealthHandler(LanAdminHandler):
             return super()._spotify_state()
 
     def _handle_spotify_callback(self, query: str) -> None:
+        if self.inspection_hold:
+            self._inspection_locked()
+            return
         synchronization = self.auth_synchronization
         if synchronization is None:
             super()._handle_spotify_callback(query)
@@ -628,6 +658,9 @@ class OperationalHealthHandler(LanAdminHandler):
             super()._handle_spotify_callback(query)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self.inspection_hold and self.path not in {"/admin/login", "/admin/logout"}:
+            self._inspection_locked()
+            return
         try:
             parsed = urllib.parse.urlsplit(self.path)
         except ValueError:
@@ -660,12 +693,34 @@ class OperationalHealthHandler(LanAdminHandler):
             self._reply(HTTPStatus.BAD_REQUEST, b"Invalid request")
             return
 
+        if self.inspection_hold and parsed.path == "/healthz":
+            # Preserve the original liveness/storage-health contract: an
+            # inspection hold must not mask an unwritable persistent root.
+            ready = _data_dir_ready(self.data_dir)
+            self._reply(
+                HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
+                json.dumps(
+                    {
+                        "status": "ok" if ready else "degraded",
+                        "version": __version__,
+                        "spotify_reconciliation": "inspection_held",
+                    },
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+                content_type="application/json",
+            )
+            return
+        if self.inspection_hold and parsed.path == "/admin/spotify/callback":
+            self._inspection_locked()
+            return
+
         if parsed.path == "/":
             ready = _data_dir_ready(self.data_dir)
             payload = _operational_status_page(
                 ready=ready,
                 spotify_state=self._spotify_state(),
                 status=self.operational_status,
+                inspection_hold=self.inspection_hold,
             )
             self._reply(
                 HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
@@ -740,6 +795,7 @@ class OperationalHealthHandler(LanAdminHandler):
             lan_mode=self._is_lan_admin_mode(),
             notice=notice,
             state=state,
+            inspection_hold=self.inspection_hold,
         )
         self._reply(HTTPStatus.OK, payload)
 
@@ -1284,6 +1340,8 @@ def serve(
     env = os.environ if environ is None else environ
     stopped = stop_event if stop_event is not None else threading.Event()
     _reject_obsolete_configuration(data_dir, env)
+    # Reject invalid inspection settings before any initialization writes.
+    inspect_requested = inspection_requested(env)
     # A pristine root must become v11 before SQLite, OAuth or journals write
     # durable files. Existing roots without state cannot be claimed fresh.
     if not any(
@@ -1295,6 +1353,9 @@ def serve(
             open_managed_state_store(data_dir)
         except ManagedStateError as exc:
             raise RuntimeError("installation identity/configuration is ambiguous") from exc
+    # On an occupied legacy root, persist the inspection fence BEFORE the
+    # first call that might initiate the irreversible v11 conversion.
+    inspection_hold = startup_gate(data_dir, requested=inspect_requested)
     database_path = initialize_runtime_storage(data_dir)
     store = SQLiteStore(database_path)
     diagnostic_candidate = DiagnosticEventStore(database_path)
@@ -1327,12 +1388,12 @@ def serve(
         request_metrics=request_metrics,
         rate_limit_journal=rate_limit_journal,
     )
-    if managed_admin_service is not None:
+    if managed_admin_service is not None and not inspection_hold:
         finalized = managed_admin_service.finalize_known_provisioning()
         if finalized is not None:
             config = _load_runtime_config(data_dir, env)
     configured = config is not None
-    if configured and spotify_auth is None:
+    if configured and spotify_auth is None and not inspection_hold:
         raise RuntimeError(
             "engine configuration requires production Spotify authorization settings "
             "or explicit LAN development authorization"
@@ -1390,6 +1451,8 @@ def serve(
             diagnostics=diagnostics,
             process_stop_event=stopped,
         )
+        if inspection_hold:
+            lifecycle.hold_for_inspection()
         status: OperationalStatus = lifecycle.status
     else:
         status = _MutableOperationalStatus(configured=configured)
@@ -1423,6 +1486,7 @@ def serve(
     handler_type.diagnostic_store = diagnostic_store
     handler_type.operational_diagnostics = diagnostics
     handler_type.spotify_request_metrics = request_metrics
+    handler_type.inspection_hold = inspection_hold
     server = HTTPServer((host, port), handler_type)
     server.timeout = 0.5
 
@@ -1480,6 +1544,7 @@ def serve(
         handler_type.source_admin_service = None
         handler_type.diagnostic_store = None
         handler_type.spotify_request_metrics = None
+        handler_type.inspection_hold = False
         if handlers_installed:
             signal.signal(signal.SIGTERM, previous_sigterm)
             signal.signal(signal.SIGINT, previous_sigint)
@@ -1588,13 +1653,18 @@ def _operational_status_page(
     ready: bool,
     spotify_state: AuthorizationState | None,
     status: OperationalStatus | None,
+    inspection_hold: bool = False,
 ) -> bytes:
     snapshot = (
         OperationalStatus(configured=False).snapshot() if status is None else status.snapshot()
     )
     runtime_label = "Ready" if ready else "Degraded"
     storage_label = "Writable" if ready else "Unavailable"
-    engine_label = _engine_label(snapshot)
+    engine_label = (
+        "INSPECTION HOLD - no Spotify reconciliation"
+        if inspection_hold
+        else _engine_label(snapshot)
+    )
     cycle = snapshot.last_cycle
     cycle_result = "Not run yet" if cycle is None else ("Success" if cycle.ok else "Failed")
     cycle_started = "—" if cycle is None else _format_time(cycle.started_at)
@@ -1603,6 +1673,13 @@ def _operational_status_page(
     next_run = "—" if snapshot.next_run_at is None else _format_time(snapshot.next_run_at)
     source_rows = _source_rows(cycle)
     playlist_rows = _playlist_rows(cycle)
+    inspection_banner = (
+        '<p role="alert"><strong>INSPECTION HOLD ACTIVE:</strong> Spotify reconciliation '
+        "is suspended across restarts. HTTP health does not certify readiness. "
+        "Release requires a state-hash-confirmed CLI action and a restart.</p>"
+        if inspection_hold
+        else ""
+    )
 
     document = f"""<!doctype html>
 <html lang="en">
@@ -1623,6 +1700,7 @@ def _operational_status_page(
 </head>
 <body>
   <h1>News Bulletin Playlists</h1>
+  {inspection_banner}
   <p>This page is read-only. Administrative actions remain isolated under the
      authenticated <code>/admin/</code> surface.</p>
   <dl>

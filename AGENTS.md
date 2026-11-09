@@ -16,6 +16,21 @@ Instructions for AI coding/review agents working in this repository.
 - Do not use `git clean -fd`, `git clean -fdx` or `git reset --hard` unless the repository root and impact have been explicitly verified and the task genuinely requires it.
 - Work on the requested feature/issue branch. Do not push directly to `main` and do not merge unless explicitly authorized.
 
+## Startup inspection for a forward-only cutover (#630)
+
+When `NEWS_PLAYLIST_STARTUP_INSPECTION=1` is set, a private durable hold marker
+must be published before any v6-v10 -> v11 conversion or Spotify cycle; it must
+survive restart even when the env setting is absent. Never automatically start,
+wake or reconcile a scheduler, finalize uncertain provisioning or accept Admin
+configuration/provider POST/OAuth writes while this process is held. Only the
+existing session login/logout POST routes may proceed to provide authenticated
+read-only inspection after a restart. All GET status and Admin views
+must disclose held/not-production-ready status; healthcheck is only liveness.
+Release requires the exact current v11 SHA-256 and a fixed explicit CLI
+acknowledgment under the state lock; a running held process never releases
+itself. Do not invent a clock timeout or a readback-based guarantee against
+an already dispatched HTTP write. The owner does not require a private backup.
+
 ## Required local validation
 
 For normal source changes, run the repository gates with Python 3.15:
