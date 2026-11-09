@@ -199,11 +199,19 @@ def playlist_bundle(
         if template is None:
             raise PlaylistExportError("The playlist template is unavailable")
         source_ids = target.source_ids
-        exceptions = tuple(
-            e
+        # ZIP v1 has only one policy. It must not silently omit template
+        # exceptions that would become effective after editing the managed max.
+        # Preserve existing source-subset/reordering export behavior for
+        # compatibility: full template source closure requires ZIP v2 (#638).
+        if any(
+            e.source_id not in source_ids or e.max_seconds <= target.max_duration_seconds
             for e in template.duration_policy.exceptions
-            if e.source_id in source_ids and e.max_seconds > target.max_duration_seconds
-        )
+        ):
+            raise PlaylistExportError(
+                "ZIP v1 would silently discard future-use duration exceptions; "
+                "lossless ZIP v2 is required (#638)"
+            )
+        exceptions = template.duration_policy.exceptions
         countries, languages, ordering = template.countries, template.languages, template.ordering
         configuration = {"enabled": target.enabled, "hidden": None}
     else:

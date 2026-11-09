@@ -133,6 +133,30 @@ an ambiguous in-flight write remains a separate #421 hard stop.
 This work does not authorize production activation, and does not by itself
 solve #633 owner-controlled historical sources or #638 full portable ZIP v2.
 
+## ZIP v1 safety boundary before complete v2 (#638)
+
+Managed ZIP v1 can faithfully describe the current destination selection,
+but it has no separate representation of the original template's full source
+closure or future-use duration exceptions. If a template exception would be
+dropped because it falls below the current managed maximum or refers to a
+temporarily unassigned source, export now **fails explicitly** with a ZIP v2
+requirement rather than silently discarding those exception selectors. No source
+or playlist is changed by this check. The existing ZIP v1 format and successful
+representable exports remain unchanged.
+
+For compatibility, a managed destination whose selected sources are a **subset
+or a different order** of the original template can still export a ZIP v1
+snapshot of its current selection. Such a ZIP does **not** carry omitted
+template-default sources or their configuration. **Do not call it a complete
+backup of the original template.** A full owner-portable source closure
+still requires ZIP v2 (#638).
+
+This is an interim **loss-prevention guard**, not a solution to #638: ZIP v2
+must preserve the full editable owner template and all dormant exceptions,
+including policy defaults, even where the current managed selection differs.
+Do not approve #631 or export-recovery acceptance until v2 import+export and
+functional edit/reassignment tests have passed.
+
 ## Dependency and risk matrix
 
 This matrix was established before choosing the interchange representation.
