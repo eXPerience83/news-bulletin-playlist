@@ -23,6 +23,7 @@ from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
 def reject_external_network(monkeypatch: pytest.MonkeyPatch) -> None:
     def blocked(*_args: object, **_kwargs: object) -> None:
         pytest.fail("Inspection report tried to access an external network")
+
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket, "getaddrinfo", blocked)
 
@@ -53,9 +54,7 @@ def test_first_boot_reports_four_exact_managed_destinations_and_frozen_policies(
     assert [p["source_ids"] for p in report["playlists"]] == [
         list(p.source_ids) for p in installed.managed_overlay.playlists
     ]
-    assert [s["id"] for s in report["sources"]] == [
-        s.id for s in preview.original_runtime.sources
-    ]
+    assert [s["id"] for s in report["sources"]] == [s.id for s in preview.original_runtime.sources]
     assert [s["parser_id"] for s in report["sources"]] == [
         s.parser_id for s in preview.original_runtime.sources
     ]
@@ -77,6 +76,20 @@ def test_changed_legacy_bytes_fail_closed_even_when_v11_is_valid(tmp_path: Path)
     with pytest.raises(UpgradeInspectionError, match="changed"):
         upgrade_inspection_report(root)
     assert owner.load_bytes() == unchanged
+
+
+def test_missing_inert_legacy_file_cannot_be_misrepresented_as_clean_install(
+    tmp_path: Path,
+):
+    root, _ = legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    owner = V11OperationalStore(root)
+    owner.initialize_from_legacy()
+    before = owner.load_bytes()
+    (root / "managed-state.json").unlink()
+    with pytest.raises(UpgradeInspectionError, match="missing"):
+        upgrade_inspection_report(root)
+    assert owner.load_bytes() == before
 
 
 def test_inspection_report_marks_operator_changed_managed_destinations(tmp_path: Path):

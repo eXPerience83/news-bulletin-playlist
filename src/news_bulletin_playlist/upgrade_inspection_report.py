@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.inspection_fence import InspectionGateError, _read
 from news_bulletin_playlist.legacy_materialization import pause_dormant_legacy_playlists
 from news_bulletin_playlist.managed_state import (
@@ -46,20 +47,24 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
     try:
         with _locked_root(data_dir) as directory:
             gate = _read(directory)
-            owned_raw = _read_regular(
-                directory, V11_OPERATIONAL_FILENAME, MAX_OPERATIONAL_BYTES
-            )
+            owned_raw = _read_regular(directory, V11_OPERATIONAL_FILENAME, MAX_OPERATIONAL_BYTES)
             operational = parse_v11_operational(owned_raw)
             try:
-                legacy_raw = _read_regular(
-                    directory, MANAGED_STATE_FILENAME, MAX_OPERATIONAL_BYTES
-                )
+                legacy_raw = _read_regular(directory, MANAGED_STATE_FILENAME, MAX_OPERATIONAL_BYTES)
             except FileNotFoundError:
                 legacy_raw = None
         # All state-bearing inputs above were captured under the same lock.
         if legacy_raw is None:
-            # A fresh installation has no original legacy state to compare;
-            # do not fabricate one or mistake newly added playlists as legacy.
+            # Only a genuinely pristine first install lacks legacy bytes.
+            # A migrated root without its original input cannot be verified:
+            # never silently treat missing evidence as a clean install.
+            if (
+                operational.historical_catalog.sources
+                or operational.historical_catalog.playlists
+                or operational.installed_sources
+                or operational.source_provenance
+            ):
+                raise UpgradeInspectionError("Original legacy managed-state is missing")
             legacy_matches: bool | None = None
             runtime_matches: bool | None = None
         else:
@@ -71,9 +76,7 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
             legacy_matches = normalized.playlists == operational.managed_overlay.playlists
             # The current owner catalog must reconstruct the historical engine
             # semantics, not merely preserve the Spotify destination IDs.
-            original_runtime = compile_engine_config(
-                operational.historical_catalog, normalized
-            )
+            original_runtime = compile_engine_config(operational.historical_catalog, normalized)
             runtime_matches = original_runtime == operational.runtime
 
         source_rows: list[dict[str, object]] = []
@@ -136,8 +139,14 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
             for template in operational.owner_inventory.templates.records
         ]
         cover_ids = sorted(
-            {template.cover_id for template in operational.owner_inventory.templates.records}
+            {
+                template.cover_id
+                for template in operational.owner_inventory.templates.records
+            }
+            | {template.cover_id for template in operational.managed_overlay.templates}
+            | {playlist.cover_id for playlist in operational.managed_overlay.playlists}
         )
+        cover_ids = [cover_id for cover_id in cover_ids if not is_uploaded_cover_id(cover_id)]
         covers = MigratedCoverAssets(data_dir)
         artwork = [
             {"id": cover_id, "persisted_and_verified": covers.load(cover_id) is not None}
@@ -171,9 +180,7 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
                 else "changed"
             ),
             "checks": checks,
-            "safe_to_review_without_spotify_writes": gate_state == "held" and all(
-                checks.values()
-            ),
+            "safe_to_review_without_spotify_writes": gate_state == "held" and all(checks.values()),
             "ready_for_production": False,
             "sources": source_rows,
             "playlists": playlists,
