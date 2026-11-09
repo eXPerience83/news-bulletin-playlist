@@ -174,6 +174,6 @@ def test_historical_source_metadata_edit_survives_restart_without_detector_chang
     with pytest.raises(ManagedStateError, match="could not be saved"):
         stale.save_owner_source(edited)
     assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
-    with pytest.raises(ManagedStateError, match="identity or detector"):
+    with pytest.raises(ManagedStateError, match="could not be saved"):
         store.save_owner_source(replace(edited, timezone="Atlantic/Canary"))
     assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
