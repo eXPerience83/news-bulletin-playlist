@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from news_bulletin_playlist.catalog import PlaylistTemplate
 from news_bulletin_playlist.models import (
