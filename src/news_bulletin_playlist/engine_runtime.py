@@ -776,9 +776,7 @@ class OperationalHealthHandler(LanAdminHandler):
             if synchronization is None:
                 snapshot = service.snapshot(readonly=self.inspection_hold)
                 state = (
-                    service.store.load_readonly()
-                    if self.inspection_hold
-                    else service.store.load()
+                    service.store.load_readonly() if self.inspection_hold else service.store.load()
                 )
             else:
                 with synchronization.hold():

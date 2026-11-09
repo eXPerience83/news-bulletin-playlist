@@ -220,11 +220,8 @@ def test_tampered_identity_confirmations_do_not_write(tmp_path, mutation):
         assert store.path.read_bytes() == original
 
 
-
 @pytest.mark.parametrize("path", [EXPORT, PREPARE])
-def test_corrupt_persisted_cover_yields_server_error_and_no_leak(
-    tmp_path, monkeypatch, path
-):
+def test_corrupt_persisted_cover_yields_server_error_and_no_leak(tmp_path, monkeypatch, path):
     with _server(tmp_path) as (server, client, store):
         store.save(_ready())
         cookie = _login(server)

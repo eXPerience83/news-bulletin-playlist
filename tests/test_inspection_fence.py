@@ -372,7 +372,6 @@ def test_cli_status_is_read_only_and_release_is_explicit(tmp_path: Path, capsys)
     assert (root / "managed-state-v11.json").read_bytes() == before
 
 
-
 @pytest.mark.parametrize("target", ["/admin/", "/admin/sources"])
 @pytest.mark.parametrize("inspection_hold", [True, False])
 def test_pending_known_provisioning_is_readonly_during_inspection(

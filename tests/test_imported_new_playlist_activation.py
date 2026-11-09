@@ -209,7 +209,6 @@ def test_imported_activation_with_every_source_disabled_fails_before_provider(
     assert service.provisioning_journal.load() is None
 
 
-
 def test_imported_multiline_description_accepts_browser_crlf_without_changing_bytes(
     tmp_path: Path,
 ) -> None:
