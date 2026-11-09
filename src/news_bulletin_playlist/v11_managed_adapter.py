@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+from news_bulletin_playlist.catalog import PlaylistTemplate
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     InstalledSource,
@@ -113,6 +114,24 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             self.catalog = parse_v11_operational(next_bytes).active_catalog
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner source could not be saved") from exc
+    def save_owner_template(self, edited: PlaylistTemplate) -> None:
+        """CAS a historical template preserving source closure and dormant exceptions."""
+        if not isinstance(edited, PlaylistTemplate):
+            raise ManagedStateError("historical owner template must be complete")
+        try:
+            current = parse_v11_operational(self._expected_bytes)
+            inventory = current.owner_inventory
+            templates = inventory.templates.replace_one(
+                edited.id, edited, sources=inventory.source_order.ids
+            )
+            next_bytes = self._owner.save_owner_inventory(
+                replace(inventory, templates=templates),
+                expected_bytes=self._expected_bytes,
+            )
+            self._expected_bytes = next_bytes
+            self.catalog = parse_v11_operational(next_bytes).active_catalog
+        except (V11StoreError, OSError, ValueError) as exc:
+            raise ManagedStateError("v11 owner template could not be saved") from exc
 
 
 class ReadOnlyLegacyStateStore(ManagedStateStore):

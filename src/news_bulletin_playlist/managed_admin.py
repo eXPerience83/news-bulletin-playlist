@@ -50,6 +50,7 @@ from news_bulletin_playlist.models import (
     PlaylistId,
     SourceId,
 )
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.spotify.client import (
     SpotifyApiError,
@@ -234,6 +235,58 @@ class ManagedAdminService:
             custom_templates=state.templates,
             playlist_examples=BUILTIN_CATALOG.playlists,
         )
+
+    def update_owner_template_metadata(
+        self,
+        template_id: PlaylistId | str,
+        *,
+        fingerprint: str,
+        display_name: str,
+        description: str,
+        retention_hours: int,
+        max_episodes: int,
+        min_duration_seconds: int,
+        max_duration_seconds: int,
+    ) -> PlaylistTemplate:
+        """Edit historical owner defaults but preserve dormant exceptions and IDs."""
+        if not isinstance(self.store, ForwardOnlyManagedStateStore):
+            raise ManagedAdminError("Owner templates require v11")
+        self.store.load()
+        self.catalog = self.store.catalog
+        current = next(
+            (item for item in self.catalog.playlists if item.id == template_id),
+            None,
+        )
+        if current is None:
+            raise ManagedAdminError("Owned template was not found")
+        expected = hashlib.sha256(OwnerTemplateSet((current,)).serialize()).hexdigest()
+        if fingerprint != expected:
+            raise ManagedAdminError("Owned template changed; reload Admin before editing")
+        if (
+            type(retention_hours) is not int
+            or type(max_episodes) is not int
+            or type(min_duration_seconds) is not int
+            or type(max_duration_seconds) is not int
+            or min(retention_hours, max_episodes, max_duration_seconds) <= 0
+            or min_duration_seconds < 0
+            or min_duration_seconds > max_duration_seconds
+        ):
+            raise ValueError("Invalid owner template policy")
+        updated = replace(
+            current,
+            display_name=display_name,
+            description=description,
+            retention_hours=retention_hours,
+            max_episodes=max_episodes,
+            duration_policy=replace(
+                current.duration_policy,
+                default_min_seconds=min_duration_seconds,
+                default_max_seconds=max_duration_seconds,
+            ),
+        )
+        self.store.save_owner_template(updated)
+        self.catalog = self.store.catalog
+        return updated
 
     def create_from_example(self, example_id: PlaylistId | str) -> LocalPlaylistTemplate:
         """Explicitly copy a bundled example into one owner-controlled local draft.
