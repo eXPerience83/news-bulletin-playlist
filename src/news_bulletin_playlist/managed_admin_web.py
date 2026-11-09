@@ -671,15 +671,12 @@ def _custom_draft_card(
         else status_badge("Draft", tone="muted")
     )
     selected_sources = tuple(source for source in sources if source.id in draft.default_source_ids)
-    eligible_sources = len(selected_sources) == len(draft.default_source_ids) and all(
-        source.enabled for source in selected_sources
+    eligible_sources = len(selected_sources) == len(draft.default_source_ids) and (
+        any(source.enabled for source in selected_sources)
+        if draft.portable_metadata is not None
+        else all(source.enabled for source in selected_sources)
     )
-    if draft.portable_metadata is not None:
-        publish = (
-            '<p class="notice">Imported portable draft: edit/export only; '
-            "Spotify activation is blocked.</p>"
-        )
-    elif referenced:
+    if referenced:
         publish = '<p class="muted">This draft already has a managed Spotify destination.</p>'
     elif draft.hidden:
         publish = '<p class="muted">Unhide and save this draft before publishing.</p>'
@@ -693,6 +690,13 @@ def _custom_draft_card(
         source_fields = "".join(
             _hidden_input("source_id", str(source_id)) for source_id in draft.default_source_ids
         )
+        imported_confirmation = (
+            '<label><input type="checkbox" name="confirm_imported_new" value="1" required>'
+            "I confirm that this creates a NEW Spotify playlist. It will NOT recover "
+            "or overwrite the original Spotify destination.</label>"
+            if draft.portable_metadata is not None
+            else ""
+        )
         publish = f"""
 <form method="post" action="/admin/playlists/activate">
   {_hidden_input("csrf_token", csrf_token)}
@@ -703,6 +707,7 @@ def _custom_draft_card(
   {_hidden_input("min_duration_minutes", str(draft.min_duration_seconds // 60))}
   {_hidden_input("max_duration_minutes", str(draft.max_duration_seconds // 60))}
   {source_fields}
+  {imported_confirmation}
   <p class="muted">Creates a public Spotify playlist with initial project attribution;
      attempts to upload the selected cover once. Later image changes require
      the separate Apply Spotify metadata &amp; cover action.</p>
@@ -715,6 +720,29 @@ def _custom_draft_card(
         target_id=str(draft.id),
         active_on_spotify=False,
     )
+    relink = ""
+    if (
+        draft.portable_metadata is not None
+        and not referenced
+        and not draft.hidden
+        and provisioning_intent is None
+        and spotify_connected
+    ):
+        relink = f"""
+<form method="post" action="/admin/playlists/relink">
+  {_hidden_input("csrf_token", csrf_token)}
+  {_hidden_input("template_id", str(draft.id))}
+  <label>Existing Spotify playlist ID (22 characters; enter manually)
+    <input name="destination_id" pattern="[A-Za-z0-9]{{22}}"
+           minlength="22" maxlength="22" required autocomplete="off">
+  </label>
+  <label><input type="checkbox" name="confirm_existing" value="1" required>
+    I have checked this existing Spotify playlist ID. Verify ownership and
+    matching playlist name, then link it locally PAUSED. Do not create a new
+    playlist or change anything in Spotify.</label>
+  <button class="button" type="submit">Link existing Spotify playlist (paused)</button>
+</form>
+"""
     editor = (
         imported_draft_editor(draft, csrf_token)
         if draft.portable_metadata is not None
@@ -741,6 +769,7 @@ def _custom_draft_card(
   {portable_controls("draft", str(draft.id), draft.portable_id)}
   {upload_form}
   {publish}
+  {relink}
   {delete_control}
 </article>
 """

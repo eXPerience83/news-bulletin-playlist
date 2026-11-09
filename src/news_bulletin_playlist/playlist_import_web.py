@@ -18,7 +18,7 @@ def upload_page(csrf: str) -> bytes:
     return render_admin_shell(
         title="Import playlist ZIP",
         active_tab="playlists",
-        intro="Local draft import; no Spotify calls or activation.",
+        intro="Local draft import; no Spotify calls. Publishing later is a separate opt-in.",
         body_html=f'''<h2>Import portable playlist ZIP v1</h2>
 <p>Maximum 1 MiB. Preview validates everything without writing files.</p>
 <form method="post" action="/admin/playlists/import/preview" enctype="multipart/form-data">
@@ -64,7 +64,8 @@ value="apply" type="submit">Apply import</button>"""
 <p>JPEG verified
 byte for byte; a durable content-addressed copy will be prepared before the state commit.
 Imported drafts retain exact seconds, exceptions and provenance.
-Their Spotify activation is blocked.</p>
+Publishing later requires explicit confirmation to create a NEW Spotify playlist.
+The original Spotify destination is never restored automatically.</p>
 <details>
 <summary>Complete imported playlist configuration and attribution</summary>
 <pre>{details}</pre></details>
@@ -110,7 +111,7 @@ def result_page(result: PlaylistImportResult | None) -> bytes:
     return render_admin_shell(
         title="Playlist import result",
         active_tab="playlists",
-        intro="Local drafts only; Spotify is unchanged.",
+        intro="Local drafts only; Spotify is unchanged until explicitly published.",
         body_html=body + '<p><a href="/admin/">Back to playlists</a></p>',
     )
 

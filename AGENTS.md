@@ -143,9 +143,15 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   Imported provenance/exceptions require explicit schema v10 adoption, not a silent v9
   extension. Reads/exports/previews/legacy saves do not adopt v10; all later mutations
   preserve it. Pre-v10 images need a matching backup for rollback. Imported drafts keep
-  exact seconds/legacy policies and are edit/export only; activation must be rejected
-  before OAuth. On ambiguous state saves read back once; never retry blindly. Safe
-  unreferenced prepared assets can remain and be verified/reused on a fresh preview.
+  exact seconds/legacy policies. ZIP import itself remains provider-free, but a
+  separate, CSRF-protected activation may create a NEW Spotify destination only
+  with explicit operator confirmation and a byte-precise match to the saved
+  draft (sources, artwork, text and second-based bounds). No imported metadata
+  grants ownership of an existing remote playlist ID. Existing-destination
+  relinking requires a separate reviewed ownership-verification workflow (#634).
+  Unconfirmed activation must be rejected before OAuth. On ambiguous state saves
+  read back once; never retry blindly. Safe unreferenced prepared assets can
+  remain and be verified/reused on a fresh preview.
 - One engine can drive multiple playlists, countries and languages.
 - The authoritative production architecture is Spotify-first. Runtime playlist decisions must not
   depend on RSS collection, RSS-native identities, RSS-to-Spotify matching or PENDING/AMBIGUOUS

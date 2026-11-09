@@ -517,13 +517,19 @@ class ManagedAdminService:
             raise ManagedAdminError("unknown installation-owned playlist template")
         return match
 
-    def check_activation_allowed(self, template_id: str) -> None:
-        if any(
-            t.id == template_id and t.portable_metadata is not None
-            for t in self.store.load_readonly().templates
+    def check_activation_allowed(
+        self, template_id: str, *, confirm_imported_new: bool = False
+    ) -> None:
+        if (
+            any(
+                t.id == template_id and t.portable_metadata is not None
+                for t in self.store.load_readonly().templates
+            )
+            and not confirm_imported_new
         ):
             raise ManagedAdminError(
-                "Imported portable drafts are edit/export only; activation is unavailable"
+                "Creating a NEW Spotify playlist from an imported draft requires "
+                "explicit confirmation; this does not relink the original destination"
             )
 
     def activate(
@@ -539,6 +545,7 @@ class ManagedAdminService:
         min_duration_seconds: int | None = None,
         min_duration_minutes: int | None = None,
         max_duration_minutes: int | None = None,
+        confirm_imported_new: bool = False,
     ) -> ManagedPlaylist:
         self.last_initial_cover_error = None
         if self.provisioning_journal.load() is not None:
@@ -546,9 +553,10 @@ class ManagedAdminService:
         state = self.store.load()
         template = self._template(template_id, state=state)
         local = next((item for item in state.templates if item.id == template_id), None)
-        if local is not None and local.portable_metadata is not None:
+        if local is not None and local.portable_metadata is not None and not confirm_imported_new:
             raise ManagedAdminError(
-                "Imported portable drafts are edit/export only; activation is unavailable"
+                "Imported playlist activation requires confirmation to create a NEW Spotify "
+                "playlist; recovering its old destination is a separate operation"
             )
         if local is not None and local.hidden:
             raise ManagedAdminError("hidden custom template cannot be activated")
@@ -563,13 +571,47 @@ class ManagedAdminService:
             current_max=template.duration_policy.default_max_seconds,
             activating=True,
         )
+        if local is not None and local.portable_metadata is not None:
+            # Portable metadata is observational, never authority over Spotify IDs.
+            # Require the operator to publish the exact validated local draft, not
+            # a client-supplied policy that bypasses import review or loses seconds.
+            if (
+                display_name != local.display_name
+                or description != local.description
+                or cover_id != local.cover_id
+                or tuple(str(item) for item in source_ids)
+                != tuple(str(item) for item in local.default_source_ids)
+                or (duration_min, duration_max)
+                != (local.min_duration_seconds, local.max_duration_seconds)
+            ):
+                raise ManagedAdminError(
+                    "Imported playlist activation must match the saved draft exactly; "
+                    "edit and save the draft before creating a NEW Spotify playlist"
+                )
+            # Reject silent footer normalization: preserve the imported base
+            # description exactly or require an explicit edit first.
+            if _playlist_description(description) != local.description:
+                raise ManagedAdminError(
+                    "Imported playlist description requires an explicit draft edit "
+                    "before NEW Spotify activation"
+                )
+            # Fail before journal/provider I/O when the imported settings,
+            # capabilities or references cannot compile as runtime configuration.
+            self._validate_state(state)
         intent = ProvisioningIntent(
             state=ProvisioningState.REQUEST_STARTED,
             template_id=template.id,
             display_name=_playlist_name(display_name),
             description=_playlist_description(description),
             cover_id=self._cover_id(cover_id),
-            source_ids=self._source_ids(source_ids, state=state, allow_empty=False),
+            source_ids=self._source_ids(
+                source_ids,
+                state=state,
+                allow_empty=False,
+                existing=local.default_source_ids
+                if local is not None and local.portable_metadata is not None
+                else (),
+            ),
             retention_hours=template.retention_hours,
             max_episodes=template.max_episodes,
             max_duration_seconds=duration_max,
@@ -646,6 +688,14 @@ class ManagedAdminService:
             # Keep the journal for explicit operator recovery.
             return None
         template = self._template(intent.template_id, state=state)
+        imported = next(
+            (
+                draft
+                for draft in state.templates
+                if draft.id == intent.template_id and draft.portable_metadata is not None
+            ),
+            None,
+        )
         managed = replace(
             activate_template(template, intent.destination_id),
             portable_id=allocate_portable_id(state)
@@ -654,7 +704,12 @@ class ManagedAdminService:
             display_name=intent.display_name,
             description=intent.description,
             cover_id=intent.cover_id,
-            source_ids=self._source_ids(intent.source_ids, state=state, allow_empty=False),
+            source_ids=self._source_ids(
+                intent.source_ids,
+                state=state,
+                allow_empty=False,
+                existing=imported.default_source_ids if imported is not None else (),
+            ),
             retention_hours=intent.retention_hours,
             max_episodes=intent.max_episodes,
             max_duration_seconds=intent.max_duration_seconds,
@@ -695,6 +750,93 @@ class ManagedAdminService:
         result = self.finalize_known_provisioning()
         assert result is not None
         return result
+
+    def relink_imported_destination(
+        self,
+        *,
+        template_id: PlaylistId | str,
+        destination_id: str,
+        access_token: str,
+        confirm_existing: bool,
+    ) -> ManagedPlaylist:
+        """Link an imported configuration to an already-owned Spotify playlist.
+
+        No playlist create, update, cover upload or other provider mutation. The
+        caller must hold the normal configuration lock, as for Admin adoption.
+        A successful relink starts PAUSED; resuming is a separate explicit step.
+        """
+        if not confirm_existing:
+            raise ManagedAdminError("Explicit confirmation is required to relink Spotify")
+        if self.provisioning_journal.load() is not None:
+            raise PlaylistProvisioningRecoveryRequired()
+        state = self.store.load()
+        local = self._local_template(state, template_id)
+        if local.portable_metadata is None:
+            raise ManagedAdminError("Only imported playlist drafts can be relinked")
+        if local.hidden:
+            raise ManagedAdminError("Unhide the imported draft before relinking")
+        if any(playlist.template_id == local.id for playlist in state.playlists):
+            raise ManagedAdminError("Imported draft already has a managed destination")
+
+        # The remote ID must be supplied and confirmed by the operator. A ZIP's
+        # original_id / provenance is never a Spotify destination authority.
+        candidate = _spotify_playlist_id_text(destination_id)
+        if any(
+            str(playlist.destination.adapter_id) == "spotify"
+            and playlist.destination.external_id == candidate
+            for playlist in state.playlists
+        ):
+            raise ManagedAdminError("Spotify destination is already locally managed")
+        selected = self._source_ids(
+            local.default_source_ids,
+            state=state,
+            allow_empty=True,
+            existing=local.default_source_ids,
+        )
+        cover = self._cover_id(local.cover_id)
+        template = self._template(local.id, state=state)
+        self._validate_state(state)
+
+        client = self.client_factory(access_token)
+        try:
+            account_id = _spotify_user_id(client.current_user())
+        except SpotifyApiError as exc:
+            if exc.status in {401, 403}:
+                raise ManagedAdminError(
+                    "Spotify ownership verification requires reconnecting Spotify "
+                    "with the user-read-private permission"
+                ) from exc
+            raise
+        owner_id = _spotify_playlist_owner_id(
+            client.playlist_details(candidate),
+            expected_playlist_id=candidate,
+            expected_name=local.display_name,
+        )
+        if account_id != owner_id:
+            raise ManagedAdminError("Spotify playlist is not owned by the authorized user")
+
+        # A remote read must not authorize an edit based on an obsolete draft.
+        # The caller holds configuration synchronization; the v11 store also
+        # protects the durable replacement with an exact-byte CAS.
+        if self.provisioning_journal.load() is not None or self.store.load() != state:
+            raise ManagedAdminError("Playlist configuration changed during Spotify verification")
+        managed = replace(
+            activate_template(template, candidate),
+            enabled=False,
+            portable_id=allocate_portable_id(state)
+            if state.schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION
+            else None,
+            display_name=local.display_name,
+            description=local.description,
+            cover_id=cover,
+            source_ids=selected,
+            retention_hours=local.retention_hours,
+            max_episodes=local.max_episodes,
+            min_duration_seconds=local.min_duration_seconds,
+            max_duration_seconds=local.max_duration_seconds,
+        )
+        self._save_validated(replace(state, playlists=state.playlists + (managed,)))
+        return managed
 
     def clear_uncertain_provisioning(self) -> None:
         intent = self.provisioning_journal.load()
