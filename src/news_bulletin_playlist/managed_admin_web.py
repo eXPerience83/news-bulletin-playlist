@@ -128,7 +128,18 @@ def render_managed_admin_page(
         "inactive duration exceptions and artwork references stay intact.</p>"
         '<div class="admin-grid">'
         + "".join(
-            _owner_template_edit_form(template, csrf_token=csrf_token)
+            _owner_template_edit_form(
+                template,
+                csrf_token=csrf_token,
+                can_delete=(
+                    not state.quarantined_templates
+                    and all(playlist.template_id != template.id for playlist in snapshot.managed)
+                    and (
+                        snapshot.provisioning_intent is None
+                        or snapshot.provisioning_intent.template_id != template.id
+                    )
+                ),
+            )
             for template in catalog.playlists
         )
         + "</div></section>"
@@ -238,7 +249,9 @@ def render_managed_admin_page(
     )
 
 
-def _owner_template_edit_form(template: PlaylistTemplate, *, csrf_token: str) -> str:
+def _owner_template_edit_form(
+    template: PlaylistTemplate, *, csrf_token: str, can_delete: bool
+) -> str:
     """Never discard dormant exceptions by flattening historical templates."""
 
     def esc(value: object) -> str:
@@ -246,6 +259,20 @@ def _owner_template_edit_form(template: PlaylistTemplate, *, csrf_token: str) ->
 
     digest = hashlib.sha256(OwnerTemplateSet((template,)).serialize()).hexdigest()
     policy = template.duration_policy
+    delete_control = (
+        f"""
+  <form method="post" action="/admin/playlists/templates/owner/delete">
+    {_hidden_input("csrf_token", csrf_token)}
+    {_hidden_input("template_id", str(template.id))}
+    {_hidden_input("template_digest", digest)}
+    <label><input type="checkbox" name="confirm_owner_delete" value="1" required>
+      Delete this unused installation-owned template</label>
+    <button class="button button-danger" type="submit">Delete owner template</button>
+  </form>
+"""
+        if can_delete
+        else '<p class="muted">Deletion is blocked while referenced or quarantined.</p>'
+    )
     return f"""
 <details class="card playlist-card">
   <summary>Edit owner template: {html.escape(template.display_name)}</summary>
@@ -281,6 +308,7 @@ def _owner_template_edit_form(template: PlaylistTemplate, *, csrf_token: str) ->
     </label>
     <button class="button button-primary" type="submit">Save owner template</button>
   </form>
+  {delete_control}
 </details>
 """
 

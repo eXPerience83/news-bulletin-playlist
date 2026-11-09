@@ -292,6 +292,42 @@ class ManagedAdminService:
         self.catalog = self.store.catalog
         return updated
 
+    def delete_owner_template(
+        self,
+        template_id: PlaylistId | str,
+        *,
+        fingerprint: str,
+        confirmed: bool,
+    ) -> None:
+        """Operator-confirmed local deletion, with all references checked afresh."""
+        if not confirmed:
+            raise ManagedAdminError("Confirm deletion of this owner template")
+        if not isinstance(self.store, ForwardOnlyManagedStateStore):
+            raise ManagedAdminError("Owner templates require v11")
+        state = self.store.load()
+        self.catalog = self.store.catalog
+        current = next(
+            (item for item in self.catalog.playlists if item.id == template_id),
+            None,
+        )
+        if current is None:
+            raise ManagedAdminError("Owned template was not found")
+        digest = hashlib.sha256(OwnerTemplateSet((current,)).serialize()).hexdigest()
+        if not hmac.compare_digest(fingerprint, digest):
+            raise ManagedAdminError("Owned template changed; reload before deleting")
+        if any(playlist.template_id == current.id for playlist in state.playlists):
+            raise ManagedAdminError("Owner template is referenced by a Spotify destination")
+        if state.quarantined_templates:
+            raise ManagedAdminError("Resolve quarantined drafts before deleting templates")
+        pending = self.provisioning_journal.load()
+        if pending is not None and pending.template_id == current.id:
+            raise ManagedAdminError("Owner template is referenced by pending provisioning")
+        self.store.delete_owner_template(
+            current.id,
+            pending_template_ids=(pending.template_id,) if pending is not None else (),
+        )
+        self.catalog = self.store.catalog
+
     def create_from_example(self, example_id: PlaylistId | str) -> LocalPlaylistTemplate:
         """Explicitly copy a bundled example into one owner-controlled local draft.
 

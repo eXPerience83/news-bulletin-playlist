@@ -11,6 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from news_bulletin_playlist.catalog import PlaylistTemplate
+from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     InstalledSource,
@@ -133,6 +134,34 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             self.catalog = parse_v11_operational(next_bytes).active_catalog
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner template could not be saved") from exc
+    def delete_owner_template(
+        self,
+        template_id: PlaylistId,
+        *,
+        pending_template_ids: tuple[PlaylistId, ...] = (),
+    ) -> None:
+        """Remove an unreferenced owner template via exact-byte CAS, never Spotify."""
+        try:
+            current = parse_v11_operational(self._expected_bytes)
+            if current.managed_overlay.quarantined_templates:
+                raise ManagedStateError(
+                    "Repair quarantined drafts before deleting historical templates"
+                )
+            updated = current.owner_inventory.templates.remove_unreferenced(
+                template_id,
+                managed_template_ids=tuple(
+                    playlist.template_id for playlist in current.managed_overlay.playlists
+                ),
+                pending_template_ids=pending_template_ids,
+            )
+            inventory = replace(current.owner_inventory, templates=updated)
+            next_bytes = self._owner.save_owner_inventory(
+                inventory, expected_bytes=self._expected_bytes
+            )
+            self._expected_bytes = next_bytes
+            self.catalog = parse_v11_operational(next_bytes).active_catalog
+        except (V11StoreError, OSError, ValueError) as exc:
+            raise ManagedStateError("v11 owner template could not be deleted safely") from exc
 
 
 class ReadOnlyLegacyStateStore(ManagedStateStore):

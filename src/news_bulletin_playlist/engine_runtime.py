@@ -162,6 +162,7 @@ _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/templates/from-example": "local-example-created",
     "/admin/playlists/templates/update": "local-draft-updated",
     "/admin/playlists/templates/owner/update": "owner-template-updated",
+    "/admin/playlists/templates/owner/delete": "owner-template-deleted",
     "/admin/playlists/templates/delete": "local-draft-deleted",
     "/admin/playlists/templates/quarantine/discard": "local-quarantine-discarded",
 }
@@ -964,6 +965,7 @@ class OperationalHealthHandler(LanAdminHandler):
             "/admin/playlists/templates/from-example",
             "/admin/playlists/templates/update",
             "/admin/playlists/templates/owner/update",
+            "/admin/playlists/templates/owner/delete",
             "/admin/playlists/templates/delete",
             "/admin/playlists/templates/quarantine/discard",
         }
@@ -1021,6 +1023,7 @@ class OperationalHealthHandler(LanAdminHandler):
                 "/admin/playlists/templates/from-example",
                 "/admin/playlists/templates/update",
                 "/admin/playlists/templates/owner/update",
+                "/admin/playlists/templates/owner/delete",
                 "/admin/playlists/templates/delete",
                 "/admin/playlists/templates/quarantine/discard",
             }:
@@ -1159,6 +1162,18 @@ class OperationalHealthHandler(LanAdminHandler):
         path: str,
     ) -> str:
         """Local-only custom template mutation behind existing auth/CSRF/lock."""
+        if path == "/admin/playlists/templates/owner/delete":
+            if set(form) != {
+                "csrf_token", "template_id", "template_digest", "confirm_owner_delete"
+            }:
+                raise ValueError("Invalid owner template deletion form")
+            template_id = single_form_value(form, "template_id")
+            service.delete_owner_template(
+                template_id,
+                fingerprint=single_form_value(form, "template_digest"),
+                confirmed=form.get("confirm_owner_delete", []) == ["1"],
+            )
+            return template_id
         if path == "/admin/playlists/templates/owner/update":
             allowed = {
                 "csrf_token",
