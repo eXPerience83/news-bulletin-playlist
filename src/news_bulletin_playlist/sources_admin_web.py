@@ -109,6 +109,7 @@ def render_sources_page(
         provider_available=provider_available,
         owner_catalog_editable=owner_catalog_editable,
     )
+    source_kind = "owner" if owner_catalog_editable else "built-in"
     body = "".join(
         (
             render_lan_warning() if lan_mode else "",
@@ -120,7 +121,7 @@ def render_sources_page(
       <p class="eyebrow">Catalogue</p>
       <h2 id="source-catalog-heading">Broadcasters and sources</h2>
     </div>
-    <p class="section-note">{len(catalog.sources)} owner sources, {len(state.sources)} custom sources</p>
+    <p class="section-note">{len(catalog.sources)} {source_kind}, {len(state.sources)} custom</p>
   </div>
   {add_source}
   <p><a class="button" href="/admin/sources/import">Import sources</a></p>
