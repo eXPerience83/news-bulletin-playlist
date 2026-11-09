@@ -16,8 +16,8 @@ from _portable_playlist_fixtures import UUID, _ready, _unpack
 from _source_admin_http_fixtures import _server
 
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
-from news_bulletin_playlist.migrated_covers import MigratedCoverError
 from news_bulletin_playlist.managed_state import ManagedStateStore
+from news_bulletin_playlist.migrated_covers import MigratedCoverError
 from news_bulletin_playlist.portable_playlists_web import portable_controls
 
 EXPORT = "/admin/playlists/export.zip?kind=managed&id=spain_spanish_news"

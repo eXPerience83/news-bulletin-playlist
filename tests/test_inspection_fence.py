@@ -18,8 +18,6 @@ from _source_admin_http_fixtures import _server
 
 from news_bulletin_playlist import engine_runtime
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
-from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
-from news_bulletin_playlist.managed_state import ManagedState
 from news_bulletin_playlist.cli import main
 from news_bulletin_playlist.engine_runtime import EngineLifecycleController
 from news_bulletin_playlist.inspection_fence import (
@@ -32,6 +30,8 @@ from news_bulletin_playlist.inspection_fence import (
     release_gate,
     startup_gate,
 )
+from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
+from news_bulletin_playlist.managed_state import ManagedState
 from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
 
 
@@ -416,6 +416,9 @@ def test_pending_known_provisioning_is_readonly_during_inspection(
                 assert store.path.read_bytes() != before_state
                 assert not journal.path.exists()
                 assert len(store.load_readonly().playlists) == 1
-                assert store.load_readonly().playlists[0].destination.external_id == "known-destination"
+                assert (
+                    store.load_readonly().playlists[0].destination.external_id
+                    == "known-destination"
+                )
         finally:
             server.RequestHandlerClass.inspection_hold = False

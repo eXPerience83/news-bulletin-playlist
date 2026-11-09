@@ -42,7 +42,6 @@ from news_bulletin_playlist.managed_admin_web import (
     playlist_id_from_form,
     single_form_value,
 )
-from news_bulletin_playlist.migrated_covers import MigratedCoverError
 from news_bulletin_playlist.managed_provisioning import (
     MANAGED_PROVISIONING_FILENAME,
     ProvisioningJournal,
@@ -52,6 +51,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     effective_sources,
 )
+from news_bulletin_playlist.migrated_covers import MigratedCoverError
 from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.playlist_bundle import PlaylistBundleError
@@ -181,7 +181,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                         page = render_admin_shell(
                             title="Edit imported draft",
                             active_tab="playlists",
-                            intro="Local portable draft. NEW Spotify creation requires confirmation; EXISTING destination relinking requires ownership verification.",
+                            intro=(
+                                "Local portable draft. NEW Spotify creation requires "
+                                "confirmation; EXISTING destination relinking requires "
+                                "ownership verification."
+                            ),
                             body_html=imported_draft_editor(draft, security.issue_csrf_token()),
                         )
                     self._reply(HTTPStatus.OK, page)
@@ -419,7 +423,13 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 HTTPStatus.CONFLICT,
                 "Playlist candidate is incompatible with local references or policy",
             )
-        except ManagedStateError, ProvisioningJournalError, OSError, CustomCoverAssetError, MigratedCoverError:
+        except (
+            ManagedStateError,
+            ProvisioningJournalError,
+            OSError,
+            CustomCoverAssetError,
+            MigratedCoverError,
+        ):
             self._source_error(
                 HTTPStatus.SERVICE_UNAVAILABLE,
                 "Playlist configuration or artwork persistence is unavailable; "
@@ -569,7 +579,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except PlaylistExportError as exc:
             self._source_error(HTTPStatus.CONFLICT, str(exc))
         except MigratedCoverError:
-            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Persisted artwork storage is unavailable")
+            self._source_error(
+                HTTPStatus.SERVICE_UNAVAILABLE, "Persisted artwork storage is unavailable"
+            )
         except ManagedStateError, PortableSourceError, CustomCoverAssetError, OSError:
             self._source_error(
                 HTTPStatus.CONFLICT, "Playlist configuration or selected cover is unavailable"
@@ -619,7 +631,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         except PlaylistExportError as exc:
             self._source_error(HTTPStatus.CONFLICT, str(exc))
         except MigratedCoverError:
-            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Persisted artwork storage is unavailable")
+            self._source_error(
+                HTTPStatus.SERVICE_UNAVAILABLE, "Persisted artwork storage is unavailable"
+            )
         except ManagedStateError, OSError:
             self._source_error(HTTPStatus.CONFLICT, "Playlist identity preparation is unavailable")
         except ValueError:
@@ -1557,12 +1571,20 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 )
             elif synchronization is None:
                 snapshot = service.snapshot(readonly=self.inspection_hold)
-                state = service.store.load_readonly() if self.inspection_hold else service.store.load()
+                state = (
+                    service.store.load_readonly()
+                    if self.inspection_hold
+                    else service.store.load()
+                )
                 catalog = service.catalog
             else:
                 with synchronization.hold():
                     snapshot = service.snapshot(readonly=self.inspection_hold)
-                    state = service.store.load_readonly() if self.inspection_hold else service.store.load()
+                    state = (
+                        service.store.load_readonly()
+                        if self.inspection_hold
+                        else service.store.load()
+                    )
                 catalog = service.catalog
             effective_sources(catalog, state)
         except ManagedStateError, OSError:
