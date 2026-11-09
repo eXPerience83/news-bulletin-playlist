@@ -139,10 +139,7 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
             for template in operational.owner_inventory.templates.records
         ]
         cover_ids = sorted(
-            {
-                template.cover_id
-                for template in operational.owner_inventory.templates.records
-            }
+            {template.cover_id for template in operational.owner_inventory.templates.records}
             | {template.cover_id for template in operational.managed_overlay.templates}
             | {playlist.cover_id for playlist in operational.managed_overlay.playlists}
         )
