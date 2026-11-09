@@ -161,7 +161,9 @@ def test_duplicate_owner_template_ids_are_rejected():
         lambda data: data.replace(b'"version":1', b'"version":2'),
         lambda data: data.replace(b'"templates":[', b'"extra":0,"templates":['),
         lambda data: data.replace(b'"edition_fold":1', b'"edition_fold":2'),
-        lambda data: data.replace(b'"edition_local_time":"12:00:00.000000"', b'"edition_local_time":"broken"'),
+        lambda data: data.replace(
+            b'"edition_local_time":"12:00:00.000000"', b'"edition_local_time":"broken"'
+        ),
         lambda data: data.replace(b'"ordering":"edition_at_desc"', b'"ordering":"unknown"'),
         lambda data: data.replace(b'"max_episodes":100', b'"max_episodes":true'),
         lambda data: b" " * (2 * 1024 * 1024 + 1),
