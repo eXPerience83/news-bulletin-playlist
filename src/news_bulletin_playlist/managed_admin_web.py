@@ -125,7 +125,7 @@ def render_managed_admin_page(
     owned_templates = (
         '<section class="section admin-section"><h2>Installation-owned templates</h2>'
         '<p class="muted">Edit saved defaults locally. IDs, assigned source order, '
-        'inactive duration exceptions and artwork references stay intact.</p>'
+        "inactive duration exceptions and artwork references stay intact.</p>"
         '<div class="admin-grid">'
         + "".join(
             _owner_template_edit_form(template, csrf_token=csrf_token)

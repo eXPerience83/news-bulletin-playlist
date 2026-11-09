@@ -86,9 +86,7 @@ def test_owner_template_edit_keeps_dormant_exception_after_reducing_max(tmp_path
     catalog = _catalog_with_duration_exception()
     root = tmp_path / "legacy"
     root.mkdir()
-    ManagedStateStore(root / "managed-state.json", catalog=catalog).save(
-        _legacy_state(10, catalog)
-    )
+    ManagedStateStore(root / "managed-state.json", catalog=catalog).save(_legacy_state(10, catalog))
     V11OperationalStore(root).initialize_from_legacy(catalog=catalog)
     store = open_managed_state_store(root)
     assert isinstance(store, ForwardOnlyManagedStateStore)

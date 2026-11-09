@@ -177,7 +177,7 @@ def _sources_table(
         health = _source_health_badge(source_outcomes.get(source.id), enabled=source.enabled)
         ownership = (
             "Owner-managed"
-            if owner_catalog_editable
+            if owner_catalog_editable and source.id in built_in_ids
             else ("Built-in" if source.id in built_in_ids else "Custom")
         )
         state_label = (
