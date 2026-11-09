@@ -37,6 +37,7 @@ from news_bulletin_playlist.managed_state import (
     source_definition,
 )
 from news_bulletin_playlist.models import EngineConfig, SourceDefinition
+from news_bulletin_playlist.owner_inventory import OwnerInventory, OwnerInventoryError
 from news_bulletin_playlist.v11_candidate import (
     V11CandidateError,
     parse_v11_candidate,
@@ -62,6 +63,7 @@ class V11OperationalState:
     playlist_examples: tuple[PlaylistTemplate, ...]
     example_provenance: tuple[LegacyProvenance, ...]
     migration_origin_sha256: str
+    owner_inventory: OwnerInventory | None
 
     @property
     def is_live_migration_authorized(self) -> bool:
@@ -87,10 +89,18 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
             ).hexdigest(),
             "installed_catalog": encoded_catalog,
             "managed_overlay": overlay,
+            # Strict independent owner records for a future atomic authority
+            # transition. The old frozen catalog is audit provenance only.
+            "owner_inventory": OwnerInventory.from_snapshot(snapshot).to_document(),
         }
         payload = _canonical(document)
         result = parse_v11_operational(payload)
-    except (FrozenLegacySnapshotError, ManagedStateError, V11CandidateError) as exc:
+    except (
+        FrozenLegacySnapshotError,
+        ManagedStateError,
+        V11CandidateError,
+        OwnerInventoryError,
+    ) as exc:
         raise V11OperationalError("cannot build a lossless operational state") from exc
     if result.runtime != candidate.projection.projected_runtime:
         raise V11OperationalError("v11 operational state changes original runtime")
@@ -111,13 +121,20 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         )
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise V11OperationalError("invalid v11 operational JSON") from exc
-    if not isinstance(document, dict) or set(document) != {
+    expected_fields = {
         "format",
         "schema_version",
         "migration_origin_sha256",
         "installed_catalog",
         "managed_overlay",
-    }:
+    }
+    # Existing v11 beta documents remain readable and are NOT silently
+    # upgraded by GET requests. A subsequent CAS-authorized transition will
+    # own those records. New first-boot migrations always include inventory.
+    if not isinstance(document, dict) or set(document) not in (
+        expected_fields,
+        expected_fields | {"owner_inventory"},
+    ):
         raise V11OperationalError("invalid v11 operational fields")
     if (
         document["format"] != OPERATIONAL_FORMAT
@@ -135,6 +152,13 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         snapshot = parse_legacy_snapshot(catalog_bytes)
         if snapshot.source_order is None:
             raise V11OperationalError("v11 requires verified historical source order")
+        owner_inventory = (
+            OwnerInventory.parse(document["owner_inventory"])
+            if "owner_inventory" in document
+            else None
+        )
+        if owner_inventory is not None:
+            owner_inventory.validate_against(snapshot)
         digest = document["migration_origin_sha256"]
         if digest != snapshot.managed_state_sha256:
             raise V11OperationalError("v11 historical origin digest mismatch")
@@ -157,7 +181,12 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         )
         if payload != _canonical(document):
             raise V11OperationalError("noncanonical v11 operational JSON")
-    except (FrozenLegacySnapshotError, ManagedStateError, LocalPlaylistTemplateError) as exc:
+    except (
+        FrozenLegacySnapshotError,
+        ManagedStateError,
+        LocalPlaylistTemplateError,
+        OwnerInventoryError,
+    ) as exc:
         raise V11OperationalError("v11 operational state cannot be validated") from exc
 
     by_id = {item.installed.id: item for item in snapshot.sources}
@@ -172,6 +201,7 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         playlist_examples=templates,
         example_provenance=tuple(item.provenance for item in snapshot.templates),
         migration_origin_sha256=digest,
+        owner_inventory=owner_inventory,
     )
 
 
@@ -201,6 +231,8 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
         raise V11OperationalError("v11 edit changed historical catalog")
     if verified.migration_origin_sha256 != current.migration_origin_sha256:
         raise V11OperationalError("v11 edit changed migration origin")
+    if verified.owner_inventory != current.owner_inventory:
+        raise V11OperationalError("v11 overlay edit changed installed owner inventory")
     return next_payload
 
 
