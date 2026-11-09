@@ -324,5 +324,7 @@ class V11OperationalStore:
                     with suppress(FileNotFoundError):
                         os.unlink(temporary, dir_fd=dir_fd)
             except OSError as exc:
-                raise V11StoreError("v11 owner write durability uncertain; inspect before retry") from exc
+                raise V11StoreError(
+                    "v11 owner write durability uncertain; inspect before retry"
+                ) from exc
             return next_bytes
