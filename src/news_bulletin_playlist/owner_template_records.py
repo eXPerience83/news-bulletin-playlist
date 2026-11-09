@@ -127,9 +127,7 @@ def _decode_template(value: object) -> PlaylistTemplate:
         or len(ids) != len(set(ids))
     ):
         raise OwnerTemplateError("Invalid owned template source assignments")
-    policy = exact_object(
-        fields["duration_policy"], {"min_seconds", "max_seconds", "exceptions"}
-    )
+    policy = exact_object(fields["duration_policy"], {"min_seconds", "max_seconds", "exceptions"})
     exceptions = policy["exceptions"]
     if not isinstance(exceptions, list) or len(exceptions) > 100:
         raise OwnerTemplateError("Invalid owned template duration exceptions")
@@ -182,8 +180,7 @@ class OwnerTemplateSet:
             ):
                 raise OwnerTemplateError("Owned template references a missing source")
             if any(
-                exception.source_id not in all_ids
-                for exception in item.duration_policy.exceptions
+                exception.source_id not in all_ids for exception in item.duration_policy.exceptions
             ):
                 raise OwnerTemplateError("Owned template exception references a missing source")
             # Strict roundtrip validates timezone fold, microseconds, integer
@@ -198,8 +195,7 @@ class OwnerTemplateSet:
             "templates": [_template_record(item) for item in self.records],
         }
         payload = (
-            json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-            + "\n"
+            json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(",", ":")) + "\n"
         ).encode("utf-8")
         if len(payload) > _MAX_BYTES:
             raise OwnerTemplateError("Owner template inventory exceeds size limit")

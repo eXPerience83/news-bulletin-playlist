@@ -46,9 +46,7 @@ def test_four_destinations_with_historical_template_policies_are_semantically_un
     canonical = owner.serialize()
     assert OwnerTemplateSet.parse(canonical) == owner
     assert len(owner.records) == len(installed_catalog.playlists)
-    assert [item.id for item in owner.records] == [
-        item.id for item in installed_catalog.playlists
-    ]
+    assert [item.id for item in owner.records] == [item.id for item in installed_catalog.playlists]
     assert owner.records[0].duration_policy == original_owner_templates[0].duration_policy
 
     # Reconstruct a "legacy-shaped" compilation solely from owner records
@@ -172,18 +170,18 @@ def test_duplicate_owner_template_ids_are_rejected():
 )
 def test_corrupt_or_noncanonical_owner_template_rejected(corruption):
     catalog = _catalog_with_duration_exception()
-    record = materialize_owner_templates(catalog.playlists, sources=tuple(
-        s.id for s in catalog.sources
-    )).serialize()
+    record = materialize_owner_templates(
+        catalog.playlists, sources=tuple(s.id for s in catalog.sources)
+    ).serialize()
     with pytest.raises(OwnerTemplateError):
         OwnerTemplateSet.parse(corruption(record))
 
 
 def test_future_template_id_is_not_inferred_from_legacy_image():
     catalog = _catalog_with_duration_exception()
-    originals = materialize_owner_templates(catalog.playlists, sources=tuple(
-        item.id for item in catalog.sources
-    ))
+    originals = materialize_owner_templates(
+        catalog.playlists, sources=tuple(item.id for item in catalog.sources)
+    )
     archived = originals.serialize()
     # The persisted record contains all values: no need to import BUILTIN_CATALOG
     # or inspect a newer container image to reopen it.
