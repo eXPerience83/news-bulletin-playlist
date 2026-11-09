@@ -51,7 +51,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
                 raw = self._owner.load_bytes()
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("forward-only v11 conversion failed") from exc
-        self.catalog = owned.historical_catalog
+        self.catalog = owned.active_catalog
         self._expected_bytes = raw
 
     def load(self) -> ManagedState:

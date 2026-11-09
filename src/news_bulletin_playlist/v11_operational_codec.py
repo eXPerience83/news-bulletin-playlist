@@ -56,6 +56,7 @@ class V11OperationalError(ValueError):
 class V11OperationalState:
     schema_version: int
     historical_catalog: BuiltInCatalog
+    active_catalog: BuiltInCatalog
     managed_overlay: ManagedState
     runtime: EngineConfig
     installed_sources: tuple[InstalledSource, ...]
@@ -156,21 +157,25 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         if digest != snapshot.managed_state_sha256:
             raise V11OperationalError("v11 historical origin digest mismatch")
         catalog = _historical_catalog(snapshot)
-        overlay = parse_managed_state(document["managed_overlay"], catalog=catalog)
+        # The owner inventory, not the legacy image-preset reconstruction, is
+        # now the runtime source of truth. Historical catalog is retained only
+        # for the provenance record and initial migration equivalence.
+        active_catalog = _owner_active_catalog(snapshot, owner_inventory)
+        overlay = parse_managed_state(document["managed_overlay"], catalog=active_catalog)
         if overlay.schema_version < snapshot.managed_schema_version:
             raise V11OperationalError("v11 overlay cannot downgrade its original schema")
-        if serialize_managed_state(overlay, catalog=catalog) != document["managed_overlay"]:
+        if serialize_managed_state(overlay, catalog=active_catalog) != document["managed_overlay"]:
             raise V11OperationalError("noncanonical v11 managed overlay")
-        runtime = compile_engine_config(catalog, overlay)
+        runtime = compile_engine_config(active_catalog, overlay)
         # The original historical order is frozen, not a constraint on later
         # installation-owned source/template edits. Only image-preset sources
         # remain fixed in their original relative order; newly installed
         # sources may be added or removed through the validated overlay.
-        image_ids = tuple(source.id for source in catalog.sources)
+        image_ids = tuple(source.id for source in active_catalog.sources)
         if tuple(item.id for item in runtime.sources[: len(image_ids)]) != image_ids:
             raise V11OperationalError("v11 installed catalog source order changed")
         templates = effective_playlist_templates(
-            catalog, overlay.templates, sources=runtime.sources
+            active_catalog, overlay.templates, sources=runtime.sources
         )
         if payload != _canonical(document):
             raise V11OperationalError("noncanonical v11 operational JSON")
@@ -187,6 +192,7 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
     return V11OperationalState(
         schema_version=OPERATIONAL_SCHEMA_VERSION,
         historical_catalog=catalog,
+        active_catalog=active_catalog,
         managed_overlay=overlay,
         runtime=runtime,
         installed_sources=tuple(item.installed for item in ordered_records),
@@ -212,7 +218,7 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
     try:
         document = json.loads(payload)
         document["managed_overlay"] = serialize_managed_state(
-            overlay, catalog=current.historical_catalog
+            overlay, catalog=current.active_catalog
         )
         next_payload = _canonical(document)
         verified = parse_v11_operational(next_payload)
@@ -222,11 +228,35 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
         raise V11OperationalError("v11 edit changed managed state")
     if verified.historical_catalog != current.historical_catalog:
         raise V11OperationalError("v11 edit changed historical catalog")
+    if verified.active_catalog != current.active_catalog:
+        raise V11OperationalError("v11 edit changed owner-backed active catalog")
     if verified.migration_origin_sha256 != current.migration_origin_sha256:
         raise V11OperationalError("v11 edit changed migration origin")
     if verified.owner_inventory != current.owner_inventory:
         raise V11OperationalError("v11 overlay edit changed installed owner inventory")
     return next_payload
+
+
+def _owner_active_catalog(
+    snapshot: FrozenLegacyCatalogSnapshot,
+    owned: OwnerInventory,
+) -> BuiltInCatalog:
+    """Compile from owner-persisted definitions, never image presets.
+
+    Installation-provenance sources stay in the existing managed overlay;
+    image-origin sources are sourced from owner records at their exact original
+    positions. Future owner edits must be a separate CAS-authorized operation.
+    """
+    original_image_ids = {
+        item.installed.id
+        for item in snapshot.sources
+        if item.provenance is LegacyProvenance.IMAGE_PRESET
+    }
+    ordered_sources = owned.source_order.definitions(owned.sources)
+    return BuiltInCatalog(
+        tuple(source for source in ordered_sources if source.id in original_image_ids),
+        owned.templates.records,
+    )
 
 
 def _historical_catalog(snapshot: FrozenLegacyCatalogSnapshot) -> BuiltInCatalog:

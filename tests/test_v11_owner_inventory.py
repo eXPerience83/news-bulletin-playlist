@@ -74,6 +74,36 @@ def test_first_conversion_persists_source_and_template_owner_inventory_without_r
     assert b"token-should-stay-private" not in stored_bytes
 
 
+def test_runtime_and_admin_use_persisted_owner_inventory_not_frozen_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import news_bulletin_playlist.v11_operational_codec as codec
+    from news_bulletin_playlist.catalog import BuiltInCatalog
+    from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
+
+    root, _ = _legacy_root(tmp_path, 10)
+    original = V11OperationalStore(root).initialize_from_legacy(
+        catalog=_catalog_with_duration_exception()
+    )
+    assert original.active_catalog.playlists == original.owner_inventory.templates.records
+    assert original.runtime.sources
+    original_bytes = V11OperationalStore(root).load_bytes()
+
+    # Force the historical-only reconstruction to the *wrong* empty image
+    # catalog. The owner-backed runtime must still reopen identically.
+    monkeypatch.setattr(codec, "_historical_catalog", lambda _snapshot: BuiltInCatalog((), ()))
+    reopened = parse_v11_operational(original_bytes)
+    assert reopened.runtime == original.runtime
+    assert reopened.active_catalog == original.active_catalog
+    assert reopened.historical_catalog == BuiltInCatalog((), ())
+    assert reopened.owner_inventory == original.owner_inventory
+
+    store = ForwardOnlyManagedStateStore(root, readonly=True)
+    assert store.catalog == original.active_catalog
+    assert store.load_readonly() == original.managed_overlay
+    assert V11OperationalStore(root).load_bytes() == original_bytes
+
+
 def test_owner_inventory_survives_managed_overlay_cas_without_rebuilding_image_defaults(
     tmp_path: Path,
 ):
