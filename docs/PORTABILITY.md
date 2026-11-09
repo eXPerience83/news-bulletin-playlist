@@ -22,6 +22,40 @@ copy is prudent; **portable JSON and ZIP are not production backups**.
 Acceptance on isolated synthetic roots is tracked by #553 and later beta gates by
 #565. No release/image or live migration is implied by code merged into `main`.
 
+## First-boot durable owner inventory — pre-activation stage (#633)
+
+New direct v6–v10 -> v11 cutovers now include an `owner_inventory` object
+**inside the same canonical, atomic `managed-state-v11.json` authority**
+as the pre-existing `installed_catalog` provenance and `managed_overlay`.
+It contains a separate, strict original source-order vector; complete
+portable-capability-validated source definitions (split into at most 100
+definitions per bounded chunk); and the independent versioned owner
+template records described below. Even an empty clean install persists an
+empty inventory, never implicitly installing image presets.
+
+The historical `installed_catalog` is retained as **immutable forensic
+evidence** of what the old image/owner configuration contained. The new
+owner records are loaded and *checked for exact equivalence* to that
+evidence on each v11 parse; missing source IDs, duplicate/unknown parser or
+filter versions, changed source order, truncated dormant duration
+exceptions, changed template defaults or otherwise malformed owner
+metadata **block the entire state read**. They never silently reconstruct
+from the image. The original file, OAuth, SQLite and Spotify are untouched
+by inventory creation. A normal managed-overlay CAS preserves the owner
+inventory unchanged.
+
+This is deliberately a **pre-activation schema field**: it does not yet
+make the owner inventory the runtime/Admin source of truth. The live
+`historical_catalog` remains an immutable image-preset-style view until
+an independently reviewed atomic switch also covers Admin editor behavior
+and deletion references. Old v11 beta documents lacking
+`owner_inventory` remain readable as their previous form, with no
+silent write/migration on GET. Missing fields in a new v11 document must
+not be guessed/recreated; the later owner activation must explicitly
+handle this compatibility case. Do not claim #633 complete on the basis
+of inventory persistence alone. Historical cover JPEGs and attribution
+must also be installed durably through #637 before production acceptance.
+
 ## Historical template owner records — isolated codec (#633)
 
 Before replacing the live v11 authority's frozen `IMAGE_PRESET` templates,
