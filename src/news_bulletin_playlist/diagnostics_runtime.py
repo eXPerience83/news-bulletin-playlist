@@ -898,9 +898,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         try:
             source_id = values["source_id"][0]
-            if (
-                source_id in {item.id for item in service.catalog.sources}
-                and not isinstance(service.store, ForwardOnlyManagedStateStore)
+            if source_id in {item.id for item in service.catalog.sources} and not isinstance(
+                service.store, ForwardOnlyManagedStateStore
             ):
                 builtin = service.get_builtin_source(source_id)
                 self._reply(

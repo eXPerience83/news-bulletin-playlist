@@ -293,7 +293,6 @@ class V11OperationalStore:
             return next_bytes
 
 
-
     def save_owner_inventory(self, inventory: OwnerInventory, *, expected_bytes: bytes) -> bytes:
         """CAS owner definitions; never modify the forensic catalog or legacy file."""
         with _locked_root(self.root) as dir_fd:

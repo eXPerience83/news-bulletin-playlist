@@ -142,7 +142,6 @@ def test_unknown_occupied_root_must_not_be_reclaimed_fresh(tmp_path: Path) -> No
     assert not (tmp_path / V11_OPERATIONAL_FILENAME).exists()
 
 
-
 def test_historical_source_metadata_edit_survives_restart_without_detector_change(tmp_path: Path):
     from news_bulletin_playlist.managed_state import InstalledSource
 
