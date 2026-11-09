@@ -85,9 +85,13 @@ class OwnerInventory:
             canonical_sources = self.source_order.definitions(self.sources)
             return {
                 "source_order": json.loads(self.source_order.serialize()),
-                "installed_sources": (
-                    json.loads(export_sources(canonical_sources)) if canonical_sources else None
-                ),
+                # Split the complete installation into bounded source v1
+                # capability documents. A valid legacy root can have more
+                # than 100 sources even though one portable v1 file cannot.
+                "installed_sources": [
+                    json.loads(export_sources(canonical_sources[i : i + 100]))
+                    for i in range(0, len(canonical_sources), 100)
+                ],
                 "templates": json.loads(self.templates.serialize()),
             }
         except (ValueError, TypeError, UnicodeError, KeyError) as exc:
@@ -101,13 +105,13 @@ class OwnerInventory:
                 document, {"source_order", "installed_sources", "templates"}
             )
             order = OwnerSourceOrder.parse(_compact(obj["source_order"]))
-            parsed_sources = (
-                parse_sources(_compact(obj["installed_sources"]))
-                if obj["installed_sources"] is not None
-                else ()
-            )
+            chunks = obj["installed_sources"]
+            if not isinstance(chunks, list) or len(chunks) > 6:
+                raise OwnerInventoryError("Invalid bounded owner source chunks")
             records = tuple(
-                InstalledSource.from_definition(item.source) for item in parsed_sources
+                InstalledSource.from_definition(item.source)
+                for chunk in chunks
+                for item in parse_sources(_compact(chunk))
             )
             templates = OwnerTemplateSet.parse(_compact(obj["templates"]))
             result = cls(
