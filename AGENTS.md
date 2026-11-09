@@ -235,7 +235,7 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   before the authority marker, and fail closed on missing/corrupt assets. Cover IDs,
   managed playlists and provider metadata must not be changed by this preparation.
   Do not silently fall back to later image assets after an inherited asset fails.
-- Once the v11 runtime adapter is active, use only `managed-state-v11.json` for runtime/Admin edits and compile against the frozen per-installation catalog. Never silently read/write old legacy state if v11 exists. No downgrade support; preserve old bytes for incident diagnosis. For genuinely fresh installs, do not implicitly provision Spotify playlists or auto-run provider operations.
+- Once the v11 runtime adapter is active, use only `managed-state-v11.json` for runtime/Admin edits and compile against the active catalog decoded from its persisted owner inventory, not the current image. The historical catalog and legacy bytes are immutable forensic evidence. Full reference-safe historical source/template CRUD and versioned post-migration edit validation (#633) are not yet implemented; do not claim they are. Never silently read/write old legacy state if v11 exists. No downgrade support. For genuinely fresh installs, do not implicitly provision Spotify playlists or auto-run provider operations. During inspection hold, GET handlers must use read-only snapshots and never finalize pending provisioning.
 
 ## Documentation and external contracts
 

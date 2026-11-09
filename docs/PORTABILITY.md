@@ -44,11 +44,11 @@ from the image. The original file, OAuth, SQLite and Spotify are untouched
 by inventory creation. A normal managed-overlay CAS preserves the owner
 inventory unchanged.
 
-This is deliberately a **pre-activation schema field**: it does not yet
-make the owner inventory the runtime/Admin source of truth. The live
-`historical_catalog` remains an immutable image-preset-style view until
-an independently reviewed atomic switch also covers Admin editor behavior
-and deletion references. Old v11 beta documents lacking
+The v11 runtime and Admin now compile and read their **active catalog from the
+persisted owner inventory**, not from the current image or the historical
+catalog. However, #633 is not complete: the historical owner records still
+lack full mutable, reference-safe Admin CRUD, and initial evidence-equivalence
+checks must be versioned before legitimate edits are allowed. Old v11 beta documents lacking
 `owner_inventory` are **rejected fail-closed** rather than silently
 falling back to old frozen presets; they require a separate explicitly
 reviewed conversion, never a GET-time repair. Missing fields must not be
@@ -81,8 +81,9 @@ Offline v6–v10 regression tests compile the original four managed destinations
 from re-decoded historical source/template data and assert exact
 `EngineConfig` equality, including parser/filter, disabled assignments,
 destination IDs and duration policies. **This is a fidelity proof only.**
-The live v11 `managed_overlay` and Admin still use the frozen historical
-catalog until the reviewed atomic authority cutover. Cover JPEG **bytes**
+The live v11 runtime and Admin use the persisted owner inventory as their
+active catalog, while full owner CRUD and post-migration edit semantics are
+still pending. Cover JPEG **bytes**
 are not embedded in this template codec: their durable `/data`
 materialization and attribution are addressed separately in PR #637.
 Code from specialized parsers remains in the application and must stay
@@ -579,9 +580,9 @@ artwork already belongs to `/data/custom-covers`; a missing historical draft
 asset remains missing rather than silently being replaced.
 
 This addresses **only the cover resource** subproblem of #633. Historic source
-and playlist-template definitions still use a frozen per-installation catalog,
-not fully editable owner records; source ordering and full template ownership
-remain separate release blockers. As with all portable formats, these covers
+and template definitions are persisted and now feed the active catalog,
+including source order; full reference-safe owner CRUD, legitimate post-migration
+mutations and complete ZIP v2 remain release blockers. These covers
 do not back up OAuth, SQLite or Spotify state.
 
 ## Portable playlist ZIP v1 (#550)
