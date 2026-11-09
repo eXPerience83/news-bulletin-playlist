@@ -63,7 +63,7 @@ class V11OperationalState:
     playlist_examples: tuple[PlaylistTemplate, ...]
     example_provenance: tuple[LegacyProvenance, ...]
     migration_origin_sha256: str
-    owner_inventory: OwnerInventory | None
+    owner_inventory: OwnerInventory
 
     @property
     def is_live_migration_authorized(self) -> bool:
@@ -121,21 +121,19 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         )
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise V11OperationalError("invalid v11 operational JSON") from exc
-    expected_fields = {
+    required_fields = {
         "format",
         "schema_version",
         "migration_origin_sha256",
         "installed_catalog",
         "managed_overlay",
+        "owner_inventory",
     }
-    # Existing v11 beta documents remain readable and are NOT silently
-    # upgraded by GET requests. A subsequent CAS-authorized transition will
-    # own those records. New first-boot migrations always include inventory.
-    if not isinstance(document, dict) or set(document) not in (
-        expected_fields,
-        expected_fields | {"owner_inventory"},
-    ):
-        raise V11OperationalError("invalid v11 operational fields")
+    # An owner inventory is mandatory: accepting missing data as an old beta
+    # would silently revert its source/template ownership to frozen presets.
+    # Older v11 beta authority requires an explicit reviewed conversion.
+    if not isinstance(document, dict) or set(document) != required_fields:
+        raise V11OperationalError("missing or invalid v11 owner inventory fields")
     if (
         document["format"] != OPERATIONAL_FORMAT
         or type(document["schema_version"]) is not int
@@ -152,13 +150,8 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         snapshot = parse_legacy_snapshot(catalog_bytes)
         if snapshot.source_order is None:
             raise V11OperationalError("v11 requires verified historical source order")
-        owner_inventory = (
-            OwnerInventory.parse(document["owner_inventory"])
-            if "owner_inventory" in document
-            else None
-        )
-        if owner_inventory is not None:
-            owner_inventory.validate_against(snapshot)
+        owner_inventory = OwnerInventory.parse(document["owner_inventory"])
+        owner_inventory.validate_against(snapshot)
         digest = document["migration_origin_sha256"]
         if digest != snapshot.managed_state_sha256:
             raise V11OperationalError("v11 historical origin digest mismatch")

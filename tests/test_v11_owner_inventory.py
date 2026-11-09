@@ -123,9 +123,10 @@ def test_empty_clean_install_has_empty_durable_owner_inventory(tmp_path: Path):
         lambda d: d["owner_inventory"]["templates"]["templates"][0]["duration_policy"][
             "exceptions"
         ].clear(),
-        lambda d: d["owner_inventory"]["installed_sources"][0]["sources"][0][
-            "processing"
-        ]["parser"].update({"id": "not-installed"}),
+        lambda d: d["owner_inventory"]["installed_sources"][0]["sources"][0]["processing"][
+            "parser"
+        ].update({"id": "not-installed"}),
+        lambda d: d.pop("owner_inventory"),
     ],
 )
 def test_corrupted_owner_inventory_cannot_silently_fall_back_to_image_preset(
@@ -143,16 +144,16 @@ def test_corrupted_owner_inventory_cannot_silently_fall_back_to_image_preset(
     assert owner.load().owner_inventory is not None
 
 
-def test_old_v11_beta_document_remains_readable_without_silent_ownerization(tmp_path: Path):
+def test_old_v11_beta_document_requires_explicit_conversion_not_hidden_fallback(tmp_path: Path):
     root, _ = _legacy_root(tmp_path, 10)
     owner = V11OperationalStore(root)
     first = owner.initialize_from_legacy(catalog=_catalog_with_duration_exception())
     doc = json.loads(owner.load_bytes())
     del doc["owner_inventory"]
     old_bytes = (json.dumps(doc, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
-    parsed = parse_v11_operational(old_bytes)
-    assert parsed.owner_inventory is None
-    assert parsed.runtime == first.runtime
+    with pytest.raises(V11OperationalError, match="owner inventory"):
+        parse_v11_operational(old_bytes)
+    assert first.owner_inventory is not None
 
 
 def test_portable_capability_chunks_cover_more_than_one_hundred_owner_sources():
@@ -170,6 +171,4 @@ def test_portable_capability_chunks_cover_more_than_one_hundred_owner_sources():
     document = inventory.to_document()
     assert len(document["installed_sources"]) == 2
     roundtripped = OwnerInventory.parse(document)
-    assert roundtripped.source_order.definitions(roundtripped.sources) == order.definitions(
-        records
-    )
+    assert roundtripped.source_order.definitions(roundtripped.sources) == order.definitions(records)

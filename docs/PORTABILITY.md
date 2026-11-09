@@ -49,10 +49,10 @@ make the owner inventory the runtime/Admin source of truth. The live
 `historical_catalog` remains an immutable image-preset-style view until
 an independently reviewed atomic switch also covers Admin editor behavior
 and deletion references. Old v11 beta documents lacking
-`owner_inventory` remain readable as their previous form, with no
-silent write/migration on GET. Missing fields in a new v11 document must
-not be guessed/recreated; the later owner activation must explicitly
-handle this compatibility case. Do not claim #633 complete on the basis
+`owner_inventory` are **rejected fail-closed** rather than silently
+falling back to old frozen presets; they require a separate explicitly
+reviewed conversion, never a GET-time repair. Missing fields must not be
+guessed/recreated. Do not claim #633 complete on the basis
 of inventory persistence alone. Historical cover JPEGs and attribution
 must also be installed durably through #637 before production acceptance.
 
