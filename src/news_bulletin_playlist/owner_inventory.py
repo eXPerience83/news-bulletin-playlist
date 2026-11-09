@@ -28,11 +28,7 @@ from news_bulletin_playlist.owner_template_records import (
     materialize_owner_templates,
 )
 from news_bulletin_playlist.portable_playlist_metadata import exact_object
-from news_bulletin_playlist.portable_sources import (
-    PortableSourceError,
-    export_sources,
-    parse_sources,
-)
+from news_bulletin_playlist.portable_sources import export_sources, parse_sources
 
 
 class OwnerInventoryError(ValueError):
@@ -101,9 +97,7 @@ class OwnerInventory:
     def parse(cls, document: object) -> OwnerInventory:
         """Validate all independent codecs and exact membership, fail closed."""
         try:
-            obj = exact_object(
-                document, {"source_order", "installed_sources", "templates"}
-            )
+            obj = exact_object(document, {"source_order", "installed_sources", "templates"})
             order = OwnerSourceOrder.parse(_compact(obj["source_order"]))
             chunks = obj["installed_sources"]
             if not isinstance(chunks, list) or len(chunks) > 6:
