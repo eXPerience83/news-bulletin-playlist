@@ -152,6 +152,7 @@ def test_historical_source_metadata_edit_survives_restart_without_detector_chang
     original_runtime = preview.original_runtime
     before = (root / "managed-state.json").read_bytes()
     old_v11 = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    stale = open_managed_state_store(root)
     edited = replace(
         InstalledSource.from_definition(original),
         display_name="Renamed owner station",
@@ -169,3 +170,10 @@ def test_historical_source_metadata_edit_survives_restart_without_detector_chang
         source.id for source in original_runtime.sources
     )
     assert open_managed_state_store(root).catalog.sources[0].display_name == "Renamed owner station"
+    after = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    with pytest.raises(ManagedStateError, match="could not be saved"):
+        stale.save_owner_source(edited)
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
+    with pytest.raises(ManagedStateError, match="identity or detector"):
+        store.save_owner_source(replace(edited, timezone="Atlantic/Canary"))
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
