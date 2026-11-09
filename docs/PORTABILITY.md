@@ -88,6 +88,38 @@ materialization and attribution are addressed separately in PR #637.
 Code from specialized parsers remains in the application and must stay
 version-capability validated, never imported as executable content.
 
+## Verifying the migration without Spotify writes
+
+After a direct, operator-initiated v11 cutover in
+`NEWS_PLAYLIST_STARTUP_INSPECTION=1` mode, run **inside the new container**:
+
+```sh
+news-playlist inspection-report --data-dir /data
+```
+
+The command reads the same locked v11 authority and the **inert original**
+`managed-state.json`; it does not copy the dataset or call Spotify, OAuth,
+SQLite, the scheduler or an external service. Output is JSON showing the
+persisted v11 SHA-256, first-boot hold state, every Spotify destination ID
+(including paused ones), all source IDs and parser/filter/time strategies in
+their retained order, per-playlist source selection and duration policies,
+historical template exceptions (including dormant ones), and a validity
+check of owner-persisted cover bytes.
+
+It verifies that the on-disk legacy JSON SHA-256 matches the frozen migration
+origin. If they differ it **fails closed**; if the user has subsequently
+edited a playlist then the report explicitly flags the divergence rather
+than presenting an old/new equivalence claim. The return code is 0 only when
+the inspection hold is active and all current comparison checks pass; 1
+means there is something to review, and invalid state produces an error.
+Both successful output and a green container healthcheck are **technical
+inspection evidence, not permission to release the gate**. The report always
+includes `ready_for_production: false` while the full #633 owner CRUD,
+#638 lossless ZIP v2 and #421 hard-stop concerns remain unresolved.
+
+The report does not reconstruct or repoint Spotify playlists and does not
+replace the final explicit `inspection-release` hash confirmation.
+
 ## Explicit first-boot Spotify inspection hold (#630)
 
 For the operator-approved forward-only `0.2.3b1 -> 0.3.0b1` upgrade,
