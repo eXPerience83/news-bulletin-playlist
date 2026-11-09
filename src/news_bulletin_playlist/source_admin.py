@@ -64,6 +64,7 @@ from news_bulletin_playlist.spotify.public_detector import (
 )
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
+from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
 
 MAX_SOURCE_AUDIT_BATCH_SOURCES = 20
 _SAFE_AUDIT_ARCHIVE_SOURCE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -492,6 +493,18 @@ class SourceAdminService:
         state = self.snapshot()
         return self._custom_source(state, source_id)
 
+    def get_owned_source(self, source_id: str) -> InstalledSource:
+        """Expose owner-stored specialized sources to the normal metadata editor."""
+        if not isinstance(self.store, ForwardOnlyManagedStateStore):
+            raise SourceMutationError("Historical source is not editable in legacy state")
+        with self.synchronization.hold():
+            self.store.load_readonly()
+            self.catalog = self.store.catalog
+            source = next((item for item in self.catalog.sources if item.id == source_id), None)
+            if source is None:
+                raise SourceMutationError("Historical source was not found")
+            return InstalledSource.from_definition(source)
+
     def update_metadata(
         self,
         source_id: str,
@@ -506,7 +519,18 @@ class SourceAdminService:
     ) -> tuple[ManagedSource, bool]:
         with self.synchronization.hold():
             state = self.store.load()
-            current = self._custom_source(state, source_id)
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.catalog = self.store.catalog
+            owner_record = (
+                next((item for item in self.catalog.sources if item.id == source_id), None)
+                if isinstance(self.store, ForwardOnlyManagedStateStore)
+                else None
+            )
+            current = (
+                InstalledSource.from_definition(owner_record)
+                if owner_record is not None
+                else self._custom_source(state, source_id)
+            )
             try:
                 updated = replace(
                     current,
@@ -523,18 +547,25 @@ class SourceAdminService:
                 )
                 if isinstance(updated, InstalledSource):
                     updated = replace(updated, languages=(updated.language, *updated.languages[1:]))
-                serialize_managed_state(
-                    replace(
-                        state,
-                        sources=tuple(
-                            updated if item.id == updated.id else item for item in state.sources
+                if owner_record is None:
+                    serialize_managed_state(
+                        replace(
+                            state,
+                            sources=tuple(
+                                updated if item.id == updated.id else item for item in state.sources
+                            ),
                         ),
-                    ),
-                    catalog=self.catalog,
-                )
+                        catalog=self.catalog,
+                    )
             except ValueError as exc:
                 raise ValueError("Source metadata is invalid") from exc
-            self._save_replacement(state, updated)
+            if owner_record is not None:
+                assert isinstance(self.store, ForwardOnlyManagedStateStore)
+                assert isinstance(updated, InstalledSource)
+                self.store.save_owner_source(updated)
+                self.catalog = self.store.catalog
+            else:
+                self._save_replacement(state, updated)
             return updated, any(playlist.enabled for playlist in state.playlists)
 
     def set_enabled(self, source_id: str, enabled: bool) -> tuple[ManagedSource, bool]:

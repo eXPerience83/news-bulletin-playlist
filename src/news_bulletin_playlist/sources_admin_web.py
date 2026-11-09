@@ -43,6 +43,7 @@ def render_sources_page(
     csrf_token: str,
     notice: str | None = None,
     provider_available: bool = True,
+    owner_catalog_editable: bool = False,
 ) -> bytes:
     """Show installed sources separately from downloadable, uninstalled examples."""
     current = effective_sources(catalog, state)
@@ -100,7 +101,13 @@ def render_sources_page(
         else ""
     )
     table = _sources_table(
-        snapshot, catalog, state, last_cycle, csrf_token, provider_available=provider_available
+        snapshot,
+        catalog,
+        state,
+        last_cycle,
+        csrf_token,
+        provider_available=provider_available,
+        owner_catalog_editable=owner_catalog_editable,
     )
     body = "".join(
         (
@@ -113,7 +120,7 @@ def render_sources_page(
       <p class="eyebrow">Catalogue</p>
       <h2 id="source-catalog-heading">Broadcasters and sources</h2>
     </div>
-    <p class="section-note">{len(catalog.sources)} built-in, {len(state.sources)} custom sources</p>
+    <p class="section-note">{len(catalog.sources)} owner sources, {len(state.sources)} custom sources</p>
   </div>
   {add_source}
   <p><a class="button" href="/admin/sources/import">Import sources</a></p>
@@ -146,6 +153,7 @@ def _sources_table(
     csrf_token: str,
     *,
     provider_available: bool = True,
+    owner_catalog_editable: bool = False,
 ) -> str:
     source_outcomes = (
         {} if last_cycle is None else {outcome.source_id: outcome for outcome in last_cycle.sources}
@@ -166,10 +174,14 @@ def _sources_table(
         )
         spotify_link = f"https://open.spotify.com/show/{show_id}"
         health = _source_health_badge(source_outcomes.get(source.id), enabled=source.enabled)
-        ownership = "Built-in" if source.id in built_in_ids else "Custom"
+        ownership = (
+            "Owner-managed"
+            if owner_catalog_editable
+            else ("Built-in" if source.id in built_in_ids else "Custom")
+        )
         state_label = (
             "Image-owned"
-            if source.id in built_in_ids
+            if source.id in built_in_ids and not owner_catalog_editable
             else ("Enabled" if source.enabled else "Disabled")
         )
         controls = ""
@@ -187,9 +199,8 @@ def _sources_table(
         else:
             controls += '<p class="muted">Connect Spotify to edit source settings.</p>'
         if provider_available and source.id in built_in_ids:
-            controls += (
-                f'<a href="/admin/sources/edit?source_id={safe_id}">Edit public release time</a>'
-            )
+            label = "Edit metadata" if owner_catalog_editable else "Edit public release time"
+            controls += f'<a href="/admin/sources/edit?source_id={safe_id}">{label}</a>'
         if provider_available and source.id not in built_in_ids:
             next_enabled = not source.enabled
             verb = "Enable" if next_enabled else "Disable"
@@ -300,7 +311,7 @@ def render_edit_source_page(
         (render_lan_warning() if lan_mode else "")
         + f"""
 <section class="section admin-section">
-  <h2>Edit custom source</h2>
+  <h2>Edit installation source</h2>
   <p>Source ID: <code>{esc(source.id)}</code></p>
   <p>Spotify show ID: <code>{esc(source.spotify_show_id)}</code>
      <a href="https://open.spotify.com/show/{esc(source.spotify_show_id)}"
@@ -333,7 +344,7 @@ def render_edit_source_page(
     return render_admin_shell(
         title="Edit source",
         active_tab="sources",
-        intro="Edit safe custom-source metadata.",
+        intro="Edit installation-owned source metadata.",
         body_html=body,
     )
 

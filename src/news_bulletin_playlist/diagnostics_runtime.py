@@ -126,6 +126,7 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestMetricsSnapshot,
 )
 from news_bulletin_playlist.v11_managed_adapter import (
+    ForwardOnlyManagedStateStore,
     open_managed_state_store,
     open_managed_state_store_readonly,
 )
@@ -897,7 +898,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         try:
             source_id = values["source_id"][0]
-            if source_id in {item.id for item in service.catalog.sources}:
+            if (
+                source_id in {item.id for item in service.catalog.sources}
+                and not isinstance(service.store, ForwardOnlyManagedStateStore)
+            ):
                 builtin = service.get_builtin_source(source_id)
                 self._reply(
                     HTTPStatus.OK,
@@ -908,7 +912,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     ),
                 )
                 return
-            source = service.get_custom_source(source_id)
+            source = (
+                service.get_owned_source(source_id)
+                if source_id in {item.id for item in service.catalog.sources}
+                else service.get_custom_source(source_id)
+            )
             state = service.snapshot()
         except SourceMutationError:
             self._source_error(HTTPStatus.NOT_FOUND, "Custom source not found")
@@ -1606,6 +1614,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 lan_mode=self._is_lan_admin_mode(),
                 csrf_token=security.issue_csrf_token(),
                 provider_available=service is not None,
+                owner_catalog_editable=(
+                    isinstance(service.store, ForwardOnlyManagedStateStore)
+                    if service is not None
+                    else False
+                ),
                 notice={
                     "source-added": "Custom source added successfully.",
                     "source-updated": "Custom source updated successfully.",

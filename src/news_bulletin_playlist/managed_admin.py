@@ -58,6 +58,7 @@ from news_bulletin_playlist.spotify.client import (
 )
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitSuppressed
+from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
 
 MAX_PLAYLIST_NAME_LENGTH = 100
 SPOTIFY_PLAYLIST_DESCRIPTION_LIMIT = 300
@@ -220,6 +221,8 @@ class ManagedAdminService:
         if not readonly:
             self.finalize_known_provisioning()
         state = self.store.load_readonly() if readonly else self.store.load()
+        if isinstance(self.store, ForwardOnlyManagedStateStore):
+            self.catalog = self.store.catalog
         managed_templates = {playlist.template_id for playlist in state.playlists}
         available = tuple(
             template for template in self.catalog.playlists if template.id not in managed_templates

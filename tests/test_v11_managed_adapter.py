@@ -169,5 +169,4 @@ def test_historical_source_metadata_edit_survives_restart_without_detector_chang
     assert tuple(source.id for source in load_effective_config(root, {}).sources) == tuple(
         source.id for source in original_runtime.sources
     )
-    with pytest.raises(ManagedStateError, match="could not be saved"):
-        store.save_owner_source(edited)
+    assert open_managed_state_store(root).catalog.sources[0].display_name == "Renamed owner station"
