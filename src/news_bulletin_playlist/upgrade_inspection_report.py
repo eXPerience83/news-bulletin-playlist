@@ -46,22 +46,22 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
     try:
         with _locked_root(data_dir) as directory:
             gate = _read(directory)
-            owned_raw = _read_regular(directory, V11_OPERATIONAL_FILENAME, MAX_OPERATIONAL_BYTES)
+            owned_raw = _read_regular(
+                directory, V11_OPERATIONAL_FILENAME, MAX_OPERATIONAL_BYTES
+            )
             operational = parse_v11_operational(owned_raw)
             try:
-                legacy_raw = _read_regular(directory, MANAGED_STATE_FILENAME, MAX_OPERATIONAL_BYTES)
+                legacy_raw = _read_regular(
+                    directory, MANAGED_STATE_FILENAME, MAX_OPERATIONAL_BYTES
+                )
             except FileNotFoundError:
                 legacy_raw = None
         # All state-bearing inputs above were captured under the same lock.
         if legacy_raw is None:
-            if operational.migration_origin_sha256 != operational.migration_origin_sha256:
-                raise UpgradeInspectionError("Impossible historical origin")
-            # A new empty install contains no historical managed destinations.
+            # A fresh installation has no original legacy state to compare;
+            # do not fabricate one or mistake newly added playlists as legacy.
             legacy_matches: bool | None = None
             runtime_matches: bool | None = None
-            if operational.managed_overlay.playlists or operational.owner_inventory.sources:
-                # A later clean-install edit is valid, but not a legacy upgrade.
-                pass
         else:
             if hashlib.sha256(legacy_raw).hexdigest() != operational.migration_origin_sha256:
                 raise UpgradeInspectionError("Original managed-state bytes changed after migration")
@@ -71,7 +71,9 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
             legacy_matches = normalized.playlists == operational.managed_overlay.playlists
             # The current owner catalog must reconstruct the historical engine
             # semantics, not merely preserve the Spotify destination IDs.
-            original_runtime = compile_engine_config(operational.historical_catalog, normalized)
+            original_runtime = compile_engine_config(
+                operational.historical_catalog, normalized
+            )
             runtime_matches = original_runtime == operational.runtime
 
         source_rows: list[dict[str, object]] = []
@@ -98,7 +100,10 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
             )
         playlists: list[dict[str, object]] = []
         for playlist in operational.managed_overlay.playlists:
-            runtime = next((item for item in operational.runtime.playlists if item.id == playlist.id), None)
+            runtime = next(
+                (item for item in operational.runtime.playlists if item.id == playlist.id),
+                None,
+            )
             playlists.append(
                 {
                     "id": playlist.id,
@@ -142,7 +147,10 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
         all_artwork = all(item["persisted_and_verified"] for item in artwork)
         checks: dict[str, bool] = {
             "owner_inventory_valid": True,
-            "legacy_bytes_match_origin": legacy_raw is None or True,
+            "legacy_bytes_match_origin": (
+                legacy_raw is None
+                or hashlib.sha256(legacy_raw).hexdigest() == operational.migration_origin_sha256
+            ),
             "managed_destinations_unchanged": legacy_matches is not False,
             "runtime_policies_unchanged": runtime_matches is not False,
             "historical_artwork_verified": all_artwork,
@@ -156,10 +164,16 @@ def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
             "historical_origin_sha256": operational.migration_origin_sha256,
             "legacy_file_present": legacy_raw is not None,
             "legacy_comparison": (
-                "not_applicable" if legacy_raw is None else "matching" if legacy_matches and runtime_matches else "changed"
+                "not_applicable"
+                if legacy_raw is None
+                else "matching"
+                if legacy_matches and runtime_matches
+                else "changed"
             ),
             "checks": checks,
-            "safe_to_review_without_spotify_writes": gate_state == "held" and all(checks.values()),
+            "safe_to_review_without_spotify_writes": gate_state == "held" and all(
+                checks.values()
+            ),
             "ready_for_production": False,
             "sources": source_rows,
             "playlists": playlists,

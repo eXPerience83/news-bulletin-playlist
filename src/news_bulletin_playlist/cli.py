@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -11,6 +12,10 @@ from news_bulletin_playlist.inspection_fence import (
     InspectionGateError,
     inspect_gate,
     release_gate,
+)
+from news_bulletin_playlist.upgrade_inspection_report import (
+    UpgradeInspectionError,
+    upgrade_inspection_report,
 )
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
@@ -34,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
         "inspection-status", help="read v11 reconciliation hold state and exact SHA-256"
     )
     inspect_parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    report_parser = commands.add_parser(
+        "inspection-report",
+        help="compare persisted v11 sources/playlists/policies with original legacy evidence",
+    )
+    report_parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     release_parser = commands.add_parser(
         "inspection-release", help="explicitly release held Spotify reconciliation on next restart"
     )
@@ -64,6 +74,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if status.original_release_sha256 is not None:
             print(f"Release acknowledged for: {status.original_release_sha256}")
         return 0
+    if args.command == "inspection-report":
+        try:
+            report = upgrade_inspection_report(args.data_dir)
+        except UpgradeInspectionError as exc:
+            parser.error(str(exc))
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0 if report["safe_to_review_without_spotify_writes"] else 1
     if args.command == "inspection-release":
         try:
             status = release_gate(
