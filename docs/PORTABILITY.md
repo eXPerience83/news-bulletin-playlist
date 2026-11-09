@@ -22,6 +22,38 @@ copy is prudent; **portable JSON and ZIP are not production backups**.
 Acceptance on isolated synthetic roots is tracked by #553 and later beta gates by
 #565. No release/image or live migration is implied by code merged into `main`.
 
+## Historical template owner records — isolated codec (#633)
+
+Before replacing the live v11 authority's frozen `IMAGE_PRESET` templates,
+`owner_template_records.OwnerTemplateSet` establishes an independent,
+canonical and strictly decoded **owner-owned template data contract**.
+It preserves original template IDs (including names without the
+`custom_` prefix), exact names/descriptions, country/language ordering,
+default source IDs, retention and episode limits, cover references and
+every duration exception including UTC-fold and microsecond precision.
+The source-closure validation considers **all** installed sources, not just
+currently selected sources; dormant, later-applicable exceptions are retained.
+Missing identifiers, duplicate keys, bad policy numbers and unrecognized
+ordering are rejected without fallback.
+
+The codec also supports pure ID-stable edit and delete-with-reference-guard
+operations. Existing creation/edit validation of newly created local drafts
+remains unchanged; legacy high bounds are **not** silently truncated to the
+100-character/100-episode editor defaults. Its validation and serialization
+do not contact the network, Spotify, SQLite or the current container image
+catalog. A zero-record set is a valid starting point for clean installations.
+
+Offline v6–v10 regression tests compile the original four managed destinations
+from re-decoded historical source/template data and assert exact
+`EngineConfig` equality, including parser/filter, disabled assignments,
+destination IDs and duration policies. **This is a fidelity proof only.**
+The live v11 `managed_overlay` and Admin still use the frozen historical
+catalog until the reviewed atomic authority cutover. Cover JPEG **bytes**
+are not embedded in this template codec: their durable `/data`
+materialization and attribution are addressed separately in PR #637.
+Code from specialized parsers remains in the application and must stay
+version-capability validated, never imported as executable content.
+
 ## Dependency and risk matrix
 
 This matrix was established before choosing the interchange representation.
