@@ -215,9 +215,11 @@ class ManagedAdminService:
             store.path.with_name(MANAGED_PROVISIONING_FILENAME)
         )
 
-    def snapshot(self) -> ManagedAdminSnapshot:
-        self.finalize_known_provisioning()
-        state = self.store.load()
+    def snapshot(self, *, readonly: bool = False) -> ManagedAdminSnapshot:
+        """Read without recovering a pending provision during inspection."""
+        if not readonly:
+            self.finalize_known_provisioning()
+        state = self.store.load_readonly() if readonly else self.store.load()
         managed_templates = {playlist.template_id for playlist in state.playlists}
         available = tuple(
             template for template in self.catalog.playlists if template.id not in managed_templates
@@ -577,7 +579,8 @@ class ManagedAdminService:
             # a client-supplied policy that bypasses import review or loses seconds.
             if (
                 display_name != local.display_name
-                or description != local.description
+                or description.replace("\r\n", "\n").replace("\r", "\n")
+                != local.description.replace("\r\n", "\n").replace("\r", "\n")
                 or cover_id != local.cover_id
                 or tuple(str(item) for item in source_ids)
                 != tuple(str(item) for item in local.default_source_ids)
@@ -588,6 +591,8 @@ class ManagedAdminService:
                     "Imported playlist activation must match the saved draft exactly; "
                     "edit and save the draft before creating a NEW Spotify playlist"
                 )
+            # Browser CRLF is not a user edit: provision the stored draft bytes.
+            description = local.description
             # Reject silent footer normalization: preserve the imported base
             # description exactly or require an explicit edit first.
             if _playlist_description(description) != local.description:

@@ -17,6 +17,9 @@ from _legacy_dataset import legacy_root as _legacy_root
 from _source_admin_http_fixtures import _server
 
 from news_bulletin_playlist import engine_runtime
+from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
+from news_bulletin_playlist.managed_state import ManagedState
 from news_bulletin_playlist.cli import main
 from news_bulletin_playlist.engine_runtime import EngineLifecycleController
 from news_bulletin_playlist.inspection_fence import (
@@ -367,3 +370,52 @@ def test_cli_status_is_read_only_and_release_is_explicit(tmp_path: Path, capsys)
     assert "normal restart" in capsys.readouterr().out
     assert not inspect_gate(root).held
     assert (root / "managed-state-v11.json").read_bytes() == before
+
+
+
+@pytest.mark.parametrize("target", ["/admin/", "/admin/sources"])
+@pytest.mark.parametrize("inspection_hold", [True, False])
+def test_pending_known_provisioning_is_readonly_during_inspection(
+    tmp_path: Path, target: str, inspection_hold: bool
+) -> None:
+    """Both GET paths preserve pending provision bytes until the hold is lifted."""
+    with _server(tmp_path) as (server, client, store):
+        store.save(ManagedState())
+        template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+        service = server.RequestHandlerClass.managed_admin_service
+        assert service is not None
+        journal = service.provisioning_journal
+        journal.save(
+            ProvisioningIntent(
+                state=ProvisioningState.DESTINATION_KNOWN,
+                template_id=template.id,
+                display_name=template.display_name,
+                description=template.description,
+                cover_id=template.cover_id,
+                source_ids=template.default_source_ids,
+                retention_hours=template.retention_hours,
+                max_episodes=template.max_episodes,
+                max_duration_seconds=template.duration_policy.default_max_seconds,
+                destination_id="known-destination",
+            )
+        )
+        before_state = store.path.read_bytes()
+        before_journal = journal.path.read_bytes()
+        cookie = _login(server)
+        server.RequestHandlerClass.inspection_hold = inspection_hold
+        try:
+            status, _, _page = _request(server, "GET", target, cookie=cookie)
+            assert status == 200
+            assert client.calls == []
+            if inspection_hold:
+                assert store.path.read_bytes() == before_state
+                assert journal.path.read_bytes() == before_journal
+                assert store.load_readonly().playlists == ()
+                assert journal.load() is not None
+            else:
+                assert store.path.read_bytes() != before_state
+                assert not journal.path.exists()
+                assert len(store.load_readonly().playlists) == 1
+                assert store.load_readonly().playlists[0].destination.external_id == "known-destination"
+        finally:
+            server.RequestHandlerClass.inspection_hold = False

@@ -207,3 +207,30 @@ def test_imported_activation_with_every_source_disabled_fails_before_provider(
         publish(service, draft, confirm=True)
     assert not client.creates
     assert service.provisioning_journal.load() is None
+
+
+
+def test_imported_multiline_description_accepts_browser_crlf_without_changing_bytes(
+    tmp_path: Path,
+) -> None:
+    client = FakeSpotify()
+    service, draft, _covers = setup_import(tmp_path, client)
+    state = service.store.load_readonly()
+    reviewed = replace(draft, description="First line\nSecond line")
+    service.store.save(replace(state, templates=(reviewed,)))
+    managed = service.activate(
+        template_id=reviewed.id,
+        display_name=reviewed.display_name,
+        description="First line\r\nSecond line",
+        cover_id=reviewed.cover_id,
+        source_ids=reviewed.default_source_ids,
+        access_token="synthetic-token",
+        min_duration_seconds=reviewed.min_duration_seconds,
+        max_duration_seconds=reviewed.max_duration_seconds,
+        confirm_imported_new=True,
+    )
+    assert managed.description == reviewed.description
+    assert client.creates == [
+        (reviewed.display_name, render_spotify_description(reviewed.description))
+    ]
+    assert service.provisioning_journal.load() is None
