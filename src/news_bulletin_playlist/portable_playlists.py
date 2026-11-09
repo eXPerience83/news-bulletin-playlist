@@ -37,6 +37,7 @@ from news_bulletin_playlist.managed_state import (
     serialize_managed_state,
     template_suspended_by_quarantine,
 )
+from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
 from news_bulletin_playlist.portable_identity import portable_id
 from news_bulletin_playlist.portable_sources import export_sources
 
@@ -108,6 +109,7 @@ class PortableCoverLoader:
 
     def __init__(self, data_dir: Path, *, bundled_roots: tuple[Path, ...] | None = None) -> None:
         self.store = CustomCoverAssetStore(data_dir / "custom-covers")
+        self.migrated = MigratedCoverAssets(data_dir)
         self.roots = (
             bundled_roots
             if bundled_roots is not None
@@ -119,6 +121,11 @@ class PortableCoverLoader:
 
     def load(self, cover_id: str) -> tuple[bytes, dict[str, object]]:
         uploaded = is_uploaded_cover_id(cover_id)
+        recovered = self.migrated.load(cover_id) if not uploaded else None
+        if recovered is not None:
+            data, attribution = recovered
+            validate_canonical_jpeg(data)
+            return data, attribution
         if uploaded:
             data = self.store.load(cover_id)
         elif cover_id in _BUNDLED:

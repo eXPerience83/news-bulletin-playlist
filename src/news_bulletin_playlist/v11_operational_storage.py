@@ -26,6 +26,8 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     serialize_managed_state,
 )
+from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
+from news_bulletin_playlist.portable_playlists import PortableCoverLoader
 from news_bulletin_playlist.v11_candidate import build_v11_candidate
 from news_bulletin_playlist.v11_candidate_storage import _locked_root, _read_regular
 from news_bulletin_playlist.v11_operational_codec import (
@@ -157,6 +159,18 @@ class V11OperationalStore:
                 )
                 if _read_regular(dir_fd, _LEGACY_FILENAME, 12 * 1024 * 1024) != original:
                     raise V11StoreError("legacy state changed during forward migration")
+                inherited_covers = (
+                    {item.definition.cover_id for item in preview.template_snapshots}
+                    | {item.cover_id for item in preview.original_state.playlists}
+                    | {item.cover_id for item in preview.original_state.templates}
+                )
+                # Preserve the *exact* original JPEG and attribution under /data
+                # before the irreversible v11 authority marker can exist.
+                MigratedCoverAssets(self.root).materialize(
+                    inherited_covers, PortableCoverLoader(self.root)
+                )
+                if _read_regular(dir_fd, _LEGACY_FILENAME, 12 * 1024 * 1024) != original:
+                    raise V11StoreError("legacy state changed during artwork preparation")
                 _record_authority(dir_fd)
                 temporary = _write_temporary(dir_fd, next_bytes)
                 try:

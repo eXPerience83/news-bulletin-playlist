@@ -507,6 +507,27 @@ HTTP edits/downloads, and real chronology/filter decisions with synthetic catalo
 for SER, RNE, CNN, RFI, RMF, ONU minutes and the generic custom parser. Network,
 OAuth and real Spotify calls are prohibited in the new domain tests.
 
+## Persisted historical cover assets (#633 — partial)
+
+The forward-only v11 conversion preserves inherited bundled cover JPEG **bytes**
+and exact attribution in a /data-owned, hash-verified inventory before the
+irreversible authority marker is written. The original cover IDs remain stable;
+PortableCoverLoader, Admin cover previews and explicit cover synchronization
+prefer these persistent copies, even when future image bundles remove old JPEGs.
+This does not regenerate images, modify provider artwork or create destinations.
+Incomplete or corrupt persisted copies must fail rather than silently fall back.
+
+References to pre-existing `uploaded_<digest>` artwork remain unchanged and
+are not copied or required to exist for an unused historical draft. Uploaded
+artwork already belongs to `/data/custom-covers`; a missing historical draft
+asset remains missing rather than silently being replaced.
+
+This addresses **only the cover resource** subproblem of #633. Historic source
+and playlist-template definitions still use a frozen per-installation catalog,
+not fully editable owner records; source ordering and full template ownership
+remain separate release blockers. As with all portable formats, these covers
+do not back up OAuth, SQLite or Spotify state.
+
 ## Portable playlist ZIP v1 (#550)
 
 Admin managed-playlist and local-draft cards offer **Prepare portable export identity**
