@@ -272,6 +272,10 @@ class ManagedAdminService:
             or min_duration_seconds > max_duration_seconds
         ):
             raise ValueError("Invalid owner template policy")
+        if description.replace("\r\n", "\n").replace("\r", "\n") == current.description.replace(
+            "\r\n", "\n"
+        ):
+            description = current.description
         updated = replace(
             current,
             display_name=display_name,

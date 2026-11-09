@@ -30,6 +30,7 @@ from news_bulletin_playlist.managed_state import (
     template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.playlist_import_web import imported_draft_editor
 from news_bulletin_playlist.portable_playlists_web import portable_controls
@@ -50,6 +51,7 @@ def render_managed_admin_page(
     notice: str | None = None,
     error: str | None = None,
     inspection_hold: bool = False,
+    owner_catalog_editable: bool = False,
 ) -> bytes:
     """Render playlist policy and lifecycle controls in the shared admin shell."""
 
@@ -119,6 +121,19 @@ def render_managed_admin_page(
         csrf_token=csrf_token,
         sources=sources,
         custom_source_ids=custom_sources,
+    )
+    owned_templates = (
+        '<section class="section admin-section"><h2>Installation-owned templates</h2>'
+        '<p class="muted">Edit saved defaults locally. IDs, assigned source order, '
+        'inactive duration exceptions and artwork references stay intact.</p>'
+        '<div class="admin-grid">'
+        + "".join(
+            _owner_template_edit_form(template, csrf_token=csrf_token)
+            for template in catalog.playlists
+        )
+        + "</div></section>"
+        if owner_catalog_editable
+        else ""
     )
     spotify_action = "Reconnect Spotify" if spotify_connected else "Connect Spotify"
     actions = f"""
@@ -207,6 +222,7 @@ def render_managed_admin_page(
   <p class="muted">Review the built-in defaults before creating a Spotify playlist.</p>
   <div class="admin-grid">{available}</div>
 </section>
+{owned_templates}
 """,
         )
     )
@@ -220,6 +236,53 @@ def render_managed_admin_page(
         body_html=body,
         actions_html=actions,
     )
+
+
+
+def _owner_template_edit_form(template: PlaylistTemplate, *, csrf_token: str) -> str:
+    """Never discard dormant exceptions by flattening historical templates."""
+    def esc(value: object) -> str:
+        return html.escape(str(value), quote=True)
+
+    digest = hashlib.sha256(OwnerTemplateSet((template,)).serialize()).hexdigest()
+    policy = template.duration_policy
+    return f"""
+<details class="card playlist-card">
+  <summary>Edit owner template: {html.escape(template.display_name)}</summary>
+  <p class="muted">ID <code>{esc(template.id)}</code>;
+     sources {len(template.default_source_ids)};
+     retained exceptions {len(policy.exceptions)}.</p>
+  <form method="post" action="/admin/playlists/templates/owner/update">
+    {_hidden_input("csrf_token", csrf_token)}
+    {_hidden_input("template_id", str(template.id))}
+    {_hidden_input("template_digest", digest)}
+    <label>Name
+      <input name="display_name" required maxlength="4096"
+             value="{esc(template.display_name)}">
+    </label>
+    <label>Description
+      <textarea name="description" rows="3">{html.escape(template.description)}</textarea>
+    </label>
+    <label>Retention hours
+      <input name="retention_hours" type="number" min="1"
+             value="{template.retention_hours}" required>
+    </label>
+    <label>Maximum episodes
+      <input name="max_episodes" type="number" min="1"
+             value="{template.max_episodes}" required>
+    </label>
+    <label>Minimum duration (seconds)
+      <input name="min_duration_seconds" type="number" min="0"
+             value="{policy.default_min_seconds}" required>
+    </label>
+    <label>Maximum duration (seconds)
+      <input name="max_duration_seconds" type="number" min="1"
+             value="{policy.default_max_seconds}" required>
+    </label>
+    <button class="button button-primary" type="submit">Save owner template</button>
+  </form>
+</details>
+"""
 
 
 def single_form_value(

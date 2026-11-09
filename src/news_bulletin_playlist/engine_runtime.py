@@ -111,7 +111,10 @@ from news_bulletin_playlist.spotify_backoff import (
     SpotifyRateLimitStateUnavailable,
 )
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
-from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_managed_adapter import (
+    ForwardOnlyManagedStateStore,
+    open_managed_state_store,
+)
 from news_bulletin_playlist.v11_operational_storage import (
     V11_AUTHORITY_FILENAME,
     V11_OPERATIONAL_FILENAME,
@@ -158,6 +161,7 @@ _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/templates/create": "local-draft-created",
     "/admin/playlists/templates/from-example": "local-example-created",
     "/admin/playlists/templates/update": "local-draft-updated",
+    "/admin/playlists/templates/owner/update": "owner-template-updated",
     "/admin/playlists/templates/delete": "local-draft-deleted",
     "/admin/playlists/templates/quarantine/discard": "local-quarantine-discarded",
 }
@@ -808,6 +812,7 @@ class OperationalHealthHandler(LanAdminHandler):
             notice=notice,
             state=state,
             inspection_hold=self.inspection_hold,
+            owner_catalog_editable=isinstance(service.store, ForwardOnlyManagedStateStore),
         )
         self._reply(HTTPStatus.OK, payload)
 
@@ -958,6 +963,7 @@ class OperationalHealthHandler(LanAdminHandler):
             "/admin/playlists/templates/create",
             "/admin/playlists/templates/from-example",
             "/admin/playlists/templates/update",
+            "/admin/playlists/templates/owner/update",
             "/admin/playlists/templates/delete",
             "/admin/playlists/templates/quarantine/discard",
         }
@@ -1014,6 +1020,7 @@ class OperationalHealthHandler(LanAdminHandler):
                 "/admin/playlists/templates/create",
                 "/admin/playlists/templates/from-example",
                 "/admin/playlists/templates/update",
+                "/admin/playlists/templates/owner/update",
                 "/admin/playlists/templates/delete",
                 "/admin/playlists/templates/quarantine/discard",
             }:
@@ -1152,6 +1159,32 @@ class OperationalHealthHandler(LanAdminHandler):
         path: str,
     ) -> str:
         """Local-only custom template mutation behind existing auth/CSRF/lock."""
+        if path == "/admin/playlists/templates/owner/update":
+            allowed = {
+                "csrf_token",
+                "template_id",
+                "template_digest",
+                "display_name",
+                "description",
+                "retention_hours",
+                "max_episodes",
+                "min_duration_seconds",
+                "max_duration_seconds",
+            }
+            if set(form) != allowed:
+                raise ValueError("Invalid owner template form")
+            template_id = single_form_value(form, "template_id")
+            service.update_owner_template_metadata(
+                template_id,
+                fingerprint=single_form_value(form, "template_digest"),
+                display_name=single_form_value(form, "display_name"),
+                description=single_form_value(form, "description", required=False),
+                retention_hours=int(single_form_value(form, "retention_hours")),
+                max_episodes=int(single_form_value(form, "max_episodes")),
+                min_duration_seconds=int(single_form_value(form, "min_duration_seconds")),
+                max_duration_seconds=int(single_form_value(form, "max_duration_seconds")),
+            )
+            return template_id
         if path == "/admin/playlists/templates/from-example":
             draft = service.create_from_example(single_form_value(form, "example_id"))
             return str(draft.id)
