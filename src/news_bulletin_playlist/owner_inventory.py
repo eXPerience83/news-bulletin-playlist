@@ -85,7 +85,9 @@ class OwnerInventory:
             canonical_sources = self.source_order.definitions(self.sources)
             return {
                 "source_order": json.loads(self.source_order.serialize()),
-                "installed_sources": json.loads(export_sources(canonical_sources)),
+                "installed_sources": (
+                    json.loads(export_sources(canonical_sources)) if canonical_sources else None
+                ),
                 "templates": json.loads(self.templates.serialize()),
             }
         except (ValueError, TypeError, UnicodeError, KeyError) as exc:
@@ -99,7 +101,11 @@ class OwnerInventory:
                 document, {"source_order", "installed_sources", "templates"}
             )
             order = OwnerSourceOrder.parse(_compact(obj["source_order"]))
-            parsed_sources = parse_sources(_compact(obj["installed_sources"]))
+            parsed_sources = (
+                parse_sources(_compact(obj["installed_sources"]))
+                if obj["installed_sources"] is not None
+                else ()
+            )
             records = tuple(
                 InstalledSource.from_definition(item.source) for item in parsed_sources
             )
