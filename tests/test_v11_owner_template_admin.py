@@ -118,9 +118,11 @@ def test_owner_template_delete_rejects_referenced_destination_without_writes(
         service.store = store
         service.catalog = store.catalog
         state = store.load_readonly()
-        target = next(t for t in store.catalog.playlists if any(
-            p.template_id == t.id for p in state.playlists
-        ))
+        target = next(
+            t
+            for t in store.catalog.playlists
+            if any(p.template_id == t.id for p in state.playlists)
+        )
         before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
         cookie = _login(server)
         status, _, page = _request(server, "GET", "/admin/", cookie=cookie)
@@ -160,10 +162,12 @@ def test_owner_template_delete_unused_is_durable_and_cas_guarded(
         # Synthetic-only setup: release the template's managed reference before
         # deletion. A real operator must stop management explicitly.
         if any(p.template_id == chosen.id for p in state.playlists):
-            store.save(replace(
-                state,
-                playlists=tuple(p for p in state.playlists if p.template_id != chosen.id),
-            ))
+            store.save(
+                replace(
+                    state,
+                    playlists=tuple(p for p in state.playlists if p.template_id != chosen.id),
+                )
+            )
         source_ids = tuple(source.id for source in store.catalog.sources)
         cookie = _login(server)
         status, _, page = _request(server, "GET", "/admin/", cookie=cookie)

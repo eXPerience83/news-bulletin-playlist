@@ -1164,7 +1164,10 @@ class OperationalHealthHandler(LanAdminHandler):
         """Local-only custom template mutation behind existing auth/CSRF/lock."""
         if path == "/admin/playlists/templates/owner/delete":
             if set(form) != {
-                "csrf_token", "template_id", "template_digest", "confirm_owner_delete"
+                "csrf_token",
+                "template_id",
+                "template_digest",
+                "confirm_owner_delete",
             }:
                 raise ValueError("Invalid owner template deletion form")
             template_id = single_form_value(form, "template_id")
