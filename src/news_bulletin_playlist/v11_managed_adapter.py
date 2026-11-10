@@ -96,7 +96,6 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
                 or edited.timezone != original.timezone
                 or edited.countries != original.countries
                 or edited.languages[1:] != original.languages[1:]
-                or edited.enabled != original.enabled
             ):
                 raise ManagedStateError(
                     "historical source identity or detector cannot be edited here"

@@ -571,7 +571,18 @@ class SourceAdminService:
     def set_enabled(self, source_id: str, enabled: bool) -> tuple[ManagedSource, bool]:
         with self.synchronization.hold():
             state = self.store.load()
-            current = self._custom_source(state, source_id)
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.catalog = self.store.catalog
+            owned = (
+                next((item for item in self.catalog.sources if item.id == source_id), None)
+                if isinstance(self.store, ForwardOnlyManagedStateStore)
+                else None
+            )
+            current = (
+                InstalledSource.from_definition(owned)
+                if owned is not None
+                else self._custom_source(state, source_id)
+            )
             if not enabled:
                 blocked = source_disable_blockers(
                     current.id,
@@ -587,7 +598,13 @@ class SourceAdminService:
                         "resolve any pending activation."
                     )
             updated = replace(current, enabled=enabled)
-            self._save_replacement(state, updated)
+            if owned is not None:
+                assert isinstance(self.store, ForwardOnlyManagedStateStore)
+                assert isinstance(updated, InstalledSource)
+                self.store.save_owner_source(updated)
+                self.catalog = self.store.catalog
+            else:
+                self._save_replacement(state, updated)
             return updated, any(playlist.enabled for playlist in state.playlists)
 
     def deletion_references(self, source_id: str) -> tuple[ManagedSource, tuple[str, ...], bool]:
