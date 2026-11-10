@@ -103,6 +103,21 @@ def test_owner_source_enabled_toggle_persists_specialized_processing_without_spo
         assert managed_service is not None and service is not None
         managed_service.store = service.store = store
         managed_service.catalog = service.catalog = store.catalog
+        failures: list[str] = []
+        call = service.set_enabled
+
+        def capture_errors(source_id: str, enabled: bool):
+            try:
+                return call(source_id, enabled)
+            except Exception as exc:
+                chain = []
+                while exc is not None:
+                    chain.append(f"{type(exc).__name__}: {exc}")
+                    exc = exc.__cause__
+                failures.append(" <- ".join(chain))
+                raise
+
+        service.set_enabled = capture_errors
         cookie = _login(server)
         status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
         assert status == 200
@@ -118,7 +133,7 @@ def test_owner_source_enabled_toggle_persists_specialized_processing_without_spo
                 "enabled": "0" if source.enabled else "1",
             },
         )
-        assert status == 303
+        assert status == 303, failures
         changed = open_managed_state_store(root).catalog.sources[0]
         assert changed.enabled is not source.enabled
         assert changed.id == source.id

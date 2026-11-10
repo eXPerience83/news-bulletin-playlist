@@ -608,48 +608,54 @@ class SourceAdminService:
             return updated, any(playlist.enabled for playlist in state.playlists)
 
     def deletion_references(self, source_id: str) -> tuple[ManagedSource, tuple[str, ...], bool]:
-        """Read current references for confirmation; Delete checks them again under both locks."""
+        """Read current references for confirmation; Delete checks under both locks."""
         with self.synchronization.hold():
             state = self.store.load()
-            if isinstance(self.store, ForwardOnlyManagedStateStore):
-                self.catalog = self.store.catalog
-            owner = (
-                next((item for item in self.catalog.sources if item.id == source_id), None)
-                if isinstance(self.store, ForwardOnlyManagedStateStore)
-                else None
-            )
-            source = (
-                InstalledSource.from_definition(owner)
-                if owner is not None
-                else self._custom_source(state, source_id)
-            )
-            used_by = tuple(
-                playlist.display_name
-                for playlist in state.playlists
-                if source.id in playlist.source_ids
-            ) + tuple(
-                f"{template.display_name} (custom template)"
-                for template in state.templates
+            return self._deletion_references_loaded(state, source_id)
+
+    def _deletion_references_loaded(
+        self, state: ManagedState, source_id: str
+    ) -> tuple[ManagedSource, tuple[str, ...], bool]:
+        """Recheck references while caller already holds the configuration lock."""
+        if isinstance(self.store, ForwardOnlyManagedStateStore):
+            self.catalog = self.store.catalog
+        owner = (
+            next((item for item in self.catalog.sources if item.id == source_id), None)
+            if isinstance(self.store, ForwardOnlyManagedStateStore)
+            else None
+        )
+        source = (
+            InstalledSource.from_definition(owner)
+            if owner is not None
+            else self._custom_source(state, source_id)
+        )
+        used_by = tuple(
+            playlist.display_name
+            for playlist in state.playlists
+            if source.id in playlist.source_ids
+        ) + tuple(
+            f"{template.display_name} (custom template)"
+            for template in state.templates
+            if source.id in template.default_source_ids
+            or any(e.source_id == source.id for e in template.duration_exceptions)
+        )
+        if owner is not None:
+            used_by += tuple(
+                f"{template.display_name} (owner template)"
+                for template in self.catalog.playlists
                 if source.id in template.default_source_ids
-                or any(e.source_id == source.id for e in template.duration_exceptions)
-            )
-            if owner is not None:
-                used_by += tuple(
-                    f"{template.display_name} (owner template)"
-                    for template in self.catalog.playlists
-                    if source.id in template.default_source_ids
-                    or any(
-                        exception.source_id == source.id
-                        for exception in template.duration_policy.exceptions
-                    )
+                or any(
+                    exception.source_id == source.id
+                    for exception in template.duration_policy.exceptions
                 )
-                if any(item.source_id == source.id for item in state.source_overrides):
-                    used_by += ("Saved public-release override",)
-            intent = self.provisioning_journal.load()
-            pending = intent is not None and source.id in intent.source_ids
-            if state.quarantined_templates:
-                used_by += ("Unresolved custom playlist drafts",)
-            return source, used_by, pending
+            )
+            if any(item.source_id == source.id for item in state.source_overrides):
+                used_by += ("Saved public-release override",)
+        intent = self.provisioning_journal.load()
+        pending = intent is not None and source.id in intent.source_ids
+        if state.quarantined_templates:
+            used_by += ("Unresolved custom playlist drafts",)
+        return source, used_by, pending
 
     def delete(self, source_id: str) -> bool:
         """Remove the definition last, after source-local caches are cleared.
@@ -669,7 +675,7 @@ class SourceAdminService:
             # Lock order is always cycle gate -> configuration lock, also in the cycle runner.
             with self.synchronization.hold():
                 state = self.store.load()
-                _, used_by, pending = self.deletion_references(source_id)
+                _, used_by, pending = self._deletion_references_loaded(state, source_id)
                 if used_by or pending:
                     raise SourceReferencedError("Unassign this source before deletion")
                 is_owner = isinstance(self.store, ForwardOnlyManagedStateStore) and source_id in {
