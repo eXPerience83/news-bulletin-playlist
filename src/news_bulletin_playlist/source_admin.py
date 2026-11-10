@@ -594,7 +594,18 @@ class SourceAdminService:
         """Read current references for confirmation; Delete checks them again under both locks."""
         with self.synchronization.hold():
             state = self.store.load()
-            source = self._custom_source(state, source_id)
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.catalog = self.store.catalog
+            owner = (
+                next((item for item in self.catalog.sources if item.id == source_id), None)
+                if isinstance(self.store, ForwardOnlyManagedStateStore)
+                else None
+            )
+            source = (
+                InstalledSource.from_definition(owner)
+                if owner is not None
+                else self._custom_source(state, source_id)
+            )
             used_by = tuple(
                 playlist.display_name
                 for playlist in state.playlists
@@ -603,7 +614,20 @@ class SourceAdminService:
                 f"{template.display_name} (custom template)"
                 for template in state.templates
                 if source.id in template.default_source_ids
+                or any(e.source_id == source.id for e in template.duration_exceptions)
             )
+            if owner is not None:
+                used_by += tuple(
+                    f"{template.display_name} (owner template)"
+                    for template in self.catalog.playlists
+                    if source.id in template.default_source_ids
+                    or any(
+                        exception.source_id == source.id
+                        for exception in template.duration_policy.exceptions
+                    )
+                )
+                if any(item.source_id == source.id for item in state.source_overrides):
+                    used_by += ("Saved public-release override",)
             intent = self.provisioning_journal.load()
             pending = intent is not None and source.id in intent.source_ids
             if state.quarantined_templates:
@@ -628,23 +652,30 @@ class SourceAdminService:
             # Lock order is always cycle gate -> configuration lock, also in the cycle runner.
             with self.synchronization.hold():
                 state = self.store.load()
-                source = self._custom_source(state, source_id)
-                intent = self.provisioning_journal.load()
-                if (
-                    any(source.id in playlist.source_ids for playlist in state.playlists)
-                    or any(source.id in template.default_source_ids for template in state.templates)
-                    or state.quarantined_templates
-                    or (intent is not None and source.id in intent.source_ids)
-                ):
+                _, used_by, pending = self.deletion_references(source_id)
+                if used_by or pending:
                     raise SourceReferencedError("Unassign this source before deletion")
-                next_state = replace(
-                    state,
-                    sources=tuple(item for item in state.sources if item.id != source.id),
+                is_owner = (
+                    isinstance(self.store, ForwardOnlyManagedStateStore)
+                    and source_id in {item.id for item in self.store.catalog.sources}
                 )
-                compile_engine_config(self.catalog, next_state)
-                self.first_journal.clear_source_runtime_state(source.id)
-                self.detector_journal.clear_source_state(source.id)
-                self.store.save(next_state)
+                if is_owner:
+                    source = next(item for item in self.store.catalog.sources if item.id == source_id)
+                    self.first_journal.clear_source_runtime_state(source.id)
+                    self.detector_journal.clear_source_state(source.id)
+                    assert isinstance(self.store, ForwardOnlyManagedStateStore)
+                    self.store.delete_owner_source(source.id)
+                    self.catalog = self.store.catalog
+                else:
+                    source = self._custom_source(state, source_id)
+                    next_state = replace(
+                        state,
+                        sources=tuple(item for item in state.sources if item.id != source.id),
+                    )
+                    compile_engine_config(self.catalog, next_state)
+                    self.first_journal.clear_source_runtime_state(source.id)
+                    self.detector_journal.clear_source_state(source.id)
+                    self.store.save(next_state)
                 return any(playlist.enabled for playlist in state.playlists)
 
     def _custom_source(self, state: ManagedState, source_id: str) -> ManagedSource:

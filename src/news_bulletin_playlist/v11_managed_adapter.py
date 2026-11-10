@@ -18,7 +18,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     ManagedStateStore,
 )
-from news_bulletin_playlist.models import PlaylistId
+from news_bulletin_playlist.models import PlaylistId, SourceId
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import (
     V11_AUTHORITY_FILENAME,
@@ -163,6 +163,47 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             self.catalog = parse_v11_operational(next_bytes).active_catalog
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner template could not be deleted safely") from exc
+
+    def delete_owner_source(
+        self, source_id: SourceId, *, pending_source_ids: tuple[SourceId, ...] = ()
+    ) -> None:
+        """Remove an unreferenced historic source and its order entry atomically."""
+        try:
+            current = parse_v11_operational(self._expected_bytes)
+            state = current.managed_overlay
+            inventory = current.owner_inventory
+            if source_id not in {item.id for item in current.active_catalog.sources}:
+                raise ManagedStateError("historical owner source was not found")
+            if (
+                state.quarantined_templates
+                or source_id in pending_source_ids
+                or any(source_id in playlist.source_ids for playlist in state.playlists)
+                or any(override.source_id == source_id for override in state.source_overrides)
+                or any(
+                    source_id in template.default_source_ids
+                    or any(e.source_id == source_id for e in template.duration_exceptions)
+                    for template in state.templates
+                )
+                or any(
+                    source_id in template.default_source_ids
+                    or any(
+                        e.source_id == source_id
+                        for e in template.duration_policy.exceptions
+                    )
+                    for template in inventory.templates.records
+                )
+            ):
+                raise ManagedStateError("historical owner source still has references")
+            records = tuple(item for item in inventory.sources if item.id != source_id)
+            order = inventory.source_order.after_records_change(inventory.sources, records)
+            next_bytes = self._owner.save_owner_inventory(
+                replace(inventory, sources=records, source_order=order),
+                expected_bytes=self._expected_bytes,
+            )
+            self._expected_bytes = next_bytes
+            self.catalog = parse_v11_operational(next_bytes).active_catalog
+        except (V11StoreError, OSError, ValueError) as exc:
+            raise ManagedStateError("v11 owner source could not be deleted safely") from exc
 
 
 class ReadOnlyLegacyStateStore(ManagedStateStore):

@@ -202,6 +202,8 @@ def _sources_table(
         if provider_available and source.id in built_in_ids:
             label = "Edit metadata" if owner_catalog_editable else "Edit public release time"
             controls += f'<a href="/admin/sources/edit?source_id={safe_id}">{label}</a>'
+            if owner_catalog_editable:
+                controls += f'<a href="/admin/sources/delete?source_id={safe_id}">Delete</a>'
         if provider_available and source.id not in built_in_ids:
             next_enabled = not source.enabled
             verb = "Enable" if next_enabled else "Disable"
