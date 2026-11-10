@@ -203,28 +203,6 @@ def _sources_table(
             label = "Edit metadata" if owner_catalog_editable else "Edit public release time"
             controls += f'<a href="/admin/sources/edit?source_id={safe_id}">{label}</a>'
             if owner_catalog_editable:
-                next_enabled = not source.enabled
-                blockers = (
-                    source_disable_blockers(
-                        source.id,
-                        sources=sources,
-                        playlists=snapshot.managed,
-                        provisioning_intent=snapshot.provisioning_intent,
-                    )
-                    if source.enabled
-                    else ()
-                )
-                if blockers:
-                    controls += '<p class="muted">Cannot disable the last effective source.</p>'
-                else:
-                    verb = "Enable" if next_enabled else "Disable"
-                    controls += (
-                        '<form method="post" action="/admin/sources/set-enabled">'
-                        f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
-                        f'<input type="hidden" name="source_id" value="{safe_id}">'
-                        f'<input type="hidden" name="enabled" value="{int(next_enabled)}">'
-                        f'<button class="button" type="submit">{verb}</button></form>'
-                    )
                 controls += f'<a href="/admin/sources/delete?source_id={safe_id}">Delete</a>'
         if provider_available and source.id not in built_in_ids:
             next_enabled = not source.enabled
