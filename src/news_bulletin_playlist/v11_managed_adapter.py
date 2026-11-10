@@ -186,10 +186,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
                 )
                 or any(
                     source_id in template.default_source_ids
-                    or any(
-                        e.source_id == source_id
-                        for e in template.duration_policy.exceptions
-                    )
+                    or any(e.source_id == source_id for e in template.duration_policy.exceptions)
                     for template in inventory.templates.records
                 )
             ):

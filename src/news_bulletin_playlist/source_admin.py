@@ -655,10 +655,9 @@ class SourceAdminService:
                 _, used_by, pending = self.deletion_references(source_id)
                 if used_by or pending:
                     raise SourceReferencedError("Unassign this source before deletion")
-                is_owner = (
-                    isinstance(self.store, ForwardOnlyManagedStateStore)
-                    and source_id in {item.id for item in self.store.catalog.sources}
-                )
+                is_owner = isinstance(self.store, ForwardOnlyManagedStateStore) and source_id in {
+                    item.id for item in self.store.catalog.sources
+                }
                 if is_owner:
                     source = next(
                         item for item in self.store.catalog.sources if item.id == source_id
