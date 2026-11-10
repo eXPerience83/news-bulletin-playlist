@@ -660,7 +660,9 @@ class SourceAdminService:
                     and source_id in {item.id for item in self.store.catalog.sources}
                 )
                 if is_owner:
-                    source = next(item for item in self.store.catalog.sources if item.id == source_id)
+                    source = next(
+                        item for item in self.store.catalog.sources if item.id == source_id
+                    )
                     self.first_journal.clear_source_runtime_state(source.id)
                     self.detector_journal.clear_source_state(source.id)
                     assert isinstance(self.store, ForwardOnlyManagedStateStore)
