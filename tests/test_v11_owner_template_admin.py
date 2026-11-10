@@ -7,6 +7,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
@@ -104,3 +105,98 @@ def test_owner_template_edit_keeps_dormant_exception_after_reducing_max(tmp_path
     assert changed.duration_policy.exceptions == original.duration_policy.exceptions
     assert exception.source_id in changed.default_source_ids
     assert changed.default_source_ids == original.default_source_ids
+
+
+def test_owner_template_delete_rejects_referenced_destination_without_writes(
+    tmp_path: Path,
+) -> None:
+    root, _preview = _root(tmp_path, 10)
+    with _server(root) as (server, client, _legacy_store):
+        store = open_managed_state_store(root)
+        service = server.RequestHandlerClass.managed_admin_service
+        assert service is not None
+        service.store = store
+        service.catalog = store.catalog
+        state = store.load_readonly()
+        target = next(t for t in store.catalog.playlists if any(
+            p.template_id == t.id for p in state.playlists
+        ))
+        before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        cookie = _login(server)
+        status, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+        assert status == 200
+        digest = hashlib.sha256(OwnerTemplateSet((target,)).serialize()).hexdigest()
+        status, _, _ = _request(
+            server,
+            "POST",
+            "/admin/playlists/templates/owner/delete",
+            cookie=cookie,
+            form={
+                "csrf_token": _csrf(page),
+                "template_id": str(target.id),
+                "template_digest": digest,
+                "confirm_owner_delete": "1",
+            },
+        )
+        assert status == 409
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+        assert not client.calls
+        assert target.id in {t.id for t in open_managed_state_store(root).catalog.playlists}
+
+
+def test_owner_template_delete_unused_is_durable_and_cas_guarded(
+    tmp_path: Path,
+) -> None:
+    root, preview = _root(tmp_path, 10)
+    before_legacy = (root / "managed-state.json").read_bytes()
+    with _server(root) as (server, client, _legacy_store):
+        store = open_managed_state_store(root)
+        service = server.RequestHandlerClass.managed_admin_service
+        assert service is not None
+        service.store = store
+        service.catalog = store.catalog
+        state = store.load_readonly()
+        chosen = store.catalog.playlists[0]
+        # Synthetic-only setup: release the template's managed reference before
+        # deletion. A real operator must stop management explicitly.
+        if any(p.template_id == chosen.id for p in state.playlists):
+            store.save(replace(
+                state,
+                playlists=tuple(p for p in state.playlists if p.template_id != chosen.id),
+            ))
+        source_ids = tuple(source.id for source in store.catalog.sources)
+        cookie = _login(server)
+        status, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+        assert status == 200
+        digest = hashlib.sha256(OwnerTemplateSet((chosen,)).serialize()).hexdigest()
+        assert b"/admin/playlists/templates/owner/delete" in page
+        original_v11 = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        status, _, _ = _request(
+            server,
+            "POST",
+            "/admin/playlists/templates/owner/delete",
+            cookie=cookie,
+            form={
+                "csrf_token": _csrf(page),
+                "template_id": str(chosen.id),
+                "template_digest": digest,
+                "confirm_owner_delete": "1",
+            },
+        )
+        assert status == 303
+        assert not client.calls
+        after = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        assert after != original_v11
+        assert json.loads(after)["owner_revision"] == 1
+        reopened = open_managed_state_store(root)
+        assert chosen.id not in {t.id for t in reopened.catalog.playlists}
+        assert tuple(source.id for source in reopened.catalog.sources) == source_ids
+        assert (root / "managed-state.json").read_bytes() == before_legacy
+        assert len(preview.original_runtime.playlists) == 4
+        stale = open_managed_state_store(root)
+        stale._expected_bytes = original_v11
+        from news_bulletin_playlist.managed_state import ManagedStateError
+
+        with pytest.raises(ManagedStateError, match="could not be deleted"):
+            stale.delete_owner_template(chosen.id)
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
