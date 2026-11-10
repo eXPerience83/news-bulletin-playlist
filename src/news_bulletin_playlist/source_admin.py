@@ -668,14 +668,16 @@ class SourceAdminService:
                     self.store.delete_owner_source(source.id)
                     self.catalog = self.store.catalog
                 else:
-                    source = self._custom_source(state, source_id)
+                    custom_source = self._custom_source(state, source_id)
                     next_state = replace(
                         state,
-                        sources=tuple(item for item in state.sources if item.id != source.id),
+                        sources=tuple(
+                            item for item in state.sources if item.id != custom_source.id
+                        ),
                     )
                     compile_engine_config(self.catalog, next_state)
-                    self.first_journal.clear_source_runtime_state(source.id)
-                    self.detector_journal.clear_source_state(source.id)
+                    self.first_journal.clear_source_runtime_state(custom_source.id)
+                    self.detector_journal.clear_source_state(custom_source.id)
                     self.store.save(next_state)
                 return any(playlist.enabled for playlist in state.playlists)
 
