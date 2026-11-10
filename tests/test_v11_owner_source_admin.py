@@ -76,7 +76,6 @@ def test_admin_edits_historical_source_metadata_without_changing_parser_or_spoti
     assert len(original.original_runtime.playlists) == 4
 
 
-
 def test_owner_source_enabled_toggle_persists_specialized_processing_without_spotify(
     tmp_path: Path,
 ) -> None:
