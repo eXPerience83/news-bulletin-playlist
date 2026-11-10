@@ -11,7 +11,6 @@ from dataclasses import replace
 from pathlib import Path
 
 from news_bulletin_playlist.catalog import PlaylistTemplate
-from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
     InstalledSource,
@@ -19,6 +18,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     ManagedStateStore,
 )
+from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import (
     V11_AUTHORITY_FILENAME,
@@ -134,6 +134,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             self.catalog = parse_v11_operational(next_bytes).active_catalog
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner template could not be saved") from exc
+
     def delete_owner_template(
         self,
         template_id: PlaylistId,
