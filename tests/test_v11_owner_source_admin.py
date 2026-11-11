@@ -14,6 +14,8 @@ from _legacy_dataset import legacy_root as _root
 from _source_admin_http_fixtures import _server
 
 from news_bulletin_playlist.catalog import BuiltInCatalog
+from news_bulletin_playlist.managed_state import ManagedSourceOverride
+from news_bulletin_playlist.models import PublicReleaseMode
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
@@ -209,3 +211,53 @@ def test_legacy_image_catalog_still_rejects_disabled_source(tmp_path: Path) -> N
     first = open_managed_state_store(root).catalog.sources[0]
     with pytest.raises(ValueError, match="must be enabled"):
         BuiltInCatalog((replace(first, enabled=False),), ())
+
+
+def test_owner_source_mode_edit_reconciles_legacy_override_in_one_commit(
+    tmp_path: Path,
+) -> None:
+    root, _preview = _root(tmp_path, 10)
+    legacy_before = (root / "managed-state.json").read_bytes()
+    with _server(root) as (server, client, _unused):
+        store = open_managed_state_store(root)
+        source = store.catalog.sources[0]
+        effective_mode = next(
+            mode for mode in PublicReleaseMode if mode != source.public_release_mode
+        )
+        state = store.load_readonly()
+        store.save(
+            replace(
+                state,
+                source_overrides=(
+                    *tuple(
+                        item for item in state.source_overrides if item.source_id != source.id
+                    ),
+                    ManagedSourceOverride(source.id, effective_mode),
+                ),
+            )
+        )
+        service = server.RequestHandlerClass.source_admin_service
+        managed = server.RequestHandlerClass.managed_admin_service
+        assert service is not None and managed is not None
+        service.store = managed.store = store
+        service.catalog = managed.catalog = store.catalog
+        assert service.get_owned_source(str(source.id)).public_release_mode == effective_mode
+        updated, _ = service.update_metadata(
+            str(source.id),
+            display_name="Owner mode reconciled",
+            origin_kind=source.origin.kind.value,
+            origin_code=source.origin.code,
+            language=str(source.languages[0]),
+            editorial_scope=source.editorial_scope.value,
+            # Omitted mode must preserve the effective override, not raw owner default.
+            public_release_mode=None,
+        )
+        assert updated.public_release_mode == effective_mode
+        assert not client.calls
+        reopened = open_managed_state_store(root)
+        assert reopened.catalog.sources[0].public_release_mode == effective_mode
+        assert all(item.source_id != source.id for item in reopened.load().source_overrides)
+        actual = parse_v11_operational((root / V11_OPERATIONAL_FILENAME).read_bytes())
+        assert actual.runtime.sources[0].public_release_mode == effective_mode
+        assert json.loads((root / V11_OPERATIONAL_FILENAME).read_text())["owner_revision"] == 1
+        assert (root / "managed-state.json").read_bytes() == legacy_before

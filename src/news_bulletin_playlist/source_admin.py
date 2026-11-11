@@ -473,9 +473,20 @@ class SourceAdminService:
         selected = PublicReleaseMode(mode)
         with self.synchronization.hold():
             state = self.store.load()
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.catalog = self.store.catalog
             base = next((source for source in self.catalog.sources if source.id == source_id), None)
             if base is None:
                 raise SourceMutationError("Built-in source not found")
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.store.save_owner_source(
+                    replace(InstalledSource.from_definition(base), public_release_mode=selected),
+                    reconcile_public_release_override=True,
+                )
+                self.catalog = self.store.catalog
+                return replace(base, public_release_mode=selected), any(
+                    p.enabled for p in state.playlists
+                )
             overrides = tuple(
                 item for item in state.source_overrides if item.source_id != source_id
             )
@@ -498,10 +509,13 @@ class SourceAdminService:
         if not isinstance(self.store, ForwardOnlyManagedStateStore):
             raise SourceMutationError("Historical source is not editable in legacy state")
         with self.synchronization.hold():
-            self.store.load_readonly()
+            state = self.store.load_readonly()
             self.catalog = self.store.catalog
-            source = next((item for item in self.catalog.sources if item.id == source_id), None)
-            if source is None:
+            source = next(
+                (item for item in effective_sources(self.catalog, state) if item.id == source_id),
+                None,
+            )
+            if source is None or source_id not in {item.id for item in self.catalog.sources}:
                 raise SourceMutationError("Historical source was not found")
             return InstalledSource.from_definition(source)
 
@@ -527,7 +541,13 @@ class SourceAdminService:
                 else None
             )
             current = (
-                InstalledSource.from_definition(owner_record)
+                InstalledSource.from_definition(
+                    next(
+                        item
+                        for item in effective_sources(self.catalog, state)
+                        if item.id == source_id
+                    )
+                )
                 if owner_record is not None
                 else self._custom_source(state, source_id)
             )
@@ -562,7 +582,9 @@ class SourceAdminService:
             if owner_record is not None:
                 assert isinstance(self.store, ForwardOnlyManagedStateStore)
                 assert isinstance(updated, InstalledSource)
-                self.store.save_owner_source(updated)
+                self.store.save_owner_source(
+                    updated, reconcile_public_release_override=True
+                )
                 self.catalog = self.store.catalog
             else:
                 self._save_replacement(state, updated)
