@@ -229,9 +229,7 @@ def test_owner_source_mode_edit_reconciles_legacy_override_in_one_commit(
             replace(
                 state,
                 source_overrides=(
-                    *tuple(
-                        item for item in state.source_overrides if item.source_id != source.id
-                    ),
+                    *tuple(item for item in state.source_overrides if item.source_id != source.id),
                     ManagedSourceOverride(source.id, effective_mode),
                 ),
             )

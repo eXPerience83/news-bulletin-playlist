@@ -582,9 +582,7 @@ class SourceAdminService:
             if owner_record is not None:
                 assert isinstance(self.store, ForwardOnlyManagedStateStore)
                 assert isinstance(updated, InstalledSource)
-                self.store.save_owner_source(
-                    updated, reconcile_public_release_override=True
-                )
+                self.store.save_owner_source(updated, reconcile_public_release_override=True)
                 self.catalog = self.store.catalog
             else:
                 self._save_replacement(state, updated)
