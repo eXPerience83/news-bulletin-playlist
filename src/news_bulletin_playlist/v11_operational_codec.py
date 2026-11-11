@@ -268,8 +268,13 @@ def update_v11_owner_inventory(
         document = json.loads(payload)
         document["owner_inventory"] = edited.to_document()
         # Update owner mode and retire its legacy override in one durable CAS.
+        # Owner catalog and managed projection must validate as *one* candidate:
+        # a newly imported template may reference source records added to the
+        # owner inventory by this same atomic CAS.
+        snapshot = parse_legacy_snapshot(_canonical(document["installed_catalog"]))
+        next_catalog = _owner_active_catalog(snapshot, edited)
         document["managed_overlay"] = serialize_managed_state(
-            updated_overlay, catalog=current.active_catalog
+            updated_overlay, catalog=next_catalog
         )
         document["owner_revision"] = document.get("owner_revision", 0) + 1
         candidate = _canonical(document)
@@ -301,9 +306,17 @@ def _owner_active_catalog(
         for item in snapshot.sources
         if item.provenance is LegacyProvenance.IMAGE_PRESET
     }
+    historical_ids = {item.installed.id for item in snapshot.sources}
     ordered_sources = owned.source_order.definitions(owned.sources)
+    # Historical custom sources remain represented in managed_overlay.sources,
+    # whereas newly owner-installed sources belong to this active catalog.
+    # Do not duplicate historical custom records or silently hide new sources.
     return BuiltInCatalog(
-        tuple(source for source in ordered_sources if source.id in original_image_ids),
+        tuple(
+            source
+            for source in ordered_sources
+            if source.id in original_image_ids or source.id not in historical_ids
+        ),
         owned.templates.records,
         allow_disabled_sources=True,
     )

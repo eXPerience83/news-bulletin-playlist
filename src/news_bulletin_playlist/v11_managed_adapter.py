@@ -19,6 +19,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.owner_inventory import OwnerInventory
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import (
     V11_AUTHORITY_FILENAME,
@@ -76,6 +77,26 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             self._expected_bytes = self._owner.save(state, expected_bytes=self._expected_bytes)
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner state could not be saved") from exc
+
+    def save_owner_bundle(
+        self, inventory: OwnerInventory, overlay: ManagedState
+    ) -> None:
+        """Commit an import's owner sources, templates and projection in one v11 CAS.
+
+        No caller may update owner catalog and overlay in separate steps.
+        An interrupted save must be treated as uncertain and inspected anew.
+        """
+        try:
+            next_bytes = self._owner.save_owner_inventory(
+                inventory,
+                expected_bytes=self._expected_bytes,
+                managed_overlay=overlay,
+            )
+            parsed = parse_v11_operational(next_bytes)
+            self._expected_bytes = next_bytes
+            self.catalog = parsed.active_catalog
+        except (V11StoreError, OSError, ValueError) as exc:
+            raise ManagedStateError("v11 imported owner bundle outcome uncertain") from exc
 
     def save_owner_source(
         self, edited: InstalledSource, *, reconcile_public_release_override: bool = False
