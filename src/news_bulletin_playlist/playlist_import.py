@@ -285,7 +285,11 @@ class PlaylistImportService:
                     replace(exception, source_id=mapping[exception.source_id])
                     for exception in bundle.exceptions
                 ),
-                hidden=False,
+                hidden=(
+                    bundle.playlist["configuration"]["hidden"]
+                    if bundle.playlist["kind"] == "draft"
+                    else False
+                ),
                 owner_template_id=plan.owner_template.id,
             )
             overlay = replace(

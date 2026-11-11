@@ -282,8 +282,8 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
     template_attribution = None
     required_ids = set(ids)
     if version == 2:
-        if p["kind"] != "managed":
-            raise PlaylistBundleError("ZIP v2 requires a managed playlist")
+        if p["kind"] not in {"managed", "draft"}:
+            raise PlaylistBundleError("ZIP v2 requires managed or linked-draft policy")
         template_data = exact_object(root["template"], {"path", "size", "sha256", "cover"})
         if template_data["path"] != "template.json":
             raise PlaylistBundleError("Unknown ZIP v2 owner-template path")
@@ -296,19 +296,20 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
         owner_template = templates.records[0]
         required_ids.update(owner_template.default_source_ids)
         required_ids.update(e.source_id for e in owner_template.duration_policy.exceptions)
-        if (
-            p["ordering"] != owner_template.ordering.value
-            or p["countries"] != list(owner_template.countries)
-            or p["languages"] != list(owner_template.languages)
-        ):
-            raise PlaylistBundleError("ZIP v2 current policy disagrees with owner template")
-        expected_active = tuple(
-            e
-            for e in owner_template.duration_policy.exceptions
-            if e.source_id in ids and e.max_seconds > duration["max_seconds"]
-        )
-        if exceptions != expected_active:
-            raise PlaylistBundleError("ZIP v2 active exceptions disagree with owner template")
+        if p["kind"] == "managed":
+            if (
+                p["ordering"] != owner_template.ordering.value
+                or p["countries"] != list(owner_template.countries)
+                or p["languages"] != list(owner_template.languages)
+            ):
+                raise PlaylistBundleError("ZIP v2 current policy disagrees with owner template")
+            expected_active = tuple(
+                e
+                for e in owner_template.duration_policy.exceptions
+                if e.source_id in ids and e.max_seconds > duration["max_seconds"]
+            )
+            if exceptions != expected_active:
+                raise PlaylistBundleError("ZIP v2 active exceptions disagree with owner template")
     records = inspect_sources(files["sources.json"])
     if {r.source.id if isinstance(r, PortableSource) else r.id for r in records} != required_ids:
         raise PlaylistBundleError("Source closure does not match assigned and dormant sources")

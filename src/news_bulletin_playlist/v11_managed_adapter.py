@@ -7,6 +7,7 @@ in v11, without creating any Spotify managed destination automatically.
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -77,6 +78,12 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             self._expected_bytes = self._owner.save(state, expected_bytes=self._expected_bytes)
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner state could not be saved") from exc
+
+    def owner_cover_attribution(self, cover_id: str) -> dict[str, object] | None:
+        """Read validated owner credit for a restored template JPEG, without writes."""
+        current = parse_v11_operational(self._expected_bytes)
+        encoded = dict(current.owner_inventory.cover_attributions).get(cover_id)
+        return json.loads(encoded) if encoded is not None else None
 
     def save_owner_bundle(self, inventory: OwnerInventory, overlay: ManagedState) -> None:
         """Commit an import's owner sources, templates and projection in one v11 CAS.

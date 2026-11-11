@@ -191,7 +191,7 @@ def playlist_bundle(
     version: int = 1,
 ) -> tuple[str, bytes]:
     """Build everything before returning bytes; caller holds the configuration lock."""
-    if version not in (1, 2) or (version == 2 and kind != "managed"):
+    if version not in (1, 2) or (version == 2 and kind not in {"managed", "draft"}):
         raise PlaylistExportError("Unsupported or incomplete portable playlist version")
     target = _target(state, store, kind, object_id)
     identity = portable_id(target.portable_id)
@@ -229,6 +229,16 @@ def playlist_bundle(
         countries, languages, ordering = template.countries, template.languages, template.ordering
         configuration = {"enabled": target.enabled, "hidden": None}
     else:
+        template = (
+            next(
+                (item for item in store.catalog.playlists if item.id == target.owner_template_id),
+                None,
+            )
+            if version == 2 and target.owner_template_id is not None
+            else None
+        )
+        if version == 2 and template is None:
+            raise PlaylistExportError("ZIP v2 draft has no linked owner template closure")
         source_ids = target.default_source_ids
         exceptions = target.duration_exceptions
         countries, languages, ordering = target.countries, target.languages, target.ordering
@@ -238,7 +248,6 @@ def playlist_bundle(
     sources = {source.id: source for source in effective_sources(store.catalog, state)}
     closure_ids = source_ids
     if version == 2:
-        assert isinstance(target, ManagedPlaylist)
         assert template is not None
         closure_ids = tuple(
             dict.fromkeys(
@@ -319,10 +328,14 @@ def playlist_bundle(
     }
     additional_entries: list[tuple[str, bytes]] = []
     if version == 2:
-        assert isinstance(target, ManagedPlaylist)
         assert template is not None
         template_document = OwnerTemplateSet((template,)).serialize()
         template_cover_bytes, template_attribution = covers.load(template.cover_id)
+        owner_credit = getattr(store, "owner_cover_attribution", None)
+        if callable(owner_credit):
+            stored_credit = owner_credit(template.cover_id)
+            if stored_credit is not None:
+                template_attribution = stored_credit
         template_cover_descriptor = _descriptor(template_cover_bytes)
         template_cover_path = f"covers/{template_cover_descriptor['sha256']}.jpg"
         manifest["template"] = {
