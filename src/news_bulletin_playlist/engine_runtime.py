@@ -144,6 +144,8 @@ _ADMIN_NOTICE_MESSAGES = {
     "local-example-created": "Playlist example saved as a local draft; Spotify was not contacted.",
     "local-draft-updated": "Custom playlist draft updated locally.",
     "local-draft-deleted": "Custom playlist draft deleted locally.",
+    "owner-template-updated": "Owner template updated locally; Spotify was not contacted.",
+    "owner-template-deleted": "Owner template deleted locally; Spotify was not contacted.",
     "owner-cover-uploaded": (
         "Custom cover saved locally. For an existing Spotify playlist, "
         "use Apply Spotify metadata & cover to publish this change."

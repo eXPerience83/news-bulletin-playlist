@@ -7,7 +7,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
@@ -81,7 +80,9 @@ def test_admin_edits_historical_source_metadata_without_changing_parser_or_spoti
     assert len(original.original_runtime.playlists) == 4
 
 
-def test_owner_source_disable_and_enable_preserves_assignments_and_detectors(tmp_path: Path) -> None:
+def test_owner_source_disable_and_enable_preserves_assignments_and_detectors(
+    tmp_path: Path,
+) -> None:
     root, _preview = _root(tmp_path, 10)
     legacy_bytes = (root / "managed-state.json").read_bytes()
     with _server(root) as (server, client, _unused):

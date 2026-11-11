@@ -235,6 +235,6 @@ def test_corrupt_persisted_cover_yields_server_error_and_no_leak(tmp_path, monke
         status, headers, body = _request(server, "GET", EXPORT, cookie=cookie)
         assert status == HTTPStatus.SERVICE_UNAVAILABLE
         assert "Content-Disposition" not in headers
-        assert b"secret" not in body and b"PK\\x03\\x04" not in body
+        assert b"secret" not in body and not body.startswith(b"PK\x03\x04")
         assert before == _files(tmp_path)
         assert client.calls == []

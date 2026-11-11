@@ -272,10 +272,13 @@ class ManagedAdminService:
             or min_duration_seconds > max_duration_seconds
         ):
             raise ValueError("Invalid owner template policy")
+        display_name = _playlist_name(display_name)
         if description.replace("\r\n", "\n").replace("\r", "\n") == current.description.replace(
             "\r\n", "\n"
         ):
             description = current.description
+        else:
+            description = _playlist_description(description)
         updated = replace(
             current,
             display_name=display_name,
