@@ -194,6 +194,14 @@ def playlist_bundle(
     if version not in (1, 2) or (version == 2 and kind not in {"managed", "draft"}):
         raise PlaylistExportError("Unsupported or incomplete portable playlist version")
     target = _target(state, store, kind, object_id)
+    if (
+        version == 1
+        and isinstance(target, LocalPlaylistTemplate)
+        and target.owner_template_id is not None
+    ):
+        raise PlaylistExportError(
+            "ZIP v1 would discard a recovered owner template; export ZIP v2 explicitly"
+        )
     identity = portable_id(target.portable_id)
     if identity is None:
         raise PlaylistExportError("Prepare a portable identity before downloading this playlist")

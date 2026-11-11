@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.legacy_catalog_snapshot import FrozenLegacyCatalogSnapshot
 from news_bulletin_playlist.legacy_materialization import LegacyProvenance
 from news_bulletin_playlist.managed_state import (
@@ -101,8 +102,7 @@ class OwnerInventory:
                 for cover_id, encoded in self.cover_attributions:
                     if (
                         not isinstance(cover_id, str)
-                        or not cover_id.startswith("uploaded_")
-                        or len(cover_id) != 73
+                        or not is_uploaded_cover_id(cover_id)
                         or cover_id in seen
                         or not isinstance(encoded, str)
                     ):

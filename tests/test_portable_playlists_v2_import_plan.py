@@ -21,7 +21,11 @@ from news_bulletin_playlist.managed_state import (
 from news_bulletin_playlist.models import DurationPolicy, DurationPolicyException, PlaylistId
 from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle_v2
 from news_bulletin_playlist.playlist_import import PlaylistImportError, PlaylistImportService
-from news_bulletin_playlist.portable_playlists import PlaylistExportService, PortableCoverLoader
+from news_bulletin_playlist.portable_playlists import (
+    PlaylistExportError,
+    PlaylistExportService,
+    PortableCoverLoader,
+)
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
@@ -214,6 +218,8 @@ def test_v2_reexport_restored_draft_preserves_owner_closure_on_second_install(tm
     exporter = PlaylistExportService(
         store, ConfigurationSynchronization(), PortableCoverLoader(root)
     )
+    with pytest.raises(PlaylistExportError, match="ZIP v2"):
+        exporter.export("draft", first_result.current_draft_id)
     identity, outgoing = exporter.export("draft", first_result.current_draft_id, version=2)
     assert identity == UUID
     parsed = inspect_playlist_bundle_v2(outgoing)
