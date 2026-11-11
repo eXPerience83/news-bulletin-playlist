@@ -33,7 +33,6 @@ from news_bulletin_playlist.portable_sources import (
     UnsupportedPortableSource,
     parse_sources,
 )
-from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
 from news_bulletin_playlist.source_import import (
     SourceImportPreview,
     SourceImportRow,
@@ -41,6 +40,7 @@ from news_bulletin_playlist.source_import import (
     plan_source_import,
     source_import_fingerprint,
 )
+from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
 
 
 class PlaylistImportError(ValueError):
@@ -116,7 +116,11 @@ class PlaylistImportService:
                 sorted(
                     (
                         *plan_source_import(
-                            tuple(item for item in bundle.sources if isinstance(item, PortableSource)),
+                            tuple(
+                                item
+                                for item in bundle.sources
+                                if isinstance(item, PortableSource)
+                            ),
                             sources,
                         ),
                         *(
@@ -158,7 +162,9 @@ class PlaylistImportService:
                 template,
                 id=PlaylistId(new_id),
                 cover_id="uploaded_" + hashlib.sha256(bundle.template_jpeg).hexdigest(),
-                default_source_ids=tuple(SourceId(mapping[id_]) for id_ in template.default_source_ids),
+                default_source_ids=tuple(
+                    SourceId(mapping[id_]) for id_ in template.default_source_ids
+                ),
                 duration_policy=replace(
                     template.duration_policy,
                     exceptions=tuple(

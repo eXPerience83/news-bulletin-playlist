@@ -78,7 +78,10 @@ def test_v2_plan_restores_dormant_source_and_fold_without_writes(tmp_path):
     }
     assert len(first.owner_template.duration_policy.exceptions) == 2
     assert first.owner_template.duration_policy.exceptions[1].edition_local_time.fold == 1
-    assert first.owner_template.duration_policy.exceptions[0].edition_local_time.microsecond == 123456
+    assert (
+        first.owner_template.duration_policy.exceptions[0].edition_local_time.microsecond
+        == 123456
+    )
     assert all(
         e.source_id in first.owner_template.default_source_ids
         for e in first.owner_template.duration_policy.exceptions
