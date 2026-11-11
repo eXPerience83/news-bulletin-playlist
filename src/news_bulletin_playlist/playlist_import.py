@@ -107,6 +107,7 @@ class PlaylistImportService:
         if not isinstance(self.store, ForwardOnlyManagedStateStore):
             raise PlaylistImportError("ZIP v2 requires a v11 owner installation")
         assert bundle.template is not None
+        assert bundle.template_jpeg is not None
         with self.synchronization.hold():
             state = self.store.load_readonly()
             pending = self.provisioning.load()
@@ -156,7 +157,7 @@ class PlaylistImportService:
             remapped = replace(
                 template,
                 id=PlaylistId(new_id),
-                cover_id="uploaded_" + hashlib.sha256(bundle.template_jpeg or b"").hexdigest(),
+                cover_id="uploaded_" + hashlib.sha256(bundle.template_jpeg).hexdigest(),
                 default_source_ids=tuple(SourceId(mapping[id_]) for id_ in template.default_source_ids),
                 duration_policy=replace(
                     template.duration_policy,
