@@ -67,7 +67,7 @@ def test_v2_retains_full_dormant_template_and_selected_runtime(tmp_path):
     assert store.export("managed", str(playlist.id), version=2)[1] == data
     assert store.store.path.read_bytes() == before
     assert b"SECRET-REMOTE-DESTINATION" not in data
-    with pytest.raises(PlaylistBundleError, match="version"):
+    with pytest.raises(PlaylistBundleError, match="ZIP envelope"):
         inspect_playlist_bundle(data)
     parsed = inspect_playlist_bundle_v2(data)
     assert parsed.version == 2
