@@ -12,7 +12,12 @@ from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetStore
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
-from news_bulletin_playlist.managed_state import ManagedState, ManagedStateError, activate_template
+from news_bulletin_playlist.managed_state import (
+    InstalledSource,
+    ManagedState,
+    ManagedStateError,
+    activate_template,
+)
 from news_bulletin_playlist.models import DurationPolicy, DurationPolicyException
 from news_bulletin_playlist.playlist_import import PlaylistImportError, PlaylistImportService
 from news_bulletin_playlist.portable_playlists import PortableCoverLoader
@@ -165,7 +170,13 @@ def test_v2_apply_refuses_stale_preview_without_installing_artwork(tmp_path):
     root, store, importer = _receiver(tmp_path)
     plan = importer.preview_v2(data)
     state = store.load_readonly()
-    store.save(replace(state, schema_version=10))
+    # Fresh v11 already stores schema 10; make a real unrelated durable edit.
+    store.save(
+        replace(
+            state,
+            sources=(InstalledSource.from_definition(BUILTIN_CATALOG.sources[0]),),
+        )
+    )
     before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
     with pytest.raises(PlaylistImportError, match="changed"):
         importer.apply_v2(data, plan.sources.fingerprint)
