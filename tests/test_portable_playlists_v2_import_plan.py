@@ -142,13 +142,9 @@ def test_v2_import_commits_full_owner_and_current_projection_atomically(tmp_path
     assert len(owner_template.default_source_ids) == len(template.default_source_ids)
     assert len(owner_template.duration_policy.exceptions) == 2
     assert owner_template.duration_policy.exceptions[1].edition_local_time.fold == 1
-    assert (
-        owner_template.duration_policy.exceptions[0].edition_local_time.microsecond == 123456
-    )
+    assert owner_template.duration_policy.exceptions[0].edition_local_time.microsecond == 123456
     assert owner_template.default_source_ids[-1] not in state.templates[0].default_source_ids
-    original_by_show = {
-        s.external_references[0].external_id: s for s in BUILTIN_CATALOG.sources
-    }
+    original_by_show = {s.external_references[0].external_id: s for s in BUILTIN_CATALOG.sources}
     for restored in reopened.catalog.sources:
         show = restored.external_references[0].external_id
         expected = original_by_show[show]

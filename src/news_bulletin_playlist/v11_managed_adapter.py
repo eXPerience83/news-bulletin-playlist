@@ -78,9 +78,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner state could not be saved") from exc
 
-    def save_owner_bundle(
-        self, inventory: OwnerInventory, overlay: ManagedState
-    ) -> None:
+    def save_owner_bundle(self, inventory: OwnerInventory, overlay: ManagedState) -> None:
         """Commit an import's owner sources, templates and projection in one v11 CAS.
 
         No caller may update owner catalog and overlay in separate steps.

@@ -273,9 +273,7 @@ def update_v11_owner_inventory(
         # owner inventory by this same atomic CAS.
         snapshot = parse_legacy_snapshot(_canonical(document["installed_catalog"]))
         next_catalog = _owner_active_catalog(snapshot, edited)
-        document["managed_overlay"] = serialize_managed_state(
-            updated_overlay, catalog=next_catalog
-        )
+        document["managed_overlay"] = serialize_managed_state(updated_overlay, catalog=next_catalog)
         document["owner_revision"] = document.get("owner_revision", 0) + 1
         candidate = _canonical(document)
         verified = parse_v11_operational(candidate)

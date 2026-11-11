@@ -142,9 +142,7 @@ class PlaylistImportService:
             sorted(
                 (
                     *plan_source_import(
-                        tuple(
-                            item for item in bundle.sources if isinstance(item, PortableSource)
-                        ),
+                        tuple(item for item in bundle.sources if isinstance(item, PortableSource)),
                         sources,
                     ),
                     *(
@@ -158,9 +156,7 @@ class PlaylistImportService:
         )
         source_preview = SourceImportPreview(
             rows,
-            hashlib.sha256(
-                self.store._expected_bytes + repr(pending).encode("utf-8")
-            ).hexdigest(),
+            hashlib.sha256(self.store._expected_bytes + repr(pending).encode("utf-8")).hexdigest(),
             state.schema_version,
         )
         if source_preview.unsupported or source_preview.conflicts:
@@ -181,9 +177,8 @@ class PlaylistImportService:
                 True,
                 "ZIP v2 currently requires unclaimed sources and no pending provisioning",
             )
-        if (
-            any(p.portable_id == bundle.playlist["portable_id"] for p in state.playlists)
-            or any(t.portable_id == bundle.playlist["portable_id"] for t in state.templates)
+        if any(p.portable_id == bundle.playlist["portable_id"] for p in state.playlists) or any(
+            t.portable_id == bundle.playlist["portable_id"] for t in state.templates
         ):
             return PlaylistV2ImportPlan(
                 bundle,
@@ -213,9 +208,7 @@ class PlaylistImportService:
             template,
             id=PlaylistId(new_id),
             cover_id="uploaded_" + hashlib.sha256(bundle.template_jpeg).hexdigest(),
-            default_source_ids=tuple(
-                SourceId(mapping[id_]) for id_ in template.default_source_ids
-            ),
+            default_source_ids=tuple(SourceId(mapping[id_]) for id_ in template.default_source_ids),
             duration_policy=replace(
                 template.duration_policy,
                 exceptions=tuple(
@@ -327,7 +320,7 @@ class PlaylistImportService:
             except ManagedStateError:
                 try:
                     observed = parse_v11_operational(self.store._owner.load_bytes())
-                except (OSError, ValueError):
+                except OSError, ValueError:
                     raise PlaylistImportError(
                         "ZIP v2 import outcome uncertain; inspect v11 before retrying"
                     ) from None
