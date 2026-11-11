@@ -77,8 +77,10 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 owner state could not be saved") from exc
 
-    def save_owner_source(self, edited: InstalledSource) -> None:
-        """Edit a historical owner source without replacing specialized processing."""
+    def save_owner_source(
+        self, edited: InstalledSource, *, reconcile_public_release_override: bool = False
+    ) -> None:
+        """CAS the owner definition, optionally retiring a legacy mode override atomically."""
         if not isinstance(edited, InstalledSource):
             raise ManagedStateError("historical source edit requires complete metadata")
         try:
@@ -107,8 +109,20 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
                     for item in current.owner_inventory.sources
                 ),
             )
+            overlay = (
+                replace(
+                    current.managed_overlay,
+                    source_overrides=tuple(
+                        item
+                        for item in current.managed_overlay.source_overrides
+                        if item.source_id != edited.id
+                    ),
+                )
+                if reconcile_public_release_override
+                else None
+            )
             next_bytes = self._owner.save_owner_inventory(
-                inventory, expected_bytes=self._expected_bytes
+                inventory, expected_bytes=self._expected_bytes, managed_overlay=overlay
             )
             self._expected_bytes = next_bytes
             self.catalog = parse_v11_operational(next_bytes).active_catalog

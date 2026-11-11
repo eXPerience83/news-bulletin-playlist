@@ -250,7 +250,9 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
     return next_payload
 
 
-def update_v11_owner_inventory(payload: bytes, edited: OwnerInventory) -> bytes:
+def update_v11_owner_inventory(
+    payload: bytes, edited: OwnerInventory, *, managed_overlay: ManagedState | None = None
+) -> bytes:
     """Publish a validated owner-inventory revision without rewriting legacy evidence.
 
     A revision is explicit and strictly increasing. The initial conversion is
@@ -259,23 +261,28 @@ def update_v11_owner_inventory(payload: bytes, edited: OwnerInventory) -> bytes:
     current = parse_v11_operational(payload)
     if not isinstance(edited, OwnerInventory):
         raise V11OperationalError("invalid owner inventory edit")
-    if edited == current.owner_inventory:
+    updated_overlay = current.managed_overlay if managed_overlay is None else managed_overlay
+    if edited == current.owner_inventory and updated_overlay == current.managed_overlay:
         return payload
     try:
         document = json.loads(payload)
         document["owner_inventory"] = edited.to_document()
+        # Update owner mode and retire its legacy override in one durable CAS.
+        document["managed_overlay"] = serialize_managed_state(
+            updated_overlay, catalog=current.active_catalog
+        )
         document["owner_revision"] = document.get("owner_revision", 0) + 1
         candidate = _canonical(document)
         verified = parse_v11_operational(candidate)
     except (ValueError, TypeError, RecursionError) as exc:
         raise V11OperationalError("owner inventory edit is not valid") from exc
     if (
-        verified.managed_overlay != current.managed_overlay
+        verified.managed_overlay != updated_overlay
         or verified.migration_origin_sha256 != current.migration_origin_sha256
         or verified.historical_catalog != current.historical_catalog
         or verified.owner_inventory != edited
     ):
-        raise V11OperationalError("owner edit changed historical evidence or managed policy")
+        raise V11OperationalError("owner edit changed historical evidence or requested policy")
     return candidate
 
 

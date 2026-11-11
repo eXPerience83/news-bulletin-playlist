@@ -292,7 +292,13 @@ class V11OperationalStore:
                 raise V11StoreError("v11 write durability uncertain; inspect before retry") from exc
             return next_bytes
 
-    def save_owner_inventory(self, inventory: OwnerInventory, *, expected_bytes: bytes) -> bytes:
+    def save_owner_inventory(
+        self,
+        inventory: OwnerInventory,
+        *,
+        expected_bytes: bytes,
+        managed_overlay: ManagedState | None = None,
+    ) -> bytes:
         """CAS owner definitions; never modify the forensic catalog or legacy file."""
         with _locked_root(self.root) as dir_fd:
             current = _read_existing(dir_fd)
@@ -301,7 +307,9 @@ class V11OperationalStore:
             if not isinstance(expected_bytes, bytes) or current != expected_bytes:
                 raise V11StoreError("stale v11 edit; reload before saving")
             try:
-                next_bytes = update_v11_owner_inventory(current, inventory)
+                next_bytes = update_v11_owner_inventory(
+                    current, inventory, managed_overlay=managed_overlay
+                )
             except V11OperationalError as exc:
                 raise V11StoreError("invalid v11 owner inventory edit") from exc
             if next_bytes == current:
