@@ -11,8 +11,10 @@ from dataclasses import dataclass
 from typing import Any
 from zipfile import BadZipFile, ZipFile
 
+from news_bulletin_playlist.catalog import PlaylistTemplate
 from news_bulletin_playlist.custom_cover_assets import MAX_JPEG_BYTES, validate_canonical_jpeg
 from news_bulletin_playlist.models import DurationPolicy, DurationPolicyException
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.portable_identity import portable_id
 from news_bulletin_playlist.portable_playlist_metadata import (
     exact_object,
@@ -23,6 +25,7 @@ from news_bulletin_playlist.portable_playlist_metadata import (
 from news_bulletin_playlist.portable_playlists import (
     MAX_MANIFEST_BYTES,
     MAX_PLAYLIST_ZIP_BYTES,
+    MAX_PLAYLIST_ZIP_V2_BYTES,
     canonical_json,
 )
 from news_bulletin_playlist.portable_sources import (
@@ -45,6 +48,9 @@ class PlaylistBundle:
     jpeg: bytes
     exceptions: tuple[DurationPolicyException, ...]
     metadata: str
+    version: int = 1
+    template: PlaylistTemplate | None = None
+    template_jpeg: bytes | None = None
 
 
 def _id(value: object) -> str:
@@ -76,13 +82,18 @@ def _digest(data: bytes) -> dict[str, object]:
     return {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
 
-def _files(document: bytes) -> dict[str, bytes]:
-    if not isinstance(document, bytes) or not 22 < len(document) <= MAX_PLAYLIST_ZIP_BYTES:
-        raise PlaylistBundleError("Playlist ZIP must be at most 1 MiB")
-    # Require the exact non-ZIP64, single-disk, comment-free envelope produced by v1.
+def _files(document: bytes, *, version: int = 1) -> dict[str, bytes]:
+    maximum = MAX_PLAYLIST_ZIP_V2_BYTES if version == 2 else MAX_PLAYLIST_ZIP_BYTES
+    if not isinstance(document, bytes) or not 22 < len(document) <= maximum:
+        raise PlaylistBundleError("Playlist ZIP exceeds the permitted size")
+    # Retain v1's exact four-entry envelope. V2 adds a template member and
+    # optionally a second JPEG; neither format permits comments or ZIP64.
     eocd = struct.unpack("<4s4H2IH", document[-22:])
+    allowed_counts = (5, 6) if version == 2 else (4,)
     if (
-        eocd[:5] != (b"PK\x05\x06", 0, 0, 4, 4)
+        eocd[:3] != (b"PK\x05\x06", 0, 0)
+        or eocd[3] != eocd[4]
+        or eocd[3] not in allowed_counts
         or eocd[7] != 0
         or eocd[5] + eocd[6] != len(document) - 22
     ):
@@ -90,8 +101,8 @@ def _files(document: bytes) -> dict[str, bytes]:
     output = {}
     with ZipFile(io.BytesIO(document), "r", allowZip64=False) as archive:
         entries = archive.infolist()
-        if len(entries) != 4 or archive.comment:
-            raise PlaylistBundleError("Expected exactly four ZIP entries")
+        if len(entries) not in allowed_counts or archive.comment:
+            raise PlaylistBundleError("Unexpected ZIP entry count")
         offset = 0
         total = 0
         for entry in entries:
@@ -103,6 +114,8 @@ def _files(document: bytes) -> dict[str, bytes]:
                 if name == "manifest.sha256"
                 else MAX_SOURCE_DOCUMENT_BYTES
                 if name == "sources.json"
+                else MAX_PLAYLIST_ZIP_V2_BYTES
+                if version == 2 and name == "template.json"
                 else MAX_JPEG_BYTES
                 if re.fullmatch(r"covers/[0-9a-f]{64}\.jpg", name)
                 else 0
@@ -143,25 +156,24 @@ def _files(document: bytes) -> dict[str, bytes]:
                 raise PlaylistBundleError("Inconsistent ZIP local header")
             offset += 30 + header[9] + entry.file_size
             total += entry.file_size
-            if total > MAX_PLAYLIST_ZIP_BYTES or offset > eocd[6]:
+            if total > maximum or offset > eocd[6]:
                 raise PlaylistBundleError("ZIP expansion exceeds limits")
             with archive.open(entry) as stream:
                 data = stream.read(limit + 1)
                 if len(data) != entry.file_size or stream.read(1):
                     raise PlaylistBundleError("ZIP entry size mismatch")
             output[name] = data
-        if offset != eocd[6] or list(output)[:3] != [
-            "manifest.json",
-            "manifest.sha256",
-            "sources.json",
-        ]:
+        prefix = ["manifest.json", "manifest.sha256", "sources.json"]
+        if version == 2:
+            prefix.append("template.json")
+        if offset != eocd[6] or list(output)[: len(prefix)] != prefix:
             raise PlaylistBundleError("Unexpected ZIP layout")
     return output
 
 
 def inspect_playlist_bundle(document: bytes) -> PlaylistBundle:
     try:
-        return _inspect(document)
+        return _inspect(document, version=1)
     except PlaylistBundleError:
         raise
     except (
@@ -180,16 +192,42 @@ def inspect_playlist_bundle(document: bytes) -> PlaylistBundle:
         ) from None
 
 
-def _inspect(document: bytes) -> PlaylistBundle:
-    files = _files(document)
+def inspect_playlist_bundle_v2(document: bytes) -> PlaylistBundle:
+    """Read-only strict v2 decoder; installation/apply remains deliberately disabled."""
+    try:
+        return _inspect(document, version=2)
+    except PlaylistBundleError:
+        raise
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        OverflowError,
+        RecursionError,
+        UnicodeError,
+        OSError,
+        BadZipFile,
+        struct.error,
+    ):
+        raise PlaylistBundleError(
+            "Invalid ZIP v2, owner template, capability metadata or JPEG"
+        ) from None
+
+
+def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
+    files = _files(document, version=version)
     raw = files["manifest.json"]
     if files["manifest.sha256"] != (hashlib.sha256(raw).hexdigest() + "\n").encode("ascii"):
         raise PlaylistBundleError("Manifest SHA256 mismatch")
-    root = exact_object(strict_json(raw), {"format", "version", "playlist", "files"})
+    root = exact_object(
+        strict_json(raw),
+        {"format", "version", "playlist", "files"}
+        | ({"template"} if version == 2 else set()),
+    )
     if (
         root["format"] != "news-bulletin-playlist.playlist"
         or type(root["version"]) is not int
-        or root["version"] != 1
+        or root["version"] != version
     ):
         raise PlaylistBundleError("Unsupported playlist format or version")
     p = exact_object(
@@ -239,9 +277,42 @@ def _inspect(document: bytes) -> PlaylistBundle:
     DurationPolicy(duration["max_seconds"], exceptions, duration["min_seconds"])
     if any(e.source_id not in ids for e in exceptions):
         raise PlaylistBundleError("Duration exception references an unassigned source")
+    owner_template = None
+    template_cover = None
+    required_ids = set(ids)
+    if version == 2:
+        if p["kind"] != "managed":
+            raise PlaylistBundleError("ZIP v2 requires a managed playlist")
+        template_data = exact_object(root["template"], {"path", "size", "sha256", "cover"})
+        if template_data["path"] != "template.json":
+            raise PlaylistBundleError("Unknown ZIP v2 owner-template path")
+        template_descriptor = _digest(files["template.json"])
+        if {k: template_data[k] for k in ("size", "sha256")} != template_descriptor:
+            raise PlaylistBundleError("ZIP v2 owner-template digest mismatch")
+        templates = OwnerTemplateSet.parse(files["template.json"])
+        if len(templates.records) != 1:
+            raise PlaylistBundleError("ZIP v2 must include exactly one owner template")
+        owner_template = templates.records[0]
+        required_ids.update(owner_template.default_source_ids)
+        required_ids.update(e.source_id for e in owner_template.duration_policy.exceptions)
+        if (
+            p["ordering"] != owner_template.ordering.value
+            or p["countries"] != list(owner_template.countries)
+            or p["languages"] != list(owner_template.languages)
+        ):
+            raise PlaylistBundleError("ZIP v2 current policy disagrees with owner template")
+        expected_active = tuple(
+            e for e in owner_template.duration_policy.exceptions
+            if e.source_id in ids and e.max_seconds > duration["max_seconds"]
+        )
+        if exceptions != expected_active:
+            raise PlaylistBundleError("ZIP v2 active exceptions disagree with owner template")
     records = inspect_sources(files["sources.json"])
-    if {r.source.id if isinstance(r, PortableSource) else r.id for r in records} != set(ids):
-        raise PlaylistBundleError("Source closure does not exactly match assignments")
+    if {r.source.id if isinstance(r, PortableSource) else r.id for r in records} != required_ids:
+        raise PlaylistBundleError("Source closure does not match assigned and dormant sources")
+    if version == 2:
+        assert owner_template is not None
+        templates.validate_sources(tuple(required_ids))
     cover = exact_object(
         p["cover"], {"original_id", "origin", "path", "media_type", "size", "sha256", "attribution"}
     )
@@ -253,15 +324,36 @@ def _inspect(document: bytes) -> PlaylistBundle:
     ):
         raise PlaylistBundleError("Invalid cover identity")
     path = f"covers/{cover['sha256']}.jpg"
-    if cover["path"] != path or set(files) != {
-        "manifest.json",
-        "manifest.sha256",
-        "sources.json",
-        path,
-    }:
+    file_names = {"manifest.json", "manifest.sha256", "sources.json", path}
+    if version == 2:
+        assert owner_template is not None
+        template_cover_info = exact_object(
+            root["template"]["cover"],
+            {"original_id", "origin", "path", "media_type", "size", "sha256", "attribution"},
+        )
+        template_cover_path = f"covers/{template_cover_info['sha256']}.jpg"
+        if (
+            template_cover_info["original_id"] != owner_template.cover_id
+            or template_cover_info["path"] != template_cover_path
+            or template_cover_info["media_type"] != "image/jpeg"
+            or template_cover_info["origin"] not in ("bundled", "uploaded")
+        ):
+            raise PlaylistBundleError("Invalid ZIP v2 template artwork")
+        template_cover = files.get(template_cover_path)
+        if template_cover is None:
+            raise PlaylistBundleError("Missing ZIP v2 template cover")
+        file_names.update(("template.json", template_cover_path))
+        validate_attribution(template_cover_info["attribution"])
+        validate_canonical_jpeg(template_cover)
+        if _digest(template_cover) != {
+            k: template_cover_info[k] for k in ("size", "sha256")
+        }:
+            raise PlaylistBundleError("ZIP v2 template cover digest mismatch")
+    if cover["path"] != path or set(files) != file_names:
         raise PlaylistBundleError("Inconsistent cover reference")
-    descriptors = exact_object(root["files"], {"sources.json", path})
-    for name in ("sources.json", path):
+    descriptor_names = file_names - {"manifest.json", "manifest.sha256"}
+    descriptors = exact_object(root["files"], descriptor_names)
+    for name in descriptor_names:
         descriptor = exact_object(descriptors[name], {"size", "sha256"})
         _integer(descriptor["size"])
         if descriptor != _digest(files[name]):
@@ -285,4 +377,7 @@ def _inspect(document: bytes) -> PlaylistBundle:
     from news_bulletin_playlist.portable_playlist_metadata import validate_metadata
 
     validate_metadata(metadata)
-    return PlaylistBundle(p, records, files["sources.json"], files[path], exceptions, metadata)
+    return PlaylistBundle(
+        p, records, files["sources.json"], files[path], exceptions, metadata,
+        version=version, template=owner_template, template_jpeg=template_cover,
+    )
