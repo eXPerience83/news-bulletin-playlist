@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass, replace
 
+from news_bulletin_playlist.catalog import PlaylistTemplate
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetStore
 from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningJournal
@@ -19,7 +20,12 @@ from news_bulletin_playlist.managed_state import (
     serialize_managed_state,
 )
 from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
-from news_bulletin_playlist.playlist_bundle import PlaylistBundle, inspect_playlist_bundle
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
+from news_bulletin_playlist.playlist_bundle import (
+    PlaylistBundle,
+    inspect_playlist_bundle,
+    inspect_playlist_bundle_v2,
+)
 from news_bulletin_playlist.portable_playlist_metadata import exception_payload
 from news_bulletin_playlist.portable_playlists import PortableCoverLoader, Synchronization
 from news_bulletin_playlist.portable_sources import (
@@ -27,6 +33,7 @@ from news_bulletin_playlist.portable_sources import (
     UnsupportedPortableSource,
     parse_sources,
 )
+from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
 from news_bulletin_playlist.source_import import (
     SourceImportPreview,
     SourceImportRow,
@@ -61,6 +68,18 @@ class PlaylistImportResult:
     recovered: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class PlaylistV2ImportPlan:
+    """Read-only, fully remapped v2 plan; not yet a durable install operation."""
+
+    bundle: PlaylistBundle
+    sources: SourceImportPreview
+    owner_template: PlaylistTemplate | None
+    selected_source_ids: tuple[SourceId, ...] | None
+    blocked: bool
+    reason: str
+
+
 class PlaylistImportService:
     def __init__(
         self,
@@ -76,6 +95,85 @@ class PlaylistImportService:
             covers,
         )
         self.source_service = SourceImportService(store, synchronization, provisioning)
+
+    def preview_v2(self, document: bytes) -> PlaylistV2ImportPlan:
+        """Verify a complete v2 closure and calculate local IDs without any writes.
+
+        The later durable importer must commit source records, template defaults,
+        current policy and both artwork identities together. Do NOT install the
+        plan as a v1 draft; that would discard dormant template exceptions.
+        """
+        bundle = inspect_playlist_bundle_v2(document)
+        if not isinstance(self.store, ForwardOnlyManagedStateStore):
+            raise PlaylistImportError("ZIP v2 requires a v11 owner installation")
+        assert bundle.template is not None
+        with self.synchronization.hold():
+            state = self.store.load_readonly()
+            pending = self.provisioning.load()
+            sources = effective_sources(self.store.catalog, state)
+            rows = tuple(
+                sorted(
+                    (
+                        *plan_source_import(
+                            tuple(item for item in bundle.sources if isinstance(item, PortableSource)),
+                            sources,
+                        ),
+                        *(
+                            SourceImportRow(item, None, "unsupported")
+                            for item in bundle.sources
+                            if isinstance(item, UnsupportedPortableSource)
+                        ),
+                    ),
+                    key=lambda item: item.spotify_show_id,
+                )
+            )
+            source_preview = SourceImportPreview(
+                rows,
+                source_import_fingerprint(state, sources, pending, self.store.catalog),
+                state.schema_version,
+            )
+            if source_preview.unsupported or source_preview.conflicts:
+                return PlaylistV2ImportPlan(
+                    bundle, source_preview, None, None, True,
+                    "Unsupported or conflicting source definitions require operator review",
+                )
+            # All source aliases must have unambiguous local destinations.
+            mapping = {row.incoming.id: row.local_id for row in rows if row.local_id is not None}
+            template = bundle.template
+            occupied = (
+                {str(item.id) for item in self.store.catalog.playlists}
+                | {str(item.id) for item in state.templates}
+                | {str(item.id) for item in state.playlists}
+                | {item.template_id for item in state.quarantined_templates}
+            )
+            if pending is not None:
+                occupied.add(str(pending.template_id))
+            new_id = "custom_" + bundle.playlist["portable_id"].replace("-", "")
+            suffix = 2
+            while new_id in occupied:
+                new_id = f"custom_{bundle.playlist['portable_id'].replace('-', '')}_{suffix}"
+                suffix += 1
+            remapped = replace(
+                template,
+                id=PlaylistId(new_id),
+                cover_id="uploaded_" + hashlib.sha256(bundle.template_jpeg or b"").hexdigest(),
+                default_source_ids=tuple(SourceId(mapping[id_]) for id_ in template.default_source_ids),
+                duration_policy=replace(
+                    template.duration_policy,
+                    exceptions=tuple(
+                        replace(exception, source_id=SourceId(mapping[exception.source_id]))
+                        for exception in template.duration_policy.exceptions
+                    ),
+                ),
+            )
+            selected = tuple(SourceId(mapping[id_]) for id_ in bundle.playlist["source_ids"])
+            candidate = self.source_service.build_candidate(state, rows, pending)
+            available = tuple(item.id for item in effective_sources(self.store.catalog, candidate))
+            OwnerTemplateSet((remapped,)).validate_sources(available)
+            return PlaylistV2ImportPlan(
+                bundle, source_preview, remapped, selected, False,
+                "Offline plan only; lossless v2 import is not yet enabled",
+            )
 
     def preview(self, document: bytes) -> PlaylistImportPreview:
         bundle = inspect_playlist_bundle(document)
