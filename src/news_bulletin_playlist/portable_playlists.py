@@ -239,6 +239,7 @@ def playlist_bundle(
     closure_ids = source_ids
     if version == 2:
         assert isinstance(target, ManagedPlaylist)
+        assert template is not None
         closure_ids = tuple(
             dict.fromkeys(
                 (
@@ -319,6 +320,7 @@ def playlist_bundle(
     additional_entries: list[tuple[str, bytes]] = []
     if version == 2:
         assert isinstance(target, ManagedPlaylist)
+        assert template is not None
         template_document = OwnerTemplateSet((template,)).serialize()
         template_cover_bytes, template_attribution = covers.load(template.cover_id)
         template_cover_descriptor = _descriptor(template_cover_bytes)
@@ -335,8 +337,10 @@ def playlist_bundle(
                 "attribution": template_attribution,
             },
         }
-        manifest["files"]["template.json"] = _descriptor(template_document)
-        manifest["files"][template_cover_path] = template_cover_descriptor
+        file_descriptors = manifest["files"]
+        assert isinstance(file_descriptors, dict)
+        file_descriptors["template.json"] = _descriptor(template_document)
+        file_descriptors[template_cover_path] = template_cover_descriptor
         additional_entries.append(("template.json", template_document))
         if template_cover_path != cover_path:
             additional_entries.append((template_cover_path, template_cover_bytes))
