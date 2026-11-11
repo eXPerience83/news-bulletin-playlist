@@ -721,9 +721,7 @@ def serialize_managed_state(
     _validate_overrides(state.source_overrides, catalog)
     _validate_portable_ids(state)
     if state.schema_version < IMPORTED_PLAYLIST_SCHEMA_VERSION and any(
-        t.portable_metadata is not None
-        or t.duration_exceptions
-        or t.owner_template_id is not None
+        t.portable_metadata is not None or t.duration_exceptions or t.owner_template_id is not None
         for t in state.templates
     ):
         raise ManagedStateError("Imported playlist data requires explicit schema v10")

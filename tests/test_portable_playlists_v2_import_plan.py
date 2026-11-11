@@ -214,9 +214,7 @@ def test_v2_reexport_restored_draft_preserves_owner_closure_on_second_install(tm
     exporter = PlaylistExportService(
         store, ConfigurationSynchronization(), PortableCoverLoader(root)
     )
-    identity, outgoing = exporter.export(
-        "draft", first_result.current_draft_id, version=2
-    )
+    identity, outgoing = exporter.export("draft", first_result.current_draft_id, version=2)
     assert identity == UUID
     parsed = inspect_playlist_bundle_v2(outgoing)
     assert parsed.playlist["kind"] == "draft"
@@ -236,10 +234,7 @@ def test_v2_reexport_restored_draft_preserves_owner_closure_on_second_install(tm
     assert second_result.created_sources == len(historical.default_source_ids)
     assert len(store_2.catalog.playlists[0].duration_policy.exceptions) == 2
     assert len(store_2.load_readonly().templates[0].default_source_ids) == 1
-    assert (
-        store_2.load_readonly().templates[0].owner_template_id
-        == second_result.owner_template_id
-    )
+    assert store_2.load_readonly().templates[0].owner_template_id == second_result.owner_template_id
 
 
 def test_v2_owner_template_cannot_be_deleted_while_current_draft_references_it(tmp_path):
