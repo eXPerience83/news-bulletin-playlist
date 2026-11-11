@@ -27,7 +27,7 @@ from news_bulletin_playlist.owner_template_records import (
     OwnerTemplateSet,
     materialize_owner_templates,
 )
-from news_bulletin_playlist.portable_playlist_metadata import exact_object
+from news_bulletin_playlist.portable_playlist_metadata import exact_object, validate_attribution
 from news_bulletin_playlist.portable_sources import export_sources, parse_sources
 
 
@@ -49,6 +49,9 @@ class OwnerInventory:
     source_order: OwnerSourceOrder
     sources: tuple[InstalledSource, ...]
     templates: OwnerTemplateSet
+    # Optional v11 owner JPEG credit records. Older canonical inventories have
+    # no field and remain byte-compatible until the first explicit revision.
+    cover_attributions: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_snapshot(cls, snapshot: FrozenLegacyCatalogSnapshot) -> OwnerInventory:
@@ -79,7 +82,7 @@ class OwnerInventory:
         try:
             self.templates.validate_sources(self.source_order.ids)
             canonical_sources = self.source_order.definitions(self.sources)
-            return {
+            result: dict[str, object] = {
                 "source_order": json.loads(self.source_order.serialize()),
                 # Split the complete installation into bounded source v1
                 # capability documents. A valid legacy root can have more
@@ -90,6 +93,29 @@ class OwnerInventory:
                 ],
                 "templates": json.loads(self.templates.serialize()),
             }
+            if self.cover_attributions:
+                if len(self.cover_attributions) > 256:
+                    raise OwnerInventoryError("Too many owner cover attribution records")
+                seen: set[str] = set()
+                entries: list[dict[str, object]] = []
+                for cover_id, encoded in self.cover_attributions:
+                    if (
+                        not isinstance(cover_id, str)
+                        or not cover_id.startswith("uploaded_")
+                        or len(cover_id) != 73
+                        or cover_id in seen
+                        or not isinstance(encoded, str)
+                    ):
+                        raise OwnerInventoryError("Invalid or duplicate owner cover attribution")
+                    seen.add(cover_id)
+                    attribution = validate_attribution(json.loads(encoded))
+                    if _compact(attribution).decode("utf-8") != encoded:
+                        raise OwnerInventoryError("Noncanonical owner cover attribution")
+                    entries.append({"cover_id": cover_id, "attribution": attribution})
+                if [row["cover_id"] for row in entries] != sorted(seen):
+                    raise OwnerInventoryError("Owner cover attribution order is not canonical")
+                result["cover_attributions"] = entries
+            return result
         except (ValueError, TypeError, UnicodeError, KeyError) as exc:
             raise OwnerInventoryError("Owner inventory cannot be serialized") from exc
 
@@ -97,7 +123,12 @@ class OwnerInventory:
     def parse(cls, document: object) -> OwnerInventory:
         """Validate all independent codecs and exact membership, fail closed."""
         try:
-            obj = exact_object(document, {"source_order", "installed_sources", "templates"})
+            if not isinstance(document, dict):
+                raise OwnerInventoryError("Invalid owner inventory document")
+            keys = {"source_order", "installed_sources", "templates"}
+            if "cover_attributions" in document:
+                keys.add("cover_attributions")
+            obj = exact_object(document, keys)
             order = OwnerSourceOrder.parse(_compact(obj["source_order"]))
             chunks = obj["installed_sources"]
             if not isinstance(chunks, list) or len(chunks) > 6:
@@ -108,10 +139,21 @@ class OwnerInventory:
                 for item in parse_sources(_compact(chunk))
             )
             templates = OwnerTemplateSet.parse(_compact(obj["templates"]))
+            attribution_records = obj.get("cover_attributions", [])
+            if not isinstance(attribution_records, list) or len(attribution_records) > 256:
+                raise OwnerInventoryError("Invalid owner cover attribution inventory")
+            attributions = tuple(
+                (
+                    exact_object(item, {"cover_id", "attribution"})["cover_id"],
+                    _compact(validate_attribution(item["attribution"])).decode("utf-8"),
+                )
+                for item in attribution_records
+            )
             result = cls(
                 source_order=order,
                 sources=tuple(sorted(records, key=lambda item: item.id)),
                 templates=templates,
+                cover_attributions=attributions,
             )
             if result.to_document() != obj:
                 raise OwnerInventoryError("Noncanonical owner inventory members")
