@@ -221,8 +221,7 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
         raise PlaylistBundleError("Manifest SHA256 mismatch")
     root = exact_object(
         strict_json(raw),
-        {"format", "version", "playlist", "files"}
-        | ({"template"} if version == 2 else set()),
+        {"format", "version", "playlist", "files"} | ({"template"} if version == 2 else set()),
     )
     if (
         root["format"] != "news-bulletin-playlist.playlist"
@@ -302,7 +301,8 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
         ):
             raise PlaylistBundleError("ZIP v2 current policy disagrees with owner template")
         expected_active = tuple(
-            e for e in owner_template.duration_policy.exceptions
+            e
+            for e in owner_template.duration_policy.exceptions
             if e.source_id in ids and e.max_seconds > duration["max_seconds"]
         )
         if exceptions != expected_active:
@@ -345,9 +345,7 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
         file_names.update(("template.json", template_cover_path))
         validate_attribution(template_cover_info["attribution"])
         validate_canonical_jpeg(template_cover)
-        if _digest(template_cover) != {
-            k: template_cover_info[k] for k in ("size", "sha256")
-        }:
+        if _digest(template_cover) != {k: template_cover_info[k] for k in ("size", "sha256")}:
             raise PlaylistBundleError("ZIP v2 template cover digest mismatch")
     if cover["path"] != path or set(files) != file_names:
         raise PlaylistBundleError("Inconsistent cover reference")
@@ -378,6 +376,13 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
 
     validate_metadata(metadata)
     return PlaylistBundle(
-        p, records, files["sources.json"], files[path], exceptions, metadata,
-        version=version, template=owner_template, template_jpeg=template_cover,
+        p,
+        records,
+        files["sources.json"],
+        files[path],
+        exceptions,
+        metadata,
+        version=version,
+        template=owner_template,
+        template_jpeg=template_cover,
     )

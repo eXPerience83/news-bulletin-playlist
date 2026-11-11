@@ -400,7 +400,11 @@ class PlaylistExportService:
     def export(self, kind: str, object_id: str, *, version: int = 1) -> tuple[str, bytes]:
         with self.synchronization.hold():
             return playlist_bundle(
-                self.store.load_readonly(), self.store, kind, object_id, self.covers,
+                self.store.load_readonly(),
+                self.store,
+                kind,
+                object_id,
+                self.covers,
                 version=version,
             )
 

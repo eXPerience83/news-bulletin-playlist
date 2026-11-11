@@ -85,9 +85,7 @@ def test_v2_retains_full_dormant_template_and_selected_runtime(tmp_path):
 
 
 def test_v2_preserves_different_current_and_template_cover_assets(tmp_path):
-    store, playlist, template, _active, _dormant = _donor(
-        tmp_path, different_cover=True
-    )
+    store, playlist, template, _active, _dormant = _donor(tmp_path, different_cover=True)
     assert playlist.cover_id != template.cover_id
     payload = store.export("managed", str(playlist.id), version=2)[1]
     parsed = inspect_playlist_bundle_v2(payload)
