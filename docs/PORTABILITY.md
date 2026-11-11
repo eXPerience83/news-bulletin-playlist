@@ -166,6 +166,41 @@ an ambiguous in-flight write remains a separate #421 hard stop.
 This work does not authorize production activation, and does not by itself
 solve #633 owner-controlled historical sources or #638 full portable ZIP v2.
 
+## ZIP v2 codec in progress (#638) — NOT YET AN IMPORT/RESTORE PATH
+
+The integration branch now has a **read-only, explicitly requested** ZIP v2
+export codec (`PlaylistExportService.export(..., version=2)`) and a separate
+strict offline decoder (`inspect_playlist_bundle_v2`). The regular Admin
+download and existing importer **remain ZIP v1 only**: no automatic fallback
+to v2, no implicit imported drafts, no activation and no provider writes.
+
+For a managed playlist ZIP v2 separates its **current destination projection**
+from the **full installed template**. It includes the current assignments
+(including disabled ones), the template's independent default source IDs,
+every original duration exception (including below-current-maximum and
+temporarily unassigned selectors), and the union of those exact source
+definitions with their existing capability identifiers. Exception timestamps
+preserve microseconds and DST `fold`.
+
+ZIP v2 has a canonical manifest version 2, unchanged strict portable
+`sources.json` v1, a separately hashed canonical `template.json` using the
+versioned `OwnerTemplateSet` contract, and the selected managed cover JPEG.
+When the template's default cover differs, a second content-addressed JPEG and
+attribution are included. The decoder checks SHA-256 and file size for all
+members, complete source closure, separation of active versus dormant
+exceptions, strict ZIP metadata/entry order, canonical owner template records,
+JPEG contents and distinct cover attribution. The v2 envelope is bounded to
+2 MiB, uses no compression, and never extracts files.
+
+**Important:** A v2 export passing inspection is not yet a recoverable
+configuration. The import side must durably represent the **two independent
+layers** (the current managed projection and full historical template
+closure), handle source remapping and artwork together under one atomic
+installation-owner write, and prove restart/re-edit/disable/re-enable behavior
+on a clean instance. Do not deploy or depend on v2 for backup/restore until
+that work and the #631 acceptance suite are complete. ZIP v1's strict existing
+reader and normal Admin download are unchanged.
+
 ## ZIP v1 safety boundary before complete v2 (#638)
 
 Managed ZIP v1 can faithfully describe the current destination selection,
