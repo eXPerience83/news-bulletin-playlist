@@ -6,7 +6,6 @@ from dataclasses import replace
 from datetime import time
 
 import pytest
-
 from _portable_playlist_fixtures import UUID, _service
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
