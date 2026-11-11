@@ -50,11 +50,7 @@ def _donor(tmp_path, *, different_cover=False):
         portable_id=UUID,
         source_ids=(first,),
         max_duration_seconds=3000,
-        cover_id=(
-            BUILTIN_CATALOG.playlists[1].cover_id
-            if different_cover
-            else template.cover_id
-        ),
+        cover_id=(BUILTIN_CATALOG.playlists[1].cover_id if different_cover else template.cover_id),
     )
     service = _service(
         donor_root,
