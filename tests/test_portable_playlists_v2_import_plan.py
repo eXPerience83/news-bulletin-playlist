@@ -31,7 +31,7 @@ from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
 
 
-def _donor(tmp_path):
+def _donor(tmp_path, *, different_cover=False):
     template = BUILTIN_CATALOG.playlists[0]
     first, last = template.default_source_ids[0], template.default_source_ids[-1]
     first_exception = DurationPolicyException("active", first, time(2, 15, 0, 123456, fold=1), 3600)
@@ -50,6 +50,11 @@ def _donor(tmp_path):
         portable_id=UUID,
         source_ids=(first,),
         max_duration_seconds=3000,
+        cover_id=(
+            BUILTIN_CATALOG.playlists[1].cover_id
+            if different_cover
+            else template.cover_id
+        ),
     )
     service = _service(
         donor_root,
@@ -211,7 +216,7 @@ def test_v2_failed_cas_cannot_publish_partial_sources_or_templates(tmp_path, mon
 
 
 def test_v2_reexport_restored_draft_preserves_owner_closure_on_second_install(tmp_path):
-    original, historical = _donor(tmp_path)
+    original, historical = _donor(tmp_path, different_cover=True)
     root, store, importer = _receiver(tmp_path)
     first = importer.preview_v2(original)
     first_result = importer.apply_v2(original, first.sources.fingerprint)
@@ -228,7 +233,11 @@ def test_v2_reexport_restored_draft_preserves_owner_closure_on_second_install(tm
     assert len(parsed.template.default_source_ids) == len(historical.default_source_ids)
     assert len(parsed.template.duration_policy.exceptions) == 2
     assert len(parsed.playlist["source_ids"]) == 1
-    assert parsed.template_attribution == inspect_playlist_bundle_v2(original).template_attribution
+    before = inspect_playlist_bundle_v2(original)
+    assert before.jpeg != before.template_jpeg
+    assert parsed.jpeg == before.jpeg
+    assert parsed.template_jpeg == before.template_jpeg
+    assert parsed.template_attribution == before.template_attribution
     assert b"SECRET-SPOTIFY-LINK" not in outgoing
 
     separate = tmp_path / "second"
@@ -253,3 +262,52 @@ def test_v2_owner_template_cannot_be_deleted_while_current_draft_references_it(t
         store.delete_owner_template(PlaylistId(result.owner_template_id))
     assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
     assert store.load_readonly().templates[0].owner_template_id == result.owner_template_id
+
+
+def test_v2_reassignment_duration_edits_and_source_toggle_preserve_original_owner(tmp_path):
+    data, historical = _donor(tmp_path)
+    root, store, importer = _receiver(tmp_path)
+    plan = importer.preview_v2(data)
+    result = importer.apply_v2(data, plan.sources.fingerprint)
+    reopened = open_managed_state_store(root)
+    original_owner = reopened.catalog.playlists[0]
+    assert len(original_owner.duration_policy.exceptions) == 2
+    current = reopened.load_readonly()
+    restored = current.templates[0]
+    edited = replace(
+        restored,
+        default_source_ids=original_owner.default_source_ids,
+        max_duration_seconds=2000,
+        duration_exceptions=original_owner.duration_policy.exceptions,
+    )
+    reopened.save(replace(current, templates=(edited,)))
+    assert reopened.load_readonly().templates[0].owner_template_id == result.owner_template_id
+    owned_source = reopened.catalog.sources[0]
+    from news_bulletin_playlist.managed_state import InstalledSource
+
+    reopened.save_owner_source(
+        replace(InstalledSource.from_definition(owned_source), enabled=False)
+    )
+    disabled = open_managed_state_store(root)
+    assert not disabled.catalog.sources[0].enabled
+    assert disabled.catalog.sources[0].parser_id == owned_source.parser_id
+    assert disabled.catalog.playlists[0].duration_policy.exceptions == (
+        original_owner.duration_policy.exceptions
+    )
+    disabled.save_owner_source(
+        replace(InstalledSource.from_definition(disabled.catalog.sources[0]), enabled=True)
+    )
+    assert open_managed_state_store(root).catalog.sources[0].enabled
+
+    exporter = PlaylistExportService(
+        disabled, ConfigurationSynchronization(), PortableCoverLoader(root)
+    )
+    outgoing = exporter.export("draft", result.current_draft_id, version=2)[1]
+    parsed = inspect_playlist_bundle_v2(outgoing)
+    assert parsed.template is not None
+    assert parsed.template.duration_policy == original_owner.duration_policy
+    assert parsed.playlist["duration_policy"]["max_seconds"] == 2000
+    assert len(parsed.playlist["source_ids"]) == len(historical.default_source_ids)
+    assert len(parsed.exceptions) == 2
+    assert parsed.template.id == original_owner.id
+    assert (root / "managed-state.json").exists() is False
