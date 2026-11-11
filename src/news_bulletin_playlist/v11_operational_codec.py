@@ -298,6 +298,7 @@ def _owner_active_catalog(
     return BuiltInCatalog(
         tuple(source for source in ordered_sources if source.id in original_image_ids),
         owned.templates.records,
+        allow_disabled_sources=True,
     )
 
 

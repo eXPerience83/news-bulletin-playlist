@@ -204,10 +204,11 @@ def _sources_table(
             controls += f'<a href="/admin/sources/edit?source_id={safe_id}">{label}</a>'
             if owner_catalog_editable:
                 controls += f'<a href="/admin/sources/delete?source_id={safe_id}">Delete</a>'
-        if provider_available and source.id not in built_in_ids:
+        if provider_available and (owner_catalog_editable or source.id not in built_in_ids):
             next_enabled = not source.enabled
             verb = "Enable" if next_enabled else "Disable"
-            controls += f'<a href="/admin/sources/edit?source_id={safe_id}">Edit</a>'
+            if source.id not in built_in_ids:
+                controls += f'<a href="/admin/sources/edit?source_id={safe_id}">Edit</a>'
             blocked = (
                 source_disable_blockers(
                     source.id,
@@ -249,10 +250,11 @@ def _sources_table(
                 snapshot.provisioning_intent is not None
                 and source.id in snapshot.provisioning_intent.source_ids
             )
-            if used_by.get(source.id) or pending:
-                controls += '<p class="muted">Unassign before deletion.</p>'
-            else:
-                controls += f'<a href="/admin/sources/delete?source_id={safe_id}">Delete</a>'
+            if source.id not in built_in_ids:
+                if used_by.get(source.id) or pending:
+                    controls += '<p class="muted">Unassign before deletion.</p>'
+                else:
+                    controls += f'<a href="/admin/sources/delete?source_id={safe_id}">Delete</a>'
         rows.append(
             "<tr>"
             f"<td>{html.escape(source.display_name)} "

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
@@ -11,7 +14,9 @@ from _admin_http import request as _request
 from _legacy_dataset import legacy_root as _root
 from _source_admin_http_fixtures import _server
 
+from news_bulletin_playlist.catalog import BuiltInCatalog
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
 
 
@@ -74,3 +79,132 @@ def test_admin_edits_historical_source_metadata_without_changing_parser_or_spoti
         assert b"Owner renamed station" in sources_page
         assert b"Owner-managed" in sources_page
     assert len(original.original_runtime.playlists) == 4
+
+
+def test_owner_source_disable_and_enable_preserves_assignments_and_detectors(tmp_path: Path) -> None:
+    root, _preview = _root(tmp_path, 10)
+    legacy_bytes = (root / "managed-state.json").read_bytes()
+    with _server(root) as (server, client, _unused):
+        store = open_managed_state_store(root)
+        first, second = store.catalog.sources[:2]
+        state = store.load_readonly()
+        # Every active synthetic destination keeps another enabled source.
+        store.save(
+            replace(
+                state,
+                playlists=tuple(
+                    replace(playlist, source_ids=(first.id, second.id))
+                    for playlist in state.playlists
+                ),
+            )
+        )
+        source_service = server.RequestHandlerClass.source_admin_service
+        managed = server.RequestHandlerClass.managed_admin_service
+        assert source_service is not None and managed is not None
+        source_service.store = managed.store = store
+        source_service.catalog = managed.catalog = store.catalog
+        cookie = _login(server)
+        status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        assert b"Owner-managed" in page
+        status, _, _ = _request(
+            server,
+            "POST",
+            "/admin/sources/set-enabled",
+            cookie=cookie,
+            form={
+                "csrf_token": _csrf(page),
+                "source_id": str(first.id),
+                "enabled": "0",
+            },
+        )
+        assert status == 303
+        disabled = open_managed_state_store(root)
+        assert not disabled.catalog.sources[0].enabled
+        assert disabled.catalog.sources[0].parser_id == first.parser_id
+        assert disabled.catalog.sources[0].collection_filter_id == first.collection_filter_id
+        assert disabled.catalog.sources[0].temporal_strategy == first.temporal_strategy
+        operational = parse_v11_operational((root / V11_OPERATIONAL_FILENAME).read_bytes())
+        assert all(
+            first.id not in playlist.source_selection.explicit
+            and second.id in playlist.source_selection.explicit
+            for playlist in operational.runtime.playlists
+        )
+        assert all(first.id in playlist.source_ids for playlist in disabled.load().playlists)
+        assert (root / "managed-state.json").read_bytes() == legacy_bytes
+        assert not client.calls
+
+        status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        assert b"Disabled" in page
+        status, _, _ = _request(
+            server,
+            "POST",
+            "/admin/sources/set-enabled",
+            cookie=cookie,
+            form={
+                "csrf_token": _csrf(page),
+                "source_id": str(first.id),
+                "enabled": "1",
+            },
+        )
+        assert status == 303
+        reopened = open_managed_state_store(root)
+        assert reopened.catalog.sources[0].enabled
+        assert all(
+            first.id in playlist.source_selection.explicit
+            for playlist in parse_v11_operational(
+                (root / V11_OPERATIONAL_FILENAME).read_bytes()
+            ).runtime.playlists
+        )
+        assert json.loads((root / V11_OPERATIONAL_FILENAME).read_text())["owner_revision"] == 2
+        assert (root / "managed-state.json").read_bytes() == legacy_bytes
+        assert not client.calls
+
+
+def test_owner_source_disable_rejects_last_live_source_without_write(tmp_path: Path) -> None:
+    root, _preview = _root(tmp_path, 10)
+    with _server(root) as (server, client, _unused):
+        store = open_managed_state_store(root)
+        first = store.catalog.sources[0]
+        state = store.load_readonly()
+        store.save(
+            replace(
+                state,
+                playlists=(
+                    replace(state.playlists[0], source_ids=(first.id,), enabled=True),
+                    *(replace(playlist, enabled=False) for playlist in state.playlists[1:]),
+                ),
+            )
+        )
+        source_service = server.RequestHandlerClass.source_admin_service
+        managed = server.RequestHandlerClass.managed_admin_service
+        assert source_service is not None and managed is not None
+        source_service.store = managed.store = store
+        source_service.catalog = managed.catalog = store.catalog
+        cookie = _login(server)
+        status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        assert b"Cannot disable" in page
+        before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        status, _, _ = _request(
+            server,
+            "POST",
+            "/admin/sources/set-enabled",
+            cookie=cookie,
+            form={
+                "csrf_token": _csrf(page),
+                "source_id": str(first.id),
+                "enabled": "0",
+            },
+        )
+        assert status == 409
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+        assert not client.calls
+
+
+def test_legacy_image_catalog_still_rejects_disabled_source(tmp_path: Path) -> None:
+    root, _preview = _root(tmp_path, 10)
+    first = open_managed_state_store(root).catalog.sources[0]
+    with pytest.raises(ValueError, match="must be enabled"):
+        BuiltInCatalog((replace(first, enabled=False),), ())
