@@ -320,6 +320,8 @@ class ManagedAdminService:
             raise ManagedAdminError("Owned template changed; reload before deleting")
         if any(playlist.template_id == current.id for playlist in state.playlists):
             raise ManagedAdminError("Owner template is referenced by a Spotify destination")
+        if any(item.owner_template_id == current.id for item in state.templates):
+            raise ManagedAdminError("Owner template is referenced by a recovered draft")
         if state.quarantined_templates:
             raise ManagedAdminError("Resolve quarantined drafts before deleting templates")
         pending = self.provisioning_journal.load()

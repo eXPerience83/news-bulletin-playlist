@@ -182,8 +182,13 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
                 )
             updated = current.owner_inventory.templates.remove_unreferenced(
                 template_id,
-                managed_template_ids=tuple(
-                    playlist.template_id for playlist in current.managed_overlay.playlists
+                managed_template_ids=(
+                    *tuple(playlist.template_id for playlist in current.managed_overlay.playlists),
+                    *tuple(
+                        item.owner_template_id
+                        for item in current.managed_overlay.templates
+                        if item.owner_template_id is not None
+                    ),
                 ),
                 pending_template_ids=pending_template_ids,
             )

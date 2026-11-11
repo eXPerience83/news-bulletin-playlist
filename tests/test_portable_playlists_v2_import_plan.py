@@ -137,6 +137,7 @@ def test_v2_import_commits_full_owner_and_current_projection_atomically(tmp_path
     assert len(state.templates) == 1
     assert state.templates[0].id == result.current_draft_id
     assert state.templates[0].portable_id == UUID
+    assert state.templates[0].owner_template_id == result.owner_template_id
     assert state.templates[0].max_duration_seconds == 3000
     assert len(state.templates[0].default_source_ids) == 1
     assert len(state.templates[0].duration_exceptions) == 1

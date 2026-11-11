@@ -286,6 +286,7 @@ class PlaylistImportService:
                     for exception in bundle.exceptions
                 ),
                 hidden=False,
+                owner_template_id=plan.owner_template.id,
             )
             overlay = replace(
                 state,
