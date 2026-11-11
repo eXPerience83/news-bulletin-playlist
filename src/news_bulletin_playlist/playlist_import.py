@@ -34,11 +34,7 @@ from news_bulletin_playlist.playlist_bundle import (
     inspect_playlist_bundle_v2,
 )
 from news_bulletin_playlist.portable_playlist_metadata import exception_payload
-from news_bulletin_playlist.portable_playlists import (
-    PortableCoverLoader,
-    Synchronization,
-    canonical_json,
-)
+from news_bulletin_playlist.portable_playlists import PortableCoverLoader, Synchronization
 from news_bulletin_playlist.portable_sources import (
     PortableSource,
     UnsupportedPortableSource,
@@ -298,7 +294,15 @@ class PlaylistImportService:
             )
             credits = dict(owner.cover_attributions)
             template_cover_id = plan.owner_template.cover_id
-            encoded = canonical_json(bundle.template_attribution).decode("utf-8")
+            encoded = (
+                json.dumps(
+                    bundle.template_attribution,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
             if template_cover_id in credits and credits[template_cover_id] != encoded:
                 raise PlaylistImportError("Conflicting template cover attribution")
             credits[template_cover_id] = encoded
