@@ -51,6 +51,7 @@ class PlaylistBundle:
     version: int = 1
     template: PlaylistTemplate | None = None
     template_jpeg: bytes | None = None
+    template_attribution: dict[str, object] | None = None
 
 
 def _id(value: object) -> str:
@@ -278,6 +279,7 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
         raise PlaylistBundleError("Duration exception references an unassigned source")
     owner_template = None
     template_cover = None
+    template_attribution = None
     required_ids = set(ids)
     if version == 2:
         if p["kind"] != "managed":
@@ -343,7 +345,7 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
         if template_cover is None:
             raise PlaylistBundleError("Missing ZIP v2 template cover")
         file_names.update(("template.json", template_cover_path))
-        validate_attribution(template_cover_info["attribution"])
+        template_attribution = validate_attribution(template_cover_info["attribution"])
         validate_canonical_jpeg(template_cover)
         if _digest(template_cover) != {k: template_cover_info[k] for k in ("size", "sha256")}:
             raise PlaylistBundleError("ZIP v2 template cover digest mismatch")
@@ -385,4 +387,5 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
         version=version,
         template=owner_template,
         template_jpeg=template_cover,
+        template_attribution=template_attribution,
     )
