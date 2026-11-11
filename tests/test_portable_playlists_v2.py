@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from dataclasses import replace
 from datetime import time
 from zipfile import ZipFile
-import io
 
 import pytest
 from _portable_playlist_fixtures import UUID, _service, rewrite

@@ -241,11 +241,17 @@ def playlist_bundle(
         assert isinstance(target, ManagedPlaylist)
         closure_ids = tuple(
             dict.fromkeys(
-                (*source_ids, *template.default_source_ids, *(e.source_id for e in template.duration_policy.exceptions))
+                (
+                    *source_ids,
+                    *template.default_source_ids,
+                    *(e.source_id for e in template.duration_policy.exceptions),
+                )
             )
         )
         if len(closure_ids) > 100:
-            raise PlaylistExportError("Complete owner template source closure exceeds ZIP v2 limits")
+            raise PlaylistExportError(
+                "Complete owner template source closure exceeds ZIP v2 limits"
+            )
     if any(source_id not in sources for source_id in closure_ids):
         raise PlaylistExportError("An assigned or template source is unavailable")
     source_bytes = export_sources(
@@ -343,7 +349,10 @@ def playlist_bundle(
     with ZipFile(output, "w", compression=ZIP_STORED, allowZip64=False) as archive:
         entries = [
             ("manifest.json", manifest_bytes),
-            ("manifest.sha256", (hashlib.sha256(manifest_bytes).hexdigest() + "\n").encode("ascii")),
+            (
+                "manifest.sha256",
+                (hashlib.sha256(manifest_bytes).hexdigest() + "\n").encode("ascii"),
+            ),
             ("sources.json", source_bytes),
             *additional_entries[:1],
             (cover_path, cover_bytes),
