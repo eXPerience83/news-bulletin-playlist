@@ -18,9 +18,10 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     activate_template,
 )
-from news_bulletin_playlist.models import DurationPolicy, DurationPolicyException
+from news_bulletin_playlist.models import DurationPolicy, DurationPolicyException, PlaylistId
+from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle_v2
 from news_bulletin_playlist.playlist_import import PlaylistImportError, PlaylistImportService
-from news_bulletin_playlist.portable_playlists import PortableCoverLoader
+from news_bulletin_playlist.portable_playlists import PlaylistExportService, PortableCoverLoader
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
@@ -203,3 +204,51 @@ def test_v2_failed_cas_cannot_publish_partial_sources_or_templates(tmp_path, mon
     assert not reopened.catalog.playlists
     assert not reopened.load_readonly().templates
     assert not (root / "managed-state.json").exists()
+
+
+def test_v2_reexport_restored_draft_preserves_owner_closure_on_second_install(tmp_path):
+    original, historical = _donor(tmp_path)
+    root, store, importer = _receiver(tmp_path)
+    first = importer.preview_v2(original)
+    first_result = importer.apply_v2(original, first.sources.fingerprint)
+    exporter = PlaylistExportService(
+        store, ConfigurationSynchronization(), PortableCoverLoader(root)
+    )
+    identity, outgoing = exporter.export(
+        "draft", first_result.current_draft_id, version=2
+    )
+    assert identity == UUID
+    parsed = inspect_playlist_bundle_v2(outgoing)
+    assert parsed.playlist["kind"] == "draft"
+    assert parsed.template is not None
+    assert len(parsed.template.default_source_ids) == len(historical.default_source_ids)
+    assert len(parsed.template.duration_policy.exceptions) == 2
+    assert len(parsed.playlist["source_ids"]) == 1
+    assert parsed.template_attribution == inspect_playlist_bundle_v2(original).template_attribution
+    assert b"SECRET-SPOTIFY-LINK" not in outgoing
+
+    separate = tmp_path / "second"
+    separate.mkdir()
+    _root_2, store_2, importer_2 = _receiver(separate)
+    second = importer_2.preview_v2(outgoing)
+    assert not second.blocked
+    second_result = importer_2.apply_v2(outgoing, second.sources.fingerprint)
+    assert second_result.created_sources == len(historical.default_source_ids)
+    assert len(store_2.catalog.playlists[0].duration_policy.exceptions) == 2
+    assert len(store_2.load_readonly().templates[0].default_source_ids) == 1
+    assert (
+        store_2.load_readonly().templates[0].owner_template_id
+        == second_result.owner_template_id
+    )
+
+
+def test_v2_owner_template_cannot_be_deleted_while_current_draft_references_it(tmp_path):
+    data, _historical = _donor(tmp_path)
+    root, store, importer = _receiver(tmp_path)
+    plan = importer.preview_v2(data)
+    result = importer.apply_v2(data, plan.sources.fingerprint)
+    before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    with pytest.raises(ManagedStateError, match="could not be deleted"):
+        store.delete_owner_template(PlaylistId(result.owner_template_id))
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+    assert store.load_readonly().templates[0].owner_template_id == result.owner_template_id
