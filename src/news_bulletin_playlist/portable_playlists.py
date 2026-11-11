@@ -38,11 +38,13 @@ from news_bulletin_playlist.managed_state import (
     template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.portable_identity import portable_id
 from news_bulletin_playlist.portable_sources import export_sources
 
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_PLAYLIST_ZIP_BYTES = 1024 * 1024
+MAX_PLAYLIST_ZIP_V2_BYTES = 2 * 1024 * 1024
 _BUNDLED = frozenset(
     {
         "spain_spanish_news",
@@ -185,8 +187,12 @@ def playlist_bundle(
     kind: str,
     object_id: str,
     covers: PortableCoverLoader,
+    *,
+    version: int = 1,
 ) -> tuple[str, bytes]:
     """Build everything before returning bytes; caller holds the configuration lock."""
+    if version not in (1, 2) or (version == 2 and kind != "managed"):
+        raise PlaylistExportError("Unsupported or incomplete portable playlist version")
     target = _target(state, store, kind, object_id)
     identity = portable_id(target.portable_id)
     if identity is None:
@@ -203,7 +209,7 @@ def playlist_bundle(
         # exceptions that would become effective after editing the managed max.
         # Preserve existing source-subset/reordering export behavior for
         # compatibility: full template source closure requires ZIP v2 (#638).
-        if any(
+        if version == 1 and any(
             e.source_id not in source_ids or e.max_seconds <= target.max_duration_seconds
             for e in template.duration_policy.exceptions
         ):
@@ -211,7 +217,15 @@ def playlist_bundle(
                 "ZIP v1 would silently discard future-use duration exceptions; "
                 "lossless ZIP v2 is required (#638)"
             )
-        exceptions = template.duration_policy.exceptions
+        exceptions = (
+            tuple(
+                e
+                for e in template.duration_policy.exceptions
+                if e.source_id in source_ids and e.max_seconds > target.max_duration_seconds
+            )
+            if version == 2
+            else template.duration_policy.exceptions
+        )
         countries, languages, ordering = template.countries, template.languages, template.ordering
         configuration = {"enabled": target.enabled, "hidden": None}
     else:
@@ -222,10 +236,20 @@ def playlist_bundle(
     if not source_ids or len(source_ids) > 100 or len(set(source_ids)) != len(source_ids):
         raise PlaylistExportError("Playlist assignments exceed portable source limits")
     sources = {source.id: source for source in effective_sources(store.catalog, state)}
-    if any(source_id not in sources for source_id in source_ids):
-        raise PlaylistExportError("An assigned source is unavailable")
+    closure_ids = source_ids
+    if version == 2:
+        assert isinstance(target, ManagedPlaylist)
+        closure_ids = tuple(
+            dict.fromkeys(
+                (*source_ids, *template.default_source_ids, *(e.source_id for e in template.duration_policy.exceptions))
+            )
+        )
+        if len(closure_ids) > 100:
+            raise PlaylistExportError("Complete owner template source closure exceeds ZIP v2 limits")
+    if any(source_id not in sources for source_id in closure_ids):
+        raise PlaylistExportError("An assigned or template source is unavailable")
     source_bytes = export_sources(
-        tuple(sources[source_id] for source_id in source_ids),
+        tuple(sources[source_id] for source_id in closure_ids),
         built_in_ids={source.id for source in store.catalog.sources},
     )
     cover_bytes, attribution = covers.load(target.cover_id)
@@ -245,7 +269,7 @@ def playlist_bundle(
         raise PlaylistExportError("Invalid playlist duration range")
     manifest = {
         "format": "news-bulletin-playlist.playlist",
-        "version": 1,
+        "version": version,
         "playlist": {
             "portable_id": identity,
             "original_id": _identifier(str(target.id)),
@@ -286,26 +310,52 @@ def playlist_bundle(
         },
         "files": {"sources.json": _descriptor(source_bytes), cover_path: cover_descriptor},
     }
+    additional_entries: list[tuple[str, bytes]] = []
+    if version == 2:
+        assert isinstance(target, ManagedPlaylist)
+        template_document = OwnerTemplateSet((template,)).serialize()
+        template_cover_bytes, template_attribution = covers.load(template.cover_id)
+        template_cover_descriptor = _descriptor(template_cover_bytes)
+        template_cover_path = f"covers/{template_cover_descriptor['sha256']}.jpg"
+        manifest["template"] = {
+            "path": "template.json",
+            **_descriptor(template_document),
+            "cover": {
+                "original_id": template.cover_id,
+                "origin": "uploaded" if is_uploaded_cover_id(template.cover_id) else "bundled",
+                "path": template_cover_path,
+                "media_type": "image/jpeg",
+                **template_cover_descriptor,
+                "attribution": template_attribution,
+            },
+        }
+        manifest["files"]["template.json"] = _descriptor(template_document)
+        manifest["files"][template_cover_path] = template_cover_descriptor
+        additional_entries.append(("template.json", template_document))
+        if template_cover_path != cover_path:
+            additional_entries.append((template_cover_path, template_cover_bytes))
+        elif template_cover_bytes != cover_bytes:
+            raise PlaylistExportError("Same cover digest produced different JPEG bytes")
     manifest_bytes = canonical_json(manifest)
     if len(manifest_bytes) > MAX_MANIFEST_BYTES:
         raise PlaylistExportError("Playlist manifest exceeds the portable size limit")
     output = io.BytesIO()
     with ZipFile(output, "w", compression=ZIP_STORED, allowZip64=False) as archive:
-        for path, data in (
+        entries = [
             ("manifest.json", manifest_bytes),
-            (
-                "manifest.sha256",
-                (hashlib.sha256(manifest_bytes).hexdigest() + "\n").encode("ascii"),
-            ),
+            ("manifest.sha256", (hashlib.sha256(manifest_bytes).hexdigest() + "\n").encode("ascii")),
             ("sources.json", source_bytes),
+            *additional_entries[:1],
             (cover_path, cover_bytes),
-        ):
+            *additional_entries[1:],
+        ]
+        for path, data in entries:
             entry = ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
             entry.create_system = 3
             entry.external_attr = (stat.S_IFREG | 0o600) << 16
             archive.writestr(entry, data)
     payload = output.getvalue()
-    if len(payload) > MAX_PLAYLIST_ZIP_BYTES:
+    if len(payload) > (MAX_PLAYLIST_ZIP_V2_BYTES if version == 2 else MAX_PLAYLIST_ZIP_BYTES):
         raise PlaylistExportError("Playlist ZIP exceeds the portable size limit")
     return identity, payload
 
@@ -338,10 +388,11 @@ class PlaylistExportService:
     ) -> None:
         self.store, self.synchronization, self.covers = store, synchronization, covers
 
-    def export(self, kind: str, object_id: str) -> tuple[str, bytes]:
+    def export(self, kind: str, object_id: str, *, version: int = 1) -> tuple[str, bytes]:
         with self.synchronization.hold():
             return playlist_bundle(
-                self.store.load_readonly(), self.store, kind, object_id, self.covers
+                self.store.load_readonly(), self.store, kind, object_id, self.covers,
+                version=version,
             )
 
     def preparation(self, kind: str, object_id: str) -> tuple[str, int, str | None]:
