@@ -166,48 +166,66 @@ an ambiguous in-flight write remains a separate #421 hard stop.
 This work does not authorize production activation, and does not by itself
 solve #633 owner-controlled historical sources or #638 full portable ZIP v2.
 
-## ZIP v2 codec in progress (#638) — NOT YET AN IMPORT/RESTORE PATH
+## ZIP v2 offline import/export codec (#638) — Admin and acceptance still gated
 
-The integration branch now has a **read-only, explicitly requested** ZIP v2
-export codec (`PlaylistExportService.export(..., version=2)`) and a separate
-strict offline decoder (`inspect_playlist_bundle_v2`). The regular Admin
-download and existing importer **remain ZIP v1 only**: no automatic fallback
-to v2, no implicit imported drafts, no activation and no provider writes.
+The v2 codec is now independently exportable, inspectable **and locally restorable**
+in a fresh v11 installation, using explicit internal APIs:
+`PlaylistExportService.export(..., version=2)`,
+`inspect_playlist_bundle_v2`,
+`PlaylistImportService.preview_v2(...)` and
+`PlaylistImportService.apply_v2(..., fingerprint)`.
+The normal Admin downloads/imports and the ZIP v1 path remain unchanged.
+A ZIP v2 cannot silently fall through into v1 import. **No Spotify writes,
+destination recreation or automatic activation** are part of these APIs.
 
-For a managed playlist ZIP v2 separates its **current destination projection**
-from the **full installed template**. It includes the current assignments
-(including disabled ones), the template's independent default source IDs,
-every original duration exception (including below-current-maximum and
-temporarily unassigned selectors), and the union of those exact source
-definitions with their existing capability identifiers. Exception timestamps
-preserve microseconds and DST `fold`.
+A v2 archive includes the selected playlist projection and a distinct,
+canonical `template.json` owner template, plus the union of all current,
+template-default and exception-referenced sources. The original template
+preserves inactive duration selectors, microseconds, DST fold, source-order
+semantics, specialized parser/filter identifiers and its own default policies.
+The current projection retains its own selected source IDs, enabled/hidden
+state where applicable, duration/retention policy and cover.
+Both template artwork and current artwork are exported by content-addressed
+JPEG digests with their independent attribution, even when the images differ.
 
-ZIP v2 has a canonical manifest version 2, unchanged strict portable
-`sources.json` v1, a separately hashed canonical `template.json` using the
-versioned `OwnerTemplateSet` contract, and the selected managed cover JPEG.
-When the template's default cover differs, a second content-addressed JPEG and
-attribution are included. The decoder checks SHA-256 and file size for all
-members, complete source closure, separation of active versus dormant
-exceptions, strict ZIP metadata/entry order, canonical owner template records,
-JPEG contents and distinct cover attribution. The v2 envelope is bounded to
-2 MiB, uses no compression, and never extracts files.
+The decoder validates strict ZIP envelope metadata, exact entry membership,
+total and per-file bounds (2 MiB for v2), canonical JSON, digest and size of
+every payload, JPEG contents, complete source closure and template policy.
+Unsupported source capabilities block the entire import, never degrade to a
+generic detector.
 
-An additional `PlaylistImportService.preview_v2(...)` is now an **offline
-planning-only** API for a clean v11 destination. It verifies v2, calculates
-source-ID remapping and a separate owner-template ID, preserves all dormant
-exception selectors under that remapping, and blocks mismatched/unsupported
-local source capabilities rather than applying incorrect detectors. It does
-not write state, install JPEGs, create drafts or authorize destinations; the
-Admin import flow still rejects v2 until the durable two-layer model exists.
+`preview_v2` is readonly and computes the prospective owner source IDs and
+template ID. At this stage it **blocks any reused/conflicting Spotify show
+source** and any pending provisioning; full adoption into nonempty
+installations remains a separate acceptance case. The preview fingerprint
+covers the complete v11 authority bytes and pending intent, so any intervening
+configuration edit forces a fresh preview.
 
-**Important:** A v2 export passing inspection is not yet a recoverable
-configuration. The import side must durably represent the **two independent
-layers** (the current managed projection and full historical template
-closure), handle source remapping and artwork together under one atomic
-installation-owner write, and prove restart/re-edit/disable/re-enable behavior
-on a clean instance. Do not deploy or depend on v2 for backup/restore until
-that work and the #631 acceptance suite are complete. ZIP v1's strict existing
-reader and normal Admin download are unchanged.
+`apply_v2` verifies the fingerprint under the configuration lock, validates
+the **complete owner inventory and managed overlay together in memory**,
+durably installs both JPEGs, and commits the newly owned sources, complete
+owner template and independent current local draft in **one exact-byte CAS**.
+The draft stores an explicit `owner_template_id` relationship: deletion of
+its referenced owner template is forbidden. An interrupted CAS may leave safe
+content-addressed orphan JPEGs, but never half of the configuration. An
+uncertain write uses readback and reports uncertainty if it cannot prove the
+final state. The new owner-cover attribution record is optional and preserves
+previous canonical v11 files unchanged.
+
+The offline regression suite exercises **two independent clean-instance
+round trips** (managed ZIP v2 → owner template + current draft → draft ZIP v2
+→ another installation), plus stale previews, failure before CAS, absent
+capabilities, incomplete closure and legacy ZIP rejection. A restored linked
+draft's ZIP v1 export now fails closed instead of losing its original
+owner-template details.
+
+**Still NO GO for release:** The application Admin ZIP v2 review/confirmation
+workflow remains unexposed; the normal import and explicit existing-Spotify
+destination relink/activation must be acceptance-tested against an inspected
+copy of the actual source configuration, including edits to source selection,
+time filtering and artwork after a restart. The scheduler's ambiguous
+remote-write gate (#421), #631 acceptance, and #565 release criteria remain.
+Do not infer Spotify safety or production readiness from offline code tests.
 
 ## ZIP v1 safety boundary before complete v2 (#638)
 
@@ -230,8 +248,9 @@ still requires ZIP v2 (#638).
 This is an interim **loss-prevention guard**, not a solution to #638: ZIP v2
 must preserve the full editable owner template and all dormant exceptions,
 including policy defaults, even where the current managed selection differs.
-Do not approve #631 or export-recovery acceptance until v2 import+export and
-functional edit/reassignment tests have passed.
+Do not approve #631 or production export-recovery acceptance until the
+reviewed v2 Admin flow, explicit relink and functional edit/reassignment
+checks have passed on an inspected configuration.
 
 ## Dependency and risk matrix
 
