@@ -192,6 +192,14 @@ exceptions, strict ZIP metadata/entry order, canonical owner template records,
 JPEG contents and distinct cover attribution. The v2 envelope is bounded to
 2 MiB, uses no compression, and never extracts files.
 
+An additional `PlaylistImportService.preview_v2(...)` is now an **offline
+planning-only** API for a clean v11 destination. It verifies v2, calculates
+source-ID remapping and a separate owner-template ID, preserves all dormant
+exception selectors under that remapping, and blocks mismatched/unsupported
+local source capabilities rather than applying incorrect detectors. It does
+not write state, install JPEGs, create drafts or authorize destinations; the
+Admin import flow still rejects v2 until the durable two-layer model exists.
+
 **Important:** A v2 export passing inspection is not yet a recoverable
 configuration. The import side must durably represent the **two independent
 layers** (the current managed projection and full historical template
