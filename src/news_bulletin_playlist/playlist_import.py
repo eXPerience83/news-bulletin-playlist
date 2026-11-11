@@ -117,9 +117,7 @@ class PlaylistImportService:
                     (
                         *plan_source_import(
                             tuple(
-                                item
-                                for item in bundle.sources
-                                if isinstance(item, PortableSource)
+                                item for item in bundle.sources if isinstance(item, PortableSource)
                             ),
                             sources,
                         ),
@@ -139,7 +137,11 @@ class PlaylistImportService:
             )
             if source_preview.unsupported or source_preview.conflicts:
                 return PlaylistV2ImportPlan(
-                    bundle, source_preview, None, None, True,
+                    bundle,
+                    source_preview,
+                    None,
+                    None,
+                    True,
                     "Unsupported or conflicting source definitions require operator review",
                 )
             # All source aliases must have unambiguous local destinations.
@@ -178,7 +180,11 @@ class PlaylistImportService:
             available = tuple(item.id for item in effective_sources(self.store.catalog, candidate))
             OwnerTemplateSet((remapped,)).validate_sources(available)
             return PlaylistV2ImportPlan(
-                bundle, source_preview, remapped, selected, False,
+                bundle,
+                source_preview,
+                remapped,
+                selected,
+                False,
                 "Offline plan only; lossless v2 import is not yet enabled",
             )
 

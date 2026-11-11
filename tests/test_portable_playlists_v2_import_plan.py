@@ -21,9 +21,7 @@ from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILEN
 def _donor(tmp_path):
     template = BUILTIN_CATALOG.playlists[0]
     first, last = template.default_source_ids[0], template.default_source_ids[-1]
-    first_exception = DurationPolicyException(
-        "active", first, time(2, 15, 0, 123456, fold=1), 3600
-    )
+    first_exception = DurationPolicyException("active", first, time(2, 15, 0, 123456, fold=1), 3600)
     dormant = DurationPolicyException("dormant", last, time(13, 30, fold=1), 2700)
     template = replace(
         template,
@@ -79,8 +77,7 @@ def test_v2_plan_restores_dormant_source_and_fold_without_writes(tmp_path):
     assert len(first.owner_template.duration_policy.exceptions) == 2
     assert first.owner_template.duration_policy.exceptions[1].edition_local_time.fold == 1
     assert (
-        first.owner_template.duration_policy.exceptions[0].edition_local_time.microsecond
-        == 123456
+        first.owner_template.duration_policy.exceptions[0].edition_local_time.microsecond == 123456
     )
     assert all(
         e.source_id in first.owner_template.default_source_ids
@@ -97,8 +94,7 @@ def test_v2_plan_blocks_source_metadata_collision_without_write(tmp_path):
     from news_bulletin_playlist.managed_state import InstalledSource
 
     first = next(
-        source for source in BUILTIN_CATALOG.sources
-        if source.id == template.default_source_ids[0]
+        source for source in BUILTIN_CATALOG.sources if source.id == template.default_source_ids[0]
     )
     state = store.load_readonly()
     store.save(
