@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
+from news_bulletin_playlist.catalog import PlaylistTemplate
 from news_bulletin_playlist.custom_cover_assets import (
     MAX_JPEG_BYTES,
     CustomCoverAssetError,
@@ -210,6 +211,7 @@ def playlist_bundle(
     templates = effective_playlist_templates(
         store.catalog, state.templates, sources=effective_sources(store.catalog, state)
     )
+    template: PlaylistTemplate | None
     if isinstance(target, ManagedPlaylist):
         current_template = next((item for item in templates if item.id == target.template_id), None)
         if current_template is None:
@@ -228,6 +230,7 @@ def playlist_bundle(
                 raise PlaylistExportError("Recovered owner template is missing")
         source_ids = target.source_ids
         if template is not current_template:
+            assert linked_local is not None
             # A v2 archive has a full owner policy and one current projection.
             # An independently edited local exception absent from that policy
             # cannot be represented without a further versioned field.
