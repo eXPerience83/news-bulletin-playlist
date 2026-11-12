@@ -39,6 +39,7 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
 from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
+from news_bulletin_playlist.portable_playlist_metadata import exception_payload
 from news_bulletin_playlist.portable_identity import portable_id
 from news_bulletin_playlist.portable_sources import export_sources
 
@@ -194,11 +195,12 @@ def playlist_bundle(
     if version not in (1, 2) or (version == 2 and kind not in {"managed", "draft"}):
         raise PlaylistExportError("Unsupported or incomplete portable playlist version")
     target = _target(state, store, kind, object_id)
-    if (
-        version == 1
-        and isinstance(target, LocalPlaylistTemplate)
-        and target.owner_template_id is not None
-    ):
+    linked_local = (
+        next((item for item in state.templates if item.id == target.template_id), None)
+        if isinstance(target, ManagedPlaylist)
+        else target
+    )
+    if version == 1 and linked_local is not None and linked_local.owner_template_id is not None:
         raise PlaylistExportError(
             "ZIP v1 would discard a recovered owner template; export ZIP v2 explicitly"
         )
@@ -209,10 +211,44 @@ def playlist_bundle(
         store.catalog, state.templates, sources=effective_sources(store.catalog, state)
     )
     if isinstance(target, ManagedPlaylist):
-        template = next((item for item in templates if item.id == target.template_id), None)
-        if template is None:
+        current_template = next((item for item in templates if item.id == target.template_id), None)
+        if current_template is None:
             raise PlaylistExportError("The playlist template is unavailable")
+        template = current_template
+        if version == 2 and linked_local is not None and linked_local.owner_template_id is not None:
+            template = next(
+                (item for item in store.catalog.playlists if item.id == linked_local.owner_template_id),
+                None,
+            )
+            if template is None:
+                raise PlaylistExportError("Recovered owner template is missing")
         source_ids = target.source_ids
+        if template is not current_template:
+            # A v2 archive has a full owner policy and one current projection.
+            # An independently edited local exception absent from that policy
+            # cannot be represented without a further versioned field.
+            local_effective = tuple(
+                e
+                for e in current_template.duration_policy.exceptions
+                if e.source_id in source_ids and e.max_seconds > target.max_duration_seconds
+            )
+            owner_effective = tuple(
+                e
+                for e in template.duration_policy.exceptions
+                if e.source_id in source_ids and e.max_seconds > target.max_duration_seconds
+            )
+            if tuple(map(exception_payload, local_effective)) != tuple(
+                map(exception_payload, owner_effective)
+            ) or any(
+                exception_payload(e) not in tuple(
+                    map(exception_payload, template.duration_policy.exceptions)
+                )
+                for e in linked_local.duration_exceptions
+            ):
+                raise PlaylistExportError(
+                    "Current duration edits differ from the recovered owner template; "
+                    "ZIP v2 cannot represent both without loss"
+                )
         # ZIP v1 has only one policy. It must not silently omit template
         # exceptions that would become effective after editing the managed max.
         # Preserve existing source-subset/reordering export behavior for
@@ -277,8 +313,8 @@ def playlist_bundle(
         built_in_ids={source.id for source in store.catalog.sources},
     )
     cover_bytes, attribution = covers.load(target.cover_id)
-    if not isinstance(target, ManagedPlaylist) and target.portable_metadata is not None:
-        metadata = json.loads(target.portable_metadata)
+    if linked_local is not None and linked_local.portable_metadata is not None:
+        metadata = json.loads(linked_local.portable_metadata)
         if metadata["cover_sha256"] == hashlib.sha256(cover_bytes).hexdigest():
             attribution = metadata["attribution"]
     cover_descriptor = _descriptor(cover_bytes)
