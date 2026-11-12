@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import http.client
 import json
+import re
 from dataclasses import replace
 from datetime import time
 
 import pytest
+from _admin_http import csrf as _csrf
+from _admin_http import login as _login
+from _admin_http import request as _request
+from _html import assert_valid_admin_html
+from _multipart import import_upload as _multipart
+from _source_admin_http_fixtures import _server
 from _portable_playlist_fixtures import UUID, _service, rewrite
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
@@ -448,3 +456,128 @@ def test_v2_multiple_playlists_reuse_identical_owner_sources_without_duplication
         second_result.owner_template_id,
     }
     assert not _root.joinpath("managed-state.json").exists()
+
+
+def _v2_http_preview(server, cookie, document):
+    """Session-bound ZIP v2 multipart preview, using the actual Admin handler."""
+    upload = _request(server, "GET", "/admin/playlists/import", cookie=cookie)[2]
+    media_type, body = _multipart(_csrf(upload), document, media_type="application/zip")
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    connection.request(
+        "POST",
+        "/admin/playlists/import/v2/preview",
+        body=body,
+        headers={"Cookie": cookie, "Content-Type": media_type},
+    )
+    response = connection.getresponse()
+    output = response.status, response.read()
+    connection.close()
+    return output
+
+
+def _v2_http_confirmation(page, *, confirm=True):
+    match = re.search(rb'name="preview_id" value="([A-Za-z0-9_-]+)"', page)
+    assert match is not None
+    values = {
+        "csrf_token": _csrf(page),
+        "preview_id": match.group(1).decode(),
+        "action": "apply",
+    }
+    if confirm:
+        values["confirm"] = "1"
+    return values
+
+
+def test_v2_admin_preview_offline_apply_and_inspection_hold(tmp_path):
+    document, template = _donor(tmp_path)
+    root, store, _importer = _receiver(tmp_path)
+    with _server(root) as (server, client, _legacy):
+        handler = server.RequestHandlerClass
+        managed_service = handler.managed_admin_service
+        source_service = handler.source_admin_service
+        assert managed_service is not None and source_service is not None
+        managed_service.store = source_service.store = store
+        managed_service.catalog = source_service.catalog = store.catalog
+        cookie = _login(server)
+
+        original = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        status, preview = _v2_http_preview(server, cookie, document)
+        assert status == 200, preview
+        assert_valid_admin_html(preview.decode())
+        assert b"Apply offline ZIP v2 import" in preview
+        assert b"complete duration exceptions" in preview
+        assert b"Spotify" in preview
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == original
+        assert not client.calls
+
+        # An absent explicit confirmation cannot mutate the owner inventory.
+        status, _, body = _request(
+            server,
+            "POST",
+            "/admin/playlists/import/v2/apply",
+            cookie=cookie,
+            form=_v2_http_confirmation(preview, confirm=False),
+        )
+        assert status == 400, body
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == original
+
+        status, preview = _v2_http_preview(server, cookie, document)
+        assert status == 200, preview
+        status, _, result = _request(
+            server,
+            "POST",
+            "/admin/playlists/import/v2/apply",
+            cookie=cookie,
+            form=_v2_http_confirmation(preview),
+        )
+        assert status == 200, result
+        assert_valid_admin_html(result.decode())
+        assert b"ZIP v2 offline import complete" in result
+        assert b"Spotify was not contacted" in result
+        assert len(store.catalog.sources) == len(template.default_source_ids)
+        assert len(store.catalog.playlists) == 1
+        assert not store.load_readonly().playlists
+        draft = store.load_readonly().templates[0]
+        assert draft.owner_template_id is not None
+        assert not client.calls
+
+        # No duplicate owner playlist or source is installed by a second upload.
+        after = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        status, duplicate = _v2_http_preview(server, cookie, document)
+        assert status == 200, duplicate
+        assert b"Portable identity already exists" in duplicate
+        assert b"Apply offline ZIP v2 import" not in duplicate
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
+
+        # A held process can display this imported draft but cannot write it
+        # or even stage a new ZIP preview.
+        handler.inspection_hold = True
+        try:
+            status, _, held = _request(
+                server,
+                "GET",
+                "/admin/playlists/imported/edit?id=" + str(draft.id),
+                cookie=cookie,
+            )
+            assert status == 200
+            assert b"Startup inspection hold is active" in held
+            upload = _request(server, "GET", "/admin/playlists/import", cookie=cookie)[2]
+            media_type, body = _multipart(
+                _csrf(upload), document, media_type="application/zip"
+            )
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", server.server_port, timeout=5
+            )
+            connection.request(
+                "POST",
+                "/admin/playlists/import/v2/preview",
+                body=body,
+                headers={"Cookie": cookie, "Content-Type": media_type},
+            )
+            response = connection.getresponse()
+            assert response.status == 423
+            response.read()
+            connection.close()
+            assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
+        finally:
+            handler.inspection_hold = False

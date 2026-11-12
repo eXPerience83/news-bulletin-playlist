@@ -243,6 +243,7 @@ Apply offline ZIP v2 import</button>"""
     template = plan.bundle.template
     assert template is not None
     attribution = plan.bundle.template_attribution
+    proposed_id = esc(str(plan.owner_template.id)) if plan.owner_template else "blocked"
     body = f"""<h2>{esc(playlist["display_name"])}</h2>
 <p>ZIP v2 · UUID <code>{esc(playlist["portable_id"])}</code></p>
 <p><strong>Preview:</strong> {esc(plan.reason)}</p>
@@ -257,7 +258,7 @@ will be retained. No Spotify destination ID, OAuth or episodes are imported.</p>
 <tbody>{source_rows}</tbody></table></div>
 <p>Current selected source IDs:
 <code>{esc(", ".join(map(str, plan.selected_source_ids or ())))}</code></p>
-<p>Owner template: <code>{esc(str(plan.owner_template.id) if plan.owner_template else "blocked")}</code>.
+<p>Owner template: <code>{proposed_id}</code>.
 {len(template.default_source_ids)} default sources and
 {len(template.duration_policy.exceptions)} complete duration exceptions.</p>
 <details><summary>Exact incoming playlist configuration</summary>
