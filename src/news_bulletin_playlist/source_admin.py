@@ -643,15 +643,20 @@ class SourceAdminService:
         if isinstance(self.store, ForwardOnlyManagedStateStore):
             self.catalog = self.store.catalog
         owner = (
-            next((item for item in self.catalog.sources if item.id == source_id), None)
+            next(
+                (
+                    item
+                    for item in parse_v11_operational(
+                        self.store._expected_bytes
+                    ).owner_inventory.sources
+                    if item.id == source_id
+                ),
+                None,
+            )
             if isinstance(self.store, ForwardOnlyManagedStateStore)
             else None
         )
-        source = (
-            InstalledSource.from_definition(owner)
-            if owner is not None
-            else self._custom_source(state, source_id)
-        )
+        source = owner if owner is not None else self._custom_source(state, source_id)
         used_by = tuple(
             playlist.display_name
             for playlist in state.playlists

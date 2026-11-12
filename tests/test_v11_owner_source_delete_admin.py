@@ -8,10 +8,13 @@ from pathlib import Path
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
+from _installed_fixtures import _installed
 from _legacy_dataset import legacy_root as _root
 from _source_admin_http_fixtures import _server
 
+from news_bulletin_playlist.managed_state import ManagedStateStore
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
 
 
@@ -92,3 +95,45 @@ def test_owner_source_delete_unreferenced_keeps_order_and_other_parsers(tmp_path
                 source.temporal_strategy,
             ) == untouched[source.id]
         assert (root / "managed-state.json").read_bytes() == before_legacy
+
+
+def test_legacy_installed_custom_source_deletion_clears_owner_and_overlay_together(
+    tmp_path: Path,
+) -> None:
+    root, _ = _root(tmp_path, 10)
+    original_store = ManagedStateStore(root / "managed-state.json")
+    legacy = original_store.load_readonly()
+    installed = _installed()
+    original_store.save(replace(legacy, sources=(installed,)))
+    immutable = original_store.path.read_bytes()
+    with _server(root) as (server, client, _unused):
+        store = open_managed_state_store(root)
+        before = parse_v11_operational((root / V11_OPERATIONAL_FILENAME).read_bytes())
+        assert installed.id in {item.id for item in before.owner_inventory.sources}
+        assert installed.id in {item.id for item in before.managed_overlay.sources}
+        assert installed.id not in {item.id for item in before.active_catalog.sources}
+        managed = server.RequestHandlerClass.managed_admin_service
+        sources = server.RequestHandlerClass.source_admin_service
+        assert managed is not None and sources is not None
+        managed.store = sources.store = store
+        managed.catalog = sources.catalog = store.catalog
+        cookie = _login(server)
+        status, _, page = _request(
+            server, "GET", f"/admin/sources/delete?source_id={installed.id}", cookie=cookie
+        )
+        assert status == 200
+        status, _, _ = _request(
+            server,
+            "POST",
+            "/admin/sources/delete",
+            cookie=cookie,
+            form={"csrf_token": _csrf(page), "source_id": str(installed.id)},
+        )
+        assert status == 303
+        reopened = open_managed_state_store(root)
+        current = parse_v11_operational((root / V11_OPERATIONAL_FILENAME).read_bytes())
+        assert installed.id not in {item.id for item in current.owner_inventory.sources}
+        assert installed.id not in {item.id for item in current.managed_overlay.sources}
+        assert installed.id not in {item.id for item in reopened.load_readonly().sources}
+        assert original_store.path.read_bytes() == immutable
+        assert not client.calls
