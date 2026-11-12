@@ -381,9 +381,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     staged = security.stage_playlist_import(
                         document, planned_v1.sources.fingerprint
                     )
-                    page = preview_page(
-                        planned_v1, staged.preview_id, security.issue_csrf_token()
-                    )
+                    page = preview_page(planned_v1, staged.preview_id, security.issue_csrf_token())
                 self._reply(HTTPStatus.OK, page)
                 return
             form = self._read_form(max_bytes=limit)
