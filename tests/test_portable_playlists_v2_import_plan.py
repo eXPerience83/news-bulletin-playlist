@@ -121,13 +121,7 @@ def test_v2_plan_blocks_source_metadata_collision_without_write(tmp_path):
     first = next(
         source for source in BUILTIN_CATALOG.sources if source.id == template.default_source_ids[0]
     )
-    state = store.load_readonly()
-    store.save(
-        replace(
-            state,
-            sources=(replace(InstalledSource.from_definition(first), enabled=False),),
-        )
-    )
+    store.install_owner_sources((replace(InstalledSource.from_definition(first), enabled=False),))
     before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
     plan = importer.preview_v2(data)
     assert plan.blocked and plan.sources.conflicts
@@ -187,14 +181,8 @@ def test_v2_apply_refuses_stale_preview_without_installing_artwork(tmp_path):
     data, _ = _donor(tmp_path)
     root, store, importer = _receiver(tmp_path)
     plan = importer.preview_v2(data)
-    state = store.load_readonly()
     # Fresh v11 already stores schema 10; make a real unrelated durable edit.
-    store.save(
-        replace(
-            state,
-            sources=(InstalledSource.from_definition(BUILTIN_CATALOG.sources[0]),),
-        )
-    )
+    store.install_owner_sources((InstalledSource.from_definition(BUILTIN_CATALOG.sources[0]),))
     before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
     with pytest.raises(PlaylistImportError, match="changed"):
         importer.apply_v2(data, plan.sources.fingerprint)
@@ -351,12 +339,9 @@ def test_v2_restore_sorts_current_draft_with_existing_unrelated_draft(tmp_path):
         cover_id="custom_default",
     )
     state = store.load_readonly()
-    store.save(
-        replace(
-            state,
-            sources=(InstalledSource.from_definition(unrelated_source),),
-            templates=(existing,),
-        )
+    store.install_owner_sources(
+        (InstalledSource.from_definition(unrelated_source),),
+        overlay=replace(state, templates=(existing,)),
     )
     plan = importer.preview_v2(data)
     assert not plan.blocked
