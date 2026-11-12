@@ -227,7 +227,7 @@ class SourceImportService:
                             and row.local_id is not None
                         )
                     )
-                    records = tuple(
+                    owner_records = tuple(
                         sorted(
                             (*initial.owner_inventory.sources, *additions),
                             key=lambda s: str(s.id),
@@ -235,9 +235,9 @@ class SourceImportService:
                     )
                     new_inventory = replace(
                         initial.owner_inventory,
-                        sources=records,
+                        sources=owner_records,
                         source_order=initial.owner_inventory.source_order.after_records_change(
-                            initial.owner_inventory.sources, records
+                            initial.owner_inventory.sources, owner_records
                         ),
                     )
                     next_overlay = replace(state, schema_version=candidate.schema_version)
@@ -247,20 +247,20 @@ class SourceImportService:
                         # A directory-fsync failure may have committed the entire CAS.
                         # Inspect BOTH owner records and overlay before reporting recovery.
                         try:
-                            observed = parse_v11_operational(self.store._owner.load_bytes())
+                            observed_owner = parse_v11_operational(self.store._owner.load_bytes())
                         except OSError, ValueError:
                             raise SourceImportWriteError(
                                 "Import durability is uncertain; inspect v11 before retrying."
                             ) from exc
                         if (
-                            observed.owner_inventory == new_inventory
-                            and observed.managed_overlay == next_overlay
+                            observed_owner.owner_inventory == new_inventory
+                            and observed_owner.managed_overlay == next_overlay
                         ):
                             self.store.load_readonly()
                             return SourceImportResult(resolved, creates, recovered=True)
                         if (
-                            observed.owner_inventory == initial.owner_inventory
-                            and observed.managed_overlay == state
+                            observed_owner.owner_inventory == initial.owner_inventory
+                            and observed_owner.managed_overlay == state
                         ):
                             raise SourceImportWriteError(
                                 "Import not committed; request a fresh preview to retry."
