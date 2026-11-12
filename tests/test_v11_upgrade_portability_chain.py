@@ -11,11 +11,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from _installed_fixtures import _installed
 from _legacy_dataset import legacy_root
 
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
-from news_bulletin_playlist.managed_state import effective_sources
+from news_bulletin_playlist.managed_state import ManagedStateStore, effective_sources
 from news_bulletin_playlist.playlist_bundle import (
     inspect_playlist_bundle,
     inspect_playlist_bundle_v2,
@@ -267,3 +268,70 @@ def test_four_direct_upgrade_zip_v2_imports_preserve_owner_template_closure_offl
         ) == tuple(donor_sources[id_].external_references for id_ in historical.default_source_ids)
         assert import_service.covers.load(draft.cover_id)[0] == original_bundle.jpeg
         assert import_service.covers.load(owner.cover_id)[0] == original_bundle.template_jpeg
+
+
+def test_v2_reuses_promoted_historical_custom_source_with_original_identity(
+    tmp_path: Path,
+) -> None:
+    """A legacy custom station is reused by ZIP v2 from the owner catalog, not duplicated."""
+    donor_parent = tmp_path / "donor-dataset"
+    recipient_parent = tmp_path / "recipient-dataset"
+    donor_parent.mkdir()
+    recipient_parent.mkdir()
+    donor, _ = legacy_root(donor_parent, 10)
+    recipient, _ = legacy_root(recipient_parent, 10)
+    station = _installed()
+    for root, selected in ((donor, True), (recipient, False)):
+        old = ManagedStateStore(root / "managed-state.json")
+        state = old.load_readonly()
+        playlists = (
+            (
+                replace(
+                    state.playlists[0],
+                    source_ids=(*state.playlists[0].source_ids, station.id),
+                ),
+                *state.playlists[1:],
+            )
+            if selected
+            else state.playlists
+        )
+        old.save(replace(state, sources=(station,), playlists=playlists))
+    original_recipient = (recipient / "managed-state.json").read_bytes()
+    donor_store = open_managed_state_store(donor)
+    exporter = PlaylistExportService(
+        donor_store, ConfigurationSynchronization(), PortableCoverLoader(donor)
+    )
+    playlist_id = str(donor_store.load_readonly().playlists[0].id)
+    fingerprint, _, identity = exporter.preparation("managed", playlist_id)
+    assert identity is None
+    exporter.prepare("managed", playlist_id, fingerprint, acknowledge_v9=True)
+    _, archive = exporter.export("managed", playlist_id, version=2)
+    bundle = inspect_playlist_bundle_v2(archive)
+    assert station.spotify_show_id in {
+        record.spotify_show_id for record in bundle.sources
+    }
+
+    restored = open_managed_state_store(recipient)
+    before = restored.load_readonly()
+    assert before.sources == ()
+    assert len(before.playlists) == 4
+    assert station.id in {source.id for source in restored.catalog.sources}
+    importer = PlaylistImportService(
+        restored,
+        ConfigurationSynchronization(),
+        ProvisioningJournal(recipient / "managed-playlist-provisioning.json"),
+        PortableCoverLoader(recipient),
+    )
+    plan = importer.preview_v2(archive)
+    historical = next(
+        row for row in plan.sources.rows if row.spotify_show_id == station.spotify_show_id
+    )
+    assert historical.status == "identical"
+    assert historical.local_id == station.id
+    assert not plan.blocked
+    result = importer.apply_v2(archive, plan.sources.fingerprint)
+    assert result.created_sources == 0
+    assert restored.load_readonly().playlists == before.playlists
+    assert len(restored.catalog.sources) == 14
+    assert sum(source.id == station.id for source in restored.catalog.sources) == 1
+    assert (recipient / "managed-state.json").read_bytes() == original_recipient
