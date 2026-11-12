@@ -307,15 +307,14 @@ def test_preview_expiry_capacity_and_document_kind_binding(tmp_path):
     # ZIP v2 has a larger bounded session payload and cannot be consumed
     # by a ZIP v1 apply route (nor can v1 be consumed by v2).
     v2_document = b"x" * (MAX_PLAYLIST_ZIP_BYTES + 1)
-    v2_context = manager.stage_source_import(
-        ids[0], v2_document, "fp", now=now, kind="playlist-v2"
+    v2_context = manager.stage_source_import(ids[0], v2_document, "fp", now=now, kind="playlist-v2")
+    assert (
+        manager.take_source_import(ids[0], v2_context.preview_id, now=now, kind="playlist") is None
     )
-    assert manager.take_source_import(
-        ids[0], v2_context.preview_id, now=now, kind="playlist"
-    ) is None
-    assert manager.take_source_import(
-        ids[0], v2_context.preview_id, now=now, kind="playlist-v2"
-    ) == v2_context
+    assert (
+        manager.take_source_import(ids[0], v2_context.preview_id, now=now, kind="playlist-v2")
+        == v2_context
+    )
     with pytest.raises(ValueError, match="size"):
         manager.stage_source_import(
             ids[0],
