@@ -339,6 +339,20 @@ def test_import_and_edit_page_work_without_oauth_services(tmp_path, monkeypatch)
         assert headers["Cache-Control"] == "no-store"
         assert_valid_admin_html(page.decode())
         assert _files(tmp_path) == before
+        server.RequestHandlerClass.inspection_hold = True
+        try:
+            status, _, held_page = _request(
+                server,
+                "GET",
+                "/admin/playlists/imported/edit?id=" + str(draft.id),
+                cookie=cookie,
+            )
+            assert status == 200
+            assert b"Startup inspection hold is active" in held_page
+            assert b"Imported draft edits and Spotify writes are locked" in held_page
+            assert _files(tmp_path) == before
+        finally:
+            server.RequestHandlerClass.inspection_hold = False
 
 
 @pytest.mark.parametrize(

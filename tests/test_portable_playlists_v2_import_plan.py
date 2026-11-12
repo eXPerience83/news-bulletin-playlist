@@ -31,7 +31,7 @@ from news_bulletin_playlist.portable_playlists import (
 )
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
-from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
+from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME, V11StoreError
 
 
 def _donor(tmp_path, *, different_cover=False):
@@ -363,13 +363,15 @@ def test_v2_recovered_post_commit_durability_exception_refreshes_adapter(tmp_pat
     data, _ = _donor(tmp_path)
     root, store, importer = _receiver(tmp_path)
     preview = importer.preview_v2(data)
-    real_save = store.save_owner_bundle
+    real_save = store._owner.save_owner_inventory
 
-    def succeed_then_raise(*args, **kwargs):
+    def publish_then_raise(*args, **kwargs):
         real_save(*args, **kwargs)
-        raise ManagedStateError("synthetic error after fsync")
+        # On disk, the owner inventory has changed; the facade remains stale.
+        assert store.catalog.sources == ()
+        raise V11StoreError("synthetic error after fsync")
 
-    monkeypatch.setattr(store, "save_owner_bundle", succeed_then_raise)
+    monkeypatch.setattr(store._owner, "save_owner_inventory", publish_then_raise)
     result = importer.apply_v2(data, preview.sources.fingerprint)
     assert result.recovered
     assert store.catalog.playlists

@@ -179,6 +179,13 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                         )
                         if draft is None or draft.portable_metadata is None:
                             raise ValueError
+                        hold_notice = (
+                            '<div class="notice" role="status">'
+                            "Startup inspection hold is active. "
+                            "Imported draft edits and Spotify writes are locked.</div>"
+                            if self.inspection_hold
+                            else ""
+                        )
                         page = render_admin_shell(
                             title="Edit imported draft",
                             active_tab="playlists",
@@ -187,7 +194,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                                 "confirmation; EXISTING destination relinking requires "
                                 "ownership verification."
                             ),
-                            body_html=imported_draft_editor(draft, security.issue_csrf_token()),
+                            body_html=hold_notice + imported_draft_editor(draft, security.issue_csrf_token()),
                         )
                     self._reply(HTTPStatus.OK, page)
                 except ValueError, ManagedStateError, OSError:
