@@ -27,6 +27,7 @@ from news_bulletin_playlist.managed_state import (
     compile_engine_config,
     effective_sources,
     serialize_managed_state,
+    source_definition,
 )
 from news_bulletin_playlist.models import (
     EditorialScope,
@@ -460,6 +461,14 @@ class SourceAdminService:
         with self.synchronization.hold():
             latest = self.store.load()
             self._check_duplicate(latest, source)
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                current = parse_v11_operational(self.store._expected_bytes)
+                if current.owner_sources_complete:
+                    self.store.install_owner_sources(
+                        (InstalledSource.from_definition(source_definition(source)),)
+                    )
+                    self.catalog = self.store.catalog
+                    return
             self.store.save(replace(latest, sources=(*latest.sources, source)))
 
     def get_builtin_source(self, source_id: str) -> SourceDefinition:

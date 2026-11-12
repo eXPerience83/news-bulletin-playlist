@@ -30,6 +30,8 @@ from news_bulletin_playlist.portable_sources import (
     inspect_sources,
     parse_sources,
 )
+from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
+from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 
 
 class _Synchronization(Protocol):
@@ -213,6 +215,57 @@ class SourceImportService:
                     "Explicit schema v8 compatibility acknowledgement is required."
                 )
             candidate = self.build_candidate(state, rows, pending)
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                initial = parse_v11_operational(self.store._expected_bytes)
+                if initial.owner_sources_complete:
+                    additions = tuple(
+                        InstalledSource.from_definition(replace(row.incoming, id=row.local_id))
+                        for row in rows
+                        if (
+                            row.status == "create"
+                            and isinstance(row.incoming, SourceDefinition)
+                            and row.local_id is not None
+                        )
+                    )
+                    records = tuple(
+                        sorted((*initial.owner_inventory.sources, *additions), key=lambda s: str(s.id))
+                    )
+                    new_inventory = replace(
+                        initial.owner_inventory,
+                        sources=records,
+                        source_order=initial.owner_inventory.source_order.after_records_change(
+                            initial.owner_inventory.sources, records
+                        ),
+                    )
+                    next_overlay = replace(state, schema_version=candidate.schema_version)
+                    try:
+                        self.store.install_owner_sources(additions, overlay=next_overlay)
+                    except (OSError, ManagedStateError) as exc:
+                        # A directory-fsync failure may have committed the entire CAS.
+                        # Inspect BOTH owner records and overlay before reporting recovery.
+                        try:
+                            observed = parse_v11_operational(self.store._owner.load_bytes())
+                        except (OSError, ValueError):
+                            raise SourceImportWriteError(
+                                "Import durability is uncertain; inspect v11 before retrying."
+                            ) from exc
+                        if (
+                            observed.owner_inventory == new_inventory
+                            and observed.managed_overlay == next_overlay
+                        ):
+                            self.store.load_readonly()
+                            return SourceImportResult(resolved, creates, recovered=True)
+                        if (
+                            observed.owner_inventory == initial.owner_inventory
+                            and observed.managed_overlay == state
+                        ):
+                            raise SourceImportWriteError(
+                                "Import not committed; request a fresh preview to retry."
+                            ) from exc
+                        raise SourceImportWriteError(
+                            "Owner import outcome is ambiguous; inspect v11 before retrying."
+                        ) from exc
+                    return SourceImportResult(resolved, creates)
             try:
                 self.store.save(candidate)
             except (OSError, ManagedStateError) as exc:

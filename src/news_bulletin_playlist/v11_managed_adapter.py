@@ -103,6 +103,45 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
         except (V11StoreError, OSError, ValueError) as exc:
             raise ManagedStateError("v11 imported owner bundle outcome uncertain") from exc
 
+    def install_owner_sources(
+        self, additions: tuple[InstalledSource, ...], *, overlay: ManagedState | None = None
+    ) -> OwnerInventory:
+        """Atomically append validated owner sources in their deterministic order.
+
+        Both manual intake and portable JSON import use this path in the complete
+        v11 representation. A source must never be written to the overlay and
+        silently lose its owner capabilities.
+        """
+        current = parse_v11_operational(self._expected_bytes)
+        if not current.owner_sources_complete:
+            raise ManagedStateError("Historical split-mode v11 requires explicit promotion")
+        if not additions:
+            return current.owner_inventory
+        current_sources = current.owner_inventory.sources
+        previous = {item.id for item in current_sources}
+        previous_shows = {item.spotify_show_id for item in current_sources}
+        new_ids = [item.id for item in additions]
+        new_shows = [item.spotify_show_id for item in additions]
+        if (
+            not all(isinstance(item, InstalledSource) for item in additions)
+            or len(new_ids) != len(set(new_ids))
+            or len(new_shows) != len(set(new_shows))
+            or previous.intersection(new_ids)
+            or previous_shows.intersection(new_shows)
+        ):
+            raise ManagedStateError("Owner source import contains a duplicate identity")
+        records = tuple(sorted((*current_sources, *additions), key=lambda item: str(item.id)))
+        order = current.owner_inventory.source_order.after_records_change(
+            current_sources, records
+        )
+        inventory = replace(
+            current.owner_inventory, sources=records, source_order=order
+        )
+        self.save_owner_bundle(
+            inventory, current.managed_overlay if overlay is None else overlay
+        )
+        return inventory
+
     def save_owner_source(
         self, edited: InstalledSource, *, reconcile_public_release_override: bool = False
     ) -> None:
