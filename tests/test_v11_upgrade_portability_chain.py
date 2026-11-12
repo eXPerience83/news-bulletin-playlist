@@ -142,7 +142,8 @@ def test_four_legacy_playlists_and_all_sources_remain_portable_after_v11(
 
     final = restored.load_readonly()
     assert len(final.templates) == len(archives)
-    assert len(final.sources) == len(effective)
+    assert not final.sources
+    assert len(restored.catalog.sources) == len(effective)
     assert not final.playlists  # Current portable import does NOT rebind Spotify.
     local_sources = {source.id: source for source in effective_sources(restored.catalog, final)}
     originals = {str(p.id): p for p in legacy.original_state.playlists}

@@ -72,9 +72,11 @@ def test_explicit_preset_import_without_oauth_is_durable_and_idempotent(
         )
         assert status == 200, result
         assert b"1 source(s) installed" in result
-        installed = open_managed_state_store(tmp_path).load_readonly()
-        assert len(installed.sources) == 1
-        assert installed.sources[0].spotify_show_id == (
+        installed_store = open_managed_state_store(tmp_path)
+        installed = installed_store.load_readonly()
+        assert installed.sources == ()
+        assert len(installed_store.catalog.sources) == 1
+        assert installed_store.catalog.sources[0].external_references[0].external_id == (
             BUILTIN_CATALOG.sources[0].external_references[0].external_id
         )
         assert load_effective_config(tmp_path, {}) is None  # No destination created.

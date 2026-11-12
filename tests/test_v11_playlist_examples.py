@@ -54,9 +54,8 @@ def test_no_implicit_templates_or_destinations_and_missing_sources_block(tmp_pat
 
 def test_explicit_example_copies_cover_remaps_show_and_is_idempotent(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    current = service.store.load()
     installed = _installed_source("cnn")
-    service.store.save(replace(current, sources=(installed,)))
+    service.store.install_owner_sources((installed,))
     original_example = BUILTIN_CATALOG.playlist("international_spanish_news")
     draft = service.create_from_example(original_example.id)
     assert draft.portable_metadata is None
@@ -83,9 +82,7 @@ def test_explicit_example_copies_cover_remaps_show_and_is_idempotent(tmp_path: P
 
 def test_disabled_required_source_blocks_without_losing_assignments(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    service.store.save(
-        replace(service.store.load(), sources=(_installed_source("cnn", enabled=False),))
-    )
+    service.store.install_owner_sources((_installed_source("cnn", enabled=False),))
     before = service.store.load()
     with pytest.raises(ManagedAdminError, match="Enable required sources"):
         service.create_from_example("international_spanish_news")
@@ -113,7 +110,7 @@ def test_nonnative_source_id_and_duration_exceptions_survive_restart(
     monkeypatch.setattr(examples_module, "BUILTIN_CATALOG", catalog)
     service = _service(tmp_path)
     installed = _installed_source("cnn")
-    service.store.save(replace(service.store.load(), sources=(installed,)))
+    service.store.install_owner_sources((installed,))
     draft = service.create_from_example(adjusted.id)
     assert draft.min_duration_seconds == 601
     assert draft.max_duration_seconds == 2101
@@ -126,21 +123,22 @@ def test_nonnative_source_id_and_duration_exceptions_survive_restart(
 
 def test_stale_v11_cas_cannot_overwrite_a_concurrent_source_install(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    service.store.save(replace(service.store.load(), sources=(_installed_source("cnn"),)))
+    service.store.install_owner_sources((_installed_source("cnn"),))
     other = open_managed_state_store(tmp_path)
     original_install = service.cover_installer
     assert original_install is not None
 
     def concurrent_install(art: bytes) -> str:
-        current = other.load()
-        other.save(replace(current, sources=current.sources + (_installed_source("ser"),)))
+        other.load()
+        other.install_owner_sources((_installed_source("ser"),))
         return original_install(art)
 
     service.cover_installer = concurrent_install
     with pytest.raises(ManagedStateError, match="could not be saved"):
         service.create_from_example("international_spanish_news")
     assert not service.store.load().templates
-    assert len(service.store.load().sources) == 2
+    service.store.load()
+    assert len(service.store.catalog.sources) == 2
     service.cover_installer = original_install
     draft = service.create_from_example("international_spanish_news")
     assert draft.default_source_ids == (_installed_source("cnn").id,)
@@ -185,7 +183,7 @@ def test_admin_html_and_csrf_without_spotify_oauth_or_scheduler(tmp_path: Path) 
     forbidden.engine_lifecycle = None
     forbidden.do_POST()
     assert _response(forbidden).status == HTTPStatus.FORBIDDEN
-    service.store.save(replace(service.store.load(), sources=(_installed_source("cnn"),)))
+    service.store.install_owner_sources((_installed_source("cnn"),))
     accepted = _HandlerHarness(
         tmp_path=tmp_path,
         service=service,
