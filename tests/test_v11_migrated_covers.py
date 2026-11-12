@@ -61,6 +61,19 @@ def test_exact_historical_covers_survive_without_future_bundles(tmp_path: Path, 
     assert not (root / MIGRATED_COVERS_DIR / "temporary").exists()
 
 
+def test_missing_migrated_index_cannot_fall_back_after_v11_cutover(tmp_path: Path):
+    root, preview = _legacy_root(tmp_path)
+    owned = V11OperationalStore(root).initialize_from_legacy()
+    assert owned.inherited_cover_ids
+    cover_id = preview.template_snapshots[0].definition.cover_id
+    assert cover_id in owned.inherited_cover_ids
+    index = root / MIGRATED_COVERS_DIR / "index.json"
+    index.unlink()
+    with pytest.raises(MigratedCoverError, match="index"):
+        PortableCoverLoader(root).load(cover_id)
+    assert (root / V11_OPERATIONAL_FILENAME).is_file()
+
+
 def test_corrupt_owner_asset_never_falls_back_to_bundled_resource(tmp_path: Path):
     root, _ = _legacy_root(tmp_path)
     V11OperationalStore(root).initialize_from_legacy()

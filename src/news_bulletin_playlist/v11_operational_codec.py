@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.custom_playlist_templates import (
     LocalPlaylistTemplateError,
     effective_playlist_templates,
@@ -65,6 +67,7 @@ class V11OperationalState:
     example_provenance: tuple[LegacyProvenance, ...]
     migration_origin_sha256: str
     owner_inventory: OwnerInventory
+    inherited_cover_ids: tuple[str, ...] = ()
 
     @property
     def is_live_migration_authorized(self) -> bool:
@@ -82,6 +85,15 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
         normalized = pause_dormant_legacy_playlists(catalog, candidate.projection.original_state)
         overlay = serialize_managed_state(normalized, catalog=catalog)
         encoded_catalog = json.loads(candidate.frozen_catalog_v2_bytes)
+        inherited_cover_ids = sorted(
+            cover_id
+            for cover_id in (
+                {item.definition.cover_id for item in snapshot.templates}
+                | {item.cover_id for item in candidate.projection.original_state.playlists}
+                | {item.cover_id for item in candidate.projection.original_state.templates}
+            )
+            if not is_uploaded_cover_id(cover_id)
+        )
         document = {
             "format": OPERATIONAL_FORMAT,
             "schema_version": OPERATIONAL_SCHEMA_VERSION,
@@ -93,6 +105,9 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
             # Strict independent owner records for a future atomic authority
             # transition. The old frozen catalog is audit provenance only.
             "owner_inventory": OwnerInventory.from_snapshot(snapshot).to_document(),
+            # Immutable v11 evidence that some bundled IDs must never fall back
+            # to a later image if /data/migrated-covers/index.json goes missing.
+            **({"inherited_cover_ids": inherited_cover_ids} if inherited_cover_ids else {}),
         }
         payload = _canonical(document)
         result = parse_v11_operational(payload)
@@ -137,12 +152,30 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         raise V11OperationalError("missing or invalid v11 owner inventory fields")
     # An unedited conversion requires exact match with the immutable legacy
     # witness. Only a versioned owner mutation can diverge subsequently.
+    owned_cover_ids = document.get("inherited_cover_ids")
+    if owned_cover_ids is not None:
+        if (
+            not isinstance(owned_cover_ids, list)
+            or len(owned_cover_ids) > 100
+            or len(set(map(str, owned_cover_ids))) != len(owned_cover_ids)
+            or owned_cover_ids != sorted(owned_cover_ids)
+            or any(
+                not isinstance(cover_id, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", cover_id) is None
+                or is_uploaded_cover_id(cover_id)
+                for cover_id in owned_cover_ids
+            )
+        ):
+            raise V11OperationalError("invalid inherited cover inventory")
+    recognized_fields = required_fields | (
+        {"inherited_cover_ids"} if owned_cover_ids is not None else set()
+    )
     owner_revision = document.get("owner_revision")
     if owner_revision is None:
-        if set(document) != required_fields:
+        if set(document) != recognized_fields:
             raise V11OperationalError("missing or invalid v11 owner inventory fields")
     elif (
-        set(document) != required_fields | {"owner_revision"}
+        set(document) != recognized_fields | {"owner_revision"}
         or type(owner_revision) is not int
         or not 1 <= owner_revision <= 1_000_000
     ):
@@ -163,6 +196,12 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         snapshot = parse_legacy_snapshot(catalog_bytes)
         if snapshot.source_order is None:
             raise V11OperationalError("v11 requires verified historical source order")
+        if owned_cover_ids is not None and not {
+            item.definition.cover_id
+            for item in snapshot.templates
+            if not is_uploaded_cover_id(item.definition.cover_id)
+        }.issubset(owned_cover_ids):
+            raise V11OperationalError("inherited cover inventory omits historical template")
         owner_inventory = OwnerInventory.parse(document["owner_inventory"])
         if owner_revision is None:
             owner_inventory.validate_against(snapshot)
@@ -214,6 +253,7 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         example_provenance=tuple(item.provenance for item in snapshot.templates),
         migration_origin_sha256=digest,
         owner_inventory=owner_inventory,
+        inherited_cover_ids=tuple(owned_cover_ids or ()),
     )
 
 

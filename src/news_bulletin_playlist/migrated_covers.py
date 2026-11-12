@@ -141,6 +141,22 @@ class MigratedCoverAssets:
     def load(self, cover_id: str) -> tuple[bytes, dict[str, object]] | None:
         records = self._read_index()
         if records is None or cover_id not in records:
+            # Once migration publishes v11, a previously materialized JPEG is
+            # immutable authority. Missing index/member must fail closed; do
+            # not use a later image's bundled JPEG under the historical ID.
+            authority = self.root.parent / "managed-state-v11.json"
+            if authority.exists() or authority.is_symlink():
+                try:
+                    from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
+
+                    owned = V11OperationalStore(self.root.parent).load()
+                    legacy = self.root.parent / "managed-state.json"
+                    if cover_id in owned.inherited_cover_ids or (
+                        not owned.inherited_cover_ids and (legacy.exists() or legacy.is_symlink())
+                    ):
+                        raise MigratedCoverError("Persisted inherited cover index is missing")
+                except (OSError, ValueError) as exc:
+                    raise MigratedCoverError("Inherited cover authority is unavailable") from exc
             return None
         asset_id, attribution = records[cover_id]
         try:
