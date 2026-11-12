@@ -223,17 +223,17 @@ def test_four_direct_upgrade_zip_v2_imports_preserve_owner_template_closure_offl
         created.append(result)
         assert not fresh.load_readonly().playlists
         # A restored ZIP may never acquire an old or a new Spotify destination.
-        assert original_playlist.destination.external_id.encode() not in (
-            recipient / "managed-state-v11.json"
-        ).read_bytes()
+        assert (
+            original_playlist.destination.external_id.encode()
+            not in (recipient / "managed-state-v11.json").read_bytes()
+        )
 
     assert len(fresh.catalog.playlists) == 4
     assert len({item.owner_template_id for item in fresh.load_readonly().templates}) == 4
     assert sum(item.created_sources for item in created) == len(fresh.catalog.sources)
     assert not fresh.load_readonly().playlists
     effective = {
-        source.id: source
-        for source in effective_sources(fresh.catalog, fresh.load_readonly())
+        source.id: source for source in effective_sources(fresh.catalog, fresh.load_readonly())
     }
     by_template = {item.id: item for item in fresh.catalog.playlists}
     drafts = fresh.load_readonly().templates
@@ -263,8 +263,6 @@ def test_four_direct_upgrade_zip_v2_imports_preserve_owner_template_closure_offl
         }
         assert tuple(
             effective[id_].external_references for id_ in owner.default_source_ids
-        ) == tuple(
-            donor_sources[id_].external_references for id_ in historical.default_source_ids
-        )
+        ) == tuple(donor_sources[id_].external_references for id_ in historical.default_source_ids)
         assert import_service.covers.load(draft.cover_id)[0] == original_bundle.jpeg
         assert import_service.covers.load(owner.cover_id)[0] == original_bundle.template_jpeg
