@@ -19,6 +19,10 @@ from news_bulletin_playlist.source_import import SourceImportPreview, SourceImpo
 MAX_SOURCE_IMPORT_MULTIPART_BYTES = MAX_SOURCE_DOCUMENT_BYTES + 8192
 
 
+class SourceImportUploadTooLarge(ValueError):
+    """A bounded multipart upload exceeds its configured byte budget."""
+
+
 def parse_source_import_upload(
     content_type: str,
     body: bytes,
@@ -33,7 +37,9 @@ def parse_source_import_upload(
     Uses the same bounded MIME/framing rules as owner-cover upload, with a separate
     smaller budget and field/MIME policy. Filename is untrusted and never used.
     """
-    if len(content_type) > 180 or not 0 < len(body) <= document_limit + 8192:
+    if len(body) > document_limit + 8192:
+        raise SourceImportUploadTooLarge("Source upload exceeds size limit")
+    if len(content_type) > 180 or not body:
         raise ValueError("Invalid source upload size or content type")
     match = re.fullmatch(
         r'multipart/form-data;\s*boundary=(?:"([^"\\]{1,100})"|([^;\s]{1,100}))',
@@ -74,6 +80,8 @@ def parse_source_import_upload(
             raise ValueError("Invalid or duplicate source upload field")
         data = part.get_payload(decode=True)
         limit = document_limit if name == "document" else 128
+        if name == "document" and isinstance(data, bytes) and len(data) > limit:
+            raise SourceImportUploadTooLarge("Source upload exceeds size limit")
         if not isinstance(data, bytes) or not 0 < len(data) <= limit:
             raise ValueError("Invalid source upload field size")
         if name == "document":

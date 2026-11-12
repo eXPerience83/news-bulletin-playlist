@@ -105,6 +105,7 @@ from news_bulletin_playlist.source_import import (
 )
 from news_bulletin_playlist.source_import_web import (
     MAX_SOURCE_IMPORT_MULTIPART_BYTES,
+    SourceImportUploadTooLarge,
     parse_source_import_upload,
     render_source_import_preview,
     render_source_import_result,
@@ -486,6 +487,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._source_error(
                 HTTPStatus.SERVICE_UNAVAILABLE,
                 "Too many import previews; cancel one or retry later",
+            )
+        except SourceImportUploadTooLarge:
+            self._source_error(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Playlist ZIP exceeds version size limit"
             )
         except ValueError, RecursionError, OverflowError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid playlist import or draft fields")
