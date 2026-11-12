@@ -164,14 +164,23 @@ class PlaylistImportService:
                 True,
                 "Unsupported or conflicting source definitions require operator review",
             )
-        if pending is not None or any(row.status != "create" for row in rows):
+        # Reuse is safe only for identical definitions that already belong to
+        # the active v11 owner catalog. Overlay-only sources require a separate
+        # audited promotion into owner inventory (never duplicate them).
+        owned_active_ids = {source.id for source in self.store.catalog.sources}
+        if pending is not None or any(
+            row.status not in {"create", "identical", "reuse"}
+            or (row.status in {"identical", "reuse"} and row.local_id not in owned_active_ids)
+            for row in rows
+        ):
             return PlaylistV2ImportPlan(
                 bundle,
                 source_preview,
                 None,
                 None,
                 True,
-                "ZIP v2 currently requires unclaimed sources and no pending provisioning",
+                "ZIP v2 source reuse requires exact existing owner capability records "
+                "and no pending provisioning",
             )
         if (
             any(p.portable_id == bundle.playlist["portable_id"] for p in state.playlists)
@@ -256,9 +265,13 @@ class PlaylistImportService:
             additions = tuple(
                 InstalledSource.from_definition(replace(row.incoming, id=row.local_id))
                 for row in plan.sources.rows
-                if isinstance(row.incoming, SourceDefinition) and row.local_id is not None
+                if (
+                    isinstance(row.incoming, SourceDefinition)
+                    and row.local_id is not None
+                    and row.status == "create"
+                )
             )
-            if len(additions) != len(plan.sources.rows):
+            if len(additions) != plan.sources.creates:
                 raise PlaylistImportError("Incomplete ZIP v2 source mapping")
             source_records = tuple(sorted((*owner.sources, *additions), key=lambda s: str(s.id)))
             order = owner.source_order.after_records_change(owner.sources, source_records)

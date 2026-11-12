@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import time
 
 import pytest
-from _portable_playlist_fixtures import UUID, _service
+from _portable_playlist_fixtures import UUID, _service, rewrite
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetStore
@@ -415,3 +415,34 @@ def test_v2_activated_managed_playlist_keeps_owner_and_current_cover_credit(tmp_
     assert restored.playlist["cover"]["attribution"] == first.playlist["cover"]["attribution"]
     assert restored.template_attribution == first.template_attribution
     assert b"NOT-A-REAL-DESTINATION" not in output
+
+
+def test_v2_multiple_playlists_reuse_identical_owner_sources_without_duplication(tmp_path):
+    first_zip, original_template = _donor(tmp_path)
+
+    def second_playlist_identity(manifest, _entries):
+        manifest["playlist"]["portable_id"] = "123e4567-e89b-42d3-a456-426614174002"
+        manifest["playlist"]["display_name"] = "Another managed playlist using same stations"
+
+    second_zip = rewrite(first_zip, second_playlist_identity)
+    _root, store, importer = _receiver(tmp_path)
+    first_plan = importer.preview_v2(first_zip)
+    assert not first_plan.blocked
+    first_result = importer.apply_v2(first_zip, first_plan.sources.fingerprint)
+    assert first_result.created_sources == len(original_template.default_source_ids)
+    first_ids = tuple(source.id for source in store.catalog.sources)
+    next_plan = importer.preview_v2(second_zip)
+    assert not next_plan.blocked
+    assert next_plan.sources.creates == 0
+    assert all(row.status in {"identical", "reuse"} for row in next_plan.sources.rows)
+    second_result = importer.apply_v2(second_zip, next_plan.sources.fingerprint)
+    assert second_result.created_sources == 0
+    assert tuple(source.id for source in store.catalog.sources) == first_ids
+    assert len(store.catalog.playlists) == 2
+    assert len(store.load_readonly().templates) == 2
+    assert store.load_readonly().playlists == ()
+    assert {t.owner_template_id for t in store.load_readonly().templates} == {
+        first_result.owner_template_id,
+        second_result.owner_template_id,
+    }
+    assert not _root.joinpath("managed-state.json").exists()
