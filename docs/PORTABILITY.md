@@ -137,8 +137,8 @@ the inspection hold is active and all current comparison checks pass; 1
 means there is something to review, and invalid state produces an error.
 Both successful output and a green container healthcheck are **technical
 inspection evidence, not permission to release the gate**. The report always
-includes `ready_for_production: false` while the full #633 owner CRUD,
-#638 lossless ZIP v2 and #421 hard-stop concerns remain unresolved.
+includes `ready_for_production: false` while #633 historical overlay
+reconciliation, #631 live acceptance and #421 hard-stop remain unresolved.
 
 The report does not reconstruct or repoint Spotify playlists and does not
 replace the final explicit `inspection-release` hash confirmation.
@@ -185,10 +185,10 @@ engages a new persistent hold. The CLI does not perform Spotify I/O.
 This gate is not a fence for a previously dispatched Spotify HTTP request;
 an ambiguous in-flight write remains a separate #421 hard stop.
 
-This work does not authorize production activation, and does not by itself
-solve #633 owner-controlled historical sources or #638 full portable ZIP v2.
+This work does not authorize production activation. The ZIP v2 Admin workflow
+exists separately but does not solve #633 overlay source promotion or #421.
 
-## ZIP v2 offline import/export codec (#638) — Admin and acceptance still gated
+## ZIP v2 offline import/export (#638) — Admin enabled, release still gated
 
 The v2 codec is now independently exportable, inspectable **and locally restorable**
 in a fresh v11 installation, using explicit internal APIs:
@@ -196,7 +196,10 @@ in a fresh v11 installation, using explicit internal APIs:
 `inspect_playlist_bundle_v2`,
 `PlaylistImportService.preview_v2(...)` and
 `PlaylistImportService.apply_v2(..., fingerprint)`.
-The normal Admin downloads/imports and the ZIP v1 path remain unchanged.
+Admin provides explicit ZIP v2 export and authenticated, CSRF-protected
+read-only preview and confirmed offline apply. Its 2 MiB upload size limit
+is enforced in the HTTP, multipart and session layers; ZIP v1 remains limited
+to 1 MiB. Distinct staged preview kinds prevent cross-version replay.
 A ZIP v2 cannot silently fall through into v1 import. **No Spotify writes,
 destination recreation or automatic activation** are part of these APIs.
 
@@ -217,9 +220,10 @@ Unsupported source capabilities block the entire import, never degrade to a
 generic detector.
 
 `preview_v2` is readonly and computes the prospective owner source IDs and
-template ID. At this stage it **blocks any reused/conflicting Spotify show
-source** and any pending provisioning; full adoption into nonempty
-installations remains a separate acceptance case. The preview fingerprint
+template ID. It **reuses identical sources already owned by the active v11
+catalog**, but blocks altered definitions, overlay-only historical matches
+and pending provisioning. Audited overlay promotion (#633) remains pending.
+The preview fingerprint
 covers the complete v11 authority bytes and pending intent, so any intervening
 configuration edit forces a fresh preview.
 
@@ -241,15 +245,16 @@ capabilities, incomplete closure and legacy ZIP rejection. A restored linked
 draft's ZIP v1 export now fails closed instead of losing its original
 owner-template details.
 
-**Still NO GO for release:** The application Admin ZIP v2 review/confirmation
-workflow remains unexposed; the normal import and explicit existing-Spotify
-destination relink/activation must be acceptance-tested against an inspected
-copy of the actual source configuration, including edits to source selection,
-time filtering and artwork after a restart. The scheduler's ambiguous
-remote-write gate (#421), #631 acceptance, and #565 release criteria remain.
+**Still NO GO for release:** The Admin ZIP v2 review and confirmation flow
+is exposed, and the offline suite includes four consecutive ZIP v2 restores
+from synthetic v6-v10 roots. The actual production configuration, edits to
+source selection, time filtering and artwork after restart, and any explicit
+existing-Spotify destination relink/activation still require supervised
+acceptance. The scheduler's ambiguous remote-write gate (#421), #633 overlay
+reconciliation, #631 acceptance, and #565 release criteria remain.
 Do not infer Spotify safety or production readiness from offline code tests.
 
-## ZIP v1 safety boundary before complete v2 (#638)
+## ZIP v1 safety boundary retained alongside complete ZIP v2 (#638)
 
 Managed ZIP v1 can faithfully describe the current destination selection,
 but it has no separate representation of the original template's full source
@@ -267,9 +272,9 @@ template-default sources or their configuration. **Do not call it a complete
 backup of the original template.** A full owner-portable source closure
 still requires ZIP v2 (#638).
 
-This is an interim **loss-prevention guard**, not a solution to #638: ZIP v2
-must preserve the full editable owner template and all dormant exceptions,
-including policy defaults, even where the current managed selection differs.
+This remains a ZIP v1 **loss-prevention guard**. The explicit ZIP v2 codec
+preserves the full editable owner template and dormant exceptions, including
+policy defaults when the current managed selection differs.
 Do not approve #631 or production export-recovery acceptance until the
 reviewed v2 Admin flow, explicit relink and functional edit/reassignment
 checks have passed on an inspected configuration.
@@ -666,7 +671,8 @@ asset remains missing rather than silently being replaced.
 This addresses **only the cover resource** subproblem of #633. Historic source
 and template definitions are persisted and now feed the active catalog,
 including source order; full reference-safe owner CRUD, legitimate post-migration
-mutations and complete ZIP v2 remain release blockers. These covers
+mutations and ZIP v2 acceptance on real installation data remain release
+blockers. These covers
 do not back up OAuth, SQLite or Spotify state.
 
 ## Portable playlist ZIP v1 (#550)

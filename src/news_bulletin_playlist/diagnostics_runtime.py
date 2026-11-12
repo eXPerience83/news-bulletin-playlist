@@ -67,6 +67,7 @@ from news_bulletin_playlist.playlist_import_web import (
 from news_bulletin_playlist.portable_playlist_metadata import parse_exception, strict_json
 from news_bulletin_playlist.portable_playlists import (
     MAX_PLAYLIST_ZIP_BYTES,
+    MAX_PLAYLIST_ZIP_V2_BYTES,
     PlaylistExportError,
     PlaylistExportService,
     PortableCoverLoader,
@@ -214,7 +215,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 if parsed.query or parsed.fragment:
                     self._source_error(HTTPStatus.BAD_REQUEST, "Invalid playlist import request")
                 else:
-                    self._reply(HTTPStatus.OK, upload_page(security.issue_csrf_token()))
+                    self._reply(HTTPStatus.OK, upload_page(
+                            security.issue_csrf_token(), inspection_hold=self.inspection_hold
+                        ))
             return
         if parsed.path in {"/admin/playlists/export.zip", "/admin/playlists/portable/prepare"}:
             self._serve_portable_playlist(parsed.path, parsed.query)
@@ -338,7 +341,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             preview = path.endswith("/preview")
             edit = path.endswith("/update")
             v2 = path.startswith("/admin/playlists/import/v2/")
-            limit = MAX_PLAYLIST_ZIP_BYTES + 8192 if preview else 2 * 1024 * 1024 if edit else 4096
+            document_limit = MAX_PLAYLIST_ZIP_V2_BYTES if v2 else MAX_PLAYLIST_ZIP_BYTES
+            limit = document_limit + 8192 if preview else 2 * 1024 * 1024 if edit else 4096
             length = int(lengths[0])
             if not 0 < length <= limit:
                 self.close_connection = True
@@ -360,7 +364,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 token, document = parse_source_import_upload(
                     types[0],
                     body,
-                    document_limit=MAX_PLAYLIST_ZIP_BYTES,
+                    document_limit=document_limit,
                     content_types=frozenset({"application/zip", "application/octet-stream"}),
                 )
                 if not security.consume_csrf_token(token):
@@ -371,7 +375,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 if v2:
                     planned_v2 = service.preview_v2(document)
                     staged = security.stage_playlist_import(
-                        document, planned_v2.sources.fingerprint
+                        document, planned_v2.sources.fingerprint, version=2
                     )
                     page = preview_v2_page(
                         planned_v2, staged.preview_id, security.issue_csrf_token()
@@ -409,7 +413,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             preview_id = single_form_value(form, "preview_id")
             if re.fullmatch(r"[A-Za-z0-9_-]{20,128}", preview_id) is None:
                 raise ValueError("Invalid preview reference")
-            context = security.take_playlist_import(preview_id)
+            context = security.take_playlist_import(preview_id, version=2 if v2 else 1)
             if context is None:
                 raise PlaylistImportError("Preview expired or unavailable; upload a new preview")
             if v2:

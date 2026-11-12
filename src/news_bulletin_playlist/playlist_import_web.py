@@ -19,20 +19,27 @@ from news_bulletin_playlist.portable_playlists import canonical_json
 from news_bulletin_playlist.source_import_web import render_source_import_rows
 
 
-def upload_page(csrf: str) -> bytes:
+def upload_page(csrf: str, *, inspection_hold: bool = False) -> bytes:
+    notice = (
+        '<div class="notice" role="status">Startup inspection hold is active. '
+        "Playlist imports and Spotify writes are locked.</div>"
+        if inspection_hold
+        else ""
+    )
+    disabled = " disabled" if inspection_hold else ""
     return render_admin_shell(
         title="Import playlist ZIP",
         active_tab="playlists",
         intro="Local draft import; no Spotify calls. Publishing later is a separate opt-in.",
-        body_html=f'''<h2>Import complete playlist ZIP v2</h2>
+        body_html=notice + f'''<h2>Import complete playlist ZIP v2</h2>
 <p>Recommended for lossless owner-template policy, dormant exceptions and source closure.
-Maximum 1 MiB; preview is read-only and never contacts Spotify.</p>
+Maximum 2 MiB; preview is read-only and never contacts Spotify.</p>
 <form method="post" action="/admin/playlists/import/v2/preview" enctype="multipart/form-data">
 <input type="hidden" name="csrf_token" value="{html.escape(csrf, quote=True)}">
 <label>ZIP v2 package
-<input type="file" name="document" accept=".zip,application/zip" required>
+<input type="file" name="document" accept=".zip,application/zip" required{disabled}>
 </label>
-<button class="button button-primary" type="submit">Preview ZIP v2</button></form>
+<button class="button button-primary" type="submit"{disabled}>Preview ZIP v2</button></form>
 <h2>Legacy playlist ZIP v1</h2>
 <p>Maximum 1 MiB. Preview validates everything without writing files.</p>
 <form method="post" action="/admin/playlists/import/preview" enctype="multipart/form-data">
@@ -40,9 +47,9 @@ Maximum 1 MiB; preview is read-only and never contacts Spotify.</p>
 <label>Playlist ZIP
 <input type="file"
 name="document" accept=".zip,application/zip"
-required>
+required{disabled}>
 </label>
-<button class="button button-primary" type="submit">Preview import</button></form>''',
+<button class="button button-primary" type="submit"{disabled}>Preview import</button></form>''',
     )
 
 

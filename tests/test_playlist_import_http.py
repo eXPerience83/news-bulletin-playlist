@@ -17,17 +17,21 @@ from _source_admin_http_fixtures import _server
 
 from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
 from news_bulletin_playlist.playlist_import_web import imported_draft_editor
-from news_bulletin_playlist.portable_playlists import canonical_json
+from news_bulletin_playlist.portable_playlists import (
+    MAX_PLAYLIST_ZIP_BYTES,
+    MAX_PLAYLIST_ZIP_V2_BYTES,
+    canonical_json,
+)
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 
 ROOT = "/admin/playlists/import"
 
 
-def post(server, cookie, document, token, headers=None):
+def post(server, cookie, document, token, headers=None, *, path=ROOT + "/preview"):
     kind, body = _multipart(token, document, media_type="application/zip")
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
     extra = {"Content-Type": kind} | ({"Cookie": cookie} if cookie else {}) | (headers or {})
-    connection.request("POST", ROOT + "/preview", body=body, headers=extra)
+    connection.request("POST", path, body=body, headers=extra)
     response = connection.getresponse()
     result = response.status, dict(response.getheaders()), response.read()
     connection.close()
@@ -466,3 +470,31 @@ def test_browser_textarea_roundtrip_preserves_original_text(tmp_path, descriptio
     )
     stored = store.load_readonly().templates[0]
     assert stored.description == draft.description and stored.display_name == draft.display_name
+
+
+def test_v2_upload_limit_is_2_mib_and_version_bound(tmp_path):
+    with _server(tmp_path) as (server, client, store):
+        cookie = _login(server)
+        original = _files(tmp_path)
+        # A ZIP larger than v1 but within v2 must reach its ZIP decoder;
+        # malformed bytes yield 400, not a misleading 413 size rejection.
+        document = b"x" * (MAX_PLAYLIST_ZIP_BYTES + 1)
+        upload = _request(server, "GET", ROOT, cookie=cookie)[2]
+        status, _, _ = post(
+            server, cookie, document, _csrf(upload), path=ROOT + "/preview"
+        )
+        assert status == 413
+        status, _, _ = post(
+            server, cookie, document, _csrf(upload), path=ROOT + "/v2/preview"
+        )
+        assert status == 400
+        assert _files(tmp_path) == original and not client.calls
+
+        # Never accept a document above the v2 envelope budget.
+        upload = _request(server, "GET", ROOT, cookie=cookie)[2]
+        oversized = b"x" * (MAX_PLAYLIST_ZIP_V2_BYTES + 1)
+        status, _, _ = post(
+            server, cookie, oversized, _csrf(upload), path=ROOT + "/v2/preview"
+        )
+        assert status == 413
+        assert _files(tmp_path) == original and not client.calls
