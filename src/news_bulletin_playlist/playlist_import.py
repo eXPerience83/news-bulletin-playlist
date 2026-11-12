@@ -81,7 +81,7 @@ class PlaylistImportResult:
 
 @dataclass(frozen=True, slots=True)
 class PlaylistV2ImportPlan:
-    """Read-only, fully remapped v2 plan; not yet a durable install operation."""
+    """Read-only, fully remapped v2 plan for an explicit offline owner install."""
 
     bundle: PlaylistBundle
     sources: SourceImportPreview
@@ -238,7 +238,7 @@ class PlaylistImportService:
             remapped,
             selected,
             False,
-            "Offline plan only; lossless v2 import is not yet enabled",
+            "Ready for confirmed offline owner-template and current-draft installation",
         )
 
     def apply_v2(self, document: bytes, fingerprint: str) -> PlaylistV2ImportResult:

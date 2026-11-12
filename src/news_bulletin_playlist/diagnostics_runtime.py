@@ -59,7 +59,9 @@ from news_bulletin_playlist.playlist_import import PlaylistImportError, Playlist
 from news_bulletin_playlist.playlist_import_web import (
     imported_draft_editor,
     preview_page,
+    preview_v2_page,
     result_page,
+    result_v2_page,
     upload_page,
 )
 from news_bulletin_playlist.portable_playlist_metadata import parse_exception, strict_json
@@ -194,7 +196,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                                 "confirmation; EXISTING destination relinking requires "
                                 "ownership verification."
                             ),
-                            body_html=hold_notice + imported_draft_editor(draft, security.issue_csrf_token()),
+                            body_html=(
+                                hold_notice
+                                + imported_draft_editor(draft, security.issue_csrf_token())
+                            ),
                         )
                     self._reply(HTTPStatus.OK, page)
                 except ValueError, ManagedStateError, OSError:
@@ -277,6 +282,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if path in {
             "/admin/playlists/import/preview",
             "/admin/playlists/import/apply",
+            "/admin/playlists/import/v2/preview",
+            "/admin/playlists/import/v2/apply",
             "/admin/playlists/imported/update",
         }:
             self._handle_playlist_import(path)
@@ -330,6 +337,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 raise ValueError("Invalid playlist import headers")
             preview = path.endswith("/preview")
             edit = path.endswith("/update")
+            v2 = path.startswith("/admin/playlists/import/v2/")
             limit = MAX_PLAYLIST_ZIP_BYTES + 8192 if preview else 2 * 1024 * 1024 if edit else 4096
             length = int(lengths[0])
             if not 0 < length <= limit:
@@ -360,11 +368,15 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                         HTTPStatus.FORBIDDEN, "Administration form validation failed"
                     )
                     return
-                planned = service.preview(document)
+                planned = service.preview_v2(document) if v2 else service.preview(document)
                 staged = security.stage_playlist_import(document, planned.sources.fingerprint)
                 self._reply(
                     HTTPStatus.OK,
-                    preview_page(planned, staged.preview_id, security.issue_csrf_token()),
+                    (
+                        preview_v2_page(planned, staged.preview_id, security.issue_csrf_token())
+                        if v2
+                        else preview_page(planned, staged.preview_id, security.issue_csrf_token())
+                    ),
                 )
                 return
             form = self._read_form(max_bytes=limit)
@@ -395,6 +407,21 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             context = security.take_playlist_import(preview_id)
             if context is None:
                 raise PlaylistImportError("Preview expired or unavailable; upload a new preview")
+            if v2:
+                if set(form) not in (
+                    {"csrf_token", "preview_id", "action"},
+                    {"csrf_token", "preview_id", "action", "confirm"},
+                ):
+                    raise ValueError("Invalid ZIP v2 confirmation fields")
+                action = single_form_value(form, "action")
+                if action == "cancel":
+                    self._reply(HTTPStatus.OK, result_v2_page(None))
+                    return
+                if action != "apply" or form.get("confirm") != ["1"]:
+                    raise ValueError("Explicit ZIP v2 confirmation is required")
+                result_v2 = service.apply_v2(context.document, context.fingerprint)
+                self._reply(HTTPStatus.OK, result_v2_page(result_v2))
+                return
             decisions = {
                 int(k.removeprefix("decision_")): v[0]
                 for k, v in form.items()
@@ -554,21 +581,31 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 query,
                 strict_parsing=True,
                 keep_blank_values=True,
-                max_num_fields=2,
+                max_num_fields=3,
                 errors="strict",
             )
-            if set(values) != {"kind", "id"} or any(len(v) != 1 for v in values.values()):
+            if set(values) not in ({"kind", "id"}, {"kind", "id", "version"}):
                 raise ValueError
+            if any(len(v) != 1 for v in values.values()):
+                raise ValueError
+            version_value = values.get("version", ["1"])[0]
+            if version_value not in {"1", "2"}:
+                raise ValueError
+            if "version" in values and not path.endswith("export.zip"):
+                raise ValueError
+            version = int(version_value)
             kind, object_id = values["kind"][0], values["id"][0]
             service = self._playlist_export_service()
             if path.endswith("export.zip"):
-                identity, payload = service.export(kind, object_id)
+                identity, payload = service.export(kind, object_id, version=version)
                 self._reply(
                     HTTPStatus.OK,
                     payload,
                     content_type="application/zip",
                     extra_headers={
-                        "Content-Disposition": f'attachment; filename="playlist-{identity}-v1.zip"'
+                        "Content-Disposition": (
+                            f'attachment; filename="playlist-{identity}-v{version}.zip"'
+                        )
                     },
                 )
             else:

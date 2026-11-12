@@ -22,6 +22,28 @@ copy is prudent; **portable JSON and ZIP are not production backups**.
 Acceptance on isolated synthetic roots is tracked by #553 and later beta gates by
 #565. No release/image or live migration is implied by code merged into `main`.
 
+## ZIP v2 Admin workflow (integration branch #646; not yet released)
+
+Admin offers an explicit **complete ZIP v2** download for objects with a prepared
+portable identity via `/admin/playlists/export.zip?kind=...&id=...&version=2`.
+Legacy ZIP v1 remains available separately and is still rejected when its format
+would discard dormant template policies.
+
+ZIP v2 upload uses `/admin/playlists/import/v2/preview`: the read-only
+session-bound preview displays source mappings, differences, conflicts, complete
+owner template and dormant exceptions. The separate, CSRF-checked
+`/admin/playlists/import/v2/apply` requires explicit confirmation and revalidates
+the exact staged document and current v11 state under the configuration lock.
+On success, it atomically installs owner sources, the full template and an editable
+local draft, with verified cover bytes and credits. This **does not** create, link,
+enable or write any Spotify destination. Overlay-only source matches and
+nonidentical capabilities fail closed; these cases remain an explicit #633
+reconciliation gate, not silent duplication or a forced overwrite.
+
+During startup inspection hold, POST preview/apply and all other configuration
+writes return the existing locked response. The held draft editor displays the
+inspection warning. Neither portable ZIP version is a complete `/data` backup.
+
 ## First-boot durable owner inventory — pre-activation stage (#633)
 
 New direct v6–v10 -> v11 cutovers now include an `owner_inventory` object
