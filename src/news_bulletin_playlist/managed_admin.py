@@ -1101,6 +1101,8 @@ class ManagedAdminService:
         return replace(state, playlists=playlists)
 
     def _validate_state(self, state: ManagedState) -> None:
+        if isinstance(self.store, ForwardOnlyManagedStateStore):
+            self.catalog = self.store.catalog
         compile_engine_config(self.catalog, state)
 
     def _save_validated(self, state: ManagedState) -> None:
@@ -1122,6 +1124,8 @@ class ManagedAdminService:
             raise ManagedAdminError(str(exc)) from exc
 
     def _managed(self, state: ManagedState, playlist_id: PlaylistId | str) -> ManagedPlaylist:
+        if isinstance(self.store, ForwardOnlyManagedStateStore):
+            self.catalog = self.store.catalog
         for playlist in state.playlists:
             if playlist.id == playlist_id:
                 if template_suspended_by_quarantine(self.catalog, state, playlist.template_id):
@@ -1139,6 +1143,8 @@ class ManagedAdminService:
         allow_empty: bool,
         existing: tuple[SourceId, ...] = (),
     ) -> tuple[SourceId, ...]:
+        if isinstance(self.store, ForwardOnlyManagedStateStore):
+            self.catalog = self.store.catalog
         selected = tuple(SourceId(str(source_id).strip()) for source_id in source_ids)
         if not selected and not allow_empty:
             raise ManagedAdminError("at least one source must be selected")

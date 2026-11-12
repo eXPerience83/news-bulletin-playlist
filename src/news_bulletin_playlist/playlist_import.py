@@ -27,6 +27,7 @@ from news_bulletin_playlist.models import (
     SourceDefinition,
     SourceId,
 )
+from news_bulletin_playlist.owner_inventory import OwnerInventory
 from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.playlist_bundle import (
     PlaylistBundle,
@@ -563,11 +564,72 @@ class PlaylistImportService:
                 templates=tuple(sorted((*state.templates, preview.draft), key=lambda t: t.id)),
             )
             serialize_managed_state(candidate, catalog=self.store.catalog)
+            previous_owner: OwnerInventory | None = None
+            next_owner: OwnerInventory | None = None
+            additions: tuple[InstalledSource, ...] = ()
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                current = parse_v11_operational(self.store._expected_bytes)
+                if current.owner_sources_complete:
+                    previous_owner = current.owner_inventory
+                    additions = tuple(
+                        InstalledSource.from_definition(replace(row.incoming, id=row.local_id))
+                        for row in preview.sources.rows
+                        if (
+                            row.status == "create"
+                            and isinstance(row.incoming, SourceDefinition)
+                            and row.local_id is not None
+                        )
+                    )
+                    records = tuple(
+                        sorted((*previous_owner.sources, *additions), key=lambda s: str(s.id))
+                    )
+                    next_owner = replace(
+                        previous_owner,
+                        sources=records,
+                        source_order=previous_owner.source_order.after_records_change(
+                            previous_owner.sources, records
+                        ),
+                    )
+                    candidate = replace(candidate, sources=state.sources)
+                    update_v11_owner_inventory(
+                        self.store._expected_bytes, next_owner, managed_overlay=candidate
+                    )
             CustomCoverAssetStore(self.covers.store.root).install_canonical(bundle.jpeg)
             creates = preview.sources.creates
             try:
-                self.store.save(candidate)
+                if isinstance(self.store, ForwardOnlyManagedStateStore) and next_owner is not None:
+                    self.store.install_owner_sources(additions, overlay=candidate)
+                else:
+                    self.store.save(candidate)
             except OSError, ManagedStateError:
+                if (
+                    isinstance(self.store, ForwardOnlyManagedStateStore)
+                    and previous_owner is not None
+                    and next_owner is not None
+                ):
+                    try:
+                        observed_owner = parse_v11_operational(self.store._owner.load_bytes())
+                    except OSError, ValueError:
+                        raise PlaylistImportError(
+                            "Import outcome is uncertain; inspect v11 before retrying"
+                        ) from None
+                    if (
+                        observed_owner.owner_inventory == next_owner
+                        and observed_owner.managed_overlay == candidate
+                    ):
+                        self.store.load_readonly()
+                        return PlaylistImportResult(str(preview.draft.id), creates, True, True)
+                    if (
+                        observed_owner.owner_inventory == previous_owner
+                        and observed_owner.managed_overlay == state
+                    ):
+                        raise PlaylistImportError(
+                            "Import was not committed; previous configuration is intact. "
+                            "Prepared artwork can be safely reused"
+                        ) from None
+                    raise PlaylistImportError(
+                        "Import outcome is uncertain; inspect v11 before retrying"
+                    ) from None
                 try:
                     observed = self.store.load_readonly()
                 except OSError, ManagedStateError:

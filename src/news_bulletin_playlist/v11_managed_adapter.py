@@ -116,6 +116,8 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
         if not current.owner_sources_complete:
             raise ManagedStateError("Historical split-mode v11 requires explicit promotion")
         if not additions:
+            if overlay is not None and overlay != current.managed_overlay:
+                self.save_owner_bundle(current.owner_inventory, overlay)
             return current.owner_inventory
         current_sources = current.owner_inventory.sources
         previous = {item.id for item in current_sources}
