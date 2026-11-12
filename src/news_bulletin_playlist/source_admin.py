@@ -714,11 +714,7 @@ class SourceAdminService:
                 is_owner = any(item.id == source_id for item in historical_sources)
                 if is_owner:
                     assert isinstance(self.store, ForwardOnlyManagedStateStore)
-                    source = next(
-                        item
-                        for item in historical_sources
-                        if item.id == source_id
-                    )
+                    source = next(item for item in historical_sources if item.id == source_id)
                     self.first_journal.clear_source_runtime_state(source.id)
                     self.detector_journal.clear_source_state(source.id)
                     self.store.delete_owner_source(source.id)

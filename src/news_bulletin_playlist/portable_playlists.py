@@ -244,9 +244,8 @@ def playlist_bundle(
             if tuple(map(exception_payload, local_effective)) != tuple(
                 map(exception_payload, owner_effective)
             ) or any(
-                exception_payload(e) not in tuple(
-                    map(exception_payload, template.duration_policy.exceptions)
-                )
+                exception_payload(e)
+                not in tuple(map(exception_payload, template.duration_policy.exceptions))
                 for e in linked_local.duration_exceptions
             ):
                 raise PlaylistExportError(
