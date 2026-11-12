@@ -23,7 +23,7 @@ from news_bulletin_playlist.playlist_bundle import (
 )
 from news_bulletin_playlist.playlist_import import PlaylistImportService
 from news_bulletin_playlist.portable_playlists import PlaylistExportService, PortableCoverLoader
-from news_bulletin_playlist.portable_sources import export_sources, parse_sources
+from news_bulletin_playlist.portable_sources import PortableSource, export_sources, parse_sources
 from news_bulletin_playlist.source_import import SourceImportService
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 
@@ -308,7 +308,9 @@ def test_v2_reuses_promoted_historical_custom_source_with_original_identity(
     _, archive = exporter.export("managed", playlist_id, version=2)
     bundle = inspect_playlist_bundle_v2(archive)
     assert station.spotify_show_id in {
-        record.spotify_show_id for record in bundle.sources
+        record.source.external_references[0].external_id
+        for record in bundle.sources
+        if isinstance(record, PortableSource)
     }
 
     restored = open_managed_state_store(recipient)
