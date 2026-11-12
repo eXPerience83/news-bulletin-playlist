@@ -231,7 +231,10 @@ def test_four_direct_upgrade_zip_v2_imports_preserve_owner_template_closure_offl
     assert len({item.owner_template_id for item in fresh.load_readonly().templates}) == 4
     assert sum(item.created_sources for item in created) == len(fresh.catalog.sources)
     assert not fresh.load_readonly().playlists
-    effective = {source.id: source for source in effective_sources(fresh.catalog, fresh.load_readonly())}
+    effective = {
+        source.id: source
+        for source in effective_sources(fresh.catalog, fresh.load_readonly())
+    }
     by_template = {item.id: item for item in fresh.catalog.playlists}
     drafts = fresh.load_readonly().templates
     assert len(drafts) == 4
@@ -249,16 +252,18 @@ def test_four_direct_upgrade_zip_v2_imports_preserve_owner_template_closure_offl
         assert draft.max_duration_seconds == original_playlist.max_duration_seconds
         assert len(owner.duration_policy.exceptions) == len(historical.duration_policy.exceptions)
         assert tuple(
-            (e.edition_id, e.max_seconds, e.edition_local_time, e.edition_local_time.fold)
+            (e.id, e.max_seconds, e.edition_local_time, e.edition_local_time.fold)
             for e in owner.duration_policy.exceptions
         ) == tuple(
-            (e.edition_id, e.max_seconds, e.edition_local_time, e.edition_local_time.fold)
+            (e.id, e.max_seconds, e.edition_local_time, e.edition_local_time.fold)
             for e in historical.duration_policy.exceptions
         )
         donor_sources = {
             source.id: source for source in effective_sources(store.catalog, store.load_readonly())
         }
-        assert tuple(effective[id_].external_references for id_ in owner.default_source_ids) == tuple(
+        assert tuple(
+            effective[id_].external_references for id_ in owner.default_source_ids
+        ) == tuple(
             donor_sources[id_].external_references for id_ in historical.default_source_ids
         )
         assert import_service.covers.load(draft.cover_id)[0] == original_bundle.jpeg
