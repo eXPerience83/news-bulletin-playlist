@@ -318,7 +318,7 @@ def test_v2_quarantined_portable_uuid_cannot_be_reinstalled(tmp_path):
     state = store.load_readonly()
     quarantined = QuarantinedPlaylistTemplate(
         source_index=0,
-        reason="Unresolved malformed historical draft",
+        reason="invalid_definition",
         raw_json=json.dumps({"id": "custom_bad", "portable_id": UUID}, sort_keys=True),
     )
     store.save(replace(state, quarantined_templates=(quarantined,)))
@@ -399,7 +399,16 @@ def test_v2_activated_managed_playlist_keeps_owner_and_current_cover_credit(tmp_
     restored = inspect_playlist_bundle_v2(output)
     first = inspect_playlist_bundle_v2(original)
     assert restored.template is not None
-    assert restored.template.duration_policy == first.template.duration_policy
+    assert restored.template.duration_policy.default_max_seconds == (
+        first.template.duration_policy.default_max_seconds
+    )
+    assert tuple(
+        (e.id, e.edition_local_time.isoformat(), e.edition_local_time.fold, e.max_seconds)
+        for e in restored.template.duration_policy.exceptions
+    ) == tuple(
+        (e.id, e.edition_local_time.isoformat(), e.edition_local_time.fold, e.max_seconds)
+        for e in first.template.duration_policy.exceptions
+    )
     assert len(restored.template.default_source_ids) == len(historical.default_source_ids)
     assert restored.jpeg == first.jpeg
     assert restored.template_jpeg == first.template_jpeg
