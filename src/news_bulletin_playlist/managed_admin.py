@@ -344,6 +344,8 @@ class ManagedAdminService:
         except KeyError as exc:
             raise ManagedAdminError("unknown playlist example") from exc
         state = self.store.load()
+        if isinstance(self.store, ForwardOnlyManagedStateStore):
+            self.catalog = self.store.catalog
         if state.schema_version < 10:
             raise ManagedAdminError("playlist examples require v11 owner state")
         draft_id = example_draft_id(example)

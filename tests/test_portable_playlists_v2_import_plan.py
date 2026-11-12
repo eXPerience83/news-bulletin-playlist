@@ -349,7 +349,8 @@ def test_v2_restore_sorts_current_draft_with_existing_unrelated_draft(tmp_path):
     assert tuple(t.id for t in store.load_readonly().templates) == tuple(
         sorted((existing.id, result.current_draft_id))
     )
-    assert len(store.catalog.sources) == len(historical.default_source_ids)
+    assert len(store.catalog.sources) == len(historical.default_source_ids) + 1
+    assert unrelated_source.id in {source.id for source in store.catalog.sources}
 
 
 def test_v2_recovered_post_commit_durability_exception_refreshes_adapter(tmp_path, monkeypatch):
