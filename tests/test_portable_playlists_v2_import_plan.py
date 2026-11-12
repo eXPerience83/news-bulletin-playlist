@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import time
 
@@ -10,12 +11,14 @@ from _portable_playlist_fixtures import UUID, _service
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetStore
+from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
 from news_bulletin_playlist.managed_state import (
     InstalledSource,
     ManagedState,
     ManagedStateError,
+    QuarantinedPlaylistTemplate,
     activate_template,
 )
 from news_bulletin_playlist.models import DurationPolicy, DurationPolicyException, PlaylistId
@@ -307,3 +310,99 @@ def test_v2_reassignment_duration_edits_and_source_toggle_preserve_original_owne
     assert len(parsed.exceptions) == 2
     assert parsed.template.id == original_owner.id
     assert (root / "managed-state.json").exists() is False
+
+
+def test_v2_quarantined_portable_uuid_cannot_be_reinstalled(tmp_path):
+    data, _ = _donor(tmp_path)
+    root, store, importer = _receiver(tmp_path)
+    state = store.load_readonly()
+    quarantined = QuarantinedPlaylistTemplate(
+        source_index=0,
+        reason="Unresolved malformed historical draft",
+        raw_json=json.dumps({"id": "custom_bad", "portable_id": UUID}, sort_keys=True),
+    )
+    store.save(replace(state, quarantined_templates=(quarantined,)))
+    before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    plan = importer.preview_v2(data)
+    assert plan.blocked
+    assert "identity" in plan.reason.lower()
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+
+
+def test_v2_restore_sorts_current_draft_with_existing_unrelated_draft(tmp_path):
+    data, historical = _donor(tmp_path)
+    _root, store, importer = _receiver(tmp_path)
+    unrelated_source = next(
+        s for s in BUILTIN_CATALOG.sources if s.id not in historical.default_source_ids
+    )
+    existing = LocalPlaylistTemplate(
+        id=PlaylistId("custom_zzzz_existing"),
+        display_name="Existing local draft",
+        description="",
+        default_source_ids=(unrelated_source.id,),
+        cover_id="custom_default",
+    )
+    state = store.load_readonly()
+    store.save(
+        replace(
+            state,
+            sources=(InstalledSource.from_definition(unrelated_source),),
+            templates=(existing,),
+        )
+    )
+    plan = importer.preview_v2(data)
+    assert not plan.blocked
+    result = importer.apply_v2(data, plan.sources.fingerprint)
+    assert tuple(t.id for t in store.load_readonly().templates) == tuple(
+        sorted((existing.id, result.current_draft_id))
+    )
+    assert len(store.catalog.sources) == len(historical.default_source_ids)
+
+
+def test_v2_recovered_post_commit_durability_exception_refreshes_adapter(tmp_path, monkeypatch):
+    data, _ = _donor(tmp_path)
+    root, store, importer = _receiver(tmp_path)
+    preview = importer.preview_v2(data)
+    real_save = store.save_owner_bundle
+
+    def succeed_then_raise(*args, **kwargs):
+        real_save(*args, **kwargs)
+        raise ManagedStateError("synthetic error after fsync")
+
+    monkeypatch.setattr(store, "save_owner_bundle", succeed_then_raise)
+    result = importer.apply_v2(data, preview.sources.fingerprint)
+    assert result.recovered
+    assert store.catalog.playlists
+    assert store.catalog.sources
+    assert store.load_readonly().templates[0].owner_template_id == result.owner_template_id
+    assert (root / V11_OPERATIONAL_FILENAME).is_file()
+
+
+def test_v2_activated_managed_playlist_keeps_owner_and_current_cover_credit(tmp_path):
+    original, historical = _donor(tmp_path, different_cover=True)
+    root, store, importer = _receiver(tmp_path)
+    preview = importer.preview_v2(original)
+    result = importer.apply_v2(original, preview.sources.fingerprint)
+    state = store.load_readonly()
+    linked = state.templates[0]
+    activated = replace(
+        activate_template(linked.as_playlist_template(), "NOT-A-REAL-DESTINATION"),
+        portable_id="123e4567-e89b-42d3-a456-426614174001",
+    )
+    store.save(replace(state, playlists=(activated,)))
+    exporter = PlaylistExportService(
+        store, ConfigurationSynchronization(), PortableCoverLoader(root)
+    )
+    with pytest.raises(PlaylistExportError, match="ZIP v1"):
+        exporter.export("managed", str(activated.id))
+    output = exporter.export("managed", str(activated.id), version=2)[1]
+    restored = inspect_playlist_bundle_v2(output)
+    first = inspect_playlist_bundle_v2(original)
+    assert restored.template is not None
+    assert restored.template.duration_policy == first.template.duration_policy
+    assert len(restored.template.default_source_ids) == len(historical.default_source_ids)
+    assert restored.jpeg == first.jpeg
+    assert restored.template_jpeg == first.template_jpeg
+    assert restored.playlist["cover"]["attribution"] == first.playlist["cover"]["attribution"]
+    assert restored.template_attribution == first.template_attribution
+    assert b"NOT-A-REAL-DESTINATION" not in output
