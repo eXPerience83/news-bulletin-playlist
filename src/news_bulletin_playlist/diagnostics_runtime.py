@@ -368,16 +368,23 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                         HTTPStatus.FORBIDDEN, "Administration form validation failed"
                     )
                     return
-                planned = service.preview_v2(document) if v2 else service.preview(document)
-                staged = security.stage_playlist_import(document, planned.sources.fingerprint)
-                self._reply(
-                    HTTPStatus.OK,
-                    (
-                        preview_v2_page(planned, staged.preview_id, security.issue_csrf_token())
-                        if v2
-                        else preview_page(planned, staged.preview_id, security.issue_csrf_token())
-                    ),
-                )
+                if v2:
+                    planned_v2 = service.preview_v2(document)
+                    staged = security.stage_playlist_import(
+                        document, planned_v2.sources.fingerprint
+                    )
+                    page = preview_v2_page(
+                        planned_v2, staged.preview_id, security.issue_csrf_token()
+                    )
+                else:
+                    planned_v1 = service.preview(document)
+                    staged = security.stage_playlist_import(
+                        document, planned_v1.sources.fingerprint
+                    )
+                    page = preview_page(
+                        planned_v1, staged.preview_id, security.issue_csrf_token()
+                    )
+                self._reply(HTTPStatus.OK, page)
                 return
             form = self._read_form(max_bytes=limit)
             if not security.consume_csrf_token(single_form_value(form, "csrf_token")):
