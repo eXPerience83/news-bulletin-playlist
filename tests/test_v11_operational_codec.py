@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+from dataclasses import replace
 import sqlite3
 from pathlib import Path
 
@@ -57,7 +58,11 @@ def test_standalone_v11_recreates_ordered_runtime_without_original_files(
     result = parse_v11_operational(encoded)
     assert result.schema_version == OPERATIONAL_SCHEMA_VERSION
     assert result.runtime == preview.original_runtime
-    assert result.managed_overlay == preview.original_state
+    assert result.managed_overlay == replace(preview.original_state, sources=())
+    assert result.owner_sources_complete
+    assert tuple(source.id for source in result.active_catalog.sources) == tuple(
+        source.id for source in preview.original_runtime.sources
+    )
     assert tuple(s.id for s in result.installed_sources) == tuple(
         source.id for source in preview.original_runtime.sources
     )
@@ -84,7 +89,7 @@ def test_custom_drafts_disabled_selections_quarantine_and_dst_fold(tmp_path: Pat
     preview = preview_legacy_materialization(catalog, store.load_readonly())
     parsed = parse_v11_operational(_operational(root, preview))
     assert parsed.runtime == preview.original_runtime
-    assert parsed.managed_overlay == state
+    assert parsed.managed_overlay == replace(state, sources=())
     assert parsed.managed_overlay.source_overrides == state.source_overrides
     assert parsed.managed_overlay.templates == state.templates
     assert parsed.managed_overlay.quarantined_templates == state.quarantined_templates

@@ -111,7 +111,7 @@ def test_legacy_installed_custom_source_deletion_clears_owner_and_overlay_togeth
         before = parse_v11_operational((root / V11_OPERATIONAL_FILENAME).read_bytes())
         assert installed.id in {item.id for item in before.owner_inventory.sources}
         assert installed.id in {item.id for item in before.managed_overlay.sources}
-        assert installed.id not in {item.id for item in before.active_catalog.sources}
+        assert installed.id in {item.id for item in before.active_catalog.sources}
         managed = server.RequestHandlerClass.managed_admin_service
         sources = server.RequestHandlerClass.source_admin_service
         assert managed is not None and sources is not None

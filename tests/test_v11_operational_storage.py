@@ -46,7 +46,8 @@ def test_one_shot_forward_upgrade_then_edit_restart_and_preserve_legacy(
     first = store.initialize_from_legacy(catalog=BUILTIN_CATALOG)
     assert first.runtime == preview.original_runtime
     assert store.initialize_from_legacy() == first
-    assert first.managed_overlay == preview.original_state
+    assert first.managed_overlay == replace(preview.original_state, sources=())
+    assert first.owner_sources_complete
     assert len(first.managed_overlay.playlists) == 4
     assert (root / V11_OPERATIONAL_FILENAME).stat().st_mode & 0o777 == 0o600
     assert {

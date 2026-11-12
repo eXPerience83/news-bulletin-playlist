@@ -53,7 +53,7 @@ def test_four_legacy_playlists_and_all_sources_remain_portable_after_v11(
     original_runtime = legacy.original_runtime
     store = open_managed_state_store(donor)
     assert store.catalog.sources
-    assert store.load_readonly() == legacy.original_state
+    assert store.load_readonly() == replace(legacy.original_state, sources=())
     assert tuple(s.id for s in effective_sources(store.catalog, store.load())) == tuple(
         s.id for s in original_runtime.sources
     )

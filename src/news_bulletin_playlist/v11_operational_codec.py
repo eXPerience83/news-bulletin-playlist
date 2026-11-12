@@ -68,6 +68,7 @@ class V11OperationalState:
     migration_origin_sha256: str
     owner_inventory: OwnerInventory
     inherited_cover_ids: tuple[str, ...] = ()
+    owner_sources_complete: bool = False
 
     @property
     def is_live_migration_authorized(self) -> bool:
@@ -83,7 +84,14 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
             raise V11OperationalError("ordered frozen-v2 source evidence is required")
         catalog = _historical_catalog(snapshot)
         normalized = pause_dormant_legacy_playlists(catalog, candidate.projection.original_state)
-        overlay = serialize_managed_state(normalized, catalog=catalog)
+        inventory = OwnerInventory.from_snapshot(snapshot)
+        # Historical custom sources are already in the complete owner inventory.
+        # Retire their duplicate overlay representation before the initial
+        # publication, preserving IDs and the explicitly persisted source order.
+        owner_overlay = replace(normalized, sources=())
+        overlay = serialize_managed_state(
+            owner_overlay, catalog=_owner_active_catalog(snapshot, inventory, complete=True)
+        )
         encoded_catalog = json.loads(candidate.frozen_catalog_v2_bytes)
         inherited_cover_ids = sorted(
             cover_id
@@ -102,9 +110,10 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
             ).hexdigest(),
             "installed_catalog": encoded_catalog,
             "managed_overlay": overlay,
+            "owner_source_catalog": "complete",
             # Strict independent owner records for a future atomic authority
             # transition. The old frozen catalog is audit provenance only.
-            "owner_inventory": OwnerInventory.from_snapshot(snapshot).to_document(),
+            "owner_inventory": inventory.to_document(),
             # Immutable v11 evidence that some bundled IDs must never fall back
             # to a later image if /data/migrated-covers/index.json goes missing.
             **({"inherited_cover_ids": inherited_cover_ids} if inherited_cover_ids else {}),
@@ -120,8 +129,8 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
         raise V11OperationalError("cannot build a lossless operational state") from exc
     if result.runtime != candidate.projection.projected_runtime:
         raise V11OperationalError("v11 operational state changes original runtime")
-    if result.managed_overlay != normalized:
-        raise V11OperationalError("v11 operational state changes original records")
+    if result.managed_overlay != owner_overlay:
+        raise V11OperationalError("v11 operational state changes normalized owner records")
     return payload
 
 
@@ -169,6 +178,12 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
     recognized_fields = required_fields | (
         {"inherited_cover_ids"} if owned_cover_ids is not None else set()
     )
+    owner_catalog_mode = document.get("owner_source_catalog")
+    if "owner_source_catalog" in document:
+        if owner_catalog_mode != "complete":
+            raise V11OperationalError("invalid complete owner source catalog marker")
+        recognized_fields.add("owner_source_catalog")
+    complete_owner_sources = owner_catalog_mode == "complete"
     owner_revision = document.get("owner_revision")
     if owner_revision is None:
         if set(document) != recognized_fields:
@@ -211,8 +226,12 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         # The owner inventory, not the legacy image-preset reconstruction, is
         # now the runtime source of truth. Historical catalog is retained only
         # for the provenance record and initial migration equivalence.
-        active_catalog = _owner_active_catalog(snapshot, owner_inventory)
+        active_catalog = _owner_active_catalog(
+            snapshot, owner_inventory, complete=complete_owner_sources
+        )
         overlay = parse_managed_state(document["managed_overlay"], catalog=active_catalog)
+        if complete_owner_sources and overlay.sources:
+            raise V11OperationalError("complete owner catalog cannot duplicate overlay sources")
         if overlay.schema_version < snapshot.managed_schema_version:
             raise V11OperationalError("v11 overlay cannot downgrade its original schema")
         if serialize_managed_state(overlay, catalog=active_catalog) != document["managed_overlay"]:
@@ -225,6 +244,10 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         image_ids = tuple(source.id for source in active_catalog.sources)
         if tuple(item.id for item in runtime.sources[: len(image_ids)]) != image_ids:
             raise V11OperationalError("v11 installed catalog source order changed")
+        if complete_owner_sources and tuple(source.id for source in runtime.sources) != (
+            owner_inventory.source_order.ids
+        ):
+            raise V11OperationalError("complete owner source order diverged from runtime")
         templates = effective_playlist_templates(
             active_catalog, overlay.templates, sources=runtime.sources
         )
@@ -253,6 +276,7 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         migration_origin_sha256=digest,
         owner_inventory=owner_inventory,
         inherited_cover_ids=tuple(owned_cover_ids or ()),
+        owner_sources_complete=complete_owner_sources,
     )
 
 
@@ -311,7 +335,9 @@ def update_v11_owner_inventory(
         # a newly imported template may reference source records added to the
         # owner inventory by this same atomic CAS.
         snapshot = parse_legacy_snapshot(_canonical(document["installed_catalog"]))
-        next_catalog = _owner_active_catalog(snapshot, edited)
+        next_catalog = _owner_active_catalog(
+            snapshot, edited, complete=current.owner_sources_complete
+        )
         document["managed_overlay"] = serialize_managed_state(updated_overlay, catalog=next_catalog)
         document["owner_revision"] = document.get("owner_revision", 0) + 1
         candidate = _canonical(document)
@@ -331,12 +357,14 @@ def update_v11_owner_inventory(
 def _owner_active_catalog(
     snapshot: FrozenLegacyCatalogSnapshot,
     owned: OwnerInventory,
+    *,
+    complete: bool = False,
 ) -> BuiltInCatalog:
-    """Compile from owner-persisted definitions, never image presets.
+    """Compile owner-persisted definitions without rebuilding from image presets.
 
-    Installation-provenance sources stay in the existing managed overlay;
-    image-origin sources are sourced from owner records at their exact original
-    positions. Future owner edits must be a separate CAS-authorized operation.
+    Old v11 documents without the complete marker remain readable in their
+    historical split representation. New migrations own the entire catalog,
+    including former installation-provenance sources, in original order.
     """
     original_image_ids = {
         item.installed.id
@@ -345,7 +373,11 @@ def _owner_active_catalog(
     }
     historical_ids = {item.installed.id for item in snapshot.sources}
     ordered_sources = owned.source_order.definitions(owned.sources)
-    # Historical custom sources remain represented in managed_overlay.sources,
+    if complete:
+        return BuiltInCatalog(
+            ordered_sources, owned.templates.records, allow_disabled_sources=True
+        )
+    # Old split-mode custom sources remain represented in managed_overlay.sources,
     # whereas newly owner-installed sources belong to this active catalog.
     # Do not duplicate historical custom records or silently hide new sources.
     return BuiltInCatalog(
