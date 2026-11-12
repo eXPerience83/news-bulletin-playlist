@@ -131,15 +131,9 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
         ):
             raise ManagedStateError("Owner source import contains a duplicate identity")
         records = tuple(sorted((*current_sources, *additions), key=lambda item: str(item.id)))
-        order = current.owner_inventory.source_order.after_records_change(
-            current_sources, records
-        )
-        inventory = replace(
-            current.owner_inventory, sources=records, source_order=order
-        )
-        self.save_owner_bundle(
-            inventory, current.managed_overlay if overlay is None else overlay
-        )
+        order = current.owner_inventory.source_order.after_records_change(current_sources, records)
+        inventory = replace(current.owner_inventory, sources=records, source_order=order)
+        self.save_owner_bundle(inventory, current.managed_overlay if overlay is None else overlay)
         return inventory
 
     def save_owner_source(

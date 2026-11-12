@@ -309,7 +309,7 @@ def test_v11_source_json_import_installs_owner_records_not_overlay(tmp_path: Pat
     result = service.apply(document, plan.fingerprint, keep_local=frozenset(), confirm_v8=True)
     assert result.created == 1
     assert not store.load_readonly().sources
-    assert tuple(s.id for s in store.catalog.sources[:len(baseline_order)]) == baseline_order
+    assert tuple(s.id for s in store.catalog.sources[: len(baseline_order)]) == baseline_order
     assert len(store.catalog.sources) == len(baseline_order) + 1
     new_id = result.rows[0].local_id
     assert new_id is not None

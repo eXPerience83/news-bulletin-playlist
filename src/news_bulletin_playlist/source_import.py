@@ -248,7 +248,7 @@ class SourceImportService:
                         # Inspect BOTH owner records and overlay before reporting recovery.
                         try:
                             observed = parse_v11_operational(self.store._owner.load_bytes())
-                        except (OSError, ValueError):
+                        except OSError, ValueError:
                             raise SourceImportWriteError(
                                 "Import durability is uncertain; inspect v11 before retrying."
                             ) from exc

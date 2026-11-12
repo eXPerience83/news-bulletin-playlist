@@ -374,9 +374,7 @@ def _owner_active_catalog(
     historical_ids = {item.installed.id for item in snapshot.sources}
     ordered_sources = owned.source_order.definitions(owned.sources)
     if complete:
-        return BuiltInCatalog(
-            ordered_sources, owned.templates.records, allow_disabled_sources=True
-        )
+        return BuiltInCatalog(ordered_sources, owned.templates.records, allow_disabled_sources=True)
     # Old split-mode custom sources remain represented in managed_overlay.sources,
     # whereas newly owner-installed sources belong to this active catalog.
     # Do not duplicate historical custom records or silently hide new sources.
