@@ -701,15 +701,17 @@ class SourceAdminService:
                 _, used_by, pending = self._deletion_references_loaded(state, source_id)
                 if used_by or pending:
                     raise SourceReferencedError("Unassign this source before deletion")
-                is_owner = isinstance(self.store, ForwardOnlyManagedStateStore) and source_id in {
-                    item.id
-                    for item in parse_v11_operational(self.store._expected_bytes).owner_inventory.sources
-                }
+                historical_sources = (
+                    parse_v11_operational(self.store._expected_bytes).owner_inventory.sources
+                    if isinstance(self.store, ForwardOnlyManagedStateStore)
+                    else ()
+                )
+                is_owner = any(item.id == source_id for item in historical_sources)
                 if is_owner:
                     assert isinstance(self.store, ForwardOnlyManagedStateStore)
                     source = next(
                         item
-                        for item in parse_v11_operational(self.store._expected_bytes).owner_inventory.sources
+                        for item in historical_sources
                         if item.id == source_id
                     )
                     self.first_journal.clear_source_runtime_state(source.id)

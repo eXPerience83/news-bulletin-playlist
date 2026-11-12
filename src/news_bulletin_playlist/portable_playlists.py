@@ -39,8 +39,8 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
 from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
-from news_bulletin_playlist.portable_playlist_metadata import exception_payload
 from news_bulletin_playlist.portable_identity import portable_id
+from news_bulletin_playlist.portable_playlist_metadata import exception_payload
 from news_bulletin_playlist.portable_sources import export_sources
 
 MAX_MANIFEST_BYTES = 256 * 1024
@@ -217,7 +217,11 @@ def playlist_bundle(
         template = current_template
         if version == 2 and linked_local is not None and linked_local.owner_template_id is not None:
             template = next(
-                (item for item in store.catalog.playlists if item.id == linked_local.owner_template_id),
+                (
+                    item
+                    for item in store.catalog.playlists
+                    if item.id == linked_local.owner_template_id
+                ),
                 None,
             )
             if template is None:
