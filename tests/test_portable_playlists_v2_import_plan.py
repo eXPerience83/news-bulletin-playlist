@@ -562,12 +562,8 @@ def test_v2_admin_preview_offline_apply_and_inspection_hold(tmp_path):
             assert status == 200
             assert b"Startup inspection hold is active" in held
             upload = _request(server, "GET", "/admin/playlists/import", cookie=cookie)[2]
-            media_type, body = _multipart(
-                _csrf(upload), document, media_type="application/zip"
-            )
-            connection = http.client.HTTPConnection(
-                "127.0.0.1", server.server_port, timeout=5
-            )
+            media_type, body = _multipart(_csrf(upload), document, media_type="application/zip")
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
             connection.request(
                 "POST",
                 "/admin/playlists/import/v2/preview",

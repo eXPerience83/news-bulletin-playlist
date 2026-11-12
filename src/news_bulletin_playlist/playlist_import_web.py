@@ -297,7 +297,7 @@ def result_v2_page(result: PlaylistV2ImportResult | None) -> bytes:
             f"Current draft: <code>{html.escape(result.current_draft_id)}</code>. "
             f"{result.created_sources} new sources.</p>"
             + warning
-            + '<p>Spotify was not contacted, created, linked or enabled. '
+            + "<p>Spotify was not contacted, created, linked or enabled. "
             "Review the local draft before any separate activation.</p>"
             + '<p><a href="/admin/playlists/imported/edit?id='
             + html.escape(result.current_draft_id, quote=True)
