@@ -108,6 +108,7 @@ def test_v2_preserves_different_current_and_template_cover_assets(tmp_path):
         "unknown_template_key",
         "missing_source_closure",
         "active_exception_mismatch",
+        "fold_mismatch",
         "cover_sha",
     ],
 )
@@ -136,6 +137,8 @@ def test_v2_rejects_corrupt_or_incomplete_closure(tmp_path, mutation):
             }
         elif mutation == "active_exception_mismatch":
             manifest["playlist"]["duration_policy"]["exceptions"] = []
+        elif mutation == "fold_mismatch":
+            manifest["playlist"]["duration_policy"]["exceptions"][0]["edition_fold"] = 0
         elif mutation == "cover_sha":
             manifest["template"]["cover"]["sha256"] = "0" * 64
 

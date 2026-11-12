@@ -18,6 +18,7 @@ from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.portable_identity import portable_id
 from news_bulletin_playlist.portable_playlist_metadata import (
     exact_object,
+    exception_payload,
     parse_exception,
     strict_json,
     validate_attribution,
@@ -308,7 +309,9 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
                 for e in owner_template.duration_policy.exceptions
                 if e.source_id in ids and e.max_seconds > duration["max_seconds"]
             )
-            if exceptions != expected_active:
+            if tuple(map(exception_payload, exceptions)) != tuple(
+                map(exception_payload, expected_active)
+            ):
                 raise PlaylistBundleError("ZIP v2 active exceptions disagree with owner template")
     records = inspect_sources(files["sources.json"])
     if {r.source.id if isinstance(r, PortableSource) else r.id for r in records} != required_ids:

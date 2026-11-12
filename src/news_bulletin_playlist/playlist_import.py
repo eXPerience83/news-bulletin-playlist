@@ -173,8 +173,14 @@ class PlaylistImportService:
                 True,
                 "ZIP v2 currently requires unclaimed sources and no pending provisioning",
             )
-        if any(p.portable_id == bundle.playlist["portable_id"] for p in state.playlists) or any(
-            t.portable_id == bundle.playlist["portable_id"] for t in state.templates
+        if (
+            any(p.portable_id == bundle.playlist["portable_id"] for p in state.playlists)
+            or any(t.portable_id == bundle.playlist["portable_id"] for t in state.templates)
+            or any(
+                isinstance(raw := json.loads(item.raw_json), dict)
+                and raw.get("portable_id") == bundle.playlist["portable_id"]
+                for item in state.quarantined_templates
+            )
         ):
             return PlaylistV2ImportPlan(
                 bundle,
@@ -295,7 +301,7 @@ class PlaylistImportService:
             overlay = replace(
                 state,
                 schema_version=max(state.schema_version, IMPORTED_PLAYLIST_SCHEMA_VERSION),
-                templates=(*state.templates, draft),
+                templates=tuple(sorted((*state.templates, draft), key=lambda t: str(t.id))),
             )
             credits = dict(owner.cover_attributions)
             template_cover_id = plan.owner_template.cover_id
@@ -334,6 +340,7 @@ class PlaylistImportService:
                         "ZIP v2 import outcome uncertain; inspect v11 before retrying"
                     ) from None
                 if observed.owner_inventory == inventory and observed.managed_overlay == overlay:
+                    self.store.load_readonly()
                     return PlaylistV2ImportResult(
                         str(plan.owner_template.id), str(current_id), len(additions), True
                     )
