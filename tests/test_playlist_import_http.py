@@ -304,6 +304,27 @@ def test_preview_expiry_capacity_and_document_kind_binding(tmp_path):
     assert manager.take_source_import(ids[0], source.preview_id, now=now, kind="playlist") is None
     assert manager.take_source_import(ids[0], source.preview_id, now=now) == source
 
+    # ZIP v2 has a larger bounded session payload and cannot be consumed
+    # by a ZIP v1 apply route (nor can v1 be consumed by v2).
+    v2_document = b"x" * (MAX_PLAYLIST_ZIP_BYTES + 1)
+    v2_context = manager.stage_source_import(
+        ids[0], v2_document, "fp", now=now, kind="playlist-v2"
+    )
+    assert manager.take_source_import(
+        ids[0], v2_context.preview_id, now=now, kind="playlist"
+    ) is None
+    assert manager.take_source_import(
+        ids[0], v2_context.preview_id, now=now, kind="playlist-v2"
+    ) == v2_context
+    with pytest.raises(ValueError, match="size"):
+        manager.stage_source_import(
+            ids[0],
+            b"x" * (MAX_PLAYLIST_ZIP_V2_BYTES + 1),
+            "fp",
+            now=now,
+            kind="playlist-v2",
+        )
+
 
 def test_expanded_form_reader_rejects_truncated_body():
     import io
@@ -480,21 +501,15 @@ def test_v2_upload_limit_is_2_mib_and_version_bound(tmp_path):
         # malformed bytes yield 400, not a misleading 413 size rejection.
         document = b"x" * (MAX_PLAYLIST_ZIP_BYTES + 1)
         upload = _request(server, "GET", ROOT, cookie=cookie)[2]
-        status, _, _ = post(
-            server, cookie, document, _csrf(upload), path=ROOT + "/preview"
-        )
+        status, _, _ = post(server, cookie, document, _csrf(upload), path=ROOT + "/preview")
         assert status == 413
-        status, _, _ = post(
-            server, cookie, document, _csrf(upload), path=ROOT + "/v2/preview"
-        )
+        status, _, _ = post(server, cookie, document, _csrf(upload), path=ROOT + "/v2/preview")
         assert status == 400
         assert _files(tmp_path) == original and not client.calls
 
         # Never accept a document above the v2 envelope budget.
         upload = _request(server, "GET", ROOT, cookie=cookie)[2]
         oversized = b"x" * (MAX_PLAYLIST_ZIP_V2_BYTES + 1)
-        status, _, _ = post(
-            server, cookie, oversized, _csrf(upload), path=ROOT + "/v2/preview"
-        )
+        status, _, _ = post(server, cookie, oversized, _csrf(upload), path=ROOT + "/v2/preview")
         assert status == 413
         assert _files(tmp_path) == original and not client.calls

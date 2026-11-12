@@ -155,9 +155,7 @@ class _SessionBoundSecurity(AdminSecurity):
         if version not in (1, 2):
             raise ValueError("Unsupported playlist import version")
         kind = "playlist-v2" if version == 2 else "playlist"
-        return self._manager.stage_source_import(
-            self._session_id, document, fingerprint, kind=kind
-        )
+        return self._manager.stage_source_import(self._session_id, document, fingerprint, kind=kind)
 
     def take_playlist_import(
         self, preview_id: str, *, version: int = 1

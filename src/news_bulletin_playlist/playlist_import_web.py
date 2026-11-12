@@ -31,7 +31,8 @@ def upload_page(csrf: str, *, inspection_hold: bool = False) -> bytes:
         title="Import playlist ZIP",
         active_tab="playlists",
         intro="Local draft import; no Spotify calls. Publishing later is a separate opt-in.",
-        body_html=notice + f'''<h2>Import complete playlist ZIP v2</h2>
+        body_html=notice
+        + f'''<h2>Import complete playlist ZIP v2</h2>
 <p>Recommended for lossless owner-template policy, dormant exceptions and source closure.
 Maximum 2 MiB; preview is read-only and never contacts Spotify.</p>
 <form method="post" action="/admin/playlists/import/v2/preview" enctype="multipart/form-data">

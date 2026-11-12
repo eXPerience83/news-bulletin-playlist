@@ -215,9 +215,12 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 if parsed.query or parsed.fragment:
                     self._source_error(HTTPStatus.BAD_REQUEST, "Invalid playlist import request")
                 else:
-                    self._reply(HTTPStatus.OK, upload_page(
+                    self._reply(
+                        HTTPStatus.OK,
+                        upload_page(
                             security.issue_csrf_token(), inspection_hold=self.inspection_hold
-                        ))
+                        ),
+                    )
             return
         if parsed.path in {"/admin/playlists/export.zip", "/admin/playlists/portable/prepare"}:
             self._serve_portable_playlist(parsed.path, parsed.query)
