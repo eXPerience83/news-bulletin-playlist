@@ -228,7 +228,10 @@ class SourceImportService:
                         )
                     )
                     records = tuple(
-                        sorted((*initial.owner_inventory.sources, *additions), key=lambda s: str(s.id))
+                        sorted(
+                            (*initial.owner_inventory.sources, *additions),
+                            key=lambda s: str(s.id),
+                        )
                     )
                     new_inventory = replace(
                         initial.owner_inventory,

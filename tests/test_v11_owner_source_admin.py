@@ -18,7 +18,11 @@ from _source_admin_http_fixtures import _server
 from news_bulletin_playlist.catalog import BuiltInCatalog
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
-from news_bulletin_playlist.managed_state import ManagedSourceOverride, effective_sources, source_definition
+from news_bulletin_playlist.managed_state import (
+    ManagedSourceOverride,
+    effective_sources,
+    source_definition,
+)
 from news_bulletin_playlist.models import PublicReleaseMode
 from news_bulletin_playlist.portable_sources import export_sources
 from news_bulletin_playlist.source_import import SourceImportService
@@ -296,7 +300,8 @@ def test_v11_source_json_import_installs_owner_records_not_overlay(tmp_path: Pat
     record = _installed()
     document = export_sources((source_definition(record),))
     service = SourceImportService(
-        store, ConfigurationSynchronization(),
+        store,
+        ConfigurationSynchronization(),
         ProvisioningJournal(root / "managed-playlist-provisioning.json"),
     )
     plan = service.preview(document)
