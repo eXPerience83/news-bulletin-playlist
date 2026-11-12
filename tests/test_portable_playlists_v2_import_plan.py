@@ -14,8 +14,8 @@ from _admin_http import login as _login
 from _admin_http import request as _request
 from _html import assert_valid_admin_html
 from _multipart import import_upload as _multipart
-from _source_admin_http_fixtures import _server
 from _portable_playlist_fixtures import UUID, _service, rewrite
+from _source_admin_http_fixtures import _server
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetStore
