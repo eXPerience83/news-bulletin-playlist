@@ -16,7 +16,10 @@ from _legacy_dataset import legacy_root
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
 from news_bulletin_playlist.managed_state import effective_sources
-from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle
+from news_bulletin_playlist.playlist_bundle import (
+    inspect_playlist_bundle,
+    inspect_playlist_bundle_v2,
+)
 from news_bulletin_playlist.playlist_import import PlaylistImportService
 from news_bulletin_playlist.portable_playlists import PlaylistExportService, PortableCoverLoader
 from news_bulletin_playlist.portable_sources import export_sources, parse_sources
@@ -165,3 +168,98 @@ def test_four_legacy_playlists_and_all_sources_remain_portable_after_v11(
             for source_id in original.source_ids
         )
         assert playlists.covers.load(candidate.cover_id)[0] == bundle.jpeg
+
+
+@pytest.mark.parametrize("schema", [6, 7, 8, 9, 10])
+def test_four_direct_upgrade_zip_v2_imports_preserve_owner_template_closure_offline(
+    tmp_path: Path, schema: int
+) -> None:
+    """Recover all four independently, including dormant owner policy, without Spotify."""
+    donor, evidence = legacy_root(tmp_path, schema)
+    before_legacy = (donor / "managed-state.json").read_bytes()
+    store = open_managed_state_store(donor)
+    exporter = PlaylistExportService(
+        store, ConfigurationSynchronization(), PortableCoverLoader(donor)
+    )
+    original = evidence.original_state
+    assert len(original.playlists) == 4
+
+    archives = []
+    for playlist in original.playlists:
+        fingerprint, _, identity = exporter.preparation("managed", str(playlist.id))
+        assert identity is None
+        exporter.prepare("managed", str(playlist.id), fingerprint, acknowledge_v9=True)
+        _, payload = exporter.export("managed", str(playlist.id), version=2)
+        bundle = inspect_playlist_bundle_v2(payload)
+        assert bundle.template is not None
+        assert bundle.template_jpeg is not None
+        assert bundle.template_attribution is not None
+        assert bundle.playlist["source_ids"] == list(playlist.source_ids)
+        assert playlist.destination.external_id.encode() not in payload
+        archives.append((playlist, bundle, payload))
+    assert len(archives) == 4
+    assert (donor / "managed-state.json").read_bytes() == before_legacy
+
+    recipient = tmp_path / "recipient-v2"
+    recipient.mkdir()
+    fresh = open_managed_state_store(recipient)
+    assert not fresh.catalog.sources and not fresh.catalog.playlists
+    import_service = PlaylistImportService(
+        fresh,
+        ConfigurationSynchronization(),
+        ProvisioningJournal(recipient / "managed-playlist-provisioning.json"),
+        PortableCoverLoader(recipient),
+    )
+    created = []
+    for original_playlist, bundle, payload in archives:
+        preview = import_service.preview_v2(payload)
+        assert not preview.blocked, preview.reason
+        assert preview.owner_template is not None
+        assert len(preview.owner_template.duration_policy.exceptions) == len(
+            bundle.template.duration_policy.exceptions
+        )
+        result = import_service.apply_v2(payload, preview.sources.fingerprint)
+        assert result.created_sources == preview.sources.creates
+        created.append(result)
+        assert not fresh.load_readonly().playlists
+        # A restored ZIP may never acquire an old or a new Spotify destination.
+        assert original_playlist.destination.external_id.encode() not in (
+            recipient / "managed-state-v11.json"
+        ).read_bytes()
+
+    assert len(fresh.catalog.playlists) == 4
+    assert len({item.owner_template_id for item in fresh.load_readonly().templates}) == 4
+    assert sum(item.created_sources for item in created) == len(fresh.catalog.sources)
+    assert not fresh.load_readonly().playlists
+    effective = {source.id: source for source in effective_sources(fresh.catalog, fresh.load_readonly())}
+    by_template = {item.id: item for item in fresh.catalog.playlists}
+    drafts = fresh.load_readonly().templates
+    assert len(drafts) == 4
+
+    for (original_playlist, original_bundle, _), result in zip(archives, created, strict=True):
+        draft = next(item for item in drafts if str(item.id) == result.current_draft_id)
+        owner = by_template[draft.owner_template_id]
+        historical = original_bundle.template
+        assert historical is not None
+        assert draft.display_name == original_playlist.display_name
+        assert draft.description == original_playlist.description
+        assert draft.retention_hours == original_playlist.retention_hours
+        assert draft.max_episodes == original_playlist.max_episodes
+        assert draft.min_duration_seconds == original_playlist.min_duration_seconds
+        assert draft.max_duration_seconds == original_playlist.max_duration_seconds
+        assert len(owner.duration_policy.exceptions) == len(historical.duration_policy.exceptions)
+        assert tuple(
+            (e.edition_id, e.max_seconds, e.edition_local_time, e.edition_local_time.fold)
+            for e in owner.duration_policy.exceptions
+        ) == tuple(
+            (e.edition_id, e.max_seconds, e.edition_local_time, e.edition_local_time.fold)
+            for e in historical.duration_policy.exceptions
+        )
+        donor_sources = {
+            source.id: source for source in effective_sources(store.catalog, store.load_readonly())
+        }
+        assert tuple(effective[id_].external_references for id_ in owner.default_source_ids) == tuple(
+            donor_sources[id_].external_references for id_ in historical.default_source_ids
+        )
+        assert import_service.covers.load(draft.cover_id)[0] == original_bundle.jpeg
+        assert import_service.covers.load(owner.cover_id)[0] == original_bundle.template_jpeg
