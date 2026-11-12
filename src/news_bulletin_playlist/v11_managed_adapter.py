@@ -216,7 +216,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             current = parse_v11_operational(self._expected_bytes)
             state = current.managed_overlay
             inventory = current.owner_inventory
-            if source_id not in {item.id for item in current.active_catalog.sources}:
+            if source_id not in {item.id for item in inventory.sources}:
                 raise ManagedStateError("historical owner source was not found")
             if (
                 state.quarantined_templates
@@ -237,9 +237,14 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
                 raise ManagedStateError("historical owner source still has references")
             records = tuple(item for item in inventory.sources if item.id != source_id)
             order = inventory.source_order.after_records_change(inventory.sources, records)
+            next_overlay = replace(
+                state,
+                sources=tuple(item for item in state.sources if item.id != source_id),
+            )
             next_bytes = self._owner.save_owner_inventory(
                 replace(inventory, sources=records, source_order=order),
                 expected_bytes=self._expected_bytes,
+                managed_overlay=next_overlay,
             )
             self._expected_bytes = next_bytes
             self.catalog = parse_v11_operational(next_bytes).active_catalog

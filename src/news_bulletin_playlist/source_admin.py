@@ -65,6 +65,7 @@ from news_bulletin_playlist.spotify.public_detector import (
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
 from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
+from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 
 MAX_SOURCE_AUDIT_BATCH_SOURCES = 20
 _SAFE_AUDIT_ARCHIVE_SOURCE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -248,6 +249,8 @@ class SourceAdminService:
     def snapshot(self) -> ManagedState:
         with self.synchronization.hold():
             state = self.store.load()
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.catalog = self.store.catalog
             effective_sources(self.catalog, state)
             return state
 
@@ -699,15 +702,18 @@ class SourceAdminService:
                 if used_by or pending:
                     raise SourceReferencedError("Unassign this source before deletion")
                 is_owner = isinstance(self.store, ForwardOnlyManagedStateStore) and source_id in {
-                    item.id for item in self.store.catalog.sources
+                    item.id
+                    for item in parse_v11_operational(self.store._expected_bytes).owner_inventory.sources
                 }
                 if is_owner:
+                    assert isinstance(self.store, ForwardOnlyManagedStateStore)
                     source = next(
-                        item for item in self.store.catalog.sources if item.id == source_id
+                        item
+                        for item in parse_v11_operational(self.store._expected_bytes).owner_inventory.sources
+                        if item.id == source_id
                     )
                     self.first_journal.clear_source_runtime_state(source.id)
                     self.detector_journal.clear_source_state(source.id)
-                    assert isinstance(self.store, ForwardOnlyManagedStateStore)
                     self.store.delete_owner_source(source.id)
                     self.catalog = self.store.catalog
                 else:

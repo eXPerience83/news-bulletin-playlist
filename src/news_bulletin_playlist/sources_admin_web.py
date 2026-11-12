@@ -44,8 +44,10 @@ def render_sources_page(
     notice: str | None = None,
     provider_available: bool = True,
     owner_catalog_editable: bool = False,
+    inspection_hold: bool = False,
 ) -> bytes:
     """Show installed sources separately from downloadable, uninstalled examples."""
+    editing_enabled = provider_available and not inspection_hold
     current = effective_sources(catalog, state)
     installed_shows = {
         ref.external_id
@@ -89,7 +91,7 @@ def render_sources_page(
     )
     add_source = (
         '<p><a class="button button-primary" href="/admin/sources/new">Add source</a></p>'
-        if provider_available
+        if editing_enabled
         else ""
     )
     audits = (
@@ -97,7 +99,7 @@ def render_sources_page(
         f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
         '<button class="button" type="submit">Export all audits</button></form>'
         f'<p class="muted">Audits can inspect up to {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources.</p>'
-        if provider_available
+        if editing_enabled
         else ""
     )
     table = _sources_table(
@@ -106,13 +108,20 @@ def render_sources_page(
         state,
         last_cycle,
         csrf_token,
-        provider_available=provider_available,
+        provider_available=editing_enabled,
         owner_catalog_editable=owner_catalog_editable,
     )
     source_kind = "owner" if owner_catalog_editable else "built-in"
     body = "".join(
         (
             render_lan_warning() if lan_mode else "",
+            (
+                '<div class="notice" role="status">Startup inspection hold is active. '
+                "Source edits, imports, enable/disable controls and audits are locked. "
+                "Spotify writes are disabled.</div>"
+                if inspection_hold
+                else ""
+            ),
             f'<div class="notice">{html.escape(notice)}</div>' if notice else "",
             f"""
 <section class="section admin-section" aria-labelledby="source-catalog-heading">

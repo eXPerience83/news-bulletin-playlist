@@ -1618,6 +1618,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     if service is not None
                     else False
                 ),
+                inspection_hold=self.inspection_hold,
                 notice={
                     "source-added": "Custom source added successfully.",
                     "source-updated": "Custom source updated successfully.",
