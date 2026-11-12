@@ -253,8 +253,9 @@ may be reused. Differing capabilities or unowned overlaps block the whole import
 owner template, including unassigned sources and dormant duration exceptions,
 will be retained. No Spotify destination ID, OAuth or episodes are imported.</p>
 <div class="table-wrap"><table>
-<thead><tr><th>Incoming ID</th><th>Spotify show</th><th>Decision</th>
-<th>Local ID</th><th>Differences</th></tr></thead>
+<thead><tr><th scope="col">Incoming ID</th><th scope="col">Spotify show</th>
+<th scope="col">Decision</th><th scope="col">Local ID</th>
+<th scope="col">Differences</th></tr></thead>
 <tbody>{source_rows}</tbody></table></div>
 <p>Current selected source IDs:
 <code>{esc(", ".join(map(str, plan.selected_source_ids or ())))}</code></p>
