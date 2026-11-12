@@ -155,6 +155,8 @@ class MigratedCoverAssets:
                         not owned.inherited_cover_ids and (legacy.exists() or legacy.is_symlink())
                     ):
                         raise MigratedCoverError("Persisted inherited cover index is missing")
+                except MigratedCoverError:
+                    raise
                 except (OSError, ValueError) as exc:
                     raise MigratedCoverError("Inherited cover authority is unavailable") from exc
             return None

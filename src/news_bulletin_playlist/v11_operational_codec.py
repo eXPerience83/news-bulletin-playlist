@@ -153,20 +153,19 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
     # An unedited conversion requires exact match with the immutable legacy
     # witness. Only a versioned owner mutation can diverge subsequently.
     owned_cover_ids = document.get("inherited_cover_ids")
-    if owned_cover_ids is not None:
-        if (
-            not isinstance(owned_cover_ids, list)
-            or len(owned_cover_ids) > 100
-            or len(set(map(str, owned_cover_ids))) != len(owned_cover_ids)
-            or owned_cover_ids != sorted(owned_cover_ids)
-            or any(
-                not isinstance(cover_id, str)
-                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", cover_id) is None
-                or is_uploaded_cover_id(cover_id)
-                for cover_id in owned_cover_ids
-            )
-        ):
-            raise V11OperationalError("invalid inherited cover inventory")
+    if owned_cover_ids is not None and (
+        not isinstance(owned_cover_ids, list)
+        or len(owned_cover_ids) > 100
+        or any(not isinstance(cover_id, str) for cover_id in owned_cover_ids)
+        or len(set(owned_cover_ids)) != len(owned_cover_ids)
+        or owned_cover_ids != sorted(owned_cover_ids)
+        or any(
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", cover_id) is None
+            or is_uploaded_cover_id(cover_id)
+            for cover_id in owned_cover_ids
+        )
+    ):
+        raise V11OperationalError("invalid inherited cover inventory")
     recognized_fields = required_fields | (
         {"inherited_cover_ids"} if owned_cover_ids is not None else set()
     )

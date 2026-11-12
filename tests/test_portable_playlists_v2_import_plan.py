@@ -382,7 +382,7 @@ def test_v2_activated_managed_playlist_keeps_owner_and_current_cover_credit(tmp_
     original, historical = _donor(tmp_path, different_cover=True)
     root, store, importer = _receiver(tmp_path)
     preview = importer.preview_v2(original)
-    result = importer.apply_v2(original, preview.sources.fingerprint)
+    importer.apply_v2(original, preview.sources.fingerprint)
     state = store.load_readonly()
     linked = state.templates[0]
     activated = replace(
