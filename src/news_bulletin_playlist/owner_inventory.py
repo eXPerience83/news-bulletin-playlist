@@ -20,11 +20,11 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     source_definition,
 )
+from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.owner_source_order import (
     OwnerSourceOrder,
     OwnerSourceOrderError,
 )
-from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.owner_template_records import (
     OwnerTemplateError,
     OwnerTemplateSet,

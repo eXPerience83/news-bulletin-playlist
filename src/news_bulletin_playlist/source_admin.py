@@ -486,8 +486,7 @@ class SourceAdminService:
                     )
                     self.catalog = self.store.catalog
                     return
-            else:
-                self._check_duplicate(latest, source)
+            self._check_duplicate(latest, source)
             self.store.save(replace(latest, sources=(*latest.sources, source)))
 
     def get_builtin_source(self, source_id: str) -> SourceDefinition:

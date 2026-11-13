@@ -282,9 +282,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
                     inventory,
                     sources=records,
                     source_order=order,
-                    retired_source_ids=tuple(
-                        sorted((*inventory.retired_source_ids, source_id))
-                    ),
+                    retired_source_ids=tuple(sorted((*inventory.retired_source_ids, source_id))),
                 ),
                 expected_bytes=self._expected_bytes,
                 managed_overlay=next_overlay,

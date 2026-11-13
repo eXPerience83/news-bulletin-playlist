@@ -183,7 +183,12 @@ class SourceImportService:
             sources = effective_sources(self.store.catalog, state)
             rows = tuple(
                 sorted(
-                    (*plan_source_import(records, sources, retired_ids=retired_source_ids(self.store)), *unsupported),
+                    (
+                        *plan_source_import(
+                            records, sources, retired_ids=retired_source_ids(self.store)
+                        ),
+                        *unsupported,
+                    ),
                     key=lambda row: row.spotify_show_id,
                 )
             )
