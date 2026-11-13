@@ -242,7 +242,9 @@ class PlaylistImportService:
             "Ready for confirmed offline owner-template and current-draft installation",
         )
 
-    def apply_v2(self, document: bytes, fingerprint: str) -> PlaylistV2ImportResult:
+    def apply_v2(
+        self, document: bytes, fingerprint: str, *, confirm_schema: bool = False
+    ) -> PlaylistV2ImportResult:
         """Durably install a verified v2 owner template and current local draft in one CAS.
 
         This offline method never creates/links a Spotify destination. Safe orphan
@@ -254,6 +256,10 @@ class PlaylistImportService:
             raise PlaylistImportError("ZIP v2 requires a v11 owner installation")
         with self.synchronization.hold():
             state = self.store.load_readonly()
+            if state.schema_version < IMPORTED_PLAYLIST_SCHEMA_VERSION and not confirm_schema:
+                raise PlaylistImportError(
+                    "Explicit schema v10 compatibility acknowledgement is required"
+                )
             plan = self._preview_v2(bundle, state, self.provisioning.load())
             if plan.sources.fingerprint != fingerprint:
                 raise PlaylistImportError("V2 owner state changed; request a fresh preview")

@@ -362,9 +362,10 @@ def test_imported_owner_source_editor_is_available_on_first_get_and_provenance_i
             ProvisioningJournal(root / "managed-playlist-provisioning.json"),
         )
         preview = importer.preview(document)
-        new_id = importer.apply(
+        result = importer.apply(
             document, preview.fingerprint, keep_local=frozenset(), confirm_v8=False
-        ).rows[0].local_id
+        )
+        new_id = result.rows[0].local_id
         assert new_id is not None
         # The HTTP service still owns its pre-import catalog until snapshot().
         assert new_id not in {s.id for s in source_admin.catalog.sources}

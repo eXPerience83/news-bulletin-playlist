@@ -424,15 +424,24 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 if set(form) not in (
                     {"csrf_token", "preview_id", "action"},
                     {"csrf_token", "preview_id", "action", "confirm"},
+                    {"csrf_token", "preview_id", "action", "confirm", "ack_schema"},
                 ):
                     raise ValueError("Invalid ZIP v2 confirmation fields")
                 action = single_form_value(form, "action")
                 if action == "cancel":
                     self._reply(HTTPStatus.OK, result_v2_page(None))
                     return
-                if action != "apply" or form.get("confirm") != ["1"]:
+                if (
+                    action != "apply"
+                    or form.get("confirm") != ["1"]
+                    or form.get("ack_schema", ["0"]) not in (["0"], ["1"])
+                ):
                     raise ValueError("Explicit ZIP v2 confirmation is required")
-                result_v2 = service.apply_v2(context.document, context.fingerprint)
+                result_v2 = service.apply_v2(
+                    context.document,
+                    context.fingerprint,
+                    confirm_schema=form.get("ack_schema") == ["1"],
+                )
                 self._reply(HTTPStatus.OK, result_v2_page(result_v2))
                 return
             decisions = {

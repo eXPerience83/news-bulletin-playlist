@@ -239,7 +239,14 @@ def preview_v2_page(plan: PlaylistV2ImportPlan, preview_id: str, csrf: str) -> b
     )
     controls = ""
     if not plan.blocked:
-        controls = """<label><input type="checkbox" name="confirm" value="1" required>
+        acknowledgement = ""
+        if plan.sources.schema_version < 10:
+            acknowledgement = """<p class="notice">This import promotes the local managed overlay
+to schema v10. Older images cannot read it and ZIP does not restore full production
+state. Confirm this forward-only compatibility change before importing.</p>
+<label><input type="checkbox" name="ack_schema" value="1" required>
+I accept the local schema v10 compatibility change.</label>"""
+        controls = acknowledgement + """<label><input type="checkbox" name="confirm" value="1" required>
 I confirm installation of these local owner sources, full template and editable draft.
 No Spotify destination will be created or linked.</label>
 <button class="button button-primary" name="action" value="apply" type="submit">

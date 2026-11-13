@@ -564,11 +564,54 @@ def test_v2_admin_preview_offline_apply_and_inspection_hold(tmp_path):
             response.read()
             connection.close()
             assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
-            status, _, diagnostics = _request(
-                server, "GET", "/admin/diagnostics", cookie=cookie
-            )
+            status, _, diagnostics = _request(server, "GET", "/admin/diagnostics", cookie=cookie)
             assert status == 200
             assert b"Startup inspection hold is active" in diagnostics
             assert b"not production-ready" in diagnostics
         finally:
             handler.inspection_hold = False
+
+
+def test_v2_legacy_overlay_v9_requires_explicit_schema_ack_over_http(tmp_path):
+    data, _ = _donor(tmp_path)
+    root = tmp_path / "old-receiver"
+    root.mkdir()
+    from news_bulletin_playlist.managed_state import ManagedStateStore
+
+    ManagedStateStore(root / "managed-state.json").save(ManagedState(schema_version=9))
+    store = open_managed_state_store(root)
+    assert store.load_readonly().schema_version == 9
+    with _server(root) as (server, client, _unused):
+        handler = server.RequestHandlerClass
+        managed = handler.managed_admin_service
+        sources = handler.source_admin_service
+        assert managed is not None and sources is not None
+        managed.store = sources.store = store
+        managed.catalog = sources.catalog = store.catalog
+        cookie = _login(server)
+        before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+
+        status, page = _v2_http_preview(server, cookie, data)
+        assert status == 200
+        assert b'name="ack_schema"' in page
+        assert b"schema v10" in page
+        status, _, rejected = _request(
+            server, "POST", "/admin/playlists/import/v2/apply",
+            cookie=cookie, form=_v2_http_confirmation(page),
+        )
+        assert status == 409 and b"schema v10" in rejected
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+        assert not (root / "custom-covers").exists()
+
+        status, page = _v2_http_preview(server, cookie, data)
+        assert status == 200
+        confirmed = _v2_http_confirmation(page)
+        confirmed["ack_schema"] = "1"
+        status, _, result = _request(
+            server, "POST", "/admin/playlists/import/v2/apply",
+            cookie=cookie, form=confirmed,
+        )
+        assert status == 200, result
+        assert b"ZIP v2 offline import complete" in result
+        assert open_managed_state_store(root).load_readonly().schema_version == 10
+        assert not client.calls
