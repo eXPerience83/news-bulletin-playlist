@@ -398,7 +398,8 @@ def test_v2_round_trip_keeps_nonempty_historical_duration_exception_and_show_ide
     assert mapped.edition_local_time == original_exception[0].edition_local_time
     assert mapped.edition_local_time.fold == 1
     donor_source = next(
-        s for s in effective_sources(store.catalog, store.load_readonly())
+        s
+        for s in effective_sources(store.catalog, store.load_readonly())
         if s.id == original_exception[0].source_id
     )
     recovered_source = next(s for s in restored.catalog.sources if s.id == mapped.source_id)
