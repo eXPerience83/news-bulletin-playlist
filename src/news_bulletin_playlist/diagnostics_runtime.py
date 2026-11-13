@@ -959,6 +959,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         try:
             source_id = values["source_id"][0]
+            # A JSON/ZIP owner import can update the durable catalog through a
+            # different service instance. Refresh before choosing owner vs overlay.
+            state = service.snapshot()
             if source_id in {item.id for item in service.catalog.sources} and not isinstance(
                 service.store, ForwardOnlyManagedStateStore
             ):
@@ -977,7 +980,6 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 if source_id in {item.id for item in service.catalog.sources}
                 else service.get_custom_source(source_id)
             )
-            state = service.snapshot()
         except SourceMutationError:
             self._source_error(HTTPStatus.NOT_FOUND, "Custom source not found")
             return
@@ -1709,6 +1711,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 display_timezone=self.diagnostic_timezone,
                 timezone_label=self.diagnostic_timezone_label,
                 spotify_metrics=self._spotify_metrics(),
+                inspection_hold=self.inspection_hold,
             ),
         )
 

@@ -24,7 +24,8 @@ from news_bulletin_playlist.managed_state import (
     source_definition,
 )
 from news_bulletin_playlist.models import PublicReleaseMode
-from news_bulletin_playlist.portable_sources import export_sources
+from news_bulletin_playlist.portable_sources import export_sources, parse_sources
+from news_bulletin_playlist.source_admin import export_source_configuration
 from news_bulletin_playlist.source_import import SourceImportService
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
@@ -340,3 +341,43 @@ def test_v11_manual_intake_uses_same_owner_catalog(tmp_path: Path) -> None:
         assert source.id in owned.owner_inventory.source_order.ids
         created = next(item for item in store.catalog.sources if item.id == source.id)
         assert created == source_definition(source)
+
+
+def test_imported_owner_source_editor_is_available_on_first_get_and_provenance_is_custom(
+    tmp_path: Path,
+) -> None:
+    root, _legacy = _root(tmp_path, 10)
+    with _server(root) as (server, client, _original):
+        owner_store = open_managed_state_store(root)
+        admin = server.RequestHandlerClass.managed_admin_service
+        source_admin = server.RequestHandlerClass.source_admin_service
+        assert admin is not None and source_admin is not None
+        admin.store = source_admin.store = owner_store
+        admin.catalog = source_admin.catalog = owner_store.catalog
+        imported = _installed()
+        document = export_sources((source_definition(imported),))
+        importer = SourceImportService(
+            owner_store,
+            ConfigurationSynchronization(),
+            ProvisioningJournal(root / "managed-playlist-provisioning.json"),
+        )
+        preview = importer.preview(document)
+        new_id = importer.apply(
+            document, preview.fingerprint, keep_local=frozenset(), confirm_v8=False
+        ).rows[0].local_id
+        assert new_id is not None
+        # The HTTP service still owns its pre-import catalog until snapshot().
+        assert new_id not in {s.id for s in source_admin.catalog.sources}
+        cookie = _login(server)
+        status, _, editor = _request(
+            server, "GET", f"/admin/sources/edit?source_id={new_id}", cookie=cookie
+        )
+        assert status == 200
+        assert b"Edit installation source" in editor
+        assert not client.calls
+        exported = export_source_configuration(
+            owner_store, ConfigurationSynchronization(), catalog=source_admin.catalog
+        )
+        records = {row.source.id: row for row in parse_sources(exported)}
+        assert records[new_id].provenance == "custom"
+        assert records[owner_store.catalog.sources[0].id].provenance == "built_in"

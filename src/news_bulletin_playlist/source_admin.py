@@ -182,8 +182,13 @@ def export_source_configuration(
     """Export one coherent snapshot using only local configuration dependencies."""
     with synchronization.hold():
         state = store.load_readonly()
+        if isinstance(store, ForwardOnlyManagedStateStore):
+            owned = parse_v11_operational(store._expected_bytes)
+            catalog = store.catalog
+            built_in_ids = {source.id for source in owned.historical_catalog.sources}
+        else:
+            built_in_ids = {source.id for source in catalog.sources}
         sources = effective_sources(catalog, state)
-        built_in_ids = {source.id for source in catalog.sources}
     if source_id is not None:
         sources = tuple(source for source in sources if source.id == source_id)
         if not sources:
@@ -308,7 +313,11 @@ class SourceAdminService:
             raise SourceAuditBatchStateError("effective source id is unsafe for archive export")
 
         generated_at = datetime.now(UTC)
-        built_in_ids = {source.id for source in self.catalog.sources}
+        if isinstance(self.store, ForwardOnlyManagedStateStore):
+            snapshot = parse_v11_operational(self.store._expected_bytes)
+            built_in_ids = {source.id for source in snapshot.historical_catalog.sources}
+        else:
+            built_in_ids = {source.id for source in self.catalog.sources}
         items: list[SourceAuditBatchItem] = []
         stop_failure: InspectionFailure | None = None
         public_observation_enabled = True

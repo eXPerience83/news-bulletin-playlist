@@ -564,5 +564,11 @@ def test_v2_admin_preview_offline_apply_and_inspection_hold(tmp_path):
             response.read()
             connection.close()
             assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
+            status, _, diagnostics = _request(
+                server, "GET", "/admin/diagnostics", cookie=cookie
+            )
+            assert status == 200
+            assert b"Startup inspection hold is active" in diagnostics
+            assert b"not production-ready" in diagnostics
         finally:
             handler.inspection_hold = False
