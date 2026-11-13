@@ -46,6 +46,7 @@ from news_bulletin_playlist.source_import import (
     SourceImportRow,
     SourceImportService,
     plan_source_import,
+    retired_source_ids,
     source_import_fingerprint,
 )
 from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
@@ -141,6 +142,7 @@ class PlaylistImportService:
                     *plan_source_import(
                         tuple(item for item in bundle.sources if isinstance(item, PortableSource)),
                         sources,
+                        retired_ids=retired_source_ids(self.store),
                     ),
                     *(
                         SourceImportRow(item, None, "unsupported")
@@ -389,7 +391,9 @@ class PlaylistImportService:
             sorted(
                 (
                     *plan_source_import(
-                        tuple(r for r in bundle.sources if isinstance(r, PortableSource)), sources
+                        tuple(r for r in bundle.sources if isinstance(r, PortableSource)),
+                        sources,
+                        retired_ids=retired_source_ids(self.store),
                     ),
                     *(
                         SourceImportRow(r, None, "unsupported")

@@ -9,6 +9,7 @@ provider writes are performed against these records.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
@@ -23,6 +24,7 @@ from news_bulletin_playlist.owner_source_order import (
     OwnerSourceOrder,
     OwnerSourceOrderError,
 )
+from news_bulletin_playlist.models import SourceId
 from news_bulletin_playlist.owner_template_records import (
     OwnerTemplateError,
     OwnerTemplateSet,
@@ -53,6 +55,9 @@ class OwnerInventory:
     # Optional v11 owner JPEG credit records. Older canonical inventories have
     # no field and remain byte-compatible until the first explicit revision.
     cover_attributions: tuple[tuple[str, str], ...] = ()
+    # Retired IDs remain reserved permanently so a crash between the v11 CAS
+    # and SQLite cleanup cannot expose stale episodes to a new installation.
+    retired_source_ids: tuple[SourceId, ...] = ()
 
     @classmethod
     def from_snapshot(cls, snapshot: FrozenLegacyCatalogSnapshot) -> OwnerInventory:
@@ -94,6 +99,21 @@ class OwnerInventory:
                 ],
                 "templates": json.loads(self.templates.serialize()),
             }
+            if self.retired_source_ids:
+                retired = self.retired_source_ids
+                if (
+                    len(retired) > 2048
+                    or tuple(sorted(retired)) != retired
+                    or len(set(retired)) != len(retired)
+                    or set(retired).intersection(self.source_order.ids)
+                    or any(
+                        not isinstance(item, str)
+                        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", item) is None
+                        for item in retired
+                    )
+                ):
+                    raise OwnerInventoryError("Invalid or reused retired source identity")
+                result["retired_source_ids"] = list(retired)
             if self.cover_attributions:
                 if len(self.cover_attributions) > 256:
                     raise OwnerInventoryError("Too many owner cover attribution records")
@@ -128,6 +148,8 @@ class OwnerInventory:
             keys = {"source_order", "installed_sources", "templates"}
             if "cover_attributions" in document:
                 keys.add("cover_attributions")
+            if "retired_source_ids" in document:
+                keys.add("retired_source_ids")
             obj = exact_object(document, keys)
             order = OwnerSourceOrder.parse(_compact(obj["source_order"]))
             chunks = obj["installed_sources"]
@@ -149,11 +171,15 @@ class OwnerInventory:
                 )
                 for item in attribution_records
             )
+            retired = obj.get("retired_source_ids", [])
+            if not isinstance(retired, list):
+                raise OwnerInventoryError("Invalid retired source identity list")
             result = cls(
                 source_order=order,
                 sources=tuple(sorted(records, key=lambda item: item.id)),
                 templates=templates,
                 cover_attributions=attributions,
+                retired_source_ids=tuple(retired),
             )
             if result.to_document() != obj:
                 raise OwnerInventoryError("Noncanonical owner inventory members")
@@ -167,6 +193,8 @@ class OwnerInventory:
         Future live owner mutations will need an explicit versioned authority
         transition, not a hidden exemption in this provenance check.
         """
+        if self.retired_source_ids:
+            raise OwnerInventoryError("Initial owner inventory cannot retire historical sources")
         if snapshot.source_order is None or self.source_order.ids != snapshot.source_order:
             raise OwnerInventoryError("Owner inventory changed original source order")
         by_id = {item.installed.id: item.installed for item in snapshot.sources}

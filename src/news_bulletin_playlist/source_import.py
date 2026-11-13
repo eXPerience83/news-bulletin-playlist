@@ -107,10 +107,13 @@ def _differences(left: SourceDefinition, right: SourceDefinition) -> tuple[str, 
 
 
 def plan_source_import(
-    records: tuple[PortableSource, ...], local_sources: tuple[SourceDefinition, ...]
+    records: tuple[PortableSource, ...],
+    local_sources: tuple[SourceDefinition, ...],
+    *,
+    retired_ids: frozenset[SourceId] = frozenset(),
 ) -> tuple[SourceImportRow, ...]:
     by_show = {source.external_references[0].external_id: source for source in local_sources}
-    occupied = {source.id for source in local_sources}
+    occupied = {source.id for source in local_sources} | set(retired_ids)
     rows: list[SourceImportRow] = []
     # Input order cannot influence allocation or the displayed original -> local map.
     for record in sorted(records, key=lambda item: item.source.external_references[0].external_id):
@@ -146,6 +149,15 @@ def source_import_fingerprint(
     return hashlib.sha256(repr((state, sources, pending, catalog)).encode("utf-8")).hexdigest()
 
 
+def retired_source_ids(store: ManagedStateStore) -> frozenset[SourceId]:
+    """IDs retired by a prior CAS must never reuse pre-deletion SQLite state."""
+    if isinstance(store, ForwardOnlyManagedStateStore):
+        return frozenset(
+            parse_v11_operational(store._expected_bytes).owner_inventory.retired_source_ids
+        )
+    return frozenset()
+
+
 class SourceImportService:
     def __init__(
         self,
@@ -171,7 +183,7 @@ class SourceImportService:
             sources = effective_sources(self.store.catalog, state)
             rows = tuple(
                 sorted(
-                    (*plan_source_import(records, sources), *unsupported),
+                    (*plan_source_import(records, sources, retired_ids=retired_source_ids(self.store)), *unsupported),
                     key=lambda row: row.spotify_show_id,
                 )
             )
@@ -191,7 +203,9 @@ class SourceImportService:
             state = self.store.load_readonly()
             pending = self.provisioning.load()
             sources = effective_sources(self.store.catalog, state)
-            rows = plan_source_import(records, sources)
+            rows = plan_source_import(
+                records, sources, retired_ids=retired_source_ids(self.store)
+            )
             if fingerprint != source_import_fingerprint(
                 state, sources, pending, self.store.catalog
             ):

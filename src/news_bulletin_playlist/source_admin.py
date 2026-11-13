@@ -469,15 +469,25 @@ class SourceAdminService:
         )
         with self.synchronization.hold():
             latest = self.store.load()
-            self._check_duplicate(latest, source)
             if isinstance(self.store, ForwardOnlyManagedStateStore):
                 current = parse_v11_operational(self.store._expected_bytes)
                 if current.owner_sources_complete:
+                    retired = set(current.owner_inventory.retired_source_ids)
+                    if source.id in retired:
+                        base = str(source.id)
+                        suffix = 2
+                        reserved = retired | {item.id for item in current.owner_inventory.sources}
+                        while SourceId(f"{base}_{suffix}") in reserved:
+                            suffix += 1
+                        source = replace(source, id=SourceId(f"{base}_{suffix}"))
+                    self._check_duplicate(latest, source)
                     self.store.install_owner_sources(
                         (InstalledSource.from_definition(source_definition(source)),)
                     )
                     self.catalog = self.store.catalog
                     return
+            else:
+                self._check_duplicate(latest, source)
             self.store.save(replace(latest, sources=(*latest.sources, source)))
 
     def get_builtin_source(self, source_id: str) -> SourceDefinition:
@@ -704,10 +714,11 @@ class SourceAdminService:
         return source, used_by, pending
 
     def delete(self, source_id: str) -> bool:
-        """Remove the definition last, after source-local caches are cleared.
+        """Delete under maintenance gate, committing v11 tombstone before cache cleanup.
 
-        A partial failure leaves the stable definition owning its ID. A retry is safe because
-        both journal clear operations are idempotent and missing current state requires bootstrap.
+        A failed v11 CAS leaves source/journals untouched. If the process ends
+        after CAS and before cleanup, the retired ID cannot be reused, so stale
+        SQLite episodes can never enter a newly installed source.
         """
         _, used_by, pending = self.deletion_references(source_id)
         if used_by or pending:
@@ -733,10 +744,13 @@ class SourceAdminService:
                 if is_owner:
                     assert isinstance(self.store, ForwardOnlyManagedStateStore)
                     source = next(item for item in historical_sources if item.id == source_id)
-                    self.first_journal.clear_source_runtime_state(source.id)
-                    self.detector_journal.clear_source_state(source.id)
                     self.store.delete_owner_source(source.id)
                     self.catalog = self.store.catalog
+                    # Clearing after the durable removal cannot destroy a still-
+                    # configured source if CAS fails. The retired ID blocks reuse
+                    # even when a journal fails or this process exits mid-cleanup.
+                    self.first_journal.clear_source_runtime_state(source.id)
+                    self.detector_journal.clear_source_state(source.id)
                 else:
                     custom_source = self._custom_source(state, source_id)
                     next_state = replace(

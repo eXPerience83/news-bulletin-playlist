@@ -129,6 +129,7 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
             or len(new_ids) != len(set(new_ids))
             or len(new_shows) != len(set(new_shows))
             or previous.intersection(new_ids)
+            or set(current.owner_inventory.retired_source_ids).intersection(new_ids)
             or previous_shows.intersection(new_shows)
         ):
             raise ManagedStateError("Owner source import contains a duplicate identity")
@@ -277,7 +278,14 @@ class ForwardOnlyManagedStateStore(ManagedStateStore):
                 sources=tuple(item for item in state.sources if item.id != source_id),
             )
             next_bytes = self._owner.save_owner_inventory(
-                replace(inventory, sources=records, source_order=order),
+                replace(
+                    inventory,
+                    sources=records,
+                    source_order=order,
+                    retired_source_ids=tuple(
+                        sorted((*inventory.retired_source_ids, source_id))
+                    ),
+                ),
                 expected_bytes=self._expected_bytes,
                 managed_overlay=next_overlay,
             )
