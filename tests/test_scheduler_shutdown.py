@@ -210,7 +210,10 @@ def test_shutdown_uses_one_total_deadline_across_multiple_draining_workers(
     controller = EngineLifecycleController(  # type: ignore[arg-type]
         _ControlledCycleRunner(), interval=timedelta(hours=1)
     )
-    controller._draining_threads = [UnfinishedWorker(), UnfinishedWorker()]  # type: ignore[list-item]
+    controller._draining_threads = [  # type: ignore[list-item]
+        UnfinishedWorker(),
+        UnfinishedWorker(),
+    ]
     assert controller.shutdown() is False
     assert waits == [0.5, 0.0]
     assert controller.scheduler is None

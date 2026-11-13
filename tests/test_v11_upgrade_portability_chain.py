@@ -16,9 +16,12 @@ from _legacy_dataset import legacy_root
 from _legacy_materialization_fixtures import _catalog_with_duration_exception, _legacy_state
 
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
-from news_bulletin_playlist.managed_state import compile_engine_config
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
-from news_bulletin_playlist.managed_state import ManagedStateStore, effective_sources
+from news_bulletin_playlist.managed_state import (
+    ManagedStateStore,
+    compile_engine_config,
+    effective_sources,
+)
 from news_bulletin_playlist.playlist_bundle import (
     inspect_playlist_bundle,
     inspect_playlist_bundle_v2,
@@ -358,7 +361,8 @@ def test_v2_round_trip_keeps_nonempty_historical_duration_exception_and_show_ide
     assert migrated.runtime == old_runtime
     store = open_managed_state_store(donor)
     playlist_id = str(legacy.playlists[0].id)
-    original_exception = catalog.playlist(legacy.playlists[0].template_id).duration_policy.exceptions
+    original_template = catalog.playlist(legacy.playlists[0].template_id)
+    original_exception = original_template.duration_policy.exceptions
     assert len(original_exception) == 1
     assert original_exception[0].edition_local_time.fold == 1
 
