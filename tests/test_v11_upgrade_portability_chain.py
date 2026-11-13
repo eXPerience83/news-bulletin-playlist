@@ -13,8 +13,10 @@ from pathlib import Path
 import pytest
 from _installed_fixtures import _installed
 from _legacy_dataset import legacy_root
+from _legacy_materialization_fixtures import _catalog_with_duration_exception, _legacy_state
 
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
+from news_bulletin_playlist.managed_state import compile_engine_config
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
 from news_bulletin_playlist.managed_state import ManagedStateStore, effective_sources
 from news_bulletin_playlist.playlist_bundle import (
@@ -26,6 +28,7 @@ from news_bulletin_playlist.portable_playlists import PlaylistExportService, Por
 from news_bulletin_playlist.portable_sources import PortableSource, export_sources, parse_sources
 from news_bulletin_playlist.source_import import SourceImportService
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
 
 
 @pytest.fixture(autouse=True)
@@ -337,3 +340,65 @@ def test_v2_reuses_promoted_historical_custom_source_with_original_identity(
     assert len(restored.catalog.sources) == 14
     assert sum(source.id == station.id for source in restored.catalog.sources) == 1
     assert (recipient / "managed-state.json").read_bytes() == original_recipient
+
+
+@pytest.mark.parametrize("schema", [6, 7, 8, 9, 10])
+def test_v2_round_trip_keeps_nonempty_historical_duration_exception_and_show_identity(
+    tmp_path: Path, schema: int
+) -> None:
+    """A dormant exact-time override is real data, not an empty 0 == 0 assertion."""
+    catalog = _catalog_with_duration_exception()
+    donor = tmp_path / "donor"
+    donor.mkdir()
+    legacy = _legacy_state(schema, catalog)
+    ManagedStateStore(donor / "managed-state.json", catalog=catalog).save(legacy)
+    old_bytes = (donor / "managed-state.json").read_bytes()
+    old_runtime = compile_engine_config(catalog, legacy)
+    migrated = V11OperationalStore(donor).initialize_from_legacy(catalog=catalog)
+    assert migrated.runtime == old_runtime
+    store = open_managed_state_store(donor)
+    playlist_id = str(legacy.playlists[0].id)
+    original_exception = catalog.playlist(legacy.playlists[0].template_id).duration_policy.exceptions
+    assert len(original_exception) == 1
+    assert original_exception[0].edition_local_time.fold == 1
+
+    exporter = PlaylistExportService(
+        store, ConfigurationSynchronization(), PortableCoverLoader(donor)
+    )
+    fingerprint, _, portable_id = exporter.preparation("managed", playlist_id)
+    if portable_id is None:
+        exporter.prepare("managed", playlist_id, fingerprint, acknowledge_v9=True)
+    _, archive = exporter.export("managed", playlist_id, version=2)
+    bundle = inspect_playlist_bundle_v2(archive)
+    assert bundle.template is not None
+    assert bundle.template.duration_policy.exceptions == original_exception
+    assert (donor / "managed-state.json").read_bytes() == old_bytes
+
+    recipient = tmp_path / "recipient"
+    recipient.mkdir()
+    restored = open_managed_state_store(recipient)
+    importer = PlaylistImportService(
+        restored,
+        ConfigurationSynchronization(),
+        ProvisioningJournal(recipient / "managed-playlist-provisioning.json"),
+        PortableCoverLoader(recipient),
+    )
+    plan = importer.preview_v2(archive)
+    assert not plan.blocked, plan.reason
+    result = importer.apply_v2(archive, plan.sources.fingerprint)
+    template = next(t for t in restored.catalog.playlists if str(t.id) == result.owner_template_id)
+    assert len(template.duration_policy.exceptions) == 1
+    mapped = template.duration_policy.exceptions[0]
+    assert mapped.id == original_exception[0].id
+    assert mapped.max_seconds == original_exception[0].max_seconds
+    assert mapped.edition_local_time == original_exception[0].edition_local_time
+    assert mapped.edition_local_time.fold == 1
+    donor_source = next(
+        s for s in effective_sources(store.catalog, store.load_readonly())
+        if s.id == original_exception[0].source_id
+    )
+    recovered_source = next(s for s in restored.catalog.sources if s.id == mapped.source_id)
+    assert recovered_source.external_references == donor_source.external_references
+    assert recovered_source.parser_id == donor_source.parser_id
+    assert recovered_source.collection_filter_id == donor_source.collection_filter_id
+    assert not restored.load_readonly().playlists

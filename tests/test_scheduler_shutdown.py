@@ -187,3 +187,31 @@ def test_clean_scheduler_shutdown_reports_completed_without_waiting_for_timeout(
     finally:
         runner.release.set()
         worker.join(timeout=2)
+
+
+def test_shutdown_uses_one_total_deadline_across_multiple_draining_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bounded stop may not spend the full configured timeout per worker."""
+    ticks = [12.0]
+    waits: list[float] = []
+
+    class UnfinishedWorker:
+        def join(self, timeout: float | None = None) -> None:
+            assert timeout is not None
+            waits.append(timeout)
+            ticks[0] += timeout
+
+        def is_alive(self) -> bool:
+            return True
+
+    monkeypatch.setattr(engine_runtime, "_SCHEDULER_SHUTDOWN_WAIT_SECONDS", 0.5)
+    monkeypatch.setattr(engine_runtime, "monotonic", lambda: ticks[0])
+    controller = EngineLifecycleController(  # type: ignore[arg-type]
+        _ControlledCycleRunner(), interval=timedelta(hours=1)
+    )
+    controller._draining_threads = [UnfinishedWorker(), UnfinishedWorker()]  # type: ignore[list-item]
+    assert controller.shutdown() is False
+    assert waits == [0.5, 0.0]
+    assert controller.scheduler is None
+    assert controller.status.snapshot().configured is False

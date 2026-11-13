@@ -13,6 +13,7 @@ from functools import partial
 from http import HTTPStatus
 from http.server import HTTPServer
 from pathlib import Path
+from time import monotonic
 from types import FrameType
 
 from news_bulletin_playlist import __version__
@@ -312,8 +313,12 @@ class EngineLifecycleController:
             self.status.set_configured(False)
             self._request_scheduler_stop_locked()
             draining = tuple(self._draining_threads)
+        # One total stop budget, not one full timeout for each draining worker.
+        # Never cancel an in-flight provider mutation: report remaining workers
+        # as incomplete and let the read-before-write recovery contract apply.
+        deadline = monotonic() + _SCHEDULER_SHUTDOWN_WAIT_SECONDS
         for scheduler_thread in draining:
-            scheduler_thread.join(timeout=_SCHEDULER_SHUTDOWN_WAIT_SECONDS)
+            scheduler_thread.join(timeout=max(0.0, deadline - monotonic()))
         still_running = [thread for thread in draining if thread.is_alive()]
         with self._lock:
             self._prune_draining_locked()
