@@ -246,7 +246,8 @@ to schema v10. Older images cannot read it and ZIP does not restore full product
 state. Confirm this forward-only compatibility change before importing.</p>
 <label><input type="checkbox" name="ack_schema" value="1" required>
 I accept the local schema v10 compatibility change.</label>"""
-        controls = acknowledgement + """<label><input type="checkbox" name="confirm" value="1" required>
+        controls = acknowledgement + """
+<label><input type="checkbox" name="confirm" value="1" required>
 I confirm installation of these local owner sources, full template and editable draft.
 No Spotify destination will be created or linked.</label>
 <button class="button button-primary" name="action" value="apply" type="submit">
