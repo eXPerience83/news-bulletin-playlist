@@ -596,8 +596,11 @@ def test_v2_legacy_overlay_v9_requires_explicit_schema_ack_over_http(tmp_path):
         assert b'name="ack_schema"' in page
         assert b"schema v10" in page
         status, _, rejected = _request(
-            server, "POST", "/admin/playlists/import/v2/apply",
-            cookie=cookie, form=_v2_http_confirmation(page),
+            server,
+            "POST",
+            "/admin/playlists/import/v2/apply",
+            cookie=cookie,
+            form=_v2_http_confirmation(page),
         )
         assert status == 409 and b"schema v10" in rejected
         assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
@@ -608,8 +611,11 @@ def test_v2_legacy_overlay_v9_requires_explicit_schema_ack_over_http(tmp_path):
         confirmed = _v2_http_confirmation(page)
         confirmed["ack_schema"] = "1"
         status, _, result = _request(
-            server, "POST", "/admin/playlists/import/v2/apply",
-            cookie=cookie, form=confirmed,
+            server,
+            "POST",
+            "/admin/playlists/import/v2/apply",
+            cookie=cookie,
+            form=confirmed,
         )
         assert status == 200, result
         assert b"ZIP v2 offline import complete" in result

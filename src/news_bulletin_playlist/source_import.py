@@ -208,9 +208,7 @@ class SourceImportService:
             state = self.store.load_readonly()
             pending = self.provisioning.load()
             sources = effective_sources(self.store.catalog, state)
-            rows = plan_source_import(
-                records, sources, retired_ids=retired_source_ids(self.store)
-            )
+            rows = plan_source_import(records, sources, retired_ids=retired_source_ids(self.store))
             if fingerprint != source_import_fingerprint(
                 state, sources, pending, self.store.catalog
             ):
