@@ -24,7 +24,7 @@ from news_bulletin_playlist.portable_playlists import (
     PlaylistExportService,
     PortableCoverLoader,
 )
-from news_bulletin_playlist.portable_sources import export_sources
+from news_bulletin_playlist.portable_sources import PortableSource, export_sources
 from news_bulletin_playlist.source_import import (
     SourceImportService,
     StaleSourceImport,
@@ -123,6 +123,9 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
     portable_identity, archive = exporter.export("draft", str(draft.id))
     assert portable_identity == draft.portable_id
     bundle = inspect_playlist_bundle(archive)
+    assert len(bundle.sources) == 1
+    assert isinstance(bundle.sources[0], PortableSource)
+    assert bundle.sources[0].provenance == "custom"
     assert bundle.playlist["duration_policy"]["min_seconds"] == draft.min_duration_seconds
     assert bundle.playlist["duration_policy"]["max_seconds"] == draft.max_duration_seconds
     assert bundle.jpeg == assets.load(draft.cover_id)

@@ -314,9 +314,19 @@ def playlist_bundle(
             )
     if any(source_id not in sources for source_id in closure_ids):
         raise PlaylistExportError("An assigned or template source is unavailable")
+    from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
+    from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
+
+    # The active owner catalog includes newly installed custom stations. Only
+    # original image-provenance sources should carry the built_in export label.
+    built_in_ids = (
+        {item.id for item in parse_v11_operational(store._expected_bytes).historical_catalog.sources}
+        if isinstance(store, ForwardOnlyManagedStateStore)
+        else {item.id for item in store.catalog.sources}
+    )
     source_bytes = export_sources(
         tuple(sources[source_id] for source_id in closure_ids),
-        built_in_ids={source.id for source in store.catalog.sources},
+        built_in_ids=built_in_ids,
     )
     cover_bytes, attribution = covers.load(target.cover_id)
     if linked_local is not None and linked_local.portable_metadata is not None:

@@ -590,6 +590,12 @@ def test_v2_legacy_overlay_v9_requires_explicit_schema_ack_over_http(tmp_path):
         managed.catalog = sources.catalog = store.catalog
         cookie = _login(server)
         before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        covers = root / "custom-covers"
+        before_covers = {
+            path.relative_to(covers): path.read_bytes()
+            for path in covers.rglob("*")
+            if path.is_file()
+        }
 
         status, page = _v2_http_preview(server, cookie, data)
         assert status == 200
@@ -604,7 +610,11 @@ def test_v2_legacy_overlay_v9_requires_explicit_schema_ack_over_http(tmp_path):
         )
         assert status == 409 and b"schema v10" in rejected
         assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
-        assert not (root / "custom-covers").exists()
+        assert {
+            path.relative_to(covers): path.read_bytes()
+            for path in covers.rglob("*")
+            if path.is_file()
+        } == before_covers
 
         status, page = _v2_http_preview(server, cookie, data)
         assert status == 200
