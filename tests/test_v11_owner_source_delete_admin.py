@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
@@ -12,7 +13,16 @@ from _installed_fixtures import _installed
 from _legacy_dataset import legacy_root as _root
 from _source_admin_http_fixtures import _server
 
-from news_bulletin_playlist.managed_state import ManagedStateStore
+from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
+from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
+from news_bulletin_playlist.managed_state import (
+    ManagedStateError,
+    ManagedStateStore,
+    source_definition,
+)
+from news_bulletin_playlist.models import SourceId
+from news_bulletin_playlist.portable_sources import export_sources
+from news_bulletin_playlist.source_import import SourceImportService
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
@@ -136,4 +146,88 @@ def test_legacy_installed_custom_source_deletion_clears_owner_and_overlay_togeth
         assert installed.id not in {item.id for item in current.managed_overlay.sources}
         assert installed.id not in {item.id for item in reopened.load_readonly().sources}
         assert original_store.path.read_bytes() == immutable
+        assert not client.calls
+
+
+def test_owner_delete_failed_cas_never_clears_runtime_or_detector_journals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _ = _root(tmp_path, 10)
+    store = open_managed_state_store(root)
+    current = store.load_readonly()
+    store.save(replace(current, playlists=(), templates=(), source_overrides=()))
+    for template in tuple(store.catalog.playlists):
+        store.delete_owner_template(template.id)
+    source_id = store.catalog.sources[0].id
+    with _server(root) as (server, client, _unused):
+        service = server.RequestHandlerClass.source_admin_service
+        assert service is not None
+        service.store = store
+        service.catalog = store.catalog
+        before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+
+        def never_clear(_source_id: SourceId) -> None:
+            pytest.fail("Failed owner CAS may not erase any configured source episode evidence")
+
+        def fail_cas(_source_id: SourceId) -> None:
+            raise ManagedStateError("synthetic stale CAS")
+
+        assert service.first_journal is not None
+        assert service.detector_journal is not None
+        monkeypatch.setattr(service.first_journal, "clear_source_runtime_state", never_clear)
+        monkeypatch.setattr(service.detector_journal, "clear_source_state", never_clear)
+        monkeypatch.setattr(store, "delete_owner_source", fail_cas)
+        with pytest.raises(ManagedStateError, match="synthetic stale CAS"):
+            service.delete(str(source_id))
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+        assert source_id in {source.id for source in store.catalog.sources}
+        assert not client.calls
+
+
+def test_owner_delete_cleanup_failure_retires_id_before_reimport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "fresh"
+    root.mkdir()
+    store = open_managed_state_store(root)
+    original = replace(_installed(), id=SourceId("custom_" + "Z" * 22))
+    store.install_owner_sources((original,))
+    with _server(root) as (server, client, _unused):
+        service = server.RequestHandlerClass.source_admin_service
+        assert service is not None
+        service.store = store
+        service.catalog = store.catalog
+        assert service.first_journal is not None
+
+        def fail_after_owner_commit(_source_id: SourceId) -> None:
+            raise OSError("synthetic interrupted SQLite cleanup")
+
+        monkeypatch.setattr(
+            service.first_journal, "clear_source_runtime_state", fail_after_owner_commit
+        )
+        with pytest.raises(OSError, match="synthetic interrupted SQLite cleanup"):
+            service.delete(str(original.id))
+
+        durable = parse_v11_operational((root / V11_OPERATIONAL_FILENAME).read_bytes())
+        assert original.id not in durable.owner_inventory.source_order.ids
+        assert durable.owner_inventory.retired_source_ids == (original.id,)
+        assert original.id not in {s.id for s in store.catalog.sources}
+        assert not client.calls
+
+        document = export_sources((source_definition(original),))
+        importer = SourceImportService(
+            store,
+            ConfigurationSynchronization(),
+            ProvisioningJournal(root / "managed-playlist-provisioning.json"),
+        )
+        plan = importer.preview(document)
+        assert plan.creates == 1
+        assert plan.rows[0].local_id == SourceId(str(original.id) + "_2")
+        result = importer.apply(
+            document, plan.fingerprint, keep_local=frozenset(), confirm_v8=False
+        )
+        assert result.created == 1
+        assert result.rows[0].local_id in {s.id for s in store.catalog.sources}
+        assert original.id not in {s.id for s in store.catalog.sources}
+        assert open_managed_state_store(root).load_readonly().sources == ()
         assert not client.calls
