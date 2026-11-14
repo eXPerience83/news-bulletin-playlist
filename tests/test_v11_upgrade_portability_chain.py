@@ -475,7 +475,11 @@ def test_zip_v1_preview_rejects_retired_id_aba_before_draft_commit(tmp_path: Pat
     assert receiver.catalog.sources == ()
     current_preview = importer.preview(archive)
     assert current_preview.sources.fingerprint != preview.sources.fingerprint
-    changed = next(item for item in current_preview.sources.rows if item.spotify_show_id == row.spotify_show_id)
+    changed = next(
+        item
+        for item in current_preview.sources.rows
+        if item.spotify_show_id == row.spotify_show_id
+    )
     assert changed.local_id != row.local_id
     before = (target / "managed-state-v11.json").read_bytes()
     with pytest.raises(PlaylistImportError, match="changed"):
