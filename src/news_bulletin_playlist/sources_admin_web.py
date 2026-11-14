@@ -117,7 +117,9 @@ def render_sources_page(
     if retired_source_ids and owner_catalog_editable:
         shown = retired_source_ids[:25]
         rows = "".join(
-            '<li><code>' + html.escape(str(source_id)) + '</code>'
+            "<li><code>"
+            + html.escape(str(source_id))
+            + "</code>"
             + (
                 '<form method="post" action="/admin/sources/retired/cleanup">'
                 f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
@@ -133,12 +135,12 @@ def render_sources_page(
         retired_section = (
             '<section class="section admin-section" aria-labelledby="retired-source-heading">'
             '<h2 id="retired-source-heading">Retired source maintenance</h2>'
-            f'<p>{len(retired_source_ids)} permanently reserved source IDs. '
-            'After an interrupted deletion, retry clearing their local SQLite '
-            'episode/detector journals. This does not contact Spotify or reuse IDs. '
-            'Cleanup is idempotent; completed IDs remain listed.</p>'
-            f'<ul>{rows}</ul>'
-            '</section>'
+            f"<p>{len(retired_source_ids)} permanently reserved source IDs. "
+            "After an interrupted deletion, retry clearing their local SQLite "
+            "episode/detector journals. This does not contact Spotify or reuse IDs. "
+            "Cleanup is idempotent; completed IDs remain listed.</p>"
+            f"<ul>{rows}</ul>"
+            "</section>"
         )
     body = "".join(
         (

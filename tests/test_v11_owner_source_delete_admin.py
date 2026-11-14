@@ -274,8 +274,11 @@ def test_retired_source_cleanup_retry_over_authenticated_admin_without_spotify(
 
         monkeypatch.setattr(service.detector_journal, "clear_source_state", complete_cleanup)
         status, _, _ = _request(
-            server, "POST", "/admin/sources/retired/cleanup", cookie=cookie,
-            form={"csrf_token": _csrf(page), "source_id": str(station.id)}
+            server,
+            "POST",
+            "/admin/sources/retired/cleanup",
+            cookie=cookie,
+            form={"csrf_token": _csrf(page), "source_id": str(station.id)},
         )
         assert status == 303
         assert cleared == [station.id]
@@ -287,21 +290,30 @@ def test_retired_source_cleanup_retry_over_authenticated_admin_without_spotify(
         assert status == 200
         # Cleanup is safe to repeat and must never release the retired ID.
         status, _, _ = _request(
-            server, "POST", "/admin/sources/retired/cleanup", cookie=cookie,
-            form={"csrf_token": _csrf(fresh), "source_id": str(station.id)}
+            server,
+            "POST",
+            "/admin/sources/retired/cleanup",
+            cookie=cookie,
+            form={"csrf_token": _csrf(fresh), "source_id": str(station.id)},
         )
         assert status == 303
         assert cleared == [station.id, station.id]
-        assert station.id in parse_v11_operational(
-            (root / V11_OPERATIONAL_FILENAME).read_bytes()
-        ).owner_inventory.retired_source_ids
+        assert (
+            station.id
+            in parse_v11_operational(
+                (root / V11_OPERATIONAL_FILENAME).read_bytes()
+            ).owner_inventory.retired_source_ids
+        )
         assert not client.calls
 
         status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
         assert status == 200
         status, _, _ = _request(
-            server, "POST", "/admin/sources/retired/cleanup", cookie=cookie,
-            form={"csrf_token": _csrf(page), "source_id": "ser"}
+            server,
+            "POST",
+            "/admin/sources/retired/cleanup",
+            cookie=cookie,
+            form={"csrf_token": _csrf(page), "source_id": "ser"},
         )
         assert status == 409
         assert cleared == [station.id, station.id]
@@ -312,8 +324,11 @@ def test_retired_source_cleanup_retry_over_authenticated_admin_without_spotify(
             assert b"Cleanup locked during inspection hold" in held
             assert b"Retry local cleanup" not in held
             status, _, _ = _request(
-                server, "POST", "/admin/sources/retired/cleanup", cookie=cookie,
-                form={"csrf_token": _csrf(held), "source_id": str(station.id)}
+                server,
+                "POST",
+                "/admin/sources/retired/cleanup",
+                cookie=cookie,
+                form={"csrf_token": _csrf(held), "source_id": str(station.id)},
             )
             assert status == 423
         finally:

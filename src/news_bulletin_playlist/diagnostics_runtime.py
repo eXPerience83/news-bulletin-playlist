@@ -1715,8 +1715,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             effective_sources(catalog, state)
             selected_store = service.store if service is not None else store
             retired_ids = (
-                parse_v11_operational(selected_store._expected_bytes)
-                .owner_inventory.retired_source_ids
+                parse_v11_operational(
+                    selected_store._expected_bytes
+                ).owner_inventory.retired_source_ids
                 if isinstance(selected_store, ForwardOnlyManagedStateStore)
                 else ()
             )
