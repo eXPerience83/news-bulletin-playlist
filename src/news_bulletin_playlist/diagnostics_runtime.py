@@ -134,6 +134,7 @@ from news_bulletin_playlist.v11_managed_adapter import (
     open_managed_state_store,
     open_managed_state_store_readonly,
 )
+from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.web_ui import WEB_UI_STYLES, BadgeTone, status_badge
 
 
@@ -322,6 +323,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         if path == "/admin/sources/delete":
             self._handle_source_delete()
+            return
+        if path == "/admin/sources/retired/cleanup":
+            self._handle_retired_source_cleanup()
             return
         super().do_POST()
 
@@ -1100,6 +1104,51 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             extra_headers={"Location": "/admin/sources?notice=source-deleted"},
         )
 
+    def _handle_retired_source_cleanup(self) -> None:
+        """Retry local source journal cleanup only for a durably retired owner ID."""
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.source_admin_service
+        if service is None:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Source cleanup is unavailable")
+            return
+        try:
+            form = self._read_form()
+            if set(form) != {"csrf_token", "source_id"}:
+                raise ValueError("Invalid retired source cleanup fields")
+            token = single_form_value(form, "csrf_token")
+            if not security.consume_csrf_token(token):
+                self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+                return
+            source_id = single_form_value(form, "source_id")
+            service.retry_retired_source_cleanup(source_id)
+        except EngineCycleBusyError:
+            self._source_error(HTTPStatus.CONFLICT, "Engine cycle is active; retry shortly")
+            return
+        except SourceMutationError:
+            self._source_error(HTTPStatus.CONFLICT, "Source ID is not retired")
+            return
+        except ManagedStateError, PersistenceError, OSError, RuntimeError:
+            self._source_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Retired source cleanup failed")
+            return
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source cleanup request")
+            return
+        self._admin_diagnostics().emit(
+            occurred_at=datetime.now(UTC),
+            severity=DiagnosticSeverity.INFO,
+            component="admin",
+            event_name="admin_retired_source_cleanup",
+            source_id=source_id,
+            details={"operation": "source_runtime_cleanup", "outcome": "applied"},
+        )
+        self._reply(
+            HTTPStatus.SEE_OTHER,
+            b"",
+            extra_headers={"Location": "/admin/sources?notice=retired-cleanup"},
+        )
+
     def _handle_source_mutation(self, path: str) -> None:
         security = self._require_admin()
         if security is None:
@@ -1664,7 +1713,14 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     )
                 catalog = service.catalog
             effective_sources(catalog, state)
-        except ManagedStateError, OSError:
+            selected_store = service.store if service is not None else store
+            retired_ids = (
+                parse_v11_operational(selected_store._expected_bytes)
+                .owner_inventory.retired_source_ids
+                if isinstance(selected_store, ForwardOnlyManagedStateStore)
+                else ()
+            )
+        except ManagedStateError, OSError, ValueError:
             self._reply(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 b"Managed playlist state could not be loaded safely",
@@ -1691,7 +1747,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     else False
                 ),
                 inspection_hold=self.inspection_hold,
+                retired_source_ids=retired_ids,
                 notice={
+                    "retired-cleanup": "Retired source journals were cleaned locally. "
+                    "The source ID remains permanently reserved.",
                     "source-added": "Custom source added successfully.",
                     "source-updated": "Custom source updated successfully.",
                     "source-enabled": "Custom source enabled successfully.",

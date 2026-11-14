@@ -764,6 +764,31 @@ class SourceAdminService:
                     self.store.save(next_state)
                 return any(playlist.enabled for playlist in state.playlists)
 
+    def retry_retired_source_cleanup(self, source_id: str) -> None:
+        """Operator-authorized, idempotent SQLite cleanup after a published owner deletion.
+
+        Keep the durable ID tombstone permanently even on successful cleanup:
+        another process may have observed the old ID and journals can be
+        asynchronously repopulated. Never touch Spotify or source definitions.
+        """
+        if not isinstance(self.store, ForwardOnlyManagedStateStore):
+            raise SourceMutationError("Retired source cleanup requires a v11 installation")
+        gate = self.cycle_synchronization
+        if gate is None or self.first_journal is None or self.detector_journal is None:
+            raise RuntimeError("Retired source cleanup is unavailable")
+        with gate.try_hold_maintenance() as acquired:
+            if not acquired:
+                raise EngineCycleBusyError("Engine cycle is active; retry cleanup shortly")
+            with self.synchronization.hold():
+                state = self.store.load_readonly()
+                inventory = parse_v11_operational(self.store._expected_bytes).owner_inventory
+                if source_id not in inventory.retired_source_ids:
+                    raise SourceMutationError("Source ID is not retired")
+                if any(source.id == source_id for source in effective_sources(self.store.catalog, state)):
+                    raise SourceMutationError("Retired source ID is unexpectedly active")
+                self.first_journal.clear_source_runtime_state(SourceId(source_id))
+                self.detector_journal.clear_source_state(SourceId(source_id))
+
     def _custom_source(self, state: ManagedState, source_id: str) -> ManagedSource:
         source = next((item for item in state.sources if item.id == source_id), None)
         if source is None:

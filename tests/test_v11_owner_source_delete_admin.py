@@ -231,3 +231,91 @@ def test_owner_delete_cleanup_failure_retires_id_before_reimport(
         assert original.id not in {s.id for s in store.catalog.sources}
         assert open_managed_state_store(root).load_readonly().sources == ()
         assert not client.calls
+
+
+def test_retired_source_cleanup_retry_over_authenticated_admin_without_spotify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retired"
+    root.mkdir()
+    store = open_managed_state_store(root)
+    station = replace(_installed(), id=SourceId("custom_" + "Y" * 22))
+    store.install_owner_sources((station,))
+    with _server(root) as (server, client, _legacy):
+        handler = server.RequestHandlerClass
+        service = handler.source_admin_service
+        managed = handler.managed_admin_service
+        assert service is not None and managed is not None
+        service.store = managed.store = store
+        service.catalog = managed.catalog = store.catalog
+        assert service.first_journal is not None and service.detector_journal is not None
+
+        original_clear = service.detector_journal.clear_source_state
+        cleared: list[SourceId] = []
+
+        def interrupt_cleanup(_id: SourceId) -> None:
+            raise OSError("simulated SQLite interruption")
+
+        monkeypatch.setattr(service.detector_journal, "clear_source_state", interrupt_cleanup)
+        with pytest.raises(OSError, match="simulated SQLite interruption"):
+            service.delete(str(station.id))
+        old_bytes = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        old_state = store.load_readonly()
+        cookie = _login(server)
+        status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        assert b"Retired source maintenance" in page
+        assert str(station.id).encode() in page
+        assert b"Retry local cleanup" in page
+
+        def complete_cleanup(source_id: SourceId) -> None:
+            cleared.append(source_id)
+            original_clear(source_id)
+
+        monkeypatch.setattr(service.detector_journal, "clear_source_state", complete_cleanup)
+        status, _, _ = _request(
+            server, "POST", "/admin/sources/retired/cleanup", cookie=cookie,
+            form={"csrf_token": _csrf(page), "source_id": str(station.id)}
+        )
+        assert status == 303
+        assert cleared == [station.id]
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == old_bytes
+        assert store.load_readonly() == old_state
+        assert not client.calls
+
+        status, _, fresh = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        # Cleanup is safe to repeat and must never release the retired ID.
+        status, _, _ = _request(
+            server, "POST", "/admin/sources/retired/cleanup", cookie=cookie,
+            form={"csrf_token": _csrf(fresh), "source_id": str(station.id)}
+        )
+        assert status == 303
+        assert cleared == [station.id, station.id]
+        assert station.id in parse_v11_operational(
+            (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        ).owner_inventory.retired_source_ids
+        assert not client.calls
+
+        status, _, page = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        status, _, _ = _request(
+            server, "POST", "/admin/sources/retired/cleanup", cookie=cookie,
+            form={"csrf_token": _csrf(page), "source_id": "ser"}
+        )
+        assert status == 409
+        assert cleared == [station.id, station.id]
+
+        handler.inspection_hold = True
+        try:
+            held = _request(server, "GET", "/admin/sources", cookie=cookie)[2]
+            assert b"Cleanup locked during inspection hold" in held
+            assert b"Retry local cleanup" not in held
+            status, _, _ = _request(
+                server, "POST", "/admin/sources/retired/cleanup", cookie=cookie,
+                form={"csrf_token": _csrf(held), "source_id": str(station.id)}
+            )
+            assert status == 423
+        finally:
+            handler.inspection_hold = False
+        assert not client.calls

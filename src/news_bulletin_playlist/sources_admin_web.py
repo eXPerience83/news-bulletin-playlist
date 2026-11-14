@@ -45,6 +45,7 @@ def render_sources_page(
     provider_available: bool = True,
     owner_catalog_editable: bool = False,
     inspection_hold: bool = False,
+    retired_source_ids: tuple[SourceId, ...] = (),
 ) -> bytes:
     """Show installed sources separately from downloadable, uninstalled examples."""
     editing_enabled = provider_available and not inspection_hold
@@ -112,6 +113,32 @@ def render_sources_page(
         owner_catalog_editable=owner_catalog_editable,
     )
     source_kind = "owner" if owner_catalog_editable else "built-in"
+    retired_section = ""
+    if retired_source_ids and owner_catalog_editable:
+        shown = retired_source_ids[:25]
+        rows = "".join(
+            '<li><code>' + html.escape(str(source_id)) + '</code>'
+            + (
+                '<form method="post" action="/admin/sources/retired/cleanup">'
+                f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
+                f'<input type="hidden" name="source_id" value="{html.escape(str(source_id), quote=True)}">'
+                '<button class="button" type="submit">Retry local cleanup</button></form>'
+                if not inspection_hold
+                else '<span class="muted">Cleanup locked during inspection hold</span>'
+            )
+            + "</li>"
+            for source_id in shown
+        )
+        retired_section = (
+            '<section class="section admin-section" aria-labelledby="retired-source-heading">'
+            '<h2 id="retired-source-heading">Retired source maintenance</h2>'
+            f'<p>{len(retired_source_ids)} permanently reserved source IDs. '
+            'After an interrupted deletion, retry clearing their local SQLite '
+            'episode/detector journals. This does not contact Spotify or reuse IDs. '
+            'Cleanup is idempotent; completed IDs remain listed.</p>'
+            f'<ul>{rows}</ul>'
+            '</section>'
+        )
     body = "".join(
         (
             render_lan_warning() if lan_mode else "",
@@ -140,6 +167,7 @@ def render_sources_page(
      origin need not be a country.</p>
   {table}
 </section>
+{retired_section}
 {examples_section}
 """,
         )
