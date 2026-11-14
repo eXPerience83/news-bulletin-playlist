@@ -143,10 +143,14 @@ def source_import_fingerprint(
     sources: tuple[SourceDefinition, ...],
     pending: ProvisioningIntent | None,
     catalog: BuiltInCatalog,
+    *,
+    retired_ids: frozenset[SourceId] = frozenset(),
 ) -> str:
-    # Immutable domain snapshots include destinations, drafts/quarantine and all
-    # reference/policy data. Nothing from this representation is logged or exported.
-    return hashlib.sha256(repr((state, sources, pending, catalog)).encode("utf-8")).hexdigest()
+    # The allocator reserves retired owner IDs. They MUST be part of the
+    # preview identity: an install/delete ABA can otherwise restore the same
+    # visible catalog while changing the allocated local IDs at apply time.
+    snapshot = (state, sources, pending, catalog, tuple(sorted(retired_ids)))
+    return hashlib.sha256(repr(snapshot).encode("utf-8")).hexdigest()
 
 
 def retired_source_ids(store: ManagedStateStore) -> frozenset[SourceId]:
@@ -196,7 +200,13 @@ class SourceImportService:
                 self.build_candidate(state, rows, pending)
             return SourceImportPreview(
                 rows,
-                source_import_fingerprint(state, sources, pending, self.store.catalog),
+                source_import_fingerprint(
+                    state,
+                    sources,
+                    pending,
+                    self.store.catalog,
+                    retired_ids=retired_source_ids(self.store),
+                ),
                 state.schema_version,
             )
 
@@ -210,7 +220,11 @@ class SourceImportService:
             sources = effective_sources(self.store.catalog, state)
             rows = plan_source_import(records, sources, retired_ids=retired_source_ids(self.store))
             if fingerprint != source_import_fingerprint(
-                state, sources, pending, self.store.catalog
+                state,
+                sources,
+                pending,
+                self.store.catalog,
+                retired_ids=retired_source_ids(self.store),
             ):
                 raise StaleSourceImport(
                     "Configuration or pending activation changed. Upload a new preview."

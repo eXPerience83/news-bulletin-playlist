@@ -18,18 +18,20 @@ from _legacy_materialization_fixtures import _catalog_with_duration_exception, _
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
 from news_bulletin_playlist.managed_state import (
+    InstalledSource,
     ManagedStateStore,
     compile_engine_config,
     effective_sources,
+    source_definition,
 )
 from news_bulletin_playlist.playlist_bundle import (
     inspect_playlist_bundle,
     inspect_playlist_bundle_v2,
 )
-from news_bulletin_playlist.playlist_import import PlaylistImportService
+from news_bulletin_playlist.playlist_import import PlaylistImportError, PlaylistImportService
 from news_bulletin_playlist.portable_playlists import PlaylistExportService, PortableCoverLoader
 from news_bulletin_playlist.portable_sources import PortableSource, export_sources, parse_sources
-from news_bulletin_playlist.source_import import SourceImportService
+from news_bulletin_playlist.source_import import SourceImportService, StaleSourceImport
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
 
@@ -407,3 +409,81 @@ def test_v2_round_trip_keeps_nonempty_historical_duration_exception_and_show_ide
     assert recovered_source.parser_id == donor_source.parser_id
     assert recovered_source.collection_filter_id == donor_source.collection_filter_id
     assert not restored.load_readonly().playlists
+
+
+def test_json_preview_rejects_retired_id_aba_before_source_id_changes(tmp_path: Path) -> None:
+    """An install/delete between preview and apply invalidates the visible source mapping."""
+    root = tmp_path / "owner-intake"
+    root.mkdir()
+    store = open_managed_state_store(root)
+    journal = ProvisioningJournal(root / "managed-playlist-provisioning.json")
+    importer = SourceImportService(store, ConfigurationSynchronization(), journal)
+    source = source_definition(_installed())
+    document = export_sources((source,))
+    preview = importer.preview(document)
+    intended_id = preview.rows[0].local_id
+    assert intended_id is not None
+    assert preview.rows[0].status == "create"
+
+    # Complete ABA: same effective catalog, overlay and destination set,
+    # but the old local ID is now permanently reserved for orphaned episodes.
+    original = store.load_readonly()
+    store.install_owner_sources((InstalledSource.from_definition(replace(source, id=intended_id)),))
+    store.delete_owner_source(intended_id)
+    assert store.load_readonly() == original
+    assert store.catalog.sources == ()
+    revised = importer.preview(document)
+    assert revised.rows[0].local_id != intended_id
+    assert revised.fingerprint != preview.fingerprint
+    before = (root / "managed-state-v11.json").read_bytes()
+    with pytest.raises(StaleSourceImport, match="Upload a new preview"):
+        importer.apply(document, preview.fingerprint, keep_local=frozenset(), confirm_v8=False)
+    assert (root / "managed-state-v11.json").read_bytes() == before
+
+
+def test_zip_v1_preview_rejects_retired_id_aba_before_draft_commit(tmp_path: Path) -> None:
+    """A ZIP v1 cannot silently change a source mapping after a retirement ABA."""
+    donor, legacy = legacy_root(tmp_path, 10)
+    store = open_managed_state_store(donor)
+    exporter = PlaylistExportService(
+        store, ConfigurationSynchronization(), PortableCoverLoader(donor)
+    )
+    playlist_id = str(legacy.original_state.playlists[0].id)
+    fingerprint, _, portable_id = exporter.preparation("managed", playlist_id)
+    assert portable_id is None
+    exporter.prepare("managed", playlist_id, fingerprint, acknowledge_v9=True)
+    _, archive = exporter.export("managed", playlist_id, version=1)
+
+    target = tmp_path / "empty-target"
+    target.mkdir()
+    receiver = open_managed_state_store(target)
+    importer = PlaylistImportService(
+        receiver,
+        ConfigurationSynchronization(),
+        ProvisioningJournal(target / "managed-playlist-provisioning.json"),
+        PortableCoverLoader(target),
+    )
+    preview = importer.preview(archive)
+    row = next(item for item in preview.sources.rows if item.status == "create")
+    assert row.local_id is not None
+    initial = receiver.load_readonly()
+    receiver.install_owner_sources(
+        (InstalledSource.from_definition(replace(row.incoming, id=row.local_id)),)
+    )
+    receiver.delete_owner_source(row.local_id)
+    assert receiver.load_readonly() == initial
+    assert receiver.catalog.sources == ()
+    current_preview = importer.preview(archive)
+    assert current_preview.sources.fingerprint != preview.sources.fingerprint
+    changed = next(item for item in current_preview.sources.rows if item.spotify_show_id == row.spotify_show_id)
+    assert changed.local_id != row.local_id
+    before = (target / "managed-state-v11.json").read_bytes()
+    with pytest.raises(PlaylistImportError, match="changed"):
+        importer.apply(
+            archive,
+            preview.sources.fingerprint,
+            keep_local=frozenset(),
+            confirm_schema=False,
+        )
+    assert (target / "managed-state-v11.json").read_bytes() == before
+    assert not receiver.load_readonly().templates

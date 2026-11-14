@@ -406,7 +406,13 @@ class PlaylistImportService:
         )
         source_preview = SourceImportPreview(
             rows,
-            source_import_fingerprint(state, sources, pending, self.store.catalog),
+            source_import_fingerprint(
+                state,
+                sources,
+                pending,
+                self.store.catalog,
+                retired_ids=retired_source_ids(self.store),
+            ),
             state.schema_version,
         )
         if source_preview.unsupported:
@@ -548,7 +554,11 @@ class PlaylistImportService:
             state = self.store.load_readonly()
             pending = self.provisioning.load()
             actual_fingerprint = source_import_fingerprint(
-                state, effective_sources(self.store.catalog, state), pending, self.store.catalog
+                state,
+                effective_sources(self.store.catalog, state),
+                pending,
+                self.store.catalog,
+                retired_ids=retired_source_ids(self.store),
             )
             if actual_fingerprint != fingerprint:
                 raise PlaylistImportError(
