@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import signal
 import threading
@@ -12,6 +13,7 @@ from functools import partial
 from http import HTTPStatus
 from http.server import HTTPServer
 from pathlib import Path
+from time import monotonic
 from types import FrameType
 
 from news_bulletin_playlist import __version__
@@ -46,6 +48,7 @@ from news_bulletin_playlist.engine import (
 )
 from news_bulletin_playlist.engine_cycle_synchronization import EngineCycleSynchronization
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
+from news_bulletin_playlist.inspection_fence import inspection_requested, startup_gate
 from news_bulletin_playlist.lan_admin import LanAdminHandler, build_engine_runtime_auth
 from news_bulletin_playlist.managed_admin import (
     ManagedAdminError,
@@ -64,6 +67,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     effective_sources,
 )
+from news_bulletin_playlist.migrated_covers import MigratedCoverAssets, MigratedCoverError
 from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.owner_cover_upload import (
     MAX_MULTIPART_BYTES,
@@ -108,7 +112,10 @@ from news_bulletin_playlist.spotify_backoff import (
     SpotifyRateLimitStateUnavailable,
 )
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
-from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_managed_adapter import (
+    ForwardOnlyManagedStateStore,
+    open_managed_state_store,
+)
 from news_bulletin_playlist.v11_operational_storage import (
     V11_AUTHORITY_FILENAME,
     V11_OPERATIONAL_FILENAME,
@@ -129,11 +136,17 @@ _ADMIN_NOTICE_MESSAGES = {
     "spotify-sync-applied": "Spotify metadata and cover applied successfully.",
     "playlist-stopped": "Playlist is no longer managed.",
     "playlist-provisioning-adopted": "Existing Spotify playlist adopted successfully.",
+    "playlist-existing-relinked": (
+        "Existing Spotify playlist linked to the imported draft in PAUSED mode. "
+        "No Spotify data was changed. Resume it explicitly after reviewing the settings."
+    ),
     "playlist-provisioning-cleared": "Uncertain playlist creation state cleared successfully.",
     "local-draft-created": "Custom playlist draft saved locally.",
     "local-example-created": "Playlist example saved as a local draft; Spotify was not contacted.",
     "local-draft-updated": "Custom playlist draft updated locally.",
     "local-draft-deleted": "Custom playlist draft deleted locally.",
+    "owner-template-updated": "Owner template updated locally; Spotify was not contacted.",
+    "owner-template-deleted": "Owner template deleted locally; Spotify was not contacted.",
     "owner-cover-uploaded": (
         "Custom cover saved locally. For an existing Spotify playlist, "
         "use Apply Spotify metadata & cover to publish this change."
@@ -142,6 +155,7 @@ _ADMIN_NOTICE_MESSAGES = {
 }
 _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/activate": "playlist-activated",
+    "/admin/playlists/relink": "playlist-existing-relinked",
     "/admin/playlists/update": "playlist-settings-saved",
     "/admin/playlists/sync": "spotify-sync-applied",
     "/admin/playlists/stop": "playlist-stopped",
@@ -150,6 +164,8 @@ _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/templates/create": "local-draft-created",
     "/admin/playlists/templates/from-example": "local-example-created",
     "/admin/playlists/templates/update": "local-draft-updated",
+    "/admin/playlists/templates/owner/update": "owner-template-updated",
+    "/admin/playlists/templates/owner/delete": "owner-template-deleted",
     "/admin/playlists/templates/delete": "local-draft-deleted",
     "/admin/playlists/templates/quarantine/discard": "local-quarantine-discarded",
 }
@@ -239,6 +255,7 @@ class EngineLifecycleController:
         self._scheduler_thread: threading.Thread | None = None
         self._draining_threads: list[threading.Thread] = []
         self._restart_waiter: threading.Thread | None = None
+        self._inspection_held = False
         self._lock = threading.RLock()
 
     def _process_stopping(self) -> bool:
@@ -250,10 +267,22 @@ class EngineLifecycleController:
         with self._lock:
             return self._scheduler
 
+    def hold_for_inspection(self) -> None:
+        """Prevent all scheduler starts/wakes until a separate process restart.
+
+        This process-scoped latch cannot be released through an Admin action or
+        by removing the durable marker while the runtime remains active.
+        """
+        with self._lock:
+            if self._scheduler is not None or self._draining_threads:
+                raise RuntimeError("Cannot inspect after starting a scheduler")
+            self._inspection_held = True
+            self.status.set_configured(False)
+
     def reconcile(self, *, configured: bool) -> None:
         """Make scheduler existence match whether any effective playlist is active."""
         with self._lock:
-            if self._process_stopping():
+            if self._process_stopping() or self._inspection_held:
                 configured = False
             self.status.set_configured(configured)
             self._prune_draining_locked()
@@ -269,6 +298,8 @@ class EngineLifecycleController:
 
     def wake(self) -> None:
         with self._lock:
+            if self._inspection_held:
+                return
             if self._scheduler is not None:
                 self._wake_scheduler_locked()
 
@@ -282,8 +313,12 @@ class EngineLifecycleController:
             self.status.set_configured(False)
             self._request_scheduler_stop_locked()
             draining = tuple(self._draining_threads)
+        # One total stop budget, not one full timeout for each draining worker.
+        # Never cancel an in-flight provider mutation: report remaining workers
+        # as incomplete and let the read-before-write recovery contract apply.
+        deadline = monotonic() + _SCHEDULER_SHUTDOWN_WAIT_SECONDS
         for scheduler_thread in draining:
-            scheduler_thread.join(timeout=_SCHEDULER_SHUTDOWN_WAIT_SECONDS)
+            scheduler_thread.join(timeout=max(0.0, deadline - monotonic()))
         still_running = [thread for thread in draining if thread.is_alive()]
         with self._lock:
             self._prune_draining_locked()
@@ -611,6 +646,16 @@ class OperationalHealthHandler(LanAdminHandler):
     diagnostic_store: DiagnosticEventStore | None = None
     spotify_request_metrics: SpotifyRequestMetrics | None = None
     operational_diagnostics: OperationalDiagnostics | None = None
+    inspection_hold: bool = False
+
+    def _inspection_locked(self) -> None:
+        self._reply(
+            HTTPStatus.LOCKED,
+            b"Spotify reconciliation inspection is active. "
+            b"All administration writes are blocked until the separately confirmed "
+            b"inspection release and a normal restart.",
+            content_type="text/plain; charset=utf-8",
+        )
 
     def _spotify_state(self) -> AuthorizationState | None:
         synchronization = self.auth_synchronization
@@ -620,6 +665,9 @@ class OperationalHealthHandler(LanAdminHandler):
             return super()._spotify_state()
 
     def _handle_spotify_callback(self, query: str) -> None:
+        if self.inspection_hold:
+            self._inspection_locked()
+            return
         synchronization = self.auth_synchronization
         if synchronization is None:
             super()._handle_spotify_callback(query)
@@ -628,6 +676,9 @@ class OperationalHealthHandler(LanAdminHandler):
             super()._handle_spotify_callback(query)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self.inspection_hold and self.path not in {"/admin/login", "/admin/logout"}:
+            self._inspection_locked()
+            return
         try:
             parsed = urllib.parse.urlsplit(self.path)
         except ValueError:
@@ -660,12 +711,34 @@ class OperationalHealthHandler(LanAdminHandler):
             self._reply(HTTPStatus.BAD_REQUEST, b"Invalid request")
             return
 
+        if self.inspection_hold and parsed.path == "/healthz":
+            # Preserve the original liveness/storage-health contract: an
+            # inspection hold must not mask an unwritable persistent root.
+            ready = _data_dir_ready(self.data_dir)
+            self._reply(
+                HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
+                json.dumps(
+                    {
+                        "status": "ok" if ready else "degraded",
+                        "version": __version__,
+                        "spotify_reconciliation": "inspection_held",
+                    },
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+                content_type="application/json",
+            )
+            return
+        if self.inspection_hold and parsed.path == "/admin/spotify/callback":
+            self._inspection_locked()
+            return
+
         if parsed.path == "/":
             ready = _data_dir_ready(self.data_dir)
             payload = _operational_status_page(
                 ready=ready,
                 spotify_state=self._spotify_state(),
                 status=self.operational_status,
+                inspection_hold=self.inspection_hold,
             )
             self._reply(
                 HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
@@ -713,12 +786,18 @@ class OperationalHealthHandler(LanAdminHandler):
         synchronization = self.configuration_synchronization
         try:
             if synchronization is None:
-                snapshot = service.snapshot()
-                state = service.store.load()
+                snapshot = service.snapshot(readonly=self.inspection_hold)
+                state = (
+                    service.store.load_readonly() if self.inspection_hold else service.store.load()
+                )
             else:
                 with synchronization.hold():
-                    snapshot = service.snapshot()
-                    state = service.store.load()
+                    snapshot = service.snapshot(readonly=self.inspection_hold)
+                    state = (
+                        service.store.load_readonly()
+                        if self.inspection_hold
+                        else service.store.load()
+                    )
             effective_sources(service.catalog, state)
         except ManagedStateError, OSError:
             self._reply(
@@ -740,6 +819,8 @@ class OperationalHealthHandler(LanAdminHandler):
             lan_mode=self._is_lan_admin_mode(),
             notice=notice,
             state=state,
+            inspection_hold=self.inspection_hold,
+            owner_catalog_editable=isinstance(service.store, ForwardOnlyManagedStateStore),
         )
         self._reply(HTTPStatus.OK, payload)
 
@@ -757,6 +838,8 @@ class OperationalHealthHandler(LanAdminHandler):
             return
         cover_id = filename[:-4]
         allowed = {template.cover_id for template in BUILTIN_CATALOG.playlists}
+        if self.managed_admin_service is not None:
+            allowed.update(item.cover_id for item in self.managed_admin_service.catalog.playlists)
         allowed.add(CUSTOM_DEFAULT_COVER_ID)
         if cover_id not in allowed:
             self._reply(
@@ -764,6 +847,14 @@ class OperationalHealthHandler(LanAdminHandler):
                 b"Not found",
                 content_type="text/plain; charset=utf-8",
             )
+            return
+        try:
+            owned = MigratedCoverAssets(self.data_dir).load(cover_id)
+        except MigratedCoverError:
+            self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, b"Persisted cover is invalid")
+            return
+        if owned is not None:
+            self._reply(HTTPStatus.OK, owned[0], content_type="image/jpeg")
             return
         cover_path = _bundled_cover_path(filename)
         if cover_path is None:
@@ -880,6 +971,8 @@ class OperationalHealthHandler(LanAdminHandler):
             "/admin/playlists/templates/create",
             "/admin/playlists/templates/from-example",
             "/admin/playlists/templates/update",
+            "/admin/playlists/templates/owner/update",
+            "/admin/playlists/templates/owner/delete",
             "/admin/playlists/templates/delete",
             "/admin/playlists/templates/quarantine/discard",
         }
@@ -936,6 +1029,8 @@ class OperationalHealthHandler(LanAdminHandler):
                 "/admin/playlists/templates/create",
                 "/admin/playlists/templates/from-example",
                 "/admin/playlists/templates/update",
+                "/admin/playlists/templates/owner/update",
+                "/admin/playlists/templates/owner/delete",
                 "/admin/playlists/templates/delete",
                 "/admin/playlists/templates/quarantine/discard",
             }:
@@ -981,6 +1076,10 @@ class OperationalHealthHandler(LanAdminHandler):
                         playlist_id_for_event = self._activate_managed_playlist(service, form)
                         event_name = "admin_playlist_activated"
                         next_state = "enabled"
+                    elif path == "/admin/playlists/relink":
+                        playlist_id_for_event = self._relink_imported_playlist(service, form)
+                        event_name = "admin_playlist_relinked"
+                        next_state = "disabled"
                     elif path == "/admin/playlists/update":
                         playlist_id_for_event, enabled = self._update_managed_playlist(
                             service, form
@@ -1070,6 +1169,47 @@ class OperationalHealthHandler(LanAdminHandler):
         path: str,
     ) -> str:
         """Local-only custom template mutation behind existing auth/CSRF/lock."""
+        if path == "/admin/playlists/templates/owner/delete":
+            if set(form) != {
+                "csrf_token",
+                "template_id",
+                "template_digest",
+                "confirm_owner_delete",
+            }:
+                raise ValueError("Invalid owner template deletion form")
+            template_id = single_form_value(form, "template_id")
+            service.delete_owner_template(
+                template_id,
+                fingerprint=single_form_value(form, "template_digest"),
+                confirmed=form.get("confirm_owner_delete", []) == ["1"],
+            )
+            return template_id
+        if path == "/admin/playlists/templates/owner/update":
+            allowed = {
+                "csrf_token",
+                "template_id",
+                "template_digest",
+                "display_name",
+                "description",
+                "retention_hours",
+                "max_episodes",
+                "min_duration_seconds",
+                "max_duration_seconds",
+            }
+            if set(form) != allowed:
+                raise ValueError("Invalid owner template form")
+            template_id = single_form_value(form, "template_id")
+            service.update_owner_template_metadata(
+                template_id,
+                fingerprint=single_form_value(form, "template_digest"),
+                display_name=single_form_value(form, "display_name"),
+                description=single_form_value(form, "description", required=False),
+                retention_hours=int(single_form_value(form, "retention_hours")),
+                max_episodes=int(single_form_value(form, "max_episodes")),
+                min_duration_seconds=int(single_form_value(form, "min_duration_seconds")),
+                max_duration_seconds=int(single_form_value(form, "max_duration_seconds")),
+            )
+            return template_id
         if path == "/admin/playlists/templates/from-example":
             draft = service.create_from_example(single_form_value(form, "example_id"))
             return str(draft.id)
@@ -1137,12 +1277,39 @@ class OperationalHealthHandler(LanAdminHandler):
         )
         return str(draft.id)
 
+    def _relink_imported_playlist(
+        self,
+        service: ManagedAdminService,
+        form: Mapping[str, list[str]],
+    ) -> str:
+        if set(form) != {
+            "csrf_token",
+            "template_id",
+            "destination_id",
+            "confirm_existing",
+        } or form.get("confirm_existing") != ["1"]:
+            raise ValueError("Relinking requires an explicit, complete confirmation")
+        auth = self.managed_admin_auth
+        if auth is None:
+            raise ManagedAdminError("Spotify authorization is required to verify ownership")
+        result = service.relink_imported_destination(
+            template_id=single_form_value(form, "template_id"),
+            destination_id=single_form_value(form, "destination_id"),
+            access_token=auth.get_access_token(),
+            confirm_existing=True,
+        )
+        return str(result.id)
+
     def _activate_managed_playlist(
         self,
         service: ManagedAdminService,
         form: Mapping[str, list[str]],
     ) -> str:
-        service.check_activation_allowed(single_form_value(form, "template_id"))
+        confirm_imported_new = form.get("confirm_imported_new") == ["1"]
+        service.check_activation_allowed(
+            single_form_value(form, "template_id"),
+            confirm_imported_new=confirm_imported_new,
+        )
         auth = self.managed_admin_auth
         if auth is None:
             raise ManagedAdminError("Spotify authorization is required to create a playlist")
@@ -1156,6 +1323,7 @@ class OperationalHealthHandler(LanAdminHandler):
             access_token=access_token,
             min_duration_minutes=duration_minutes_from_form(form, "min"),
             max_duration_minutes=duration_minutes_from_form(form, "max"),
+            confirm_imported_new=confirm_imported_new,
         )
         return str(managed.id)
 
@@ -1284,6 +1452,8 @@ def serve(
     env = os.environ if environ is None else environ
     stopped = stop_event if stop_event is not None else threading.Event()
     _reject_obsolete_configuration(data_dir, env)
+    # Reject invalid inspection settings before any initialization writes.
+    inspect_requested = inspection_requested(env)
     # A pristine root must become v11 before SQLite, OAuth or journals write
     # durable files. Existing roots without state cannot be claimed fresh.
     if not any(
@@ -1295,6 +1465,9 @@ def serve(
             open_managed_state_store(data_dir)
         except ManagedStateError as exc:
             raise RuntimeError("installation identity/configuration is ambiguous") from exc
+    # On an occupied legacy root, persist the inspection fence BEFORE the
+    # first call that might initiate the irreversible v11 conversion.
+    inspection_hold = startup_gate(data_dir, requested=inspect_requested)
     database_path = initialize_runtime_storage(data_dir)
     store = SQLiteStore(database_path)
     diagnostic_candidate = DiagnosticEventStore(database_path)
@@ -1327,12 +1500,12 @@ def serve(
         request_metrics=request_metrics,
         rate_limit_journal=rate_limit_journal,
     )
-    if managed_admin_service is not None:
+    if managed_admin_service is not None and not inspection_hold:
         finalized = managed_admin_service.finalize_known_provisioning()
         if finalized is not None:
             config = _load_runtime_config(data_dir, env)
     configured = config is not None
-    if configured and spotify_auth is None:
+    if configured and spotify_auth is None and not inspection_hold:
         raise RuntimeError(
             "engine configuration requires production Spotify authorization settings "
             "or explicit LAN development authorization"
@@ -1390,6 +1563,8 @@ def serve(
             diagnostics=diagnostics,
             process_stop_event=stopped,
         )
+        if inspection_hold:
+            lifecycle.hold_for_inspection()
         status: OperationalStatus = lifecycle.status
     else:
         status = _MutableOperationalStatus(configured=configured)
@@ -1423,6 +1598,7 @@ def serve(
     handler_type.diagnostic_store = diagnostic_store
     handler_type.operational_diagnostics = diagnostics
     handler_type.spotify_request_metrics = request_metrics
+    handler_type.inspection_hold = inspection_hold
     server = HTTPServer((host, port), handler_type)
     server.timeout = 0.5
 
@@ -1480,6 +1656,7 @@ def serve(
         handler_type.source_admin_service = None
         handler_type.diagnostic_store = None
         handler_type.spotify_request_metrics = None
+        handler_type.inspection_hold = False
         if handlers_installed:
             signal.signal(signal.SIGTERM, previous_sigterm)
             signal.signal(signal.SIGINT, previous_sigint)
@@ -1527,6 +1704,9 @@ def _build_managed_admin_service(
     def cover_loader(cover_id: str) -> bytes:
         if is_uploaded_cover_id(cover_id):
             return owner_covers.load(cover_id)
+        persisted = MigratedCoverAssets(data_dir).load(cover_id)
+        if persisted is not None:
+            return persisted[0]
         return _load_bundled_cover(cover_id)
 
     store = open_managed_state_store(data_dir)
@@ -1588,13 +1768,18 @@ def _operational_status_page(
     ready: bool,
     spotify_state: AuthorizationState | None,
     status: OperationalStatus | None,
+    inspection_hold: bool = False,
 ) -> bytes:
     snapshot = (
         OperationalStatus(configured=False).snapshot() if status is None else status.snapshot()
     )
     runtime_label = "Ready" if ready else "Degraded"
     storage_label = "Writable" if ready else "Unavailable"
-    engine_label = _engine_label(snapshot)
+    engine_label = (
+        "INSPECTION HOLD - no Spotify reconciliation"
+        if inspection_hold
+        else _engine_label(snapshot)
+    )
     cycle = snapshot.last_cycle
     cycle_result = "Not run yet" if cycle is None else ("Success" if cycle.ok else "Failed")
     cycle_started = "—" if cycle is None else _format_time(cycle.started_at)
@@ -1603,6 +1788,13 @@ def _operational_status_page(
     next_run = "—" if snapshot.next_run_at is None else _format_time(snapshot.next_run_at)
     source_rows = _source_rows(cycle)
     playlist_rows = _playlist_rows(cycle)
+    inspection_banner = (
+        '<p role="alert"><strong>INSPECTION HOLD ACTIVE:</strong> Spotify reconciliation '
+        "is suspended across restarts. HTTP health does not certify readiness. "
+        "Release requires a state-hash-confirmed CLI action and a restart.</p>"
+        if inspection_hold
+        else ""
+    )
 
     document = f"""<!doctype html>
 <html lang="en">
@@ -1623,6 +1815,7 @@ def _operational_status_page(
 </head>
 <body>
   <h1>News Bulletin Playlists</h1>
+  {inspection_banner}
   <p>This page is read-only. Administrative actions remain isolated under the
      authenticated <code>/admin/</code> surface.</p>
   <dl>

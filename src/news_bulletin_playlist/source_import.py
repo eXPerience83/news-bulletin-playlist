@@ -30,6 +30,8 @@ from news_bulletin_playlist.portable_sources import (
     inspect_sources,
     parse_sources,
 )
+from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
+from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 
 
 class _Synchronization(Protocol):
@@ -105,10 +107,13 @@ def _differences(left: SourceDefinition, right: SourceDefinition) -> tuple[str, 
 
 
 def plan_source_import(
-    records: tuple[PortableSource, ...], local_sources: tuple[SourceDefinition, ...]
+    records: tuple[PortableSource, ...],
+    local_sources: tuple[SourceDefinition, ...],
+    *,
+    retired_ids: frozenset[SourceId] = frozenset(),
 ) -> tuple[SourceImportRow, ...]:
     by_show = {source.external_references[0].external_id: source for source in local_sources}
-    occupied = {source.id for source in local_sources}
+    occupied = {source.id for source in local_sources} | set(retired_ids)
     rows: list[SourceImportRow] = []
     # Input order cannot influence allocation or the displayed original -> local map.
     for record in sorted(records, key=lambda item: item.source.external_references[0].external_id):
@@ -138,10 +143,23 @@ def source_import_fingerprint(
     sources: tuple[SourceDefinition, ...],
     pending: ProvisioningIntent | None,
     catalog: BuiltInCatalog,
+    *,
+    retired_ids: frozenset[SourceId] = frozenset(),
 ) -> str:
-    # Immutable domain snapshots include destinations, drafts/quarantine and all
-    # reference/policy data. Nothing from this representation is logged or exported.
-    return hashlib.sha256(repr((state, sources, pending, catalog)).encode("utf-8")).hexdigest()
+    # The allocator reserves retired owner IDs. They MUST be part of the
+    # preview identity: an install/delete ABA can otherwise restore the same
+    # visible catalog while changing the allocated local IDs at apply time.
+    snapshot = (state, sources, pending, catalog, tuple(sorted(retired_ids)))
+    return hashlib.sha256(repr(snapshot).encode("utf-8")).hexdigest()
+
+
+def retired_source_ids(store: ManagedStateStore) -> frozenset[SourceId]:
+    """IDs retired by a prior CAS must never reuse pre-deletion SQLite state."""
+    if isinstance(store, ForwardOnlyManagedStateStore):
+        return frozenset(
+            parse_v11_operational(store._expected_bytes).owner_inventory.retired_source_ids
+        )
+    return frozenset()
 
 
 class SourceImportService:
@@ -169,7 +187,12 @@ class SourceImportService:
             sources = effective_sources(self.store.catalog, state)
             rows = tuple(
                 sorted(
-                    (*plan_source_import(records, sources), *unsupported),
+                    (
+                        *plan_source_import(
+                            records, sources, retired_ids=retired_source_ids(self.store)
+                        ),
+                        *unsupported,
+                    ),
                     key=lambda row: row.spotify_show_id,
                 )
             )
@@ -177,7 +200,13 @@ class SourceImportService:
                 self.build_candidate(state, rows, pending)
             return SourceImportPreview(
                 rows,
-                source_import_fingerprint(state, sources, pending, self.store.catalog),
+                source_import_fingerprint(
+                    state,
+                    sources,
+                    pending,
+                    self.store.catalog,
+                    retired_ids=retired_source_ids(self.store),
+                ),
                 state.schema_version,
             )
 
@@ -189,9 +218,13 @@ class SourceImportService:
             state = self.store.load_readonly()
             pending = self.provisioning.load()
             sources = effective_sources(self.store.catalog, state)
-            rows = plan_source_import(records, sources)
+            rows = plan_source_import(records, sources, retired_ids=retired_source_ids(self.store))
             if fingerprint != source_import_fingerprint(
-                state, sources, pending, self.store.catalog
+                state,
+                sources,
+                pending,
+                self.store.catalog,
+                retired_ids=retired_source_ids(self.store),
             ):
                 raise StaleSourceImport(
                     "Configuration or pending activation changed. Upload a new preview."
@@ -213,6 +246,60 @@ class SourceImportService:
                     "Explicit schema v8 compatibility acknowledgement is required."
                 )
             candidate = self.build_candidate(state, rows, pending)
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                initial = parse_v11_operational(self.store._expected_bytes)
+                if initial.owner_sources_complete:
+                    additions = tuple(
+                        InstalledSource.from_definition(replace(row.incoming, id=row.local_id))
+                        for row in rows
+                        if (
+                            row.status == "create"
+                            and isinstance(row.incoming, SourceDefinition)
+                            and row.local_id is not None
+                        )
+                    )
+                    owner_records = tuple(
+                        sorted(
+                            (*initial.owner_inventory.sources, *additions),
+                            key=lambda s: str(s.id),
+                        )
+                    )
+                    new_inventory = replace(
+                        initial.owner_inventory,
+                        sources=owner_records,
+                        source_order=initial.owner_inventory.source_order.after_records_change(
+                            initial.owner_inventory.sources, owner_records
+                        ),
+                    )
+                    next_overlay = replace(state, schema_version=candidate.schema_version)
+                    try:
+                        self.store.install_owner_sources(additions, overlay=next_overlay)
+                    except (OSError, ManagedStateError) as exc:
+                        # A directory-fsync failure may have committed the entire CAS.
+                        # Inspect BOTH owner records and overlay before reporting recovery.
+                        try:
+                            observed_owner = parse_v11_operational(self.store._owner.load_bytes())
+                        except OSError, ValueError:
+                            raise SourceImportWriteError(
+                                "Import durability is uncertain; inspect v11 before retrying."
+                            ) from exc
+                        if (
+                            observed_owner.owner_inventory == new_inventory
+                            and observed_owner.managed_overlay == next_overlay
+                        ):
+                            self.store.load_readonly()
+                            return SourceImportResult(resolved, creates, recovered=True)
+                        if (
+                            observed_owner.owner_inventory == initial.owner_inventory
+                            and observed_owner.managed_overlay == state
+                        ):
+                            raise SourceImportWriteError(
+                                "Import not committed; request a fresh preview to retry."
+                            ) from exc
+                        raise SourceImportWriteError(
+                            "Owner import outcome is ambiguous; inspect v11 before retrying."
+                        ) from exc
+                    return SourceImportResult(resolved, creates)
             try:
                 self.store.save(candidate)
             except (OSError, ManagedStateError) as exc:

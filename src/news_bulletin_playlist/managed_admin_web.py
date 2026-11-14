@@ -30,6 +30,7 @@ from news_bulletin_playlist.managed_state import (
     template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.playlist_import_web import imported_draft_editor
 from news_bulletin_playlist.portable_playlists_web import portable_controls
@@ -49,6 +50,8 @@ def render_managed_admin_page(
     state: ManagedState,
     notice: str | None = None,
     error: str | None = None,
+    inspection_hold: bool = False,
+    owner_catalog_editable: bool = False,
 ) -> bytes:
     """Render playlist policy and lifecycle controls in the shared admin shell."""
 
@@ -119,6 +122,30 @@ def render_managed_admin_page(
         sources=sources,
         custom_source_ids=custom_sources,
     )
+    owned_templates = (
+        '<section class="section admin-section"><h2>Installation-owned templates</h2>'
+        '<p class="muted">Edit saved defaults locally. IDs, assigned source order, '
+        "inactive duration exceptions and artwork references stay intact.</p>"
+        '<div class="admin-grid">'
+        + "".join(
+            _owner_template_edit_form(
+                template,
+                csrf_token=csrf_token,
+                can_delete=(
+                    not state.quarantined_templates
+                    and all(playlist.template_id != template.id for playlist in snapshot.managed)
+                    and (
+                        snapshot.provisioning_intent is None
+                        or snapshot.provisioning_intent.template_id != template.id
+                    )
+                ),
+            )
+            for template in catalog.playlists
+        )
+        + "</div></section>"
+        if owner_catalog_editable
+        else ""
+    )
     spotify_action = "Reconnect Spotify" if spotify_connected else "Connect Spotify"
     actions = f"""
 <form method="post" action="/admin/spotify/connect">
@@ -131,6 +158,18 @@ def render_managed_admin_page(
             render_lan_warning() if lan_mode else "",
             _message("notice", notice),
             _message("error", error),
+            (
+                '<section class="warning" role="alert">'
+                "<h2>Startup inspection hold: Spotify writes are suspended</h2>"
+                "<p>The original playlists and source policies can be inspected here. "
+                "The scheduler is not running, Admin write forms and OAuth callback are blocked, "
+                "and healthz only reports service health, not production readiness. "
+                "Release requires an exact v11 SHA-256 confirmation using the CLI "
+                "and a normal process restart. No Spotify write was authorized by migration."
+                "</p></section>"
+                if inspection_hold
+                else ""
+            ),
             (
                 '<section class="warning" role="alert">'
                 "<h2>Custom playlist drafts require repair</h2>"
@@ -194,6 +233,7 @@ def render_managed_admin_page(
   <p class="muted">Review the built-in defaults before creating a Spotify playlist.</p>
   <div class="admin-grid">{available}</div>
 </section>
+{owned_templates}
 """,
         )
     )
@@ -207,6 +247,70 @@ def render_managed_admin_page(
         body_html=body,
         actions_html=actions,
     )
+
+
+def _owner_template_edit_form(
+    template: PlaylistTemplate, *, csrf_token: str, can_delete: bool
+) -> str:
+    """Never discard dormant exceptions by flattening historical templates."""
+
+    def esc(value: object) -> str:
+        return html.escape(str(value), quote=True)
+
+    digest = hashlib.sha256(OwnerTemplateSet((template,)).serialize()).hexdigest()
+    policy = template.duration_policy
+    delete_control = (
+        f"""
+  <form method="post" action="/admin/playlists/templates/owner/delete">
+    {_hidden_input("csrf_token", csrf_token)}
+    {_hidden_input("template_id", str(template.id))}
+    {_hidden_input("template_digest", digest)}
+    <label><input type="checkbox" name="confirm_owner_delete" value="1" required>
+      Delete this unused installation-owned template</label>
+    <button class="button button-danger" type="submit">Delete owner template</button>
+  </form>
+"""
+        if can_delete
+        else '<p class="muted">Deletion is blocked while referenced or quarantined.</p>'
+    )
+    return f"""
+<details class="card playlist-card">
+  <summary>Edit owner template: {html.escape(template.display_name)}</summary>
+  <p class="muted">ID <code>{esc(template.id)}</code>;
+     sources {len(template.default_source_ids)};
+     retained exceptions {len(policy.exceptions)}.</p>
+  <form method="post" action="/admin/playlists/templates/owner/update">
+    {_hidden_input("csrf_token", csrf_token)}
+    {_hidden_input("template_id", str(template.id))}
+    {_hidden_input("template_digest", digest)}
+    <label>Name
+      <input name="display_name" required maxlength="4096"
+             value="{esc(template.display_name)}">
+    </label>
+    <label>Description
+      <textarea name="description" rows="3">{html.escape(template.description)}</textarea>
+    </label>
+    <label>Retention hours
+      <input name="retention_hours" type="number" min="1"
+             value="{template.retention_hours}" required>
+    </label>
+    <label>Maximum episodes
+      <input name="max_episodes" type="number" min="1"
+             value="{template.max_episodes}" required>
+    </label>
+    <label>Minimum duration (seconds)
+      <input name="min_duration_seconds" type="number" min="0"
+             value="{policy.default_min_seconds}" required>
+    </label>
+    <label>Maximum duration (seconds)
+      <input name="max_duration_seconds" type="number" min="1"
+             value="{policy.default_max_seconds}" required>
+    </label>
+    <button class="button button-primary" type="submit">Save owner template</button>
+  </form>
+  {delete_control}
+</details>
+"""
 
 
 def single_form_value(
@@ -658,15 +762,12 @@ def _custom_draft_card(
         else status_badge("Draft", tone="muted")
     )
     selected_sources = tuple(source for source in sources if source.id in draft.default_source_ids)
-    eligible_sources = len(selected_sources) == len(draft.default_source_ids) and all(
-        source.enabled for source in selected_sources
+    eligible_sources = len(selected_sources) == len(draft.default_source_ids) and (
+        any(source.enabled for source in selected_sources)
+        if draft.portable_metadata is not None
+        else all(source.enabled for source in selected_sources)
     )
-    if draft.portable_metadata is not None:
-        publish = (
-            '<p class="notice">Imported portable draft: edit/export only; '
-            "Spotify activation is blocked.</p>"
-        )
-    elif referenced:
+    if referenced:
         publish = '<p class="muted">This draft already has a managed Spotify destination.</p>'
     elif draft.hidden:
         publish = '<p class="muted">Unhide and save this draft before publishing.</p>'
@@ -680,6 +781,13 @@ def _custom_draft_card(
         source_fields = "".join(
             _hidden_input("source_id", str(source_id)) for source_id in draft.default_source_ids
         )
+        imported_confirmation = (
+            '<label><input type="checkbox" name="confirm_imported_new" value="1" required>'
+            "I confirm that this creates a NEW Spotify playlist. It will NOT recover "
+            "or overwrite the original Spotify destination.</label>"
+            if draft.portable_metadata is not None
+            else ""
+        )
         publish = f"""
 <form method="post" action="/admin/playlists/activate">
   {_hidden_input("csrf_token", csrf_token)}
@@ -690,6 +798,7 @@ def _custom_draft_card(
   {_hidden_input("min_duration_minutes", str(draft.min_duration_seconds // 60))}
   {_hidden_input("max_duration_minutes", str(draft.max_duration_seconds // 60))}
   {source_fields}
+  {imported_confirmation}
   <p class="muted">Creates a public Spotify playlist with initial project attribution;
      attempts to upload the selected cover once. Later image changes require
      the separate Apply Spotify metadata &amp; cover action.</p>
@@ -702,6 +811,29 @@ def _custom_draft_card(
         target_id=str(draft.id),
         active_on_spotify=False,
     )
+    relink = ""
+    if (
+        draft.portable_metadata is not None
+        and not referenced
+        and not draft.hidden
+        and provisioning_intent is None
+        and spotify_connected
+    ):
+        relink = f"""
+<form method="post" action="/admin/playlists/relink">
+  {_hidden_input("csrf_token", csrf_token)}
+  {_hidden_input("template_id", str(draft.id))}
+  <label>Existing Spotify playlist ID (22 characters; enter manually)
+    <input name="destination_id" pattern="[A-Za-z0-9]{{22}}"
+           minlength="22" maxlength="22" required autocomplete="off">
+  </label>
+  <label><input type="checkbox" name="confirm_existing" value="1" required>
+    I have checked this existing Spotify playlist ID. Verify ownership and
+    matching playlist name, then link it locally PAUSED. Do not create a new
+    playlist or change anything in Spotify.</label>
+  <button class="button" type="submit">Link existing Spotify playlist (paused)</button>
+</form>
+"""
     editor = (
         imported_draft_editor(draft, csrf_token)
         if draft.portable_metadata is not None
@@ -728,6 +860,7 @@ def _custom_draft_card(
   {portable_controls("draft", str(draft.id), draft.portable_id)}
   {upload_form}
   {publish}
+  {relink}
   {delete_control}
 </article>
 """

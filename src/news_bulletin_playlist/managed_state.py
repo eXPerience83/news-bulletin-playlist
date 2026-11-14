@@ -721,7 +721,8 @@ def serialize_managed_state(
     _validate_overrides(state.source_overrides, catalog)
     _validate_portable_ids(state)
     if state.schema_version < IMPORTED_PLAYLIST_SCHEMA_VERSION and any(
-        t.portable_metadata is not None or t.duration_exceptions for t in state.templates
+        t.portable_metadata is not None or t.duration_exceptions or t.owner_template_id is not None
+        for t in state.templates
     ):
         raise ManagedStateError("Imported playlist data requires explicit schema v10")
     if state.schema_version < INSTALLED_SOURCES_SCHEMA_VERSION and any(
@@ -849,6 +850,8 @@ def _serialize_local_template(
     if schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION:
         result["portable_metadata"] = item.portable_metadata
         result["duration_exceptions"] = [exception_payload(e) for e in item.duration_exceptions]
+        if item.owner_template_id is not None:
+            result["owner_template_id"] = str(item.owner_template_id)
     return result
 
 
@@ -875,7 +878,7 @@ def _parse_local_template(
         }
         | ({"portable_id"} if source_schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION else set())
         | (
-            {"portable_metadata", "duration_exceptions"}
+            {"portable_metadata", "duration_exceptions", "owner_template_id"}
             if source_schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION
             else set()
         ),
@@ -933,6 +936,12 @@ def _parse_local_template(
                 )
                 if source_schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION
                 else ()
+            ),
+            owner_template_id=(
+                PlaylistId(_nonempty_string(data["owner_template_id"], path))
+                if source_schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION
+                and "owner_template_id" in data
+                else None
             ),
         )
     except ValueError, KeyError, TypeError:

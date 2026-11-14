@@ -30,6 +30,7 @@ from news_bulletin_playlist.portable_playlist_metadata import validate_metadata
 _LOCAL_ID = re.compile(r"custom_[a-z0-9][a-z0-9_]{0,55}\Z")
 _LANGUAGE = re.compile(r"[a-z]{2,3}(?:-(?:[A-Z]{2}|[0-9]{3}))?\Z")
 _COUNTRY = re.compile(r"[A-Z]{2}\Z")
+_OWNER_REF_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 MAX_LOCAL_TEMPLATE_NAME = 100
 MAX_LOCAL_TEMPLATE_DESCRIPTION = 200
 MAX_LOCAL_TEMPLATE_SOURCES = 50
@@ -66,6 +67,7 @@ class LocalPlaylistTemplate:
     portable_id: str | None = None
     portable_metadata: str | None = None
     duration_exceptions: tuple[DurationPolicyException, ...] = ()
+    owner_template_id: PlaylistId | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -88,6 +90,13 @@ class LocalPlaylistTemplate:
             raise LocalPlaylistTemplateError("invalid playlist duration exceptions")
         if not isinstance(self.id, str) or _LOCAL_ID.fullmatch(self.id) is None:
             raise LocalPlaylistTemplateError("invalid custom playlist template id")
+        if self.owner_template_id is not None and (
+            not isinstance(self.owner_template_id, str)
+            or _OWNER_REF_ID.fullmatch(self.owner_template_id) is None
+            or self.owner_template_id == self.id
+            or self.portable_id is None
+        ):
+            raise LocalPlaylistTemplateError("invalid linked owner playlist template")
         if (
             not isinstance(self.display_name, str)
             or not self.display_name.strip()
@@ -215,6 +224,8 @@ def effective_playlist_templates(
         item.__post_init__()
         if item.id in built_in_ids or item.id in seen:
             raise LocalPlaylistTemplateError("duplicate or built-in playlist template id")
+        if item.owner_template_id is not None and item.owner_template_id not in built_in_ids:
+            raise LocalPlaylistTemplateError("linked owner playlist template is missing")
         if item.cover_id not in allowed_covers and not is_uploaded_cover_id(item.cover_id):
             raise LocalPlaylistTemplateError("unknown bundled playlist cover")
         if any(source_id not in source_ids for source_id in item.default_source_ids):

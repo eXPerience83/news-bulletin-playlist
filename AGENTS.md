@@ -16,6 +16,21 @@ Instructions for AI coding/review agents working in this repository.
 - Do not use `git clean -fd`, `git clean -fdx` or `git reset --hard` unless the repository root and impact have been explicitly verified and the task genuinely requires it.
 - Work on the requested feature/issue branch. Do not push directly to `main` and do not merge unless explicitly authorized.
 
+## Startup inspection for a forward-only cutover (#630)
+
+When `NEWS_PLAYLIST_STARTUP_INSPECTION=1` is set, a private durable hold marker
+must be published before any v6-v10 -> v11 conversion or Spotify cycle; it must
+survive restart even when the env setting is absent. Never automatically start,
+wake or reconcile a scheduler, finalize uncertain provisioning or accept Admin
+configuration/provider POST/OAuth writes while this process is held. Only the
+existing session login/logout POST routes may proceed to provide authenticated
+read-only inspection after a restart. All GET status and Admin views
+must disclose held/not-production-ready status; healthcheck is only liveness.
+Release requires the exact current v11 SHA-256 and a fixed explicit CLI
+acknowledgment under the state lock; a running held process never releases
+itself. Do not invent a clock timeout or a readback-based guarantee against
+an already dispatched HTTP write. The owner does not require a private backup.
+
 ## Required local validation
 
 For normal source changes, run the repository gates with Python 3.15:
@@ -128,9 +143,15 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   Imported provenance/exceptions require explicit schema v10 adoption, not a silent v9
   extension. Reads/exports/previews/legacy saves do not adopt v10; all later mutations
   preserve it. Pre-v10 images need a matching backup for rollback. Imported drafts keep
-  exact seconds/legacy policies and are edit/export only; activation must be rejected
-  before OAuth. On ambiguous state saves read back once; never retry blindly. Safe
-  unreferenced prepared assets can remain and be verified/reused on a fresh preview.
+  exact seconds/legacy policies. ZIP import itself remains provider-free, but a
+  separate, CSRF-protected activation may create a NEW Spotify destination only
+  with explicit operator confirmation and a byte-precise match to the saved
+  draft (sources, artwork, text and second-based bounds). No imported metadata
+  grants ownership of an existing remote playlist ID. Existing-destination
+  relinking requires a separate reviewed ownership-verification workflow (#634).
+  Unconfirmed activation must be rejected before OAuth. On ambiguous state saves
+  read back once; never retry blindly. Safe unreferenced prepared assets can
+  remain and be verified/reused on a fresh preview.
 - One engine can drive multiple playlists, countries and languages.
 - The authoritative production architecture is Spotify-first. Runtime playlist decisions must not
   depend on RSS collection, RSS-native identities, RSS-to-Spotify matching or PENDING/AMBIGUOUS
@@ -209,7 +230,12 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 
 - Owner decision 2026-10-31: migration to v11 is forward-only and BREAKING (no supported downgrade); old-image rollback and full ACL snapshot rehearsal are not release gates. Keep v11 atomic, retain legacy bytes inert, fail closed on corrupt/newer state, test preservation of all installed destinations and provider-free upgrade. The isolated v11 writer must not be wired into startup until all legacy reads/writes are replaced consistently. Never touch deployed TrueNAS or Spotify without explicit operator deployment authorization.
 
-- Once the v11 runtime adapter is active, use only `managed-state-v11.json` for runtime/Admin edits and compile against the frozen per-installation catalog. Never silently read/write old legacy state if v11 exists. No downgrade support; preserve old bytes for incident diagnosis. For genuinely fresh installs, do not implicitly provision Spotify playlists or auto-run provider operations.
+- Forward-only v11 conversion must persist byte-identical inherited bundled JPEGs and
+  their original attribution to the owner-only, hash-checked /data asset inventory
+  before the authority marker, and fail closed on missing/corrupt assets. Cover IDs,
+  managed playlists and provider metadata must not be changed by this preparation.
+  Do not silently fall back to later image assets after an inherited asset fails.
+- Once the v11 runtime adapter is active, use only `managed-state-v11.json` for runtime/Admin edits and compile against the active catalog decoded from its persisted owner inventory, not the current image. The historical catalog and legacy bytes are immutable forensic evidence. Full reference-safe historical source/template CRUD and versioned post-migration edit validation (#633) are not yet implemented; do not claim they are. Never silently read/write old legacy state if v11 exists. No downgrade support. For genuinely fresh installs, do not implicitly provision Spotify playlists or auto-run provider operations. During inspection hold, GET handlers must use read-only snapshots and never finalize pending provisioning.
 
 ## Documentation and external contracts
 

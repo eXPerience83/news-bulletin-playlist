@@ -51,6 +51,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     effective_sources,
 )
+from news_bulletin_playlist.migrated_covers import MigratedCoverError
 from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.playlist_bundle import PlaylistBundleError
@@ -58,12 +59,15 @@ from news_bulletin_playlist.playlist_import import PlaylistImportError, Playlist
 from news_bulletin_playlist.playlist_import_web import (
     imported_draft_editor,
     preview_page,
+    preview_v2_page,
     result_page,
+    result_v2_page,
     upload_page,
 )
 from news_bulletin_playlist.portable_playlist_metadata import parse_exception, strict_json
 from news_bulletin_playlist.portable_playlists import (
     MAX_PLAYLIST_ZIP_BYTES,
+    MAX_PLAYLIST_ZIP_V2_BYTES,
     PlaylistExportError,
     PlaylistExportService,
     PortableCoverLoader,
@@ -101,6 +105,7 @@ from news_bulletin_playlist.source_import import (
 )
 from news_bulletin_playlist.source_import_web import (
     MAX_SOURCE_IMPORT_MULTIPART_BYTES,
+    SourceImportUploadTooLarge,
     parse_source_import_upload,
     render_source_import_preview,
     render_source_import_result,
@@ -125,9 +130,11 @@ from news_bulletin_playlist.spotify_metrics import (
     SpotifyRequestMetricsSnapshot,
 )
 from news_bulletin_playlist.v11_managed_adapter import (
+    ForwardOnlyManagedStateStore,
     open_managed_state_store,
     open_managed_state_store_readonly,
 )
+from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.web_ui import WEB_UI_STYLES, BadgeTone, status_badge
 
 
@@ -177,11 +184,25 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                         )
                         if draft is None or draft.portable_metadata is None:
                             raise ValueError
+                        hold_notice = (
+                            '<div class="notice" role="status">'
+                            "Startup inspection hold is active. "
+                            "Imported draft edits and Spotify writes are locked.</div>"
+                            if self.inspection_hold
+                            else ""
+                        )
                         page = render_admin_shell(
                             title="Edit imported draft",
                             active_tab="playlists",
-                            intro="Local portable configuration; activation is blocked.",
-                            body_html=imported_draft_editor(draft, security.issue_csrf_token()),
+                            intro=(
+                                "Local portable draft. NEW Spotify creation requires "
+                                "confirmation; EXISTING destination relinking requires "
+                                "ownership verification."
+                            ),
+                            body_html=(
+                                hold_notice
+                                + imported_draft_editor(draft, security.issue_csrf_token())
+                            ),
                         )
                     self._reply(HTTPStatus.OK, page)
                 except ValueError, ManagedStateError, OSError:
@@ -196,7 +217,12 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 if parsed.query or parsed.fragment:
                     self._source_error(HTTPStatus.BAD_REQUEST, "Invalid playlist import request")
                 else:
-                    self._reply(HTTPStatus.OK, upload_page(security.issue_csrf_token()))
+                    self._reply(
+                        HTTPStatus.OK,
+                        upload_page(
+                            security.issue_csrf_token(), inspection_hold=self.inspection_hold
+                        ),
+                    )
             return
         if parsed.path in {"/admin/playlists/export.zip", "/admin/playlists/portable/prepare"}:
             self._serve_portable_playlist(parsed.path, parsed.query)
@@ -251,6 +277,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        # Local login/logout sessions are necessary to reach read-only Admin
+        # after a restart; all configuration and provider writes remain locked.
+        if self.inspection_hold and self.path not in {"/admin/login", "/admin/logout"}:
+            self._inspection_locked()
+            return
         try:
             path = urllib.parse.urlsplit(self.path).path
         except ValueError:
@@ -259,6 +290,8 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if path in {
             "/admin/playlists/import/preview",
             "/admin/playlists/import/apply",
+            "/admin/playlists/import/v2/preview",
+            "/admin/playlists/import/v2/apply",
             "/admin/playlists/imported/update",
         }:
             self._handle_playlist_import(path)
@@ -291,6 +324,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         if path == "/admin/sources/delete":
             self._handle_source_delete()
             return
+        if path == "/admin/sources/retired/cleanup":
+            self._handle_retired_source_cleanup()
+            return
         super().do_POST()
 
     def _handle_playlist_import(self, path: str) -> None:
@@ -312,7 +348,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 raise ValueError("Invalid playlist import headers")
             preview = path.endswith("/preview")
             edit = path.endswith("/update")
-            limit = MAX_PLAYLIST_ZIP_BYTES + 8192 if preview else 2 * 1024 * 1024 if edit else 4096
+            v2 = path.startswith("/admin/playlists/import/v2/")
+            document_limit = MAX_PLAYLIST_ZIP_V2_BYTES if v2 else MAX_PLAYLIST_ZIP_BYTES
+            limit = document_limit + 8192 if preview else 2 * 1024 * 1024 if edit else 4096
             length = int(lengths[0])
             if not 0 < length <= limit:
                 self.close_connection = True
@@ -334,7 +372,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 token, document = parse_source_import_upload(
                     types[0],
                     body,
-                    document_limit=MAX_PLAYLIST_ZIP_BYTES,
+                    document_limit=document_limit,
                     content_types=frozenset({"application/zip", "application/octet-stream"}),
                 )
                 if not security.consume_csrf_token(token):
@@ -342,12 +380,21 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                         HTTPStatus.FORBIDDEN, "Administration form validation failed"
                     )
                     return
-                planned = service.preview(document)
-                staged = security.stage_playlist_import(document, planned.sources.fingerprint)
-                self._reply(
-                    HTTPStatus.OK,
-                    preview_page(planned, staged.preview_id, security.issue_csrf_token()),
-                )
+                if v2:
+                    planned_v2 = service.preview_v2(document)
+                    staged = security.stage_playlist_import(
+                        document, planned_v2.sources.fingerprint, version=2
+                    )
+                    page = preview_v2_page(
+                        planned_v2, staged.preview_id, security.issue_csrf_token()
+                    )
+                else:
+                    planned_v1 = service.preview(document)
+                    staged = security.stage_playlist_import(
+                        document, planned_v1.sources.fingerprint
+                    )
+                    page = preview_page(planned_v1, staged.preview_id, security.issue_csrf_token())
+                self._reply(HTTPStatus.OK, page)
                 return
             form = self._read_form(max_bytes=limit)
             if not security.consume_csrf_token(single_form_value(form, "csrf_token")):
@@ -374,9 +421,33 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             preview_id = single_form_value(form, "preview_id")
             if re.fullmatch(r"[A-Za-z0-9_-]{20,128}", preview_id) is None:
                 raise ValueError("Invalid preview reference")
-            context = security.take_playlist_import(preview_id)
+            context = security.take_playlist_import(preview_id, version=2 if v2 else 1)
             if context is None:
                 raise PlaylistImportError("Preview expired or unavailable; upload a new preview")
+            if v2:
+                if set(form) not in (
+                    {"csrf_token", "preview_id", "action"},
+                    {"csrf_token", "preview_id", "action", "confirm"},
+                    {"csrf_token", "preview_id", "action", "confirm", "ack_schema"},
+                ):
+                    raise ValueError("Invalid ZIP v2 confirmation fields")
+                action = single_form_value(form, "action")
+                if action == "cancel":
+                    self._reply(HTTPStatus.OK, result_v2_page(None))
+                    return
+                if (
+                    action != "apply"
+                    or form.get("confirm") != ["1"]
+                    or form.get("ack_schema", ["0"]) not in (["0"], ["1"])
+                ):
+                    raise ValueError("Explicit ZIP v2 confirmation is required")
+                result_v2 = service.apply_v2(
+                    context.document,
+                    context.fingerprint,
+                    confirm_schema=form.get("ack_schema") == ["1"],
+                )
+                self._reply(HTTPStatus.OK, result_v2_page(result_v2))
+                return
             decisions = {
                 int(k.removeprefix("decision_")): v[0]
                 for k, v in form.items()
@@ -413,7 +484,13 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 HTTPStatus.CONFLICT,
                 "Playlist candidate is incompatible with local references or policy",
             )
-        except ManagedStateError, ProvisioningJournalError, OSError, CustomCoverAssetError:
+        except (
+            ManagedStateError,
+            ProvisioningJournalError,
+            OSError,
+            CustomCoverAssetError,
+            MigratedCoverError,
+        ):
             self._source_error(
                 HTTPStatus.SERVICE_UNAVAILABLE,
                 "Playlist configuration or artwork persistence is unavailable; "
@@ -423,6 +500,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             self._source_error(
                 HTTPStatus.SERVICE_UNAVAILABLE,
                 "Too many import previews; cancel one or retry later",
+            )
+        except SourceImportUploadTooLarge:
+            self._source_error(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Playlist ZIP exceeds version size limit"
             )
         except ValueError, RecursionError, OverflowError:
             self._source_error(HTTPStatus.BAD_REQUEST, "Invalid playlist import or draft fields")
@@ -530,21 +611,31 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 query,
                 strict_parsing=True,
                 keep_blank_values=True,
-                max_num_fields=2,
+                max_num_fields=3,
                 errors="strict",
             )
-            if set(values) != {"kind", "id"} or any(len(v) != 1 for v in values.values()):
+            if set(values) not in ({"kind", "id"}, {"kind", "id", "version"}):
                 raise ValueError
+            if any(len(v) != 1 for v in values.values()):
+                raise ValueError
+            version_value = values.get("version", ["1"])[0]
+            if version_value not in {"1", "2"}:
+                raise ValueError
+            if "version" in values and not path.endswith("export.zip"):
+                raise ValueError
+            version = int(version_value)
             kind, object_id = values["kind"][0], values["id"][0]
             service = self._playlist_export_service()
             if path.endswith("export.zip"):
-                identity, payload = service.export(kind, object_id)
+                identity, payload = service.export(kind, object_id, version=version)
                 self._reply(
                     HTTPStatus.OK,
                     payload,
                     content_type="application/zip",
                     extra_headers={
-                        "Content-Disposition": f'attachment; filename="playlist-{identity}-v1.zip"'
+                        "Content-Disposition": (
+                            f'attachment; filename="playlist-{identity}-v{version}.zip"'
+                        )
                     },
                 )
             else:
@@ -562,6 +653,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 )
         except PlaylistExportError as exc:
             self._source_error(HTTPStatus.CONFLICT, str(exc))
+        except MigratedCoverError:
+            self._source_error(
+                HTTPStatus.SERVICE_UNAVAILABLE, "Persisted artwork storage is unavailable"
+            )
         except ManagedStateError, PortableSourceError, CustomCoverAssetError, OSError:
             self._source_error(
                 HTTPStatus.CONFLICT, "Playlist configuration or selected cover is unavailable"
@@ -610,6 +705,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             )
         except PlaylistExportError as exc:
             self._source_error(HTTPStatus.CONFLICT, str(exc))
+        except MigratedCoverError:
+            self._source_error(
+                HTTPStatus.SERVICE_UNAVAILABLE, "Persisted artwork storage is unavailable"
+            )
         except ManagedStateError, OSError:
             self._source_error(HTTPStatus.CONFLICT, "Playlist identity preparation is unavailable")
         except ValueError:
@@ -873,7 +972,12 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         try:
             source_id = values["source_id"][0]
-            if source_id in {item.id for item in service.catalog.sources}:
+            # A JSON/ZIP owner import can update the durable catalog through a
+            # different service instance. Refresh before choosing owner vs overlay.
+            state = service.snapshot()
+            if source_id in {item.id for item in service.catalog.sources} and not isinstance(
+                service.store, ForwardOnlyManagedStateStore
+            ):
                 builtin = service.get_builtin_source(source_id)
                 self._reply(
                     HTTPStatus.OK,
@@ -884,8 +988,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     ),
                 )
                 return
-            source = service.get_custom_source(source_id)
-            state = service.snapshot()
+            source = (
+                service.get_owned_source(source_id)
+                if source_id in {item.id for item in service.catalog.sources}
+                else service.get_custom_source(source_id)
+            )
         except SourceMutationError:
             self._source_error(HTTPStatus.NOT_FOUND, "Custom source not found")
             return
@@ -995,6 +1102,51 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             HTTPStatus.SEE_OTHER,
             b"",
             extra_headers={"Location": "/admin/sources?notice=source-deleted"},
+        )
+
+    def _handle_retired_source_cleanup(self) -> None:
+        """Retry local source journal cleanup only for a durably retired owner ID."""
+        security = self._require_admin()
+        if security is None:
+            return
+        service = self.source_admin_service
+        if service is None:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Source cleanup is unavailable")
+            return
+        try:
+            form = self._read_form()
+            if set(form) != {"csrf_token", "source_id"}:
+                raise ValueError("Invalid retired source cleanup fields")
+            token = single_form_value(form, "csrf_token")
+            if not security.consume_csrf_token(token):
+                self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
+                return
+            source_id = single_form_value(form, "source_id")
+            service.retry_retired_source_cleanup(source_id)
+        except EngineCycleBusyError:
+            self._source_error(HTTPStatus.CONFLICT, "Engine cycle is active; retry shortly")
+            return
+        except SourceMutationError:
+            self._source_error(HTTPStatus.CONFLICT, "Source ID is not retired")
+            return
+        except ManagedStateError, PersistenceError, OSError, RuntimeError:
+            self._source_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Retired source cleanup failed")
+            return
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source cleanup request")
+            return
+        self._admin_diagnostics().emit(
+            occurred_at=datetime.now(UTC),
+            severity=DiagnosticSeverity.INFO,
+            component="admin",
+            event_name="admin_retired_source_cleanup",
+            source_id=source_id,
+            details={"operation": "source_runtime_cleanup", "outcome": "applied"},
+        )
+        self._reply(
+            HTTPStatus.SEE_OTHER,
+            b"",
+            extra_headers={"Location": "/admin/sources?notice=retired-cleanup"},
         )
 
     def _handle_source_mutation(self, path: str) -> None:
@@ -1457,7 +1609,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         service: ManagedAdminService,
         form: Mapping[str, list[str]],
     ) -> str:
-        service.check_activation_allowed(single_form_value(form, "template_id"))
+        confirm_imported_new = form.get("confirm_imported_new") == ["1"]
+        service.check_activation_allowed(
+            single_form_value(form, "template_id"),
+            confirm_imported_new=confirm_imported_new,
+        )
         auth = self.managed_admin_auth
         if auth is None:
             raise ManagedAdminError("Spotify authorization is required to create a playlist")
@@ -1471,6 +1627,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             access_token=access_token,
             min_duration_minutes=duration_minutes_from_form(form, "min"),
             max_duration_minutes=duration_minutes_from_form(form, "max"),
+            confirm_imported_new=confirm_imported_new,
         )
         return str(managed.id)
 
@@ -1511,6 +1668,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             spotify_state=self._spotify_state(),
             status=self.operational_status,
             build_revision=self.build_revision,
+            inspection_hold=self.inspection_hold,
         )
         self._reply(
             HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
@@ -1540,16 +1698,30 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     custom_templates=state.templates,
                 )
             elif synchronization is None:
-                snapshot = service.snapshot()
-                state = service.store.load()
+                snapshot = service.snapshot(readonly=self.inspection_hold)
+                state = (
+                    service.store.load_readonly() if self.inspection_hold else service.store.load()
+                )
                 catalog = service.catalog
             else:
                 with synchronization.hold():
-                    snapshot = service.snapshot()
-                    state = service.store.load()
+                    snapshot = service.snapshot(readonly=self.inspection_hold)
+                    state = (
+                        service.store.load_readonly()
+                        if self.inspection_hold
+                        else service.store.load()
+                    )
                 catalog = service.catalog
             effective_sources(catalog, state)
-        except ManagedStateError, OSError:
+            selected_store = service.store if service is not None else store
+            retired_ids = (
+                parse_v11_operational(
+                    selected_store._expected_bytes
+                ).owner_inventory.retired_source_ids
+                if isinstance(selected_store, ForwardOnlyManagedStateStore)
+                else ()
+            )
+        except ManagedStateError, OSError, ValueError:
             self._reply(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 b"Managed playlist state could not be loaded safely",
@@ -1570,7 +1742,16 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 lan_mode=self._is_lan_admin_mode(),
                 csrf_token=security.issue_csrf_token(),
                 provider_available=service is not None,
+                owner_catalog_editable=(
+                    isinstance(service.store, ForwardOnlyManagedStateStore)
+                    if service is not None
+                    else False
+                ),
+                inspection_hold=self.inspection_hold,
+                retired_source_ids=retired_ids,
                 notice={
+                    "retired-cleanup": "Retired source journals were cleaned locally. "
+                    "The source ID remains permanently reserved.",
                     "source-added": "Custom source added successfully.",
                     "source-updated": "Custom source updated successfully.",
                     "source-enabled": "Custom source enabled successfully.",
@@ -1599,6 +1780,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 display_timezone=self.diagnostic_timezone,
                 timezone_label=self.diagnostic_timezone_label,
                 spotify_metrics=self._spotify_metrics(),
+                inspection_hold=self.inspection_hold,
             ),
         )
 
@@ -1765,6 +1947,7 @@ def _safe_operational_status_page(
     spotify_state: AuthorizationState | None,
     status: OperationalStatus | None,
     build_revision: str = "dev",
+    inspection_hold: bool = False,
 ) -> bytes:
     snapshot = (
         OperationalStatus(configured=False).snapshot() if status is None else status.snapshot()
@@ -1776,6 +1959,9 @@ def _safe_operational_status_page(
     if snapshot.configured:
         engine_label = "Cycle running" if snapshot.running else "Scheduled"
         engine_tone = "accent" if snapshot.running else "success"
+    if inspection_hold:
+        engine_label = "INSPECTION HOLD - Spotify writes suspended"
+        engine_tone = "warning"
 
     cycle = snapshot.last_cycle
     cycle_result = "Not run yet" if cycle is None else ("Success" if cycle.ok else "Failed")
@@ -1792,7 +1978,10 @@ def _safe_operational_status_page(
     runtime_tone: BadgeTone = "success" if ready else "danger"
     overall_label = "Operational"
     overall_tone: BadgeTone = "success"
-    if not ready:
+    if inspection_hold:
+        overall_label = "Operator inspection - NOT production ready"
+        overall_tone = "warning"
+    elif not ready:
         overall_label = "Runtime degraded"
         overall_tone = "danger"
     elif cycle is not None and not cycle.ok:
@@ -1802,6 +1991,14 @@ def _safe_operational_status_page(
         overall_label = "Cycle running"
         overall_tone = "accent"
 
+    inspection_banner = (
+        '<p class="hero-copy" role="alert"><strong>Inspection hold active:</strong> '
+        "the scheduler and all administration writes are suspended. "
+        "The healthcheck only certifies HTTP/storage availability. "
+        "A separate exact-state CLI release and normal restart are required.</p>"
+        if inspection_hold
+        else ""
+    )
     document = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1830,6 +2027,7 @@ def _safe_operational_status_page(
             A read-only view of the engine, Spotify connection, sources and published playlists.
             Detailed failure context stays inside authenticated administration.
           </p>
+          {inspection_banner}
           <p class="hero-copy">
             Pre-release: built-in playlist templates and custom sources are supported;
             creating arbitrary new playlist templates is not available yet.

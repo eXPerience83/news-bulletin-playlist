@@ -26,6 +26,9 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateStore,
     serialize_managed_state,
 )
+from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
+from news_bulletin_playlist.owner_inventory import OwnerInventory
+from news_bulletin_playlist.portable_playlists import PortableCoverLoader
 from news_bulletin_playlist.v11_candidate import build_v11_candidate
 from news_bulletin_playlist.v11_candidate_storage import _locked_root, _read_regular
 from news_bulletin_playlist.v11_operational_codec import (
@@ -35,6 +38,7 @@ from news_bulletin_playlist.v11_operational_codec import (
     build_v11_operational_from_candidate,
     parse_v11_operational,
     update_v11_operational,
+    update_v11_owner_inventory,
 )
 
 V11_OPERATIONAL_FILENAME = "managed-state-v11.json"
@@ -157,6 +161,18 @@ class V11OperationalStore:
                 )
                 if _read_regular(dir_fd, _LEGACY_FILENAME, 12 * 1024 * 1024) != original:
                     raise V11StoreError("legacy state changed during forward migration")
+                inherited_covers = (
+                    {item.definition.cover_id for item in preview.template_snapshots}
+                    | {item.cover_id for item in preview.original_state.playlists}
+                    | {item.cover_id for item in preview.original_state.templates}
+                )
+                # Preserve the *exact* original JPEG and attribution under /data
+                # before the irreversible v11 authority marker can exist.
+                MigratedCoverAssets(self.root).materialize(
+                    inherited_covers, PortableCoverLoader(self.root)
+                )
+                if _read_regular(dir_fd, _LEGACY_FILENAME, 12 * 1024 * 1024) != original:
+                    raise V11StoreError("legacy state changed during artwork preparation")
                 _record_authority(dir_fd)
                 temporary = _write_temporary(dir_fd, next_bytes)
                 try:
@@ -274,4 +290,47 @@ class V11OperationalStore:
                         os.unlink(temporary, dir_fd=dir_fd)
             except OSError as exc:
                 raise V11StoreError("v11 write durability uncertain; inspect before retry") from exc
+            return next_bytes
+
+    def save_owner_inventory(
+        self,
+        inventory: OwnerInventory,
+        *,
+        expected_bytes: bytes,
+        managed_overlay: ManagedState | None = None,
+    ) -> bytes:
+        """CAS owner definitions; never modify the forensic catalog or legacy file."""
+        with _locked_root(self.root) as dir_fd:
+            current = _read_existing(dir_fd)
+            if current is None:
+                raise V11StoreError("v11 is missing; cannot fall back to legacy")
+            if not isinstance(expected_bytes, bytes) or current != expected_bytes:
+                raise V11StoreError("stale v11 edit; reload before saving")
+            try:
+                next_bytes = update_v11_owner_inventory(
+                    current, inventory, managed_overlay=managed_overlay
+                )
+            except V11OperationalError as exc:
+                raise V11StoreError("invalid v11 owner inventory edit") from exc
+            if next_bytes == current:
+                return current
+            try:
+                temporary = _write_temporary(dir_fd, next_bytes)
+                try:
+                    if _read_existing(dir_fd) != current:
+                        raise V11StoreError("v11 changed before atomic owner save")
+                    os.replace(
+                        temporary,
+                        V11_OPERATIONAL_FILENAME,
+                        src_dir_fd=dir_fd,
+                        dst_dir_fd=dir_fd,
+                    )
+                    os.fsync(dir_fd)
+                finally:
+                    with suppress(FileNotFoundError):
+                        os.unlink(temporary, dir_fd=dir_fd)
+            except OSError as exc:
+                raise V11StoreError(
+                    "v11 owner write durability uncertain; inspect before retry"
+                ) from exc
             return next_bytes

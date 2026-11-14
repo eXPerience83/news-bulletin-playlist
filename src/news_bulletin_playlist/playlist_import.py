@@ -6,11 +6,13 @@ import hashlib
 import json
 from dataclasses import dataclass, replace
 
+from news_bulletin_playlist.catalog import PlaylistTemplate
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetStore
 from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTemplate
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningJournal
 from news_bulletin_playlist.managed_state import (
     IMPORTED_PLAYLIST_SCHEMA_VERSION,
+    InstalledSource,
     ManagedState,
     ManagedStateError,
     ManagedStateStore,
@@ -18,8 +20,20 @@ from news_bulletin_playlist.managed_state import (
     same_managed_configuration,
     serialize_managed_state,
 )
-from news_bulletin_playlist.models import CountryCode, LanguageTag, PlaylistId, SourceId
-from news_bulletin_playlist.playlist_bundle import PlaylistBundle, inspect_playlist_bundle
+from news_bulletin_playlist.models import (
+    CountryCode,
+    LanguageTag,
+    PlaylistId,
+    SourceDefinition,
+    SourceId,
+)
+from news_bulletin_playlist.owner_inventory import OwnerInventory
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
+from news_bulletin_playlist.playlist_bundle import (
+    PlaylistBundle,
+    inspect_playlist_bundle,
+    inspect_playlist_bundle_v2,
+)
 from news_bulletin_playlist.portable_playlist_metadata import exception_payload
 from news_bulletin_playlist.portable_playlists import PortableCoverLoader, Synchronization
 from news_bulletin_playlist.portable_sources import (
@@ -32,7 +46,13 @@ from news_bulletin_playlist.source_import import (
     SourceImportRow,
     SourceImportService,
     plan_source_import,
+    retired_source_ids,
     source_import_fingerprint,
+)
+from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
+from news_bulletin_playlist.v11_operational_codec import (
+    parse_v11_operational,
+    update_v11_owner_inventory,
 )
 
 
@@ -61,6 +81,26 @@ class PlaylistImportResult:
     recovered: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class PlaylistV2ImportPlan:
+    """Read-only, fully remapped v2 plan for an explicit offline owner install."""
+
+    bundle: PlaylistBundle
+    sources: SourceImportPreview
+    owner_template: PlaylistTemplate | None
+    selected_source_ids: tuple[SourceId, ...] | None
+    blocked: bool
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlaylistV2ImportResult:
+    owner_template_id: str
+    current_draft_id: str
+    created_sources: int
+    recovered: bool = False
+
+
 class PlaylistImportService:
     def __init__(
         self,
@@ -77,6 +117,266 @@ class PlaylistImportService:
         )
         self.source_service = SourceImportService(store, synchronization, provisioning)
 
+    def preview_v2(self, document: bytes) -> PlaylistV2ImportPlan:
+        """Read-only preview; imported v2 source/template IDs are not installed here."""
+        bundle = inspect_playlist_bundle_v2(document)
+        if not isinstance(self.store, ForwardOnlyManagedStateStore):
+            raise PlaylistImportError("ZIP v2 requires a v11 owner installation")
+        with self.synchronization.hold():
+            state = self.store.load_readonly()
+            return self._preview_v2(bundle, state, self.provisioning.load())
+
+    def _preview_v2(
+        self,
+        bundle: PlaylistBundle,
+        state: ManagedState,
+        pending: ProvisioningIntent | None,
+    ) -> PlaylistV2ImportPlan:
+        """Pure plan under caller-held lock; no nested configuration locks."""
+        assert isinstance(self.store, ForwardOnlyManagedStateStore)
+        assert bundle.template is not None and bundle.template_jpeg is not None
+        sources = effective_sources(self.store.catalog, state)
+        rows = tuple(
+            sorted(
+                (
+                    *plan_source_import(
+                        tuple(item for item in bundle.sources if isinstance(item, PortableSource)),
+                        sources,
+                        retired_ids=retired_source_ids(self.store),
+                    ),
+                    *(
+                        SourceImportRow(item, None, "unsupported")
+                        for item in bundle.sources
+                        if isinstance(item, UnsupportedPortableSource)
+                    ),
+                ),
+                key=lambda item: item.spotify_show_id,
+            )
+        )
+        source_preview = SourceImportPreview(
+            rows,
+            hashlib.sha256(self.store._expected_bytes + repr(pending).encode("utf-8")).hexdigest(),
+            state.schema_version,
+        )
+        if source_preview.unsupported or source_preview.conflicts:
+            return PlaylistV2ImportPlan(
+                bundle,
+                source_preview,
+                None,
+                None,
+                True,
+                "Unsupported or conflicting source definitions require operator review",
+            )
+        # Reuse is safe only for identical definitions that already belong to
+        # the active v11 owner catalog. Overlay-only sources require a separate
+        # audited promotion into owner inventory (never duplicate them).
+        owned_active_ids = {source.id for source in self.store.catalog.sources}
+        if pending is not None or any(
+            row.status not in {"create", "identical", "reuse"}
+            or (row.status in {"identical", "reuse"} and row.local_id not in owned_active_ids)
+            for row in rows
+        ):
+            return PlaylistV2ImportPlan(
+                bundle,
+                source_preview,
+                None,
+                None,
+                True,
+                "ZIP v2 source reuse requires exact existing owner capability records "
+                "and no pending provisioning",
+            )
+        if (
+            any(p.portable_id == bundle.playlist["portable_id"] for p in state.playlists)
+            or any(t.portable_id == bundle.playlist["portable_id"] for t in state.templates)
+            or any(
+                isinstance(raw := json.loads(item.raw_json), dict)
+                and raw.get("portable_id") == bundle.playlist["portable_id"]
+                for item in state.quarantined_templates
+            )
+        ):
+            return PlaylistV2ImportPlan(
+                bundle,
+                source_preview,
+                None,
+                None,
+                True,
+                "Portable identity already exists; do not overwrite a restored playlist",
+            )
+        # All source aliases must have unambiguous local destinations.
+        mapping = {row.incoming.id: row.local_id for row in rows if row.local_id is not None}
+        template = bundle.template
+        occupied = (
+            {str(item.id) for item in self.store.catalog.playlists}
+            | {str(item.id) for item in state.templates}
+            | {str(item.id) for item in state.playlists}
+            | {item.template_id for item in state.quarantined_templates}
+        )
+        if pending is not None:
+            occupied.add(str(pending.template_id))
+        new_id = "custom_" + bundle.playlist["portable_id"].replace("-", "")
+        suffix = 2
+        while new_id in occupied:
+            new_id = f"custom_{bundle.playlist['portable_id'].replace('-', '')}_{suffix}"
+            suffix += 1
+        remapped = replace(
+            template,
+            id=PlaylistId(new_id),
+            cover_id="uploaded_" + hashlib.sha256(bundle.template_jpeg).hexdigest(),
+            default_source_ids=tuple(SourceId(mapping[id_]) for id_ in template.default_source_ids),
+            duration_policy=replace(
+                template.duration_policy,
+                exceptions=tuple(
+                    replace(exception, source_id=SourceId(mapping[exception.source_id]))
+                    for exception in template.duration_policy.exceptions
+                ),
+            ),
+        )
+        selected = tuple(SourceId(mapping[id_]) for id_ in bundle.playlist["source_ids"])
+        candidate = self.source_service.build_candidate(state, rows, pending)
+        available = tuple(item.id for item in effective_sources(self.store.catalog, candidate))
+        OwnerTemplateSet((remapped,)).validate_sources(available)
+        return PlaylistV2ImportPlan(
+            bundle,
+            source_preview,
+            remapped,
+            selected,
+            False,
+            "Ready for confirmed offline owner-template and current-draft installation",
+        )
+
+    def apply_v2(
+        self, document: bytes, fingerprint: str, *, confirm_schema: bool = False
+    ) -> PlaylistV2ImportResult:
+        """Durably install a verified v2 owner template and current local draft in one CAS.
+
+        This offline method never creates/links a Spotify destination. Safe orphan
+        JPEGs may remain after a failed transaction, but partial configuration
+        writes are forbidden.
+        """
+        bundle = inspect_playlist_bundle_v2(document)
+        if not isinstance(self.store, ForwardOnlyManagedStateStore):
+            raise PlaylistImportError("ZIP v2 requires a v11 owner installation")
+        with self.synchronization.hold():
+            state = self.store.load_readonly()
+            if state.schema_version < IMPORTED_PLAYLIST_SCHEMA_VERSION and not confirm_schema:
+                raise PlaylistImportError(
+                    "Explicit schema v10 compatibility acknowledgement is required"
+                )
+            plan = self._preview_v2(bundle, state, self.provisioning.load())
+            if plan.sources.fingerprint != fingerprint:
+                raise PlaylistImportError("V2 owner state changed; request a fresh preview")
+            if plan.blocked or plan.owner_template is None or plan.selected_source_ids is None:
+                raise PlaylistImportError(plan.reason)
+            assert bundle.template_jpeg is not None
+            assert bundle.template_attribution is not None
+            current = parse_v11_operational(self.store._expected_bytes)
+            owner = current.owner_inventory
+            additions = tuple(
+                InstalledSource.from_definition(replace(row.incoming, id=row.local_id))
+                for row in plan.sources.rows
+                if (
+                    isinstance(row.incoming, SourceDefinition)
+                    and row.local_id is not None
+                    and row.status == "create"
+                )
+            )
+            if len(additions) != plan.sources.creates:
+                raise PlaylistImportError("Incomplete ZIP v2 source mapping")
+            source_records = tuple(sorted((*owner.sources, *additions), key=lambda s: str(s.id)))
+            order = owner.source_order.after_records_change(owner.sources, source_records)
+            templates = OwnerTemplateSet((*owner.templates.records, plan.owner_template))
+            templates.validate_sources(order.ids)
+            current_id = PlaylistId(str(plan.owner_template.id) + "_active")
+            if current_id in {item.id for item in state.templates}:
+                raise PlaylistImportError("V2 current draft ID conflicts with an existing draft")
+            mapping = {
+                row.incoming.id: SourceId(row.local_id)
+                for row in plan.sources.rows
+                if isinstance(row.incoming, SourceDefinition) and row.local_id is not None
+            }
+            policy = bundle.playlist["duration_policy"]
+            draft = LocalPlaylistTemplate(
+                id=current_id,
+                portable_id=bundle.playlist["portable_id"],
+                portable_metadata=bundle.metadata,
+                display_name=bundle.playlist["display_name"],
+                description=bundle.playlist["description"],
+                default_source_ids=plan.selected_source_ids,
+                cover_id="uploaded_" + hashlib.sha256(bundle.jpeg).hexdigest(),
+                countries=tuple(CountryCode(x) for x in bundle.playlist["countries"]),
+                languages=tuple(LanguageTag(x) for x in bundle.playlist["languages"]),
+                retention_hours=bundle.playlist["retention_hours"],
+                max_episodes=bundle.playlist["max_episodes"],
+                min_duration_seconds=policy["min_seconds"],
+                max_duration_seconds=policy["max_seconds"],
+                duration_exceptions=tuple(
+                    replace(exception, source_id=mapping[exception.source_id])
+                    for exception in bundle.exceptions
+                ),
+                hidden=(
+                    bundle.playlist["configuration"]["hidden"]
+                    if bundle.playlist["kind"] == "draft"
+                    else False
+                ),
+                owner_template_id=plan.owner_template.id,
+            )
+            overlay = replace(
+                state,
+                schema_version=max(state.schema_version, IMPORTED_PLAYLIST_SCHEMA_VERSION),
+                templates=tuple(sorted((*state.templates, draft), key=lambda t: str(t.id))),
+            )
+            credits = dict(owner.cover_attributions)
+            template_cover_id = plan.owner_template.cover_id
+            encoded = (
+                json.dumps(
+                    bundle.template_attribution,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+            if template_cover_id in credits and credits[template_cover_id] != encoded:
+                raise PlaylistImportError("Conflicting template cover attribution")
+            credits[template_cover_id] = encoded
+            inventory = replace(
+                owner,
+                sources=source_records,
+                source_order=order,
+                templates=templates,
+                cover_attributions=tuple(sorted(credits.items())),
+            )
+            # All policy/capabilities validate in memory before publishing artwork.
+            update_v11_owner_inventory(
+                self.store._expected_bytes, inventory, managed_overlay=overlay
+            )
+            self.covers.store.install_canonical(bundle.jpeg)
+            self.covers.store.install_canonical(bundle.template_jpeg)
+            try:
+                self.store.save_owner_bundle(inventory, overlay)
+            except ManagedStateError:
+                try:
+                    observed = parse_v11_operational(self.store._owner.load_bytes())
+                except OSError, ValueError:
+                    raise PlaylistImportError(
+                        "ZIP v2 import outcome uncertain; inspect v11 before retrying"
+                    ) from None
+                if observed.owner_inventory == inventory and observed.managed_overlay == overlay:
+                    self.store.load_readonly()
+                    return PlaylistV2ImportResult(
+                        str(plan.owner_template.id), str(current_id), len(additions), True
+                    )
+                if observed.owner_inventory == owner and observed.managed_overlay == state:
+                    raise PlaylistImportError(
+                        "ZIP v2 configuration not committed; uploaded artwork can be reused"
+                    ) from None
+                raise PlaylistImportError(
+                    "ZIP v2 outcome is ambiguous; inspect v11 authority"
+                ) from None
+            return PlaylistV2ImportResult(
+                str(plan.owner_template.id), str(current_id), len(additions)
+            )
+
     def preview(self, document: bytes) -> PlaylistImportPreview:
         bundle = inspect_playlist_bundle(document)
         with self.synchronization.hold():
@@ -91,7 +391,9 @@ class PlaylistImportService:
             sorted(
                 (
                     *plan_source_import(
-                        tuple(r for r in bundle.sources if isinstance(r, PortableSource)), sources
+                        tuple(r for r in bundle.sources if isinstance(r, PortableSource)),
+                        sources,
+                        retired_ids=retired_source_ids(self.store),
                     ),
                     *(
                         SourceImportRow(r, None, "unsupported")
@@ -104,7 +406,13 @@ class PlaylistImportService:
         )
         source_preview = SourceImportPreview(
             rows,
-            source_import_fingerprint(state, sources, pending, self.store.catalog),
+            source_import_fingerprint(
+                state,
+                sources,
+                pending,
+                self.store.catalog,
+                retired_ids=retired_source_ids(self.store),
+            ),
             state.schema_version,
         )
         if source_preview.unsupported:
@@ -233,7 +541,7 @@ class PlaylistImportService:
             source_preview,
             candidate,
             "create",
-            "Create one editable local draft; Spotify activation is blocked",
+            "Create an editable local draft; a NEW Spotify destination needs explicit activation",
         )
 
     def apply(
@@ -246,7 +554,11 @@ class PlaylistImportService:
             state = self.store.load_readonly()
             pending = self.provisioning.load()
             actual_fingerprint = source_import_fingerprint(
-                state, effective_sources(self.store.catalog, state), pending, self.store.catalog
+                state,
+                effective_sources(self.store.catalog, state),
+                pending,
+                self.store.catalog,
+                retired_ids=retired_source_ids(self.store),
             )
             if actual_fingerprint != fingerprint:
                 raise PlaylistImportError(
@@ -272,11 +584,72 @@ class PlaylistImportService:
                 templates=tuple(sorted((*state.templates, preview.draft), key=lambda t: t.id)),
             )
             serialize_managed_state(candidate, catalog=self.store.catalog)
+            previous_owner: OwnerInventory | None = None
+            next_owner: OwnerInventory | None = None
+            additions: tuple[InstalledSource, ...] = ()
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                current = parse_v11_operational(self.store._expected_bytes)
+                if current.owner_sources_complete:
+                    previous_owner = current.owner_inventory
+                    additions = tuple(
+                        InstalledSource.from_definition(replace(row.incoming, id=row.local_id))
+                        for row in preview.sources.rows
+                        if (
+                            row.status == "create"
+                            and isinstance(row.incoming, SourceDefinition)
+                            and row.local_id is not None
+                        )
+                    )
+                    records = tuple(
+                        sorted((*previous_owner.sources, *additions), key=lambda s: str(s.id))
+                    )
+                    next_owner = replace(
+                        previous_owner,
+                        sources=records,
+                        source_order=previous_owner.source_order.after_records_change(
+                            previous_owner.sources, records
+                        ),
+                    )
+                    candidate = replace(candidate, sources=state.sources)
+                    update_v11_owner_inventory(
+                        self.store._expected_bytes, next_owner, managed_overlay=candidate
+                    )
             CustomCoverAssetStore(self.covers.store.root).install_canonical(bundle.jpeg)
             creates = preview.sources.creates
             try:
-                self.store.save(candidate)
+                if isinstance(self.store, ForwardOnlyManagedStateStore) and next_owner is not None:
+                    self.store.install_owner_sources(additions, overlay=candidate)
+                else:
+                    self.store.save(candidate)
             except OSError, ManagedStateError:
+                if (
+                    isinstance(self.store, ForwardOnlyManagedStateStore)
+                    and previous_owner is not None
+                    and next_owner is not None
+                ):
+                    try:
+                        observed_owner = parse_v11_operational(self.store._owner.load_bytes())
+                    except OSError, ValueError:
+                        raise PlaylistImportError(
+                            "Import outcome is uncertain; inspect v11 before retrying"
+                        ) from None
+                    if (
+                        observed_owner.owner_inventory == next_owner
+                        and observed_owner.managed_overlay == candidate
+                    ):
+                        self.store.load_readonly()
+                        return PlaylistImportResult(str(preview.draft.id), creates, True, True)
+                    if (
+                        observed_owner.owner_inventory == previous_owner
+                        and observed_owner.managed_overlay == state
+                    ):
+                        raise PlaylistImportError(
+                            "Import was not committed; previous configuration is intact. "
+                            "Prepared artwork can be safely reused"
+                        ) from None
+                    raise PlaylistImportError(
+                        "Import outcome is uncertain; inspect v11 before retrying"
+                    ) from None
                 try:
                     observed = self.store.load_readonly()
                 except OSError, ManagedStateError:

@@ -17,6 +17,7 @@ from _source_admin_http_fixtures import _server
 
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import ManagedStateStore
+from news_bulletin_playlist.migrated_covers import MigratedCoverError
 from news_bulletin_playlist.portable_playlists_web import portable_controls
 
 EXPORT = "/admin/playlists/export.zip?kind=managed&id=spain_spanish_news"
@@ -217,3 +218,23 @@ def test_tampered_identity_confirmations_do_not_write(tmp_path, mutation):
         status, _, _ = _request(server, "POST", POST, cookie=cookie, form=_form(page) | mutation)
         assert status in {400, 409}
         assert store.path.read_bytes() == original
+
+
+def test_corrupt_persisted_cover_yields_server_error_and_no_leak(tmp_path, monkeypatch):
+    with _server(tmp_path) as (server, client, store):
+        store.save(_ready())
+        cookie = _login(server)
+        before = _files(tmp_path)
+
+        def corrupt(*_args, **_kwargs):
+            raise MigratedCoverError("secret internal asset location")
+
+        monkeypatch.setattr(
+            "news_bulletin_playlist.portable_playlists.MigratedCoverAssets.load", corrupt
+        )
+        status, headers, body = _request(server, "GET", EXPORT, cookie=cookie)
+        assert status == HTTPStatus.SERVICE_UNAVAILABLE
+        assert "Content-Disposition" not in headers
+        assert b"secret" not in body and not body.startswith(b"PK\x03\x04")
+        assert before == _files(tmp_path)
+        assert client.calls == []

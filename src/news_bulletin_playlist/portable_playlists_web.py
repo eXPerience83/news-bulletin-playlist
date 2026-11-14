@@ -8,11 +8,17 @@ from news_bulletin_playlist.admin_web import render_admin_shell
 
 def portable_controls(kind: str, object_id: str, identity: str | None) -> str:
     query = urllib.parse.urlencode({"kind": kind, "id": object_id})
-    path = "export.zip" if identity else "portable/prepare"
-    label = "Export portable ZIP" if identity else "Prepare portable export identity"
+    if not identity:
+        return (
+            f'<p><a class="button" href="/admin/playlists/portable/prepare?'
+            f'{html.escape(query, quote=True)}">Prepare portable export identity</a></p>'
+        )
+    v2_query = urllib.parse.urlencode({"kind": kind, "id": object_id, "version": 2})
     return (
-        f'<p><a class="button" href="/admin/playlists/{path}?'
-        f'{html.escape(query, quote=True)}">{label}</a></p>'
+        f'<p><a class="button" href="/admin/playlists/export.zip?'
+        f'{html.escape(v2_query, quote=True)}">Export complete ZIP v2</a> '
+        f'<a class="button" href="/admin/playlists/export.zip?'
+        f'{html.escape(query, quote=True)}">Legacy ZIP v1</a></p>'
     )
 
 
