@@ -784,7 +784,10 @@ class SourceAdminService:
                 inventory = parse_v11_operational(self.store._expected_bytes).owner_inventory
                 if source_id not in inventory.retired_source_ids:
                     raise SourceMutationError("Source ID is not retired")
-                if any(source.id == source_id for source in effective_sources(self.store.catalog, state)):
+                active_ids = {
+                    source.id for source in effective_sources(self.store.catalog, state)
+                }
+                if source_id in active_ids:
                     raise SourceMutationError("Retired source ID is unexpectedly active")
                 self.first_journal.clear_source_runtime_state(SourceId(source_id))
                 self.detector_journal.clear_source_state(SourceId(source_id))

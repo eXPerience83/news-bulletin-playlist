@@ -121,7 +121,8 @@ def render_sources_page(
             + (
                 '<form method="post" action="/admin/sources/retired/cleanup">'
                 f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
-                f'<input type="hidden" name="source_id" value="{html.escape(str(source_id), quote=True)}">'
+                f'<input type="hidden" name="source_id" '
+                f'value="{html.escape(str(source_id), quote=True)}">'
                 '<button class="button" type="submit">Retry local cleanup</button></form>'
                 if not inspection_hold
                 else '<span class="muted">Cleanup locked during inspection hold</span>'
