@@ -1115,8 +1115,14 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             return
         try:
             form = self._read_form()
-            if set(form) != {"csrf_token", "source_id"}:
+            if set(form) not in (
+                {"csrf_token", "source_id"},
+                {"csrf_token", "source_id", "retired_page"},
+            ):
                 raise ValueError("Invalid retired source cleanup fields")
+            page_text = single_form_value(form, "retired_page") if "retired_page" in form else "1"
+            if re.fullmatch(r"[1-9][0-9]{0,3}", page_text) is None:
+                raise ValueError("Invalid retired source page")
             token = single_form_value(form, "csrf_token")
             if not security.consume_csrf_token(token):
                 self._source_error(HTTPStatus.FORBIDDEN, "Administration form validation failed")
@@ -1146,7 +1152,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         self._reply(
             HTTPStatus.SEE_OTHER,
             b"",
-            extra_headers={"Location": "/admin/sources?notice=retired-cleanup"},
+            extra_headers={
+                "Location": f"/admin/sources?notice=retired-cleanup&retired_page={page_text}"
+            },
         )
 
     def _handle_source_mutation(self, path: str) -> None:
@@ -1682,6 +1690,23 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         service = self.managed_admin_service
         synchronization = self.configuration_synchronization
         try:
+            if len(query) > 256:
+                raise ValueError
+            params = urllib.parse.parse_qs(
+                query, keep_blank_values=True, max_num_fields=2, errors="strict"
+            )
+            if set(params) - {"notice", "retired_page"} or any(
+                len(values) != 1 for values in params.values()
+            ):
+                raise ValueError
+            page_text = params.get("retired_page", ["1"])[0]
+            if re.fullmatch(r"[1-9][0-9]{0,3}", page_text) is None:
+                raise ValueError
+            retired_page = int(page_text)
+        except ValueError:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid source page selection")
+            return
+        try:
             if service is None:
                 # With no OAuth, read the state but never finalize provisioning,
                 # activate a migration or call Spotify.
@@ -1728,10 +1753,12 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 content_type="text/plain; charset=utf-8",
             )
             return
+        if retired_page > max(1, (len(retired_ids) + 24) // 25):
+            self._source_error(HTTPStatus.BAD_REQUEST, "Retired source page is unavailable")
+            return
         status = self.operational_status
         last_cycle = None if status is None else status.snapshot().last_cycle
-        notice_values = urllib.parse.parse_qs(query, keep_blank_values=True).get("notice", [])
-        notice_key = notice_values[0] if len(notice_values) == 1 else ""
+        notice_key = params.get("notice", [""])[0]
         self._reply(
             HTTPStatus.OK,
             render_sources_page(
@@ -1749,6 +1776,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 ),
                 inspection_hold=self.inspection_hold,
                 retired_source_ids=retired_ids,
+                retired_page=retired_page,
                 notice={
                     "retired-cleanup": "Retired source journals were cleaned locally. "
                     "The source ID remains permanently reserved.",

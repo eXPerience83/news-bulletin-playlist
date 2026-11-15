@@ -334,3 +334,99 @@ def test_retired_source_cleanup_retry_over_authenticated_admin_without_spotify(
         finally:
             handler.inspection_hold = False
         assert not client.calls
+
+
+def test_retired_source_pages_reach_all_ids_and_preserve_cleanup_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "paginated"
+    root.mkdir()
+    store = open_managed_state_store(root)
+    state = store.load_readonly()
+    from news_bulletin_playlist.owner_inventory import OwnerInventory
+
+    inventory = parse_v11_operational(
+        (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    ).owner_inventory
+    assert isinstance(inventory, OwnerInventory)
+    retired = tuple(SourceId(f"retired_{index:03d}") for index in range(61))
+    store.save_owner_bundle(replace(inventory, retired_source_ids=retired), state)
+    before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+
+    with _server(root) as (server, client, _legacy):
+        handler = server.RequestHandlerClass
+        service = handler.source_admin_service
+        managed = handler.managed_admin_service
+        assert service is not None and managed is not None
+        service.store = managed.store = store
+        service.catalog = managed.catalog = store.catalog
+        assert service.detector_journal is not None
+        called: list[SourceId] = []
+        original_clear = service.detector_journal.clear_source_state
+
+        def record_cleanup(source_id: SourceId) -> None:
+            called.append(source_id)
+            original_clear(source_id)
+
+        monkeypatch.setattr(service.detector_journal, "clear_source_state", record_cleanup)
+        cookie = _login(server)
+
+        status, _, first = _request(server, "GET", "/admin/sources", cookie=cookie)
+        assert status == 200
+        assert b"Page 1 of 3" in first
+        assert b"retired_000" in first and b"retired_024" in first
+        assert b"retired_025" not in first and b"retired_060" not in first
+        assert b"/admin/sources?retired_page=2" in first
+
+        status, _, second = _request(
+            server, "GET", "/admin/sources?retired_page=2", cookie=cookie
+        )
+        assert status == 200
+        assert b"Page 2 of 3" in second
+        assert b"retired_025" in second and b"retired_049" in second
+        assert b"retired_050" not in second
+        assert b"/admin/sources?retired_page=1" in second
+        assert b"/admin/sources?retired_page=3" in second
+
+        status, _, last = _request(
+            server, "GET", "/admin/sources?retired_page=3", cookie=cookie
+        )
+        assert status == 200
+        assert b"Page 3 of 3" in last
+        assert b"retired_050" in last and b"retired_060" in last
+        assert b"retired_049" not in last
+        assert b'name="retired_page" value="3"' in last
+        assert b"/admin/sources?retired_page=4" not in last
+
+        status, headers, _ = _request(
+            server,
+            "POST",
+            "/admin/sources/retired/cleanup",
+            cookie=cookie,
+            form={
+                "csrf_token": _csrf(last),
+                "source_id": "retired_060",
+                "retired_page": "3",
+            },
+        )
+        assert status == 303
+        assert headers["Location"].endswith("notice=retired-cleanup&retired_page=3")
+        assert called == [SourceId("retired_060")]
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+        assert not client.calls
+
+        status, _, refreshed = _request(server, "GET", headers["Location"], cookie=cookie)
+        assert status == 200
+        assert b"Page 3 of 3" in refreshed
+        assert b"retired_060" in refreshed
+        assert b"Retired source journals were cleaned" in refreshed
+        assert not client.calls
+
+        for path in (
+            "/admin/sources?retired_page=4",
+            "/admin/sources?retired_page=0",
+            "/admin/sources?retired_page=2&retired_page=3",
+            "/admin/sources?retired_page=invalid",
+        ):
+            assert _request(server, "GET", path, cookie=cookie)[0] == 400
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before

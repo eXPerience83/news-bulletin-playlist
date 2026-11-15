@@ -32,6 +32,8 @@ from news_bulletin_playlist.temporal_strategy_web import (
 )
 from news_bulletin_playlist.web_ui import status_badge
 
+RETIRED_SOURCE_PAGE_SIZE = 25
+
 
 def render_sources_page(
     *,
@@ -46,6 +48,7 @@ def render_sources_page(
     owner_catalog_editable: bool = False,
     inspection_hold: bool = False,
     retired_source_ids: tuple[SourceId, ...] = (),
+    retired_page: int = 1,
 ) -> bytes:
     """Show installed sources separately from downloadable, uninstalled examples."""
     editing_enabled = provider_available and not inspection_hold
@@ -115,7 +118,21 @@ def render_sources_page(
     source_kind = "owner" if owner_catalog_editable else "built-in"
     retired_section = ""
     if retired_source_ids and owner_catalog_editable:
-        shown = retired_source_ids[:25]
+        total_pages = (len(retired_source_ids) + RETIRED_SOURCE_PAGE_SIZE - 1) // (
+            RETIRED_SOURCE_PAGE_SIZE
+        )
+        start = (retired_page - 1) * RETIRED_SOURCE_PAGE_SIZE
+        shown = retired_source_ids[start : start + RETIRED_SOURCE_PAGE_SIZE]
+        navigation = (
+            f'<a href="/admin/sources?retired_page={retired_page - 1}">Previous IDs</a> '
+            if retired_page > 1
+            else ""
+        )
+        navigation += f"Page {retired_page} of {total_pages}. "
+        if retired_page < total_pages:
+            navigation += (
+                f'<a href="/admin/sources?retired_page={retired_page + 1}">Next IDs</a>'
+            )
         rows = "".join(
             "<li><code>"
             + html.escape(str(source_id))
@@ -125,6 +142,7 @@ def render_sources_page(
                 f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
                 f'<input type="hidden" name="source_id" '
                 f'value="{html.escape(str(source_id), quote=True)}">'
+                f'<input type="hidden" name="retired_page" value="{retired_page}">'
                 '<button class="button" type="submit">Retry local cleanup</button></form>'
                 if not inspection_hold
                 else '<span class="muted">Cleanup locked during inspection hold</span>'
@@ -139,6 +157,7 @@ def render_sources_page(
             "After an interrupted deletion, retry clearing their local SQLite "
             "episode/detector journals. This does not contact Spotify or reuse IDs. "
             "Cleanup is idempotent; completed IDs remain listed.</p>"
+            f'<nav aria-label="Retired source pages">{navigation}</nav>'
             f"<ul>{rows}</ul>"
             "</section>"
         )
