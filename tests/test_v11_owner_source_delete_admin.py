@@ -378,9 +378,7 @@ def test_retired_source_pages_reach_all_ids_and_preserve_cleanup_page(
         assert b"retired_025" not in first and b"retired_060" not in first
         assert b"/admin/sources?retired_page=2" in first
 
-        status, _, second = _request(
-            server, "GET", "/admin/sources?retired_page=2", cookie=cookie
-        )
+        status, _, second = _request(server, "GET", "/admin/sources?retired_page=2", cookie=cookie)
         assert status == 200
         assert b"Page 2 of 3" in second
         assert b"retired_025" in second and b"retired_049" in second
@@ -388,9 +386,7 @@ def test_retired_source_pages_reach_all_ids_and_preserve_cleanup_page(
         assert b"/admin/sources?retired_page=1" in second
         assert b"/admin/sources?retired_page=3" in second
 
-        status, _, last = _request(
-            server, "GET", "/admin/sources?retired_page=3", cookie=cookie
-        )
+        status, _, last = _request(server, "GET", "/admin/sources?retired_page=3", cookie=cookie)
         assert status == 200
         assert b"Page 3 of 3" in last
         assert b"retired_050" in last and b"retired_060" in last

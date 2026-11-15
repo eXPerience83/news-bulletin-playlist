@@ -130,9 +130,7 @@ def render_sources_page(
         )
         navigation += f"Page {retired_page} of {total_pages}. "
         if retired_page < total_pages:
-            navigation += (
-                f'<a href="/admin/sources?retired_page={retired_page + 1}">Next IDs</a>'
-            )
+            navigation += f'<a href="/admin/sources?retired_page={retired_page + 1}">Next IDs</a>'
         rows = "".join(
             "<li><code>"
             + html.escape(str(source_id))
