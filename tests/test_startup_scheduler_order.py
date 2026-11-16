@@ -176,3 +176,70 @@ def test_sigterm_handler_does_not_call_lifecycle_or_sqlite(
         "runtime_stopping",
         "runtime_stopped",
     ]
+
+
+def test_incomplete_shutdown_returns_nonzero_and_records_bounded_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A daemon worker may remain alive: runtime exit must not claim success."""
+    auth = _Auth()
+    reconciled: list[bool] = []
+
+    class _IncompleteLifecycle:
+        def __init__(
+            self,
+            runner: object,
+            *,
+            interval: timedelta,
+            diagnostics: object | None = None,
+            process_stop_event: threading.Event | None = None,
+        ) -> None:
+            del runner, interval, diagnostics
+            assert process_stop_event is not None
+            self.status = OperationalStatus(configured=False)
+
+        def reconcile(self, *, configured: bool) -> None:
+            reconciled.append(configured)
+
+        def shutdown(self) -> bool:
+            return False
+
+    class _Handler(engine_runtime.OperationalHealthHandler):
+        pass
+
+    def build_auth(_data_dir: Path, *, environ: object) -> tuple[None, _Auth]:
+        del environ
+        return None, auth
+
+    monkeypatch.setattr(engine_runtime, "build_engine_runtime_auth", build_auth)
+    monkeypatch.setattr(engine_runtime, "_load_runtime_config", lambda _data_dir, _env: object())
+    monkeypatch.setattr(
+        engine_runtime, "_build_managed_admin_service", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(engine_runtime, "EngineLifecycleController", _IncompleteLifecycle)
+
+    stopped = threading.Event()
+    stopped.set()
+    assert (
+        engine_runtime.serve(
+            host="127.0.0.1",
+            port=0,
+            data_dir=tmp_path,
+            stop_event=stopped,
+            environ={},
+            handler_type=_Handler,
+        )
+        == 1
+    )
+    assert reconciled == [True]
+    assert auth.metrics is not None
+
+    events = DiagnosticEventStore(tmp_path / DEFAULT_DB_FILENAME)
+    events.initialize()
+    recorded = list(reversed(events.list_events(limit=10)))
+    assert [item.event_name for item in recorded] == [
+        "runtime_ready",
+        "runtime_stopping",
+        "runtime_shutdown_incomplete",
+    ]
+    assert recorded[-1].details == {"phase": "scheduler", "cycle_in_progress": False}
