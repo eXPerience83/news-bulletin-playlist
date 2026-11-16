@@ -596,7 +596,7 @@ def test_serve_reports_incomplete_shutdown_instead_of_clean_stop(
             environ={},
             handler_type=_Handler,
         )
-        == 0
+        == 1
     )
 
     store = DiagnosticEventStore(tmp_path / DEFAULT_DB_FILENAME)
