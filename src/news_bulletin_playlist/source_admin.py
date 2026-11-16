@@ -27,6 +27,7 @@ from news_bulletin_playlist.managed_state import (
     compile_engine_config,
     effective_sources,
     serialize_managed_state,
+    source_definition,
 )
 from news_bulletin_playlist.models import (
     EditorialScope,
@@ -64,6 +65,8 @@ from news_bulletin_playlist.spotify.public_detector import (
 )
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitJournal
 from news_bulletin_playlist.spotify_metrics import SpotifyRequestMetrics
+from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
+from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 
 MAX_SOURCE_AUDIT_BATCH_SOURCES = 20
 _SAFE_AUDIT_ARCHIVE_SOURCE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -179,8 +182,13 @@ def export_source_configuration(
     """Export one coherent snapshot using only local configuration dependencies."""
     with synchronization.hold():
         state = store.load_readonly()
+        if isinstance(store, ForwardOnlyManagedStateStore):
+            owned = parse_v11_operational(store._expected_bytes)
+            catalog = store.catalog
+            built_in_ids = {source.id for source in owned.historical_catalog.sources}
+        else:
+            built_in_ids = {source.id for source in catalog.sources}
         sources = effective_sources(catalog, state)
-        built_in_ids = {source.id for source in catalog.sources}
     if source_id is not None:
         sources = tuple(source for source in sources if source.id == source_id)
         if not sources:
@@ -247,6 +255,8 @@ class SourceAdminService:
     def snapshot(self) -> ManagedState:
         with self.synchronization.hold():
             state = self.store.load()
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.catalog = self.store.catalog
             effective_sources(self.catalog, state)
             return state
 
@@ -303,7 +313,11 @@ class SourceAdminService:
             raise SourceAuditBatchStateError("effective source id is unsafe for archive export")
 
         generated_at = datetime.now(UTC)
-        built_in_ids = {source.id for source in self.catalog.sources}
+        if isinstance(self.store, ForwardOnlyManagedStateStore):
+            snapshot = parse_v11_operational(self.store._expected_bytes)
+            built_in_ids = {source.id for source in snapshot.historical_catalog.sources}
+        else:
+            built_in_ids = {source.id for source in self.catalog.sources}
         items: list[SourceAuditBatchItem] = []
         stop_failure: InspectionFailure | None = None
         public_observation_enabled = True
@@ -455,6 +469,23 @@ class SourceAdminService:
         )
         with self.synchronization.hold():
             latest = self.store.load()
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                current = parse_v11_operational(self.store._expected_bytes)
+                if current.owner_sources_complete:
+                    retired = set(current.owner_inventory.retired_source_ids)
+                    if source.id in retired:
+                        base = str(source.id)
+                        suffix = 2
+                        reserved = retired | {item.id for item in current.owner_inventory.sources}
+                        while SourceId(f"{base}_{suffix}") in reserved:
+                            suffix += 1
+                        source = replace(source, id=SourceId(f"{base}_{suffix}"))
+                    self._check_duplicate(latest, source)
+                    self.store.install_owner_sources(
+                        (InstalledSource.from_definition(source_definition(source)),)
+                    )
+                    self.catalog = self.store.catalog
+                    return
             self._check_duplicate(latest, source)
             self.store.save(replace(latest, sources=(*latest.sources, source)))
 
@@ -472,9 +503,20 @@ class SourceAdminService:
         selected = PublicReleaseMode(mode)
         with self.synchronization.hold():
             state = self.store.load()
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.catalog = self.store.catalog
             base = next((source for source in self.catalog.sources if source.id == source_id), None)
             if base is None:
                 raise SourceMutationError("Built-in source not found")
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.store.save_owner_source(
+                    replace(InstalledSource.from_definition(base), public_release_mode=selected),
+                    reconcile_public_release_override=True,
+                )
+                self.catalog = self.store.catalog
+                return replace(base, public_release_mode=selected), any(
+                    p.enabled for p in state.playlists
+                )
             overrides = tuple(
                 item for item in state.source_overrides if item.source_id != source_id
             )
@@ -492,6 +534,21 @@ class SourceAdminService:
         state = self.snapshot()
         return self._custom_source(state, source_id)
 
+    def get_owned_source(self, source_id: str) -> InstalledSource:
+        """Expose owner-stored specialized sources to the normal metadata editor."""
+        if not isinstance(self.store, ForwardOnlyManagedStateStore):
+            raise SourceMutationError("Historical source is not editable in legacy state")
+        with self.synchronization.hold():
+            state = self.store.load_readonly()
+            self.catalog = self.store.catalog
+            source = next(
+                (item for item in effective_sources(self.catalog, state) if item.id == source_id),
+                None,
+            )
+            if source is None or source_id not in {item.id for item in self.catalog.sources}:
+                raise SourceMutationError("Historical source was not found")
+            return InstalledSource.from_definition(source)
+
     def update_metadata(
         self,
         source_id: str,
@@ -506,7 +563,24 @@ class SourceAdminService:
     ) -> tuple[ManagedSource, bool]:
         with self.synchronization.hold():
             state = self.store.load()
-            current = self._custom_source(state, source_id)
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.catalog = self.store.catalog
+            owner_record = (
+                next((item for item in self.catalog.sources if item.id == source_id), None)
+                if isinstance(self.store, ForwardOnlyManagedStateStore)
+                else None
+            )
+            current = (
+                InstalledSource.from_definition(
+                    next(
+                        item
+                        for item in effective_sources(self.catalog, state)
+                        if item.id == source_id
+                    )
+                )
+                if owner_record is not None
+                else self._custom_source(state, source_id)
+            )
             try:
                 updated = replace(
                     current,
@@ -523,24 +597,42 @@ class SourceAdminService:
                 )
                 if isinstance(updated, InstalledSource):
                     updated = replace(updated, languages=(updated.language, *updated.languages[1:]))
-                serialize_managed_state(
-                    replace(
-                        state,
-                        sources=tuple(
-                            updated if item.id == updated.id else item for item in state.sources
+                if owner_record is None:
+                    serialize_managed_state(
+                        replace(
+                            state,
+                            sources=tuple(
+                                updated if item.id == updated.id else item for item in state.sources
+                            ),
                         ),
-                    ),
-                    catalog=self.catalog,
-                )
+                        catalog=self.catalog,
+                    )
             except ValueError as exc:
                 raise ValueError("Source metadata is invalid") from exc
-            self._save_replacement(state, updated)
+            if owner_record is not None:
+                assert isinstance(self.store, ForwardOnlyManagedStateStore)
+                assert isinstance(updated, InstalledSource)
+                self.store.save_owner_source(updated, reconcile_public_release_override=True)
+                self.catalog = self.store.catalog
+            else:
+                self._save_replacement(state, updated)
             return updated, any(playlist.enabled for playlist in state.playlists)
 
     def set_enabled(self, source_id: str, enabled: bool) -> tuple[ManagedSource, bool]:
         with self.synchronization.hold():
             state = self.store.load()
-            current = self._custom_source(state, source_id)
+            if isinstance(self.store, ForwardOnlyManagedStateStore):
+                self.catalog = self.store.catalog
+            owner_record = (
+                next((item for item in self.catalog.sources if item.id == source_id), None)
+                if isinstance(self.store, ForwardOnlyManagedStateStore)
+                else None
+            )
+            current = (
+                InstalledSource.from_definition(owner_record)
+                if owner_record is not None
+                else self._custom_source(state, source_id)
+            )
             if not enabled:
                 blocked = source_disable_blockers(
                     current.id,
@@ -556,34 +648,76 @@ class SourceAdminService:
                         "resolve any pending activation."
                     )
             updated = replace(current, enabled=enabled)
-            self._save_replacement(state, updated)
+            if owner_record is not None:
+                assert isinstance(self.store, ForwardOnlyManagedStateStore)
+                assert isinstance(updated, InstalledSource)
+                self.store.save_owner_source(updated)
+                self.catalog = self.store.catalog
+            else:
+                self._save_replacement(state, updated)
             return updated, any(playlist.enabled for playlist in state.playlists)
 
     def deletion_references(self, source_id: str) -> tuple[ManagedSource, tuple[str, ...], bool]:
-        """Read current references for confirmation; Delete checks them again under both locks."""
+        """Read current references for confirmation; Delete checks under both locks."""
         with self.synchronization.hold():
             state = self.store.load()
-            source = self._custom_source(state, source_id)
-            used_by = tuple(
-                playlist.display_name
-                for playlist in state.playlists
-                if source.id in playlist.source_ids
-            ) + tuple(
-                f"{template.display_name} (custom template)"
-                for template in state.templates
-                if source.id in template.default_source_ids
+            return self._deletion_references_loaded(state, source_id)
+
+    def _deletion_references_loaded(
+        self, state: ManagedState, source_id: str
+    ) -> tuple[ManagedSource, tuple[str, ...], bool]:
+        """Recheck references while caller already holds the configuration lock."""
+        if isinstance(self.store, ForwardOnlyManagedStateStore):
+            self.catalog = self.store.catalog
+        owner = (
+            next(
+                (
+                    item
+                    for item in parse_v11_operational(
+                        self.store._expected_bytes
+                    ).owner_inventory.sources
+                    if item.id == source_id
+                ),
+                None,
             )
-            intent = self.provisioning_journal.load()
-            pending = intent is not None and source.id in intent.source_ids
-            if state.quarantined_templates:
-                used_by += ("Unresolved custom playlist drafts",)
-            return source, used_by, pending
+            if isinstance(self.store, ForwardOnlyManagedStateStore)
+            else None
+        )
+        source = owner if owner is not None else self._custom_source(state, source_id)
+        used_by = tuple(
+            playlist.display_name
+            for playlist in state.playlists
+            if source.id in playlist.source_ids
+        ) + tuple(
+            f"{template.display_name} (custom template)"
+            for template in state.templates
+            if source.id in template.default_source_ids
+            or any(e.source_id == source.id for e in template.duration_exceptions)
+        )
+        if owner is not None:
+            used_by += tuple(
+                f"{template.display_name} (owner template)"
+                for template in self.catalog.playlists
+                if source.id in template.default_source_ids
+                or any(
+                    exception.source_id == source.id
+                    for exception in template.duration_policy.exceptions
+                )
+            )
+            if any(item.source_id == source.id for item in state.source_overrides):
+                used_by += ("Saved public-release override",)
+        intent = self.provisioning_journal.load()
+        pending = intent is not None and source.id in intent.source_ids
+        if state.quarantined_templates:
+            used_by += ("Unresolved custom playlist drafts",)
+        return source, used_by, pending
 
     def delete(self, source_id: str) -> bool:
-        """Remove the definition last, after source-local caches are cleared.
+        """Delete under maintenance gate, committing v11 tombstone before cache cleanup.
 
-        A partial failure leaves the stable definition owning its ID. A retry is safe because
-        both journal clear operations are idempotent and missing current state requires bootstrap.
+        A failed v11 CAS leaves source/journals untouched. If the process ends
+        after CAS and before cleanup, the retired ID cannot be reused, so stale
+        SQLite episodes can never enter a newly installed source.
         """
         _, used_by, pending = self.deletion_references(source_id)
         if used_by or pending:
@@ -597,24 +731,64 @@ class SourceAdminService:
             # Lock order is always cycle gate -> configuration lock, also in the cycle runner.
             with self.synchronization.hold():
                 state = self.store.load()
-                source = self._custom_source(state, source_id)
-                intent = self.provisioning_journal.load()
-                if (
-                    any(source.id in playlist.source_ids for playlist in state.playlists)
-                    or any(source.id in template.default_source_ids for template in state.templates)
-                    or state.quarantined_templates
-                    or (intent is not None and source.id in intent.source_ids)
-                ):
+                _, used_by, pending = self._deletion_references_loaded(state, source_id)
+                if used_by or pending:
                     raise SourceReferencedError("Unassign this source before deletion")
-                next_state = replace(
-                    state,
-                    sources=tuple(item for item in state.sources if item.id != source.id),
+                historical_sources = (
+                    parse_v11_operational(self.store._expected_bytes).owner_inventory.sources
+                    if isinstance(self.store, ForwardOnlyManagedStateStore)
+                    else ()
                 )
-                compile_engine_config(self.catalog, next_state)
-                self.first_journal.clear_source_runtime_state(source.id)
-                self.detector_journal.clear_source_state(source.id)
-                self.store.save(next_state)
+                is_owner = any(item.id == source_id for item in historical_sources)
+                if is_owner:
+                    assert isinstance(self.store, ForwardOnlyManagedStateStore)
+                    source = next(item for item in historical_sources if item.id == source_id)
+                    self.store.delete_owner_source(source.id)
+                    self.catalog = self.store.catalog
+                    # Clearing after the durable removal cannot destroy a still-
+                    # configured source if CAS fails. The retired ID blocks reuse
+                    # even when a journal fails or this process exits mid-cleanup.
+                    self.first_journal.clear_source_runtime_state(source.id)
+                    self.detector_journal.clear_source_state(source.id)
+                else:
+                    custom_source = self._custom_source(state, source_id)
+                    next_state = replace(
+                        state,
+                        sources=tuple(
+                            item for item in state.sources if item.id != custom_source.id
+                        ),
+                    )
+                    compile_engine_config(self.catalog, next_state)
+                    self.first_journal.clear_source_runtime_state(custom_source.id)
+                    self.detector_journal.clear_source_state(custom_source.id)
+                    self.store.save(next_state)
                 return any(playlist.enabled for playlist in state.playlists)
+
+    def retry_retired_source_cleanup(self, source_id: str) -> None:
+        """Operator-authorized, idempotent SQLite cleanup after a published owner deletion.
+
+        Keep the durable ID tombstone permanently even on successful cleanup:
+        another process may have observed the old ID and journals can be
+        asynchronously repopulated. Never touch Spotify or source definitions.
+        """
+        if not isinstance(self.store, ForwardOnlyManagedStateStore):
+            raise SourceMutationError("Retired source cleanup requires a v11 installation")
+        gate = self.cycle_synchronization
+        if gate is None or self.first_journal is None or self.detector_journal is None:
+            raise RuntimeError("Retired source cleanup is unavailable")
+        with gate.try_hold_maintenance() as acquired:
+            if not acquired:
+                raise EngineCycleBusyError("Engine cycle is active; retry cleanup shortly")
+            with self.synchronization.hold():
+                state = self.store.load_readonly()
+                inventory = parse_v11_operational(self.store._expected_bytes).owner_inventory
+                if source_id not in inventory.retired_source_ids:
+                    raise SourceMutationError("Source ID is not retired")
+                active_ids = {source.id for source in effective_sources(self.store.catalog, state)}
+                if source_id in active_ids:
+                    raise SourceMutationError("Retired source ID is unexpectedly active")
+                self.first_journal.clear_source_runtime_state(SourceId(source_id))
+                self.detector_journal.clear_source_state(SourceId(source_id))
 
     def _custom_source(self, state: ManagedState, source_id: str) -> ManagedSource:
         source = next((item for item in state.sources if item.id == source_id), None)

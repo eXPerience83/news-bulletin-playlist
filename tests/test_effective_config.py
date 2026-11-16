@@ -169,12 +169,15 @@ def test_runtime_load_atomically_pauses_legacy_active_playlist_with_only_disable
 
     original_bytes = store.path.read_bytes()
     assert _load_runtime_config(tmp_path, {}) is None
-    recovered = open_managed_state_store(tmp_path).load()
+    forward = open_managed_state_store(tmp_path)
+    recovered = forward.load()
     assert store.path.read_bytes() == original_bytes
-    assert recovered == replace(legacy, playlists=(replace(legacy.playlists[0], enabled=False),))
+    assert recovered == replace(
+        legacy, sources=(), playlists=(replace(legacy.playlists[0], enabled=False),)
+    )
     assert recovered.schema_version == legacy.schema_version == 6
     assert (
-        compile_engine_config(BUILTIN_CATALOG, recovered).playlists[0].source_selection.explicit
+        compile_engine_config(forward.catalog, recovered).playlists[0].source_selection.explicit
         == ()
     )
     before = (tmp_path / V11_OPERATIONAL_FILENAME).read_bytes()

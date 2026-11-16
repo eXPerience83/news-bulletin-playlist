@@ -32,6 +32,8 @@ from news_bulletin_playlist.temporal_strategy_web import (
 )
 from news_bulletin_playlist.web_ui import status_badge
 
+RETIRED_SOURCE_PAGE_SIZE = 25
+
 
 def render_sources_page(
     *,
@@ -43,8 +45,13 @@ def render_sources_page(
     csrf_token: str,
     notice: str | None = None,
     provider_available: bool = True,
+    owner_catalog_editable: bool = False,
+    inspection_hold: bool = False,
+    retired_source_ids: tuple[SourceId, ...] = (),
+    retired_page: int = 1,
 ) -> bytes:
     """Show installed sources separately from downloadable, uninstalled examples."""
+    editing_enabled = provider_available and not inspection_hold
     current = effective_sources(catalog, state)
     installed_shows = {
         ref.external_id
@@ -88,7 +95,7 @@ def render_sources_page(
     )
     add_source = (
         '<p><a class="button button-primary" href="/admin/sources/new">Add source</a></p>'
-        if provider_available
+        if editing_enabled
         else ""
     )
     audits = (
@@ -96,15 +103,72 @@ def render_sources_page(
         f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
         '<button class="button" type="submit">Export all audits</button></form>'
         f'<p class="muted">Audits can inspect up to {MAX_SOURCE_AUDIT_BATCH_SOURCES} sources.</p>'
-        if provider_available
+        if editing_enabled
         else ""
     )
     table = _sources_table(
-        snapshot, catalog, state, last_cycle, csrf_token, provider_available=provider_available
+        snapshot,
+        catalog,
+        state,
+        last_cycle,
+        csrf_token,
+        provider_available=editing_enabled,
+        owner_catalog_editable=owner_catalog_editable,
     )
+    source_kind = "owner" if owner_catalog_editable else "built-in"
+    retired_section = ""
+    if retired_source_ids and owner_catalog_editable:
+        total_pages = (len(retired_source_ids) + RETIRED_SOURCE_PAGE_SIZE - 1) // (
+            RETIRED_SOURCE_PAGE_SIZE
+        )
+        start = (retired_page - 1) * RETIRED_SOURCE_PAGE_SIZE
+        shown = retired_source_ids[start : start + RETIRED_SOURCE_PAGE_SIZE]
+        navigation = (
+            f'<a href="/admin/sources?retired_page={retired_page - 1}">Previous IDs</a> '
+            if retired_page > 1
+            else ""
+        )
+        navigation += f"Page {retired_page} of {total_pages}. "
+        if retired_page < total_pages:
+            navigation += f'<a href="/admin/sources?retired_page={retired_page + 1}">Next IDs</a>'
+        rows = "".join(
+            "<li><code>"
+            + html.escape(str(source_id))
+            + "</code>"
+            + (
+                '<form method="post" action="/admin/sources/retired/cleanup">'
+                f'<input type="hidden" name="csrf_token" value="{safe_csrf}">'
+                f'<input type="hidden" name="source_id" '
+                f'value="{html.escape(str(source_id), quote=True)}">'
+                f'<input type="hidden" name="retired_page" value="{retired_page}">'
+                '<button class="button" type="submit">Retry local cleanup</button></form>'
+                if not inspection_hold
+                else '<span class="muted">Cleanup locked during inspection hold</span>'
+            )
+            + "</li>"
+            for source_id in shown
+        )
+        retired_section = (
+            '<section class="section admin-section" aria-labelledby="retired-source-heading">'
+            '<h2 id="retired-source-heading">Retired source maintenance</h2>'
+            f"<p>{len(retired_source_ids)} permanently reserved source IDs. "
+            "After an interrupted deletion, retry clearing their local SQLite "
+            "episode/detector journals. This does not contact Spotify or reuse IDs. "
+            "Cleanup is idempotent; completed IDs remain listed.</p>"
+            f'<nav aria-label="Retired source pages">{navigation}</nav>'
+            f"<ul>{rows}</ul>"
+            "</section>"
+        )
     body = "".join(
         (
             render_lan_warning() if lan_mode else "",
+            (
+                '<div class="notice" role="status">Startup inspection hold is active. '
+                "Source edits, imports, enable/disable controls and audits are locked. "
+                "Spotify writes are disabled.</div>"
+                if inspection_hold
+                else ""
+            ),
             f'<div class="notice">{html.escape(notice)}</div>' if notice else "",
             f"""
 <section class="section admin-section" aria-labelledby="source-catalog-heading">
@@ -113,7 +177,7 @@ def render_sources_page(
       <p class="eyebrow">Catalogue</p>
       <h2 id="source-catalog-heading">Broadcasters and sources</h2>
     </div>
-    <p class="section-note">{len(catalog.sources)} built-in, {len(state.sources)} custom sources</p>
+    <p class="section-note">{len(catalog.sources)} {source_kind}, {len(state.sources)} custom</p>
   </div>
   {add_source}
   <p><a class="button" href="/admin/sources/import">Import sources</a></p>
@@ -123,6 +187,7 @@ def render_sources_page(
      origin need not be a country.</p>
   {table}
 </section>
+{retired_section}
 {examples_section}
 """,
         )
@@ -146,6 +211,7 @@ def _sources_table(
     csrf_token: str,
     *,
     provider_available: bool = True,
+    owner_catalog_editable: bool = False,
 ) -> str:
     source_outcomes = (
         {} if last_cycle is None else {outcome.source_id: outcome for outcome in last_cycle.sources}
@@ -166,10 +232,14 @@ def _sources_table(
         )
         spotify_link = f"https://open.spotify.com/show/{show_id}"
         health = _source_health_badge(source_outcomes.get(source.id), enabled=source.enabled)
-        ownership = "Built-in" if source.id in built_in_ids else "Custom"
+        ownership = (
+            "Owner-managed"
+            if owner_catalog_editable and source.id in built_in_ids
+            else ("Built-in" if source.id in built_in_ids else "Custom")
+        )
         state_label = (
             "Image-owned"
-            if source.id in built_in_ids
+            if source.id in built_in_ids and not owner_catalog_editable
             else ("Enabled" if source.enabled else "Disabled")
         )
         controls = ""
@@ -187,13 +257,15 @@ def _sources_table(
         else:
             controls += '<p class="muted">Connect Spotify to edit source settings.</p>'
         if provider_available and source.id in built_in_ids:
-            controls += (
-                f'<a href="/admin/sources/edit?source_id={safe_id}">Edit public release time</a>'
-            )
-        if provider_available and source.id not in built_in_ids:
+            label = "Edit metadata" if owner_catalog_editable else "Edit public release time"
+            controls += f'<a href="/admin/sources/edit?source_id={safe_id}">{label}</a>'
+            if owner_catalog_editable:
+                controls += f'<a href="/admin/sources/delete?source_id={safe_id}">Delete</a>'
+        if provider_available and (owner_catalog_editable or source.id not in built_in_ids):
             next_enabled = not source.enabled
             verb = "Enable" if next_enabled else "Disable"
-            controls += f'<a href="/admin/sources/edit?source_id={safe_id}">Edit</a>'
+            if source.id not in built_in_ids:
+                controls += f'<a href="/admin/sources/edit?source_id={safe_id}">Edit</a>'
             blocked = (
                 source_disable_blockers(
                     source.id,
@@ -235,10 +307,11 @@ def _sources_table(
                 snapshot.provisioning_intent is not None
                 and source.id in snapshot.provisioning_intent.source_ids
             )
-            if used_by.get(source.id) or pending:
-                controls += '<p class="muted">Unassign before deletion.</p>'
-            else:
-                controls += f'<a href="/admin/sources/delete?source_id={safe_id}">Delete</a>'
+            if source.id not in built_in_ids:
+                if used_by.get(source.id) or pending:
+                    controls += '<p class="muted">Unassign before deletion.</p>'
+                else:
+                    controls += f'<a href="/admin/sources/delete?source_id={safe_id}">Delete</a>'
         rows.append(
             "<tr>"
             f"<td>{html.escape(source.display_name)} "
@@ -300,7 +373,7 @@ def render_edit_source_page(
         (render_lan_warning() if lan_mode else "")
         + f"""
 <section class="section admin-section">
-  <h2>Edit custom source</h2>
+  <h2>Edit installation source</h2>
   <p>Source ID: <code>{esc(source.id)}</code></p>
   <p>Spotify show ID: <code>{esc(source.spotify_show_id)}</code>
      <a href="https://open.spotify.com/show/{esc(source.spotify_show_id)}"
@@ -333,7 +406,7 @@ def render_edit_source_page(
     return render_admin_shell(
         title="Edit source",
         active_tab="sources",
-        intro="Edit safe custom-source metadata.",
+        intro="Edit installation-owned source metadata.",
         body_html=body,
     )
 

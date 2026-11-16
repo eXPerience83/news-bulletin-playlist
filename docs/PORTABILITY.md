@@ -22,6 +22,263 @@ copy is prudent; **portable JSON and ZIP are not production backups**.
 Acceptance on isolated synthetic roots is tracked by #553 and later beta gates by
 #565. No release/image or live migration is implied by code merged into `main`.
 
+## ZIP v2 Admin workflow (integration branch #646; not yet released)
+
+Admin offers an explicit **complete ZIP v2** download for objects with a prepared
+portable identity via `/admin/playlists/export.zip?kind=...&id=...&version=2`.
+Legacy ZIP v1 remains available separately and is still rejected when its format
+would discard dormant template policies.
+
+ZIP v2 upload uses `/admin/playlists/import/v2/preview`: the read-only
+session-bound preview displays source mappings, differences, conflicts, complete
+owner template and dormant exceptions. The separate, CSRF-checked
+`/admin/playlists/import/v2/apply` requires explicit confirmation and revalidates
+the exact staged document and current v11 state under the configuration lock.
+On success, it atomically installs owner sources, the full template and an editable
+local draft, with verified cover bytes and credits. This **does not** create, link,
+enable or write any Spotify destination. Overlay-only source matches and
+nonidentical capabilities fail closed; these cases remain an explicit #633
+reconciliation gate, not silent duplication or a forced overwrite.
+
+During startup inspection hold, POST preview/apply and all other configuration
+writes return the existing locked response. The held draft editor displays the
+inspection warning. Neither portable ZIP version is a complete `/data` backup.
+
+## First-boot durable owner inventory — pre-activation stage (#633)
+
+New direct v6–v10 -> v11 cutovers now include an `owner_inventory` object
+**inside the same canonical, atomic `managed-state-v11.json` authority**
+as the pre-existing `installed_catalog` provenance and `managed_overlay`.
+It contains a separate, strict original source-order vector; complete
+portable-capability-validated source definitions (split into at most 100
+definitions per bounded chunk); and the independent versioned owner
+template records described below. Even an empty clean install persists an
+empty inventory, never implicitly installing image presets.
+
+The historical `installed_catalog` is retained as **immutable forensic
+evidence** of what the old image/owner configuration contained. The new
+owner records are loaded and *checked for exact equivalence* to that
+evidence on each v11 parse; missing source IDs, duplicate/unknown parser or
+filter versions, changed source order, truncated dormant duration
+exceptions, changed template defaults or otherwise malformed owner
+metadata **block the entire state read**. They never silently reconstruct
+from the image. The original file, OAuth, SQLite and Spotify are untouched
+by inventory creation. A normal managed-overlay CAS preserves the owner
+inventory unchanged.
+
+The v11 runtime and Admin now compile and read their **active catalog from the
+persisted owner inventory**, not from the current image or the historical
+catalog. However, #633 is not complete: the historical owner records still
+lack full mutable, reference-safe Admin CRUD, and initial evidence-equivalence
+checks must be versioned before legitimate edits are allowed. Old v11 beta documents lacking
+`owner_inventory` are **rejected fail-closed** rather than silently
+falling back to old frozen presets; they require a separate explicitly
+reviewed conversion, never a GET-time repair. Missing fields must not be
+guessed/recreated. Do not claim #633 complete on the basis
+of inventory persistence alone. Historical cover JPEGs and attribution
+must also be installed durably through #637 before production acceptance.
+
+## Historical template owner records — isolated codec (#633)
+
+Before replacing the live v11 authority's frozen `IMAGE_PRESET` templates,
+`owner_template_records.OwnerTemplateSet` establishes an independent,
+canonical and strictly decoded **owner-owned template data contract**.
+It preserves original template IDs (including names without the
+`custom_` prefix), exact names/descriptions, country/language ordering,
+default source IDs, retention and episode limits, cover references and
+every duration exception including UTC-fold and microsecond precision.
+The source-closure validation considers **all** installed sources, not just
+currently selected sources; dormant, later-applicable exceptions are retained.
+Missing identifiers, duplicate keys, bad policy numbers and unrecognized
+ordering are rejected without fallback.
+
+The codec also supports pure ID-stable edit and delete-with-reference-guard
+operations. Existing creation/edit validation of newly created local drafts
+remains unchanged; legacy high bounds are **not** silently truncated to the
+100-character/100-episode editor defaults. Its validation and serialization
+do not contact the network, Spotify, SQLite or the current container image
+catalog. A zero-record set is a valid starting point for clean installations.
+
+Offline v6–v10 regression tests compile the original four managed destinations
+from re-decoded historical source/template data and assert exact
+`EngineConfig` equality, including parser/filter, disabled assignments,
+destination IDs and duration policies. **This is a fidelity proof only.**
+The live v11 runtime and Admin use the persisted owner inventory as their
+active catalog, while full owner CRUD and post-migration edit semantics are
+still pending. Cover JPEG **bytes**
+are not embedded in this template codec: their durable `/data`
+materialization and attribution are addressed separately in PR #637.
+Code from specialized parsers remains in the application and must stay
+version-capability validated, never imported as executable content.
+
+## Verifying the migration without Spotify writes
+
+After a direct, operator-initiated v11 cutover in
+`NEWS_PLAYLIST_STARTUP_INSPECTION=1` mode, run **inside the new container**:
+
+```sh
+news-playlist inspection-report --data-dir /data
+```
+
+The command reads the same locked v11 authority and the **inert original**
+`managed-state.json`; it does not copy the dataset or call Spotify, OAuth,
+SQLite, the scheduler or an external service. Output is JSON showing the
+persisted v11 SHA-256, first-boot hold state, every Spotify destination ID
+(including paused ones), all source IDs and parser/filter/time strategies in
+their retained order, per-playlist source selection and duration policies,
+historical template exceptions (including dormant ones), and a validity
+check of owner-persisted cover bytes.
+
+It verifies that the on-disk legacy JSON SHA-256 matches the frozen migration
+origin. If they differ it **fails closed**; if the user has subsequently
+edited a playlist then the report explicitly flags the divergence rather
+than presenting an old/new equivalence claim. The return code is 0 only when
+the inspection hold is active and all current comparison checks pass; 1
+means there is something to review, and invalid state produces an error.
+Both successful output and a green container healthcheck are **technical
+inspection evidence, not permission to release the gate**. The report always
+includes `ready_for_production: false` while #633 historical overlay
+reconciliation, #631 live acceptance and #421 hard-stop remain unresolved.
+
+The report does not reconstruct or repoint Spotify playlists and does not
+replace the final explicit `inspection-release` hash confirmation.
+
+## Explicit first-boot Spotify inspection hold (#630)
+
+For the operator-approved forward-only `0.2.3b1 -> 0.3.0b1` upgrade,
+set `NEWS_PLAYLIST_STARTUP_INSPECTION=1` **before first launch** of the new
+image. The application durably writes `/data/.spotify-reconciliation-inspection.json`
+**before converting existing v6-v10 state to v11**. This is a one-time
+deliberate inspection mode, not an automatic production-ready upgrade.
+No private /data backup is required by the owner.
+
+The hold survives process termination, configuration edits and restart
+**even when the environment variable is later removed**. During inspection,
+the scheduler cannot start, wake or reconcile, the OAuth callback and
+**all Admin configuration/provider POST operations** are denied with HTTP 423,
+and automatic pending provisioning finalization is deferred. The
+`POST /admin/login` and `POST /admin/logout` operations are allowed through
+their existing credential/CSRF/session validation **solely to enable authenticated
+read-only inspection** after a restart. GET status/Admin/diagnostics remain
+usable. The HTTP healthcheck still answers `status: ok` for container liveness
+but includes `spotify_reconciliation: inspection_held`; a green Docker
+healthcheck is **not** permission to sync Spotify. The public and Admin
+status pages show an explicit inspection warning.
+
+After independently inspecting the four original Spotify destinations, order,
+radio detector identifiers, source selection, retention/duration settings and
+any unknown pending provider writes, **stop** the service and run:
+
+```sh
+news-playlist inspection-status --data-dir /data
+news-playlist inspection-release --data-dir /data \
+  --state-sha256 <the-exact-64-character-value-from-inspection-status> \
+  --confirm I-REVIEWED-V11-ENABLE-SPOTIFY-WRITES
+```
+
+The second command checks exact current canonical v11 bytes under the shared
+state lock and records an atomic private release. If the state has changed
+since inspection, re-check it; there is no override. Then remove the environment
+setting (or set it to `0`) and perform a **normal restart**. Releasing the
+marker does not wake a running held process. A future explicit `=1` request
+engages a new persistent hold. The CLI does not perform Spotify I/O.
+This gate is not a fence for a previously dispatched Spotify HTTP request;
+an ambiguous in-flight write remains a separate #421 hard stop.
+
+This work does not authorize production activation. The ZIP v2 Admin workflow
+exists separately but does not solve #633 overlay source promotion or #421.
+
+## ZIP v2 offline import/export (#638) — Admin enabled, release still gated
+
+The v2 codec is now independently exportable, inspectable **and locally restorable**
+in a fresh v11 installation, using explicit internal APIs:
+`PlaylistExportService.export(..., version=2)`,
+`inspect_playlist_bundle_v2`,
+`PlaylistImportService.preview_v2(...)` and
+`PlaylistImportService.apply_v2(..., fingerprint)`.
+Admin provides explicit ZIP v2 export and authenticated, CSRF-protected
+read-only preview and confirmed offline apply. Its 2 MiB upload size limit
+is enforced in the HTTP, multipart and session layers; ZIP v1 remains limited
+to 1 MiB. Distinct staged preview kinds prevent cross-version replay.
+A ZIP v2 cannot silently fall through into v1 import. **No Spotify writes,
+destination recreation or automatic activation** are part of these APIs.
+
+A v2 archive includes the selected playlist projection and a distinct,
+canonical `template.json` owner template, plus the union of all current,
+template-default and exception-referenced sources. The original template
+preserves inactive duration selectors, microseconds, DST fold, source-order
+semantics, specialized parser/filter identifiers and its own default policies.
+The current projection retains its own selected source IDs, enabled/hidden
+state where applicable, duration/retention policy and cover.
+Both template artwork and current artwork are exported by content-addressed
+JPEG digests with their independent attribution, even when the images differ.
+
+The decoder validates strict ZIP envelope metadata, exact entry membership,
+total and per-file bounds (2 MiB for v2), canonical JSON, digest and size of
+every payload, JPEG contents, complete source closure and template policy.
+Unsupported source capabilities block the entire import, never degrade to a
+generic detector.
+
+`preview_v2` is readonly and computes the prospective owner source IDs and
+template ID. It **reuses identical sources already owned by the active v11
+catalog**, but blocks altered definitions, overlay-only historical matches
+and pending provisioning. Audited overlay promotion (#633) remains pending.
+The preview fingerprint
+covers the complete v11 authority bytes and pending intent, so any intervening
+configuration edit forces a fresh preview.
+
+`apply_v2` verifies the fingerprint under the configuration lock, validates
+the **complete owner inventory and managed overlay together in memory**,
+durably installs both JPEGs, and commits the newly owned sources, complete
+owner template and independent current local draft in **one exact-byte CAS**.
+The draft stores an explicit `owner_template_id` relationship: deletion of
+its referenced owner template is forbidden. An interrupted CAS may leave safe
+content-addressed orphan JPEGs, but never half of the configuration. An
+uncertain write uses readback and reports uncertainty if it cannot prove the
+final state. The new owner-cover attribution record is optional and preserves
+previous canonical v11 files unchanged.
+
+The offline regression suite exercises **two independent clean-instance
+round trips** (managed ZIP v2 → owner template + current draft → draft ZIP v2
+→ another installation), plus stale previews, failure before CAS, absent
+capabilities, incomplete closure and legacy ZIP rejection. A restored linked
+draft's ZIP v1 export now fails closed instead of losing its original
+owner-template details.
+
+**Still NO GO for release:** The Admin ZIP v2 review and confirmation flow
+is exposed, and the offline suite includes four consecutive ZIP v2 restores
+from synthetic v6-v10 roots. The actual production configuration, edits to
+source selection, time filtering and artwork after restart, and any explicit
+existing-Spotify destination relink/activation still require supervised
+acceptance. The scheduler's ambiguous remote-write gate (#421), #633 overlay
+reconciliation, #631 acceptance, and #565 release criteria remain.
+Do not infer Spotify safety or production readiness from offline code tests.
+
+## ZIP v1 safety boundary retained alongside complete ZIP v2 (#638)
+
+Managed ZIP v1 can faithfully describe the current destination selection,
+but it has no separate representation of the original template's full source
+closure or future-use duration exceptions. If a template exception would be
+dropped because it falls below the current managed maximum or refers to a
+temporarily unassigned source, export now **fails explicitly** with a ZIP v2
+requirement rather than silently discarding those exception selectors. No source
+or playlist is changed by this check. The existing ZIP v1 format and successful
+representable exports remain unchanged.
+
+For compatibility, a managed destination whose selected sources are a **subset
+or a different order** of the original template can still export a ZIP v1
+snapshot of its current selection. Such a ZIP does **not** carry omitted
+template-default sources or their configuration. **Do not call it a complete
+backup of the original template.** A full owner-portable source closure
+still requires ZIP v2 (#638).
+
+This remains a ZIP v1 **loss-prevention guard**. The explicit ZIP v2 codec
+preserves the full editable owner template and dormant exceptions, including
+policy defaults when the current managed selection differs.
+Do not approve #631 or production export-recovery acceptance until the
+reviewed v2 Admin flow, explicit relink and functional edit/reassignment
+checks have passed on an inspected configuration.
+
 ## Dependency and risk matrix
 
 This matrix was established before choosing the interchange representation.
@@ -396,6 +653,28 @@ HTTP edits/downloads, and real chronology/filter decisions with synthetic catalo
 for SER, RNE, CNN, RFI, RMF, ONU minutes and the generic custom parser. Network,
 OAuth and real Spotify calls are prohibited in the new domain tests.
 
+## Persisted historical cover assets (#633 — partial)
+
+The forward-only v11 conversion preserves inherited bundled cover JPEG **bytes**
+and exact attribution in a /data-owned, hash-verified inventory before the
+irreversible authority marker is written. The original cover IDs remain stable;
+PortableCoverLoader, Admin cover previews and explicit cover synchronization
+prefer these persistent copies, even when future image bundles remove old JPEGs.
+This does not regenerate images, modify provider artwork or create destinations.
+Incomplete or corrupt persisted copies must fail rather than silently fall back.
+
+References to pre-existing `uploaded_<digest>` artwork remain unchanged and
+are not copied or required to exist for an unused historical draft. Uploaded
+artwork already belongs to `/data/custom-covers`; a missing historical draft
+asset remains missing rather than silently being replaced.
+
+This addresses **only the cover resource** subproblem of #633. Historic source
+and template definitions are persisted and now feed the active catalog,
+including source order; full reference-safe owner CRUD, legitimate post-migration
+mutations and ZIP v2 acceptance on real installation data remain release
+blockers. These covers
+do not back up OAuth, SQLite or Spotify state.
+
 ## Portable playlist ZIP v1 (#550)
 
 Admin managed-playlist and local-draft cards offer **Prepare portable export identity**
@@ -627,12 +906,24 @@ attribution are displayed as escaped inert text. Original attribution is reused 
 re-export only while the JPEG digest matches; replacing artwork retains the original
 provenance record but derives current artwork attribution from the selected asset.
 
-**Imported drafts are edit/export only in this release.** Their activation is blocked
-in the UI, domain service and both HTTP activation handlers before OAuth lookup.
-This deliberately separates representable portable policies from current Spotify
-activation/editor limits. There is no implicit conversion to a managed destination.
-A future reviewed activation policy must handle exact imported values explicitly;
-#551 does not truncate them to make Spotify activation fit.
+**An imported ZIP creates only a local draft; Spotify is unchanged at import time.**
+A separate authenticated and CSRF-protected action can explicitly create a **NEW**
+Spotify playlist after confirming it will not relink or overwrite the original
+destination. The selected saved draft's name, description, source order, exact
+duration seconds and cover must match the activation request, with normal
+Spotify limits enforced before any provisioning journal or provider request.
+The existing durable creation journal prevents blind retries after ambiguous
+Spotify writes; cover upload follows durable destination persistence. Policy
+exceptions remain attached to the validated imported template. ZIP metadata
+is observational only: the original destination ID is not trusted or restored.
+Existing-destination **relinking** separately requires manual canonical Spotify
+ID entry, explicit confirmation, and read-only verification of the current
+Spotify account, owner, ID and exact playlist name. Duplicate destinations,
+including paused ones, and pending provisioning are rejected. The recovered
+local destination is PAUSED, without remote Spotify creation or modification;
+the operator must resume it separately. ZIP metadata grants no remote ID.
+Imported large historical values incompatible with Spotify creation are rejected
+clearly, not truncated or silently altered to fit the activation limits.
 
 | On-disk schema | Reads/preview/no-op | Confirmed creation import | Rollback |
 | --- | --- | --- | --- |

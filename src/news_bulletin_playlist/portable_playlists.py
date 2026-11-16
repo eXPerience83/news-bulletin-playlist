@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
+from news_bulletin_playlist.catalog import PlaylistTemplate
 from news_bulletin_playlist.custom_cover_assets import (
     MAX_JPEG_BYTES,
     CustomCoverAssetError,
@@ -37,11 +38,15 @@ from news_bulletin_playlist.managed_state import (
     serialize_managed_state,
     template_suspended_by_quarantine,
 )
+from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.portable_identity import portable_id
+from news_bulletin_playlist.portable_playlist_metadata import exception_payload
 from news_bulletin_playlist.portable_sources import export_sources
 
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_PLAYLIST_ZIP_BYTES = 1024 * 1024
+MAX_PLAYLIST_ZIP_V2_BYTES = 2 * 1024 * 1024
 _BUNDLED = frozenset(
     {
         "spain_spanish_news",
@@ -108,6 +113,7 @@ class PortableCoverLoader:
 
     def __init__(self, data_dir: Path, *, bundled_roots: tuple[Path, ...] | None = None) -> None:
         self.store = CustomCoverAssetStore(data_dir / "custom-covers")
+        self.migrated = MigratedCoverAssets(data_dir)
         self.roots = (
             bundled_roots
             if bundled_roots is not None
@@ -119,6 +125,11 @@ class PortableCoverLoader:
 
     def load(self, cover_id: str) -> tuple[bytes, dict[str, object]]:
         uploaded = is_uploaded_cover_id(cover_id)
+        recovered = self.migrated.load(cover_id) if not uploaded else None
+        if recovered is not None:
+            data, attribution = recovered
+            validate_canonical_jpeg(data)
+            return data, attribution
         if uploaded:
             data = self.store.load(cover_id)
         elif cover_id in _BUNDLED:
@@ -178,28 +189,106 @@ def playlist_bundle(
     kind: str,
     object_id: str,
     covers: PortableCoverLoader,
+    *,
+    version: int = 1,
 ) -> tuple[str, bytes]:
     """Build everything before returning bytes; caller holds the configuration lock."""
+    if version not in (1, 2) or (version == 2 and kind not in {"managed", "draft"}):
+        raise PlaylistExportError("Unsupported or incomplete portable playlist version")
     target = _target(state, store, kind, object_id)
+    linked_local = (
+        next((item for item in state.templates if item.id == target.template_id), None)
+        if isinstance(target, ManagedPlaylist)
+        else target
+    )
+    if version == 1 and linked_local is not None and linked_local.owner_template_id is not None:
+        raise PlaylistExportError(
+            "ZIP v1 would discard a recovered owner template; export ZIP v2 explicitly"
+        )
     identity = portable_id(target.portable_id)
     if identity is None:
         raise PlaylistExportError("Prepare a portable identity before downloading this playlist")
     templates = effective_playlist_templates(
         store.catalog, state.templates, sources=effective_sources(store.catalog, state)
     )
+    template: PlaylistTemplate | None
     if isinstance(target, ManagedPlaylist):
-        template = next((item for item in templates if item.id == target.template_id), None)
-        if template is None:
+        current_template = next((item for item in templates if item.id == target.template_id), None)
+        if current_template is None:
             raise PlaylistExportError("The playlist template is unavailable")
+        template = current_template
+        if version == 2 and linked_local is not None and linked_local.owner_template_id is not None:
+            template = next(
+                (
+                    item
+                    for item in store.catalog.playlists
+                    if item.id == linked_local.owner_template_id
+                ),
+                None,
+            )
+            if template is None:
+                raise PlaylistExportError("Recovered owner template is missing")
         source_ids = target.source_ids
-        exceptions = tuple(
-            e
+        if template is not current_template:
+            assert linked_local is not None
+            # A v2 archive has a full owner policy and one current projection.
+            # An independently edited local exception absent from that policy
+            # cannot be represented without a further versioned field.
+            local_effective = tuple(
+                e
+                for e in current_template.duration_policy.exceptions
+                if e.source_id in source_ids and e.max_seconds > target.max_duration_seconds
+            )
+            owner_effective = tuple(
+                e
+                for e in template.duration_policy.exceptions
+                if e.source_id in source_ids and e.max_seconds > target.max_duration_seconds
+            )
+            if tuple(map(exception_payload, local_effective)) != tuple(
+                map(exception_payload, owner_effective)
+            ) or any(
+                exception_payload(e)
+                not in tuple(map(exception_payload, template.duration_policy.exceptions))
+                for e in linked_local.duration_exceptions
+            ):
+                raise PlaylistExportError(
+                    "Current duration edits differ from the recovered owner template; "
+                    "ZIP v2 cannot represent both without loss"
+                )
+        # ZIP v1 has only one policy. It must not silently omit template
+        # exceptions that would become effective after editing the managed max.
+        # Preserve existing source-subset/reordering export behavior for
+        # compatibility: full template source closure requires ZIP v2 (#638).
+        if version == 1 and any(
+            e.source_id not in source_ids or e.max_seconds <= target.max_duration_seconds
             for e in template.duration_policy.exceptions
-            if e.source_id in source_ids and e.max_seconds > target.max_duration_seconds
+        ):
+            raise PlaylistExportError(
+                "ZIP v1 would silently discard future-use duration exceptions; "
+                "lossless ZIP v2 is required (#638)"
+            )
+        exceptions = (
+            tuple(
+                e
+                for e in template.duration_policy.exceptions
+                if e.source_id in source_ids and e.max_seconds > target.max_duration_seconds
+            )
+            if version == 2
+            else template.duration_policy.exceptions
         )
         countries, languages, ordering = template.countries, template.languages, template.ordering
         configuration = {"enabled": target.enabled, "hidden": None}
     else:
+        template = (
+            next(
+                (item for item in store.catalog.playlists if item.id == target.owner_template_id),
+                None,
+            )
+            if version == 2 and target.owner_template_id is not None
+            else None
+        )
+        if version == 2 and template is None:
+            raise PlaylistExportError("ZIP v2 draft has no linked owner template closure")
         source_ids = target.default_source_ids
         exceptions = target.duration_exceptions
         countries, languages, ordering = target.countries, target.languages, target.ordering
@@ -207,15 +296,41 @@ def playlist_bundle(
     if not source_ids or len(source_ids) > 100 or len(set(source_ids)) != len(source_ids):
         raise PlaylistExportError("Playlist assignments exceed portable source limits")
     sources = {source.id: source for source in effective_sources(store.catalog, state)}
-    if any(source_id not in sources for source_id in source_ids):
-        raise PlaylistExportError("An assigned source is unavailable")
+    closure_ids = source_ids
+    if version == 2:
+        assert template is not None
+        closure_ids = tuple(
+            dict.fromkeys(
+                (
+                    *source_ids,
+                    *template.default_source_ids,
+                    *(e.source_id for e in template.duration_policy.exceptions),
+                )
+            )
+        )
+        if len(closure_ids) > 100:
+            raise PlaylistExportError(
+                "Complete owner template source closure exceeds ZIP v2 limits"
+            )
+    if any(source_id not in sources for source_id in closure_ids):
+        raise PlaylistExportError("An assigned or template source is unavailable")
+    from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
+    from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
+
+    # The active owner catalog includes newly installed custom stations. Only
+    # original image-provenance sources should carry the built_in export label.
+    if isinstance(store, ForwardOnlyManagedStateStore):
+        original = parse_v11_operational(store._expected_bytes)
+        built_in_ids = {item.id for item in original.historical_catalog.sources}
+    else:
+        built_in_ids = {item.id for item in store.catalog.sources}
     source_bytes = export_sources(
-        tuple(sources[source_id] for source_id in source_ids),
-        built_in_ids={source.id for source in store.catalog.sources},
+        tuple(sources[source_id] for source_id in closure_ids),
+        built_in_ids=built_in_ids,
     )
     cover_bytes, attribution = covers.load(target.cover_id)
-    if not isinstance(target, ManagedPlaylist) and target.portable_metadata is not None:
-        metadata = json.loads(target.portable_metadata)
+    if linked_local is not None and linked_local.portable_metadata is not None:
+        metadata = json.loads(linked_local.portable_metadata)
         if metadata["cover_sha256"] == hashlib.sha256(cover_bytes).hexdigest():
             attribution = metadata["attribution"]
     cover_descriptor = _descriptor(cover_bytes)
@@ -230,7 +345,7 @@ def playlist_bundle(
         raise PlaylistExportError("Invalid playlist duration range")
     manifest = {
         "format": "news-bulletin-playlist.playlist",
-        "version": 1,
+        "version": version,
         "playlist": {
             "portable_id": identity,
             "original_id": _identifier(str(target.id)),
@@ -271,26 +386,62 @@ def playlist_bundle(
         },
         "files": {"sources.json": _descriptor(source_bytes), cover_path: cover_descriptor},
     }
+    additional_entries: list[tuple[str, bytes]] = []
+    if version == 2:
+        assert template is not None
+        template_document = OwnerTemplateSet((template,)).serialize()
+        template_cover_bytes, template_attribution = covers.load(template.cover_id)
+        owner_credit = getattr(store, "owner_cover_attribution", None)
+        if callable(owner_credit):
+            stored_credit = owner_credit(template.cover_id)
+            if stored_credit is not None:
+                template_attribution = stored_credit
+        template_cover_descriptor = _descriptor(template_cover_bytes)
+        template_cover_path = f"covers/{template_cover_descriptor['sha256']}.jpg"
+        manifest["template"] = {
+            "path": "template.json",
+            **_descriptor(template_document),
+            "cover": {
+                "original_id": template.cover_id,
+                "origin": "uploaded" if is_uploaded_cover_id(template.cover_id) else "bundled",
+                "path": template_cover_path,
+                "media_type": "image/jpeg",
+                **template_cover_descriptor,
+                "attribution": template_attribution,
+            },
+        }
+        file_descriptors = manifest["files"]
+        assert isinstance(file_descriptors, dict)
+        file_descriptors["template.json"] = _descriptor(template_document)
+        file_descriptors[template_cover_path] = template_cover_descriptor
+        additional_entries.append(("template.json", template_document))
+        if template_cover_path != cover_path:
+            additional_entries.append((template_cover_path, template_cover_bytes))
+        elif template_cover_bytes != cover_bytes:
+            raise PlaylistExportError("Same cover digest produced different JPEG bytes")
     manifest_bytes = canonical_json(manifest)
     if len(manifest_bytes) > MAX_MANIFEST_BYTES:
         raise PlaylistExportError("Playlist manifest exceeds the portable size limit")
     output = io.BytesIO()
     with ZipFile(output, "w", compression=ZIP_STORED, allowZip64=False) as archive:
-        for path, data in (
+        entries = [
             ("manifest.json", manifest_bytes),
             (
                 "manifest.sha256",
                 (hashlib.sha256(manifest_bytes).hexdigest() + "\n").encode("ascii"),
             ),
             ("sources.json", source_bytes),
+            *additional_entries[:1],
             (cover_path, cover_bytes),
-        ):
+            *additional_entries[1:],
+        ]
+        for path, data in entries:
             entry = ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
             entry.create_system = 3
             entry.external_attr = (stat.S_IFREG | 0o600) << 16
             archive.writestr(entry, data)
     payload = output.getvalue()
-    if len(payload) > MAX_PLAYLIST_ZIP_BYTES:
+    if len(payload) > (MAX_PLAYLIST_ZIP_V2_BYTES if version == 2 else MAX_PLAYLIST_ZIP_BYTES):
         raise PlaylistExportError("Playlist ZIP exceeds the portable size limit")
     return identity, payload
 
@@ -323,10 +474,15 @@ class PlaylistExportService:
     ) -> None:
         self.store, self.synchronization, self.covers = store, synchronization, covers
 
-    def export(self, kind: str, object_id: str) -> tuple[str, bytes]:
+    def export(self, kind: str, object_id: str, *, version: int = 1) -> tuple[str, bytes]:
         with self.synchronization.hold():
             return playlist_bundle(
-                self.store.load_readonly(), self.store, kind, object_id, self.covers
+                self.store.load_readonly(),
+                self.store,
+                kind,
+                object_id,
+                self.covers,
+                version=version,
             )
 
     def preparation(self, kind: str, object_id: str) -> tuple[str, int, str | None]:

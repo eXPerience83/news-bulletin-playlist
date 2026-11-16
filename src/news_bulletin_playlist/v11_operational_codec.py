@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
 
 from news_bulletin_playlist.catalog import BuiltInCatalog, PlaylistTemplate
+from news_bulletin_playlist.custom_cover_assets import is_uploaded_cover_id
 from news_bulletin_playlist.custom_playlist_templates import (
     LocalPlaylistTemplateError,
     effective_playlist_templates,
@@ -37,6 +39,7 @@ from news_bulletin_playlist.managed_state import (
     source_definition,
 )
 from news_bulletin_playlist.models import EngineConfig, SourceDefinition
+from news_bulletin_playlist.owner_inventory import OwnerInventory, OwnerInventoryError
 from news_bulletin_playlist.v11_candidate import (
     V11CandidateError,
     parse_v11_candidate,
@@ -55,6 +58,7 @@ class V11OperationalError(ValueError):
 class V11OperationalState:
     schema_version: int
     historical_catalog: BuiltInCatalog
+    active_catalog: BuiltInCatalog
     managed_overlay: ManagedState
     runtime: EngineConfig
     installed_sources: tuple[InstalledSource, ...]
@@ -62,6 +66,9 @@ class V11OperationalState:
     playlist_examples: tuple[PlaylistTemplate, ...]
     example_provenance: tuple[LegacyProvenance, ...]
     migration_origin_sha256: str
+    owner_inventory: OwnerInventory
+    inherited_cover_ids: tuple[str, ...] = ()
+    owner_sources_complete: bool = False
 
     @property
     def is_live_migration_authorized(self) -> bool:
@@ -77,8 +84,24 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
             raise V11OperationalError("ordered frozen-v2 source evidence is required")
         catalog = _historical_catalog(snapshot)
         normalized = pause_dormant_legacy_playlists(catalog, candidate.projection.original_state)
-        overlay = serialize_managed_state(normalized, catalog=catalog)
+        inventory = OwnerInventory.from_snapshot(snapshot)
+        # Historical custom sources are already in the complete owner inventory.
+        # Retire their duplicate overlay representation before the initial
+        # publication, preserving IDs and the explicitly persisted source order.
+        owner_overlay = replace(normalized, sources=())
+        overlay = serialize_managed_state(
+            owner_overlay, catalog=_owner_active_catalog(snapshot, inventory, complete=True)
+        )
         encoded_catalog = json.loads(candidate.frozen_catalog_v2_bytes)
+        inherited_cover_ids = sorted(
+            cover_id
+            for cover_id in (
+                {item.definition.cover_id for item in snapshot.templates}
+                | {item.cover_id for item in candidate.projection.original_state.playlists}
+                | {item.cover_id for item in candidate.projection.original_state.templates}
+            )
+            if not is_uploaded_cover_id(cover_id)
+        )
         document = {
             "format": OPERATIONAL_FORMAT,
             "schema_version": OPERATIONAL_SCHEMA_VERSION,
@@ -87,15 +110,27 @@ def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
             ).hexdigest(),
             "installed_catalog": encoded_catalog,
             "managed_overlay": overlay,
+            "owner_source_catalog": "complete",
+            # Strict independent owner records for a future atomic authority
+            # transition. The old frozen catalog is audit provenance only.
+            "owner_inventory": inventory.to_document(),
+            # Immutable v11 evidence that some bundled IDs must never fall back
+            # to a later image if /data/migrated-covers/index.json goes missing.
+            **({"inherited_cover_ids": inherited_cover_ids} if inherited_cover_ids else {}),
         }
         payload = _canonical(document)
         result = parse_v11_operational(payload)
-    except (FrozenLegacySnapshotError, ManagedStateError, V11CandidateError) as exc:
+    except (
+        FrozenLegacySnapshotError,
+        ManagedStateError,
+        V11CandidateError,
+        OwnerInventoryError,
+    ) as exc:
         raise V11OperationalError("cannot build a lossless operational state") from exc
     if result.runtime != candidate.projection.projected_runtime:
         raise V11OperationalError("v11 operational state changes original runtime")
-    if result.managed_overlay != normalized:
-        raise V11OperationalError("v11 operational state changes original records")
+    if result.managed_overlay != owner_overlay:
+        raise V11OperationalError("v11 operational state changes normalized owner records")
     return payload
 
 
@@ -111,14 +146,54 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         )
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise V11OperationalError("invalid v11 operational JSON") from exc
-    if not isinstance(document, dict) or set(document) != {
+    required_fields = {
         "format",
         "schema_version",
         "migration_origin_sha256",
         "installed_catalog",
         "managed_overlay",
-    }:
-        raise V11OperationalError("invalid v11 operational fields")
+        "owner_inventory",
+    }
+    # An owner inventory is mandatory: accepting missing data as an old beta
+    # would silently revert its source/template ownership to frozen presets.
+    # Older v11 beta authority requires an explicit reviewed conversion.
+    if not isinstance(document, dict):
+        raise V11OperationalError("missing or invalid v11 owner inventory fields")
+    # An unedited conversion requires exact match with the immutable legacy
+    # witness. Only a versioned owner mutation can diverge subsequently.
+    owned_cover_ids = document.get("inherited_cover_ids")
+    if owned_cover_ids is not None and (
+        not isinstance(owned_cover_ids, list)
+        or len(owned_cover_ids) > 100
+        or any(not isinstance(cover_id, str) for cover_id in owned_cover_ids)
+        or len(set(owned_cover_ids)) != len(owned_cover_ids)
+        or owned_cover_ids != sorted(owned_cover_ids)
+        or any(
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", cover_id) is None
+            or is_uploaded_cover_id(cover_id)
+            for cover_id in owned_cover_ids
+        )
+    ):
+        raise V11OperationalError("invalid inherited cover inventory")
+    recognized_fields = required_fields | (
+        {"inherited_cover_ids"} if owned_cover_ids is not None else set()
+    )
+    owner_catalog_mode = document.get("owner_source_catalog")
+    if "owner_source_catalog" in document:
+        if owner_catalog_mode != "complete":
+            raise V11OperationalError("invalid complete owner source catalog marker")
+        recognized_fields.add("owner_source_catalog")
+    complete_owner_sources = owner_catalog_mode == "complete"
+    owner_revision = document.get("owner_revision")
+    if owner_revision is None:
+        if set(document) != recognized_fields:
+            raise V11OperationalError("missing or invalid v11 owner inventory fields")
+    elif (
+        set(document) != recognized_fields | {"owner_revision"}
+        or type(owner_revision) is not int
+        or not 1 <= owner_revision <= 1_000_000
+    ):
+        raise V11OperationalError("invalid versioned owner inventory revision")
     if (
         document["format"] != OPERATIONAL_FORMAT
         or type(document["schema_version"]) is not int
@@ -135,29 +210,55 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         snapshot = parse_legacy_snapshot(catalog_bytes)
         if snapshot.source_order is None:
             raise V11OperationalError("v11 requires verified historical source order")
+        if owned_cover_ids is not None and not {
+            item.definition.cover_id
+            for item in snapshot.templates
+            if not is_uploaded_cover_id(item.definition.cover_id)
+        }.issubset(owned_cover_ids):
+            raise V11OperationalError("inherited cover inventory omits historical template")
+        owner_inventory = OwnerInventory.parse(document["owner_inventory"])
+        if owner_revision is None:
+            owner_inventory.validate_against(snapshot)
         digest = document["migration_origin_sha256"]
         if digest != snapshot.managed_state_sha256:
             raise V11OperationalError("v11 historical origin digest mismatch")
         catalog = _historical_catalog(snapshot)
-        overlay = parse_managed_state(document["managed_overlay"], catalog=catalog)
+        # The owner inventory, not the legacy image-preset reconstruction, is
+        # now the runtime source of truth. Historical catalog is retained only
+        # for the provenance record and initial migration equivalence.
+        active_catalog = _owner_active_catalog(
+            snapshot, owner_inventory, complete=complete_owner_sources
+        )
+        overlay = parse_managed_state(document["managed_overlay"], catalog=active_catalog)
+        if complete_owner_sources and overlay.sources:
+            raise V11OperationalError("complete owner catalog cannot duplicate overlay sources")
         if overlay.schema_version < snapshot.managed_schema_version:
             raise V11OperationalError("v11 overlay cannot downgrade its original schema")
-        if serialize_managed_state(overlay, catalog=catalog) != document["managed_overlay"]:
+        if serialize_managed_state(overlay, catalog=active_catalog) != document["managed_overlay"]:
             raise V11OperationalError("noncanonical v11 managed overlay")
-        runtime = compile_engine_config(catalog, overlay)
+        runtime = compile_engine_config(active_catalog, overlay)
         # The original historical order is frozen, not a constraint on later
         # installation-owned source/template edits. Only image-preset sources
         # remain fixed in their original relative order; newly installed
         # sources may be added or removed through the validated overlay.
-        image_ids = tuple(source.id for source in catalog.sources)
+        image_ids = tuple(source.id for source in active_catalog.sources)
         if tuple(item.id for item in runtime.sources[: len(image_ids)]) != image_ids:
             raise V11OperationalError("v11 installed catalog source order changed")
+        if complete_owner_sources and tuple(source.id for source in runtime.sources) != (
+            owner_inventory.source_order.ids
+        ):
+            raise V11OperationalError("complete owner source order diverged from runtime")
         templates = effective_playlist_templates(
-            catalog, overlay.templates, sources=runtime.sources
+            active_catalog, overlay.templates, sources=runtime.sources
         )
         if payload != _canonical(document):
             raise V11OperationalError("noncanonical v11 operational JSON")
-    except (FrozenLegacySnapshotError, ManagedStateError, LocalPlaylistTemplateError) as exc:
+    except (
+        FrozenLegacySnapshotError,
+        ManagedStateError,
+        LocalPlaylistTemplateError,
+        OwnerInventoryError,
+    ) as exc:
         raise V11OperationalError("v11 operational state cannot be validated") from exc
 
     by_id = {item.installed.id: item for item in snapshot.sources}
@@ -165,6 +266,7 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
     return V11OperationalState(
         schema_version=OPERATIONAL_SCHEMA_VERSION,
         historical_catalog=catalog,
+        active_catalog=active_catalog,
         managed_overlay=overlay,
         runtime=runtime,
         installed_sources=tuple(item.installed for item in ordered_records),
@@ -172,6 +274,9 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         playlist_examples=templates,
         example_provenance=tuple(item.provenance for item in snapshot.templates),
         migration_origin_sha256=digest,
+        owner_inventory=owner_inventory,
+        inherited_cover_ids=tuple(owned_cover_ids or ()),
+        owner_sources_complete=complete_owner_sources,
     )
 
 
@@ -189,7 +294,7 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
     try:
         document = json.loads(payload)
         document["managed_overlay"] = serialize_managed_state(
-            overlay, catalog=current.historical_catalog
+            overlay, catalog=current.active_catalog
         )
         next_payload = _canonical(document)
         verified = parse_v11_operational(next_payload)
@@ -199,9 +304,89 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
         raise V11OperationalError("v11 edit changed managed state")
     if verified.historical_catalog != current.historical_catalog:
         raise V11OperationalError("v11 edit changed historical catalog")
+    if verified.active_catalog != current.active_catalog:
+        raise V11OperationalError("v11 edit changed owner-backed active catalog")
     if verified.migration_origin_sha256 != current.migration_origin_sha256:
         raise V11OperationalError("v11 edit changed migration origin")
+    if verified.owner_inventory != current.owner_inventory:
+        raise V11OperationalError("v11 overlay edit changed installed owner inventory")
     return next_payload
+
+
+def update_v11_owner_inventory(
+    payload: bytes, edited: OwnerInventory, *, managed_overlay: ManagedState | None = None
+) -> bytes:
+    """Publish a validated owner-inventory revision without rewriting legacy evidence.
+
+    A revision is explicit and strictly increasing. The initial conversion is
+    still required to exactly match its immutable historical witness.
+    """
+    current = parse_v11_operational(payload)
+    if not isinstance(edited, OwnerInventory):
+        raise V11OperationalError("invalid owner inventory edit")
+    updated_overlay = current.managed_overlay if managed_overlay is None else managed_overlay
+    if edited == current.owner_inventory and updated_overlay == current.managed_overlay:
+        return payload
+    try:
+        document = json.loads(payload)
+        document["owner_inventory"] = edited.to_document()
+        # Update owner mode and retire its legacy override in one durable CAS.
+        # Owner catalog and managed projection must validate as *one* candidate:
+        # a newly imported template may reference source records added to the
+        # owner inventory by this same atomic CAS.
+        snapshot = parse_legacy_snapshot(_canonical(document["installed_catalog"]))
+        next_catalog = _owner_active_catalog(
+            snapshot, edited, complete=current.owner_sources_complete
+        )
+        document["managed_overlay"] = serialize_managed_state(updated_overlay, catalog=next_catalog)
+        document["owner_revision"] = document.get("owner_revision", 0) + 1
+        candidate = _canonical(document)
+        verified = parse_v11_operational(candidate)
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise V11OperationalError("owner inventory edit is not valid") from exc
+    if (
+        verified.managed_overlay != updated_overlay
+        or verified.migration_origin_sha256 != current.migration_origin_sha256
+        or verified.historical_catalog != current.historical_catalog
+        or verified.owner_inventory != edited
+    ):
+        raise V11OperationalError("owner edit changed historical evidence or requested policy")
+    return candidate
+
+
+def _owner_active_catalog(
+    snapshot: FrozenLegacyCatalogSnapshot,
+    owned: OwnerInventory,
+    *,
+    complete: bool = False,
+) -> BuiltInCatalog:
+    """Compile owner-persisted definitions without rebuilding from image presets.
+
+    Old v11 documents without the complete marker remain readable in their
+    historical split representation. New migrations own the entire catalog,
+    including former installation-provenance sources, in original order.
+    """
+    original_image_ids = {
+        item.installed.id
+        for item in snapshot.sources
+        if item.provenance is LegacyProvenance.IMAGE_PRESET
+    }
+    historical_ids = {item.installed.id for item in snapshot.sources}
+    ordered_sources = owned.source_order.definitions(owned.sources)
+    if complete:
+        return BuiltInCatalog(ordered_sources, owned.templates.records, allow_disabled_sources=True)
+    # Old split-mode custom sources remain represented in managed_overlay.sources,
+    # whereas newly owner-installed sources belong to this active catalog.
+    # Do not duplicate historical custom records or silently hide new sources.
+    return BuiltInCatalog(
+        tuple(
+            source
+            for source in ordered_sources
+            if source.id in original_image_ids or source.id not in historical_ids
+        ),
+        owned.templates.records,
+        allow_disabled_sources=True,
+    )
 
 
 def _historical_catalog(snapshot: FrozenLegacyCatalogSnapshot) -> BuiltInCatalog:

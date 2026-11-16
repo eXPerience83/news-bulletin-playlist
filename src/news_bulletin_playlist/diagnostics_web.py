@@ -120,6 +120,7 @@ def render_diagnostics_page(
     display_timezone: tzinfo = UTC,
     timezone_label: str = "UTC",
     spotify_metrics: SpotifyRequestMetricsSnapshot | None = None,
+    inspection_hold: bool = False,
 ) -> bytes:
     """Render authenticated diagnostics directly inside the shared administration shell."""
 
@@ -132,7 +133,15 @@ def render_diagnostics_page(
     playlist_value = "" if filters.playlist_id is None else filters.playlist_id
     hours_value = "all" if filters.hours is None else str(filters.hours)
     metrics = _spotify_metrics_section(spotify_metrics)
+    inspection_notice = (
+        '<div class="notice" role="status">Startup inspection hold is active. '
+        "This installation is not production-ready; configuration and Spotify writes "
+        "remain locked.</div>"
+        if inspection_hold
+        else ""
+    )
     body = f"""
+{inspection_notice}
 <section class="section card admin-panel" aria-labelledby="diagnostic-filters-heading">
   <h2 id="diagnostic-filters-heading">Filters</h2>
   <form class="filter-form" method="get" action="/admin/diagnostics">

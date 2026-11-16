@@ -724,7 +724,7 @@ def test_mid_cycle_disable_blocks_write_but_safe_metadata_change_does_not(
     ):
         writes.append("spotify mutation")
     assert writes == []
-    updated = compile_engine_config(BUILTIN_CATALOG, managed_store.load())
+    updated = compile_engine_config(managed_store.catalog, managed_store.load())
     assert managed_store.load().playlists[0].source_ids == state.playlists[0].source_ids
     assert updated.playlists[0].source_selection.explicit == (SourceId("ser"),)
     with runner._playlist_mutation_guard(updated, updated.playlists[0]):

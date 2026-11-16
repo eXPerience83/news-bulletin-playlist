@@ -12,7 +12,10 @@ from threading import RLock
 from typing import Any
 from weakref import WeakKeyDictionary
 
-from news_bulletin_playlist.portable_playlists import MAX_PLAYLIST_ZIP_BYTES
+from news_bulletin_playlist.portable_playlists import (
+    MAX_PLAYLIST_ZIP_BYTES,
+    MAX_PLAYLIST_ZIP_V2_BYTES,
+)
 from news_bulletin_playlist.portable_sources import MAX_SOURCE_DOCUMENT_BYTES
 
 ADMIN_SESSION_COOKIE = "news_playlist_admin_session"
@@ -140,12 +143,13 @@ class AdminSessionManager:
         now: datetime | None = None,
         kind: str = "sources",
     ) -> SourceImportContext:
-        limit = MAX_SOURCE_DOCUMENT_BYTES if kind == "sources" else MAX_PLAYLIST_ZIP_BYTES
-        if (
-            kind not in {"sources", "playlist"}
-            or not isinstance(document, bytes)
-            or not 0 < len(document) <= limit
-        ):
+        limits = {
+            "sources": MAX_SOURCE_DOCUMENT_BYTES,
+            "playlist": MAX_PLAYLIST_ZIP_BYTES,
+            "playlist-v2": MAX_PLAYLIST_ZIP_V2_BYTES,
+        }
+        limit = limits.get(kind)
+        if limit is None or not isinstance(document, bytes) or not 0 < len(document) <= limit:
             raise ValueError("Invalid source import document size")
         observed_at = _as_utc(now or datetime.now(UTC))
         with self._lock:

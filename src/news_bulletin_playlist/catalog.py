@@ -46,6 +46,9 @@ class BuiltInCatalog:
 
     sources: tuple[SourceDefinition, ...]
     playlists: tuple[PlaylistTemplate, ...]
+    # Legacy image catalog must remain enabled. Only persisted v11 owner
+    # definitions may opt into an explicitly disabled installed source.
+    allow_disabled_sources: bool = False
 
     def __post_init__(self) -> None:
         source_ids = [source.id for source in self.sources]
@@ -56,7 +59,7 @@ class BuiltInCatalog:
             raise ValueError("built-in catalog contains duplicate playlist template ids")
         known_sources = set(source_ids)
         for source in self.sources:
-            if not source.enabled:
+            if not source.enabled and not self.allow_disabled_sources:
                 raise ValueError(f"built-in source {source.id} must be enabled")
             if not has_title_parser(str(source.parser_id)):
                 raise ValueError(f"built-in source {source.id} has an unknown title parser")

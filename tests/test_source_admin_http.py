@@ -1995,7 +1995,7 @@ def test_real_startup_recovers_supported_legacy_dormant_state_and_allows_admin_r
             _request(server, "POST", "/admin/playlists/update", cookie=cookie, form=form)[0] == 303
         )
         final = owner.load()
-        compiled = compile_engine_config(BUILTIN_CATALOG, final)
+        compiled = compile_engine_config(owner.catalog, final)
         assert final.playlists[0].destination == playlist.destination
         if repair == "keep_paused":
             assert final.playlists[0].source_ids == playlist.source_ids

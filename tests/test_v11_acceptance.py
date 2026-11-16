@@ -24,7 +24,7 @@ from news_bulletin_playlist.portable_playlists import (
     PlaylistExportService,
     PortableCoverLoader,
 )
-from news_bulletin_playlist.portable_sources import export_sources
+from news_bulletin_playlist.portable_sources import PortableSource, export_sources
 from news_bulletin_playlist.source_import import (
     SourceImportService,
     StaleSourceImport,
@@ -123,6 +123,9 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
     portable_identity, archive = exporter.export("draft", str(draft.id))
     assert portable_identity == draft.portable_id
     bundle = inspect_playlist_bundle(archive)
+    assert len(bundle.sources) == 1
+    assert isinstance(bundle.sources[0], PortableSource)
+    assert bundle.sources[0].provenance == "custom"
     assert bundle.playlist["duration_policy"]["min_seconds"] == draft.min_duration_seconds
     assert bundle.playlist["duration_policy"]["max_seconds"] == draft.max_duration_seconds
     assert bundle.jpeg == assets.load(draft.cover_id)
@@ -150,9 +153,11 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
         confirm_schema=False,
     )
     assert result.created_draft and result.created_sources == 1
-    restored = open_managed_state_store(recipient).load_readonly()
+    restored_store = open_managed_state_store(recipient)
+    restored = restored_store.load_readonly()
     assert restored.playlists == ()
-    assert len(restored.sources) == len(restored.templates) == 1
+    assert not restored.sources
+    assert len(restored_store.catalog.sources) == len(restored.templates) == 1
     restored_draft = restored.templates[0]
     assert restored_draft.portable_id == draft.portable_id
     assert restored_draft.display_name == draft.display_name
@@ -161,7 +166,7 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
     assert restored_draft.max_duration_seconds == draft.max_duration_seconds
     assert restored_draft.retention_hours == draft.retention_hours
     assert restored_draft.max_episodes == draft.max_episodes
-    assert restored_draft.default_source_ids == (restored.sources[0].id,)
+    assert restored_draft.default_source_ids == (restored_store.catalog.sources[0].id,)
     assert (
         CustomCoverAssetStore(recipient / "custom-covers").load(restored_draft.cover_id)
         == bundle.jpeg
@@ -206,4 +211,5 @@ def test_fresh_v11_source_json_example_draft_zip_import_two_independent_roots(
             keep_local=frozenset(),
             confirm_v8=False,
         )
-    assert len(restarted.store.load().sources) == 1
+    restarted.store.load()
+    assert len(restarted.store.catalog.sources) == 1
