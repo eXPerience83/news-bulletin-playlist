@@ -327,6 +327,11 @@ def test_v11_inspection_hold_hides_migrated_cover_mutations_and_rejects_upload(
         server.RequestHandlerClass.managed_admin_service = service
         server.RequestHandlerClass.inspection_hold = True
         before = (root / "managed-state-v11.json").read_bytes()
+        # The migration already persists historical bundled JPEGs here.
+        existing_artwork = {
+            path.name: path.read_bytes()
+            for path in (root / "custom-covers").glob("*.jpg")
+        }
         playlist = store.load_readonly().playlists[0]
         cookie = _login(server)
 
@@ -345,5 +350,8 @@ def test_v11_inspection_hold_hides_migrated_cover_mutations_and_rejects_upload(
         status, _, _ = _upload_http(server, cookie, image_type, data)
         assert status == HTTPStatus.LOCKED
         assert (root / "managed-state-v11.json").read_bytes() == before
-        assert not (root / "custom-covers").exists()
+        assert {
+            path.name: path.read_bytes()
+            for path in (root / "custom-covers").glob("*.jpg")
+        } == existing_artwork
         assert not client.calls
