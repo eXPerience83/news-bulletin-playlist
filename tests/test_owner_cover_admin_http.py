@@ -341,9 +341,7 @@ def test_v11_inspection_hold_hides_migrated_cover_mutations_and_rejects_upload(
         assert '<select name="cover_id">' not in card
         assert 'action="/admin/owner-covers/upload"' not in card
 
-        image_type, data = _binary_form(
-            _csrf(page), "managed", str(playlist.id), _png()
-        )
+        image_type, data = _binary_form(_csrf(page), "managed", str(playlist.id), _png())
         status, _, _ = _upload_http(server, cookie, image_type, data)
         assert status == HTTPStatus.LOCKED
         assert (root / "managed-state-v11.json").read_bytes() == before
