@@ -553,7 +553,12 @@ class ManagedAdminService:
             return
         if target_kind == "managed":
             playlist = self._managed(state, target_id)
-            if not str(playlist.template_id).startswith("custom_"):
+            # The v11 migration makes all managed destinations installation-owned,
+            # regardless of whether their historical template ID starts with custom_.
+            # Keep the old pre-v11 restriction for legacy-only test callers.
+            if not isinstance(self.store, ForwardOnlyManagedStateStore) and not str(
+                playlist.template_id
+            ).startswith("custom_"):
                 raise ManagedAdminError("Only custom managed playlists support uploaded covers")
             self._replace(state, replace(playlist, cover_id=cover_id))
             return
