@@ -114,9 +114,7 @@ def test_changed_v11_state_invalidates_operator_release(tmp_path: Path):
 
 
 @pytest.mark.parametrize("damage", ["modified", "missing"])
-def test_release_refuses_changed_or_missing_legacy_witness(
-    tmp_path: Path, damage: str
-) -> None:
+def test_release_refuses_changed_or_missing_legacy_witness(tmp_path: Path, damage: str) -> None:
     root, _preview = _legacy_root(tmp_path, 10)
     startup_gate(root, requested=True)
     V11OperationalStore(root).initialize_from_legacy()
@@ -165,6 +163,20 @@ def test_release_refuses_missing_original_cover_with_valid_v11_sha(tmp_path: Pat
     (root / "custom-covers" / f"{asset_id}.jpg").unlink()
 
     with pytest.raises(InspectionGateError, match="Full v11 migration inspection"):
+        release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+
+
+def test_release_refuses_missing_cover_index_without_nested_root_lock(tmp_path: Path) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    V11OperationalStore(root).initialize_from_legacy()
+    state_sha = inspect_gate(root).state_sha256
+    (root / "migrated-covers" / "index.json").unlink()
+
+    # This must fail promptly: the inherited-cover load fallback must not
+    # recursively wait for the release command's already-held root flock.
+    with pytest.raises(InspectionGateError, match="not all passing"):
         release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
     assert inspect_gate(root).held
 

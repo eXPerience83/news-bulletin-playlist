@@ -160,8 +160,9 @@ def upgrade_inspection_report(
         )
         cover_ids = [cover_id for cover_id in cover_ids if not is_uploaded_cover_id(cover_id)]
         covers = MigratedCoverAssets(data_dir)
+        verified_covers = covers.inspect_expected(cover_ids)
         artwork = [
-            {"id": cover_id, "persisted_and_verified": covers.load(cover_id) is not None}
+            {"id": cover_id, "persisted_and_verified": verified_covers[cover_id]}
             for cover_id in cover_ids
         ]
         gate_state = "not_requested" if gate is None else gate[0]
