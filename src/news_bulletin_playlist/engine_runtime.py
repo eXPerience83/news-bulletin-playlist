@@ -1676,7 +1676,10 @@ def serve(
                 }
             ),
         )
-    return 0
+    # A scheduler that outlives the bounded drain may still have an
+    # unconfirmed provider mutation. Do not report a successful process exit
+    # to the container supervisor when the stop was incomplete.
+    return 0 if shutdown_complete else 1
 
 
 def _build_managed_admin_service(
