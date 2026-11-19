@@ -27,6 +27,7 @@ from news_bulletin_playlist.v11_candidate_storage import _locked_root, _read_reg
 from news_bulletin_playlist.v11_operational_codec import (
     MAX_OPERATIONAL_BYTES,
     V11OperationalError,
+    V11OperationalState,
     parse_v11_operational,
 )
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME
@@ -38,28 +39,36 @@ class UpgradeInspectionError(ValueError):
     """Cannot certify first-boot config integrity from local installation evidence."""
 
 
-def upgrade_inspection_report(data_dir: Path) -> dict[str, object]:
-    """Compare complete persisted v11 state to the inert original in one locked read.
+def _read_inspection_inputs(
+    directory: int,
+) -> tuple[tuple[str, str | None] | None, bytes, V11OperationalState, bytes | None]:
+    """Read all mutable installation evidence with the caller's root lock held."""
+    gate = _read(directory)
+    owned_raw = _read_regular(directory, V11_OPERATIONAL_FILENAME, MAX_OPERATIONAL_BYTES)
+    operational = parse_v11_operational(owned_raw)
+    try:
+        os.stat(MANAGED_STATE_FILENAME, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        legacy_raw = None
+    else:
+        legacy_raw = _read_regular(directory, MANAGED_STATE_FILENAME, MAX_OPERATIONAL_BYTES)
+    return gate, owned_raw, operational, legacy_raw
 
-    For an intentionally empty new installation, no original managed-state file
-    exists, so historical equivalence is not applicable. Fail closed when an
-    original exists but cannot be validated byte-for-byte.
+
+def upgrade_inspection_report(
+    data_dir: Path, *, _locked_fd: int | None = None
+) -> dict[str, object]:
+    """Check the original and v11 authority without provider or SQLite writes.
+
+    inspection-release supplies its already-locked root fd so the entire
+    migration verification and final gate publication share one lock.
     """
     try:
-        with _locked_root(data_dir) as directory:
-            gate = _read(directory)
-            owned_raw = _read_regular(directory, V11_OPERATIONAL_FILENAME, MAX_OPERATIONAL_BYTES)
-            operational = parse_v11_operational(owned_raw)
-            try:
-                os.stat(MANAGED_STATE_FILENAME, dir_fd=directory, follow_symlinks=False)
-            except FileNotFoundError:
-                legacy_raw = None
-            else:
-                # Only a genuinely missing file is a clean-install candidate.
-                # The checked reader must reject symlinks, FIFOs, permissions
-                # and any other malformed existing legacy-file evidence.
-                legacy_raw = _read_regular(directory, MANAGED_STATE_FILENAME, MAX_OPERATIONAL_BYTES)
-        # All state-bearing inputs above were captured under the same lock.
+        if _locked_fd is None:
+            with _locked_root(data_dir) as directory:
+                gate, owned_raw, operational, legacy_raw = _read_inspection_inputs(directory)
+        else:
+            gate, owned_raw, operational, legacy_raw = _read_inspection_inputs(_locked_fd)
         if legacy_raw is None:
             # Only a genuinely pristine first install lacks legacy bytes.
             # A migrated root without its original input cannot be verified:

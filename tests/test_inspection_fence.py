@@ -113,6 +113,75 @@ def test_changed_v11_state_invalidates_operator_release(tmp_path: Path):
     assert inspect_gate(root).held
 
 
+@pytest.mark.parametrize("damage", ["modified", "missing"])
+def test_release_refuses_changed_or_missing_legacy_witness(
+    tmp_path: Path, damage: str
+) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    V11OperationalStore(root).initialize_from_legacy()
+    state_sha = inspect_gate(root).state_sha256
+    original = root / "managed-state.json"
+    if damage == "modified":
+        original.write_bytes(b'{"schema_version":10}')
+    else:
+        original.unlink()
+
+    with pytest.raises(InspectionGateError, match="Full v11 migration inspection"):
+        release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+    assert inspect_gate(root).state_sha256 == state_sha
+
+
+def test_release_refuses_changed_runtime_even_with_current_v11_sha(tmp_path: Path) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    store = V11OperationalStore(root)
+    original = store.initialize_from_legacy()
+    store.save(
+        replace(
+            original.managed_overlay,
+            playlists=tuple(
+                replace(item, enabled=False) for item in original.managed_overlay.playlists
+            ),
+        ),
+        expected_bytes=store.load_bytes(),
+    )
+    changed_sha = inspect_gate(root).state_sha256
+    with pytest.raises(InspectionGateError, match="not all passing"):
+        release_gate(root, expected_sha256=changed_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+    assert inspect_gate(root).state_sha256 == changed_sha
+
+
+def test_release_refuses_missing_original_cover_with_valid_v11_sha(tmp_path: Path) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    V11OperationalStore(root).initialize_from_legacy()
+    state_sha = inspect_gate(root).state_sha256
+    index = json.loads((root / "migrated-covers" / "index.json").read_text())
+    assert index["covers"]
+    asset_id = index["covers"][0]["asset_id"]
+    (root / "custom-covers" / f"{asset_id}.jpg").unlink()
+
+    with pytest.raises(InspectionGateError, match="Full v11 migration inspection"):
+        release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+
+
+def test_release_allows_intentionally_empty_v11_root_only_after_held_inspection(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fresh"
+    root.mkdir()
+    startup_gate(root, requested=True)
+    V11OperationalStore(root).initialize_fresh()
+    state_sha = inspect_gate(root).state_sha256
+    result = release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert result.state == "released"
+    assert result.state_sha256 == state_sha
+
+
 @pytest.mark.parametrize("value", ["true", "yes", "2", "-1", "", " 1 ", "False"])
 def test_invalid_inspection_mode_is_not_silently_ignored(value: str):
     with pytest.raises(InspectionGateError, match=INSPECTION_ENV):

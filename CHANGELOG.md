@@ -43,6 +43,16 @@ has occurred.
 
 ### Changed
 
+- **Inspection release hardening:** explicit SHA-bound `inspection-release`
+  now rechecks the full local migration report under the same root lock and
+  refuses release if original legacy evidence, managed policies or persisted
+  historical artwork fail verification (#631). This does **not** fence a
+  previously dispatched Spotify write from an old instance (#421).
+- **v11 historical artwork:** migrated owner-managed playlists now allow local
+  custom cover selection/upload without an implicit Spotify request; inspection
+  mode blocks mutations (#648, PR #650).
+- **Shutdown signals:** incomplete new-version scheduler drain returns a
+  nonzero process exit without claiming to cancel provider work (#421, PR #647).
 - **v11 operational authority:** atomically migrate legacy v6–v10 into the
   installation-owned v11 document; retain frozen historical sources/templates,
   all four Spotify destinations, dormant assignments, overrides, portable UUIDs,

@@ -191,6 +191,12 @@ def release_gate(
         raise InspectionGateError("Explicit reconciliation release confirmation is required")
     if _SHA256.fullmatch(expected_sha256) is None:
         raise InspectionGateError("Provide the full lowercase v11 SHA-256 from inspection-status")
+    # Local import avoids a module cycle: the report uses this gate reader.
+    from news_bulletin_playlist.upgrade_inspection_report import (
+        UpgradeInspectionError,
+        upgrade_inspection_report,
+    )
+
     try:
         with _locked_root(data_dir) as fd:
             if _read(fd) != ("held", None):
@@ -200,6 +206,21 @@ def release_gate(
             observed = hashlib.sha256(raw).hexdigest()
             if observed != expected_sha256:
                 raise InspectionGateError("v11 state changed; re-inspect before releasing Spotify")
+            try:
+                report = upgrade_inspection_report(data_dir, _locked_fd=fd)
+            except UpgradeInspectionError as exc:
+                raise InspectionGateError(
+                    "Full v11 migration inspection failed; Spotify remains held"
+                ) from exc
+            if (
+                report["v11_state_sha256"] != observed
+                or report["gate"] != "held"
+                or not report["safe_to_review_without_spotify_writes"]
+            ):
+                raise InspectionGateError(
+                    "Full v11 migration inspection checks are not all passing"
+                )
+            # No local check can cancel a previously sent old-container PUT.
             _write(fd, "released", observed)
             if _read(fd) != ("released", observed):
                 raise InspectionGateError("Reconciliation release durability is uncertain")
