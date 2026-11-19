@@ -13,6 +13,9 @@ from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
 from _source_admin_http_fixtures import _server
+from _legacy_dataset import legacy_root
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
 from PIL import Image
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -239,3 +242,110 @@ def test_managed_custom_can_return_to_bundled_cover_without_spotify(
     assert state.playlists[1] == updated
     assert state.templates == (draft,)
     assert (storage.root / f"{uploaded_id}.jpg").exists()  # no unsafe asset deletion
+
+
+def test_v11_migrated_playlists_allow_owner_cover_upload_without_spotify(
+    tmp_path: Path,
+) -> None:
+    root, original = legacy_root(tmp_path, 10)
+    original_legacy_bytes = (root / "managed-state.json").read_bytes()
+    with _server(root) as (server, client, _legacy_store):
+        store = open_managed_state_store(root)
+        service = _setup_service(store, root)
+        service.catalog = store.catalog
+        server.RequestHandlerClass.managed_admin_service = service
+        state = store.load_readonly()
+        assert len(state.playlists) == 4
+        assert len({item.cover_id for item in state.playlists}) == 4
+        first = state.playlists[0]
+        assert not str(first.template_id).startswith("custom_")
+        originals = state.playlists
+        before_sources = store.catalog.sources
+        before_runtime = V11OperationalStore(root).load().runtime
+
+        cookie = _login(server)
+        status, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+        assert status == HTTPStatus.OK
+        card = next(
+            part
+            for part in page.decode().split('<article class="card playlist-card">')
+            if f"playlist/{first.destination.external_id}" in part
+        )
+        assert '<select name="cover_id">' in card
+        assert 'action="/admin/owner-covers/upload"' in card
+        assert f'<option value="{first.cover_id}" selected>' in card
+
+        image_type, data = _binary_form(_csrf(page), "managed", str(first.id), _png())
+        status, _, _ = _upload_http(server, cookie, image_type, data)
+        assert status == HTTPStatus.SEE_OTHER
+
+        reopened = open_managed_state_store(root)
+        current = reopened.load_readonly()
+        assert is_uploaded_cover_id(current.playlists[0].cover_id)
+        assert current.playlists[0].destination == first.destination
+        assert replace(current.playlists[0], cover_id=first.cover_id) == first
+        assert current.playlists[1:] == originals[1:]
+        assert reopened.catalog.sources == before_sources
+        assert V11OperationalStore(root).load().runtime == before_runtime
+        assert (root / "managed-state.json").read_bytes() == original_legacy_bytes
+        assert not client.calls
+
+        uploaded_id = current.playlists[0].cover_id
+        with pytest.raises(ManagedAdminError, match="missing or invalid"):
+            service.select_uploaded_cover(
+                target_kind="managed",
+                target_id=str(first.id),
+                cover_id="uploaded_" + "0" * 64,
+            )
+        assert reopened.load_readonly().playlists[0].cover_id == uploaded_id
+
+        # Switching back to the original design remains a local-only edit.
+        restored = service.update(
+            first.id,
+            display_name=first.display_name,
+            description=first.description,
+            cover_id=first.cover_id,
+            source_ids=first.source_ids,
+            enabled=first.enabled,
+            access_token=None,
+        )
+        assert restored == first
+        assert open_managed_state_store(root).load_readonly().playlists == originals
+        assert (root / "custom-covers" / f"{uploaded_id}.jpg").exists()
+        assert not client.calls
+    assert len(original.original_runtime.playlists) == 4
+
+
+def test_v11_inspection_hold_hides_migrated_cover_mutations_and_rejects_upload(
+    tmp_path: Path,
+) -> None:
+    root, _preview = legacy_root(tmp_path, 10)
+    with _server(root) as (server, client, _legacy_store):
+        store = open_managed_state_store(root)
+        service = _setup_service(store, root)
+        service.catalog = store.catalog
+        server.RequestHandlerClass.managed_admin_service = service
+        server.RequestHandlerClass.inspection_hold = True
+        before = (root / "managed-state-v11.json").read_bytes()
+        playlist = store.load_readonly().playlists[0]
+        cookie = _login(server)
+
+        status, _, page = _request(server, "GET", "/admin/", cookie=cookie)
+        assert status == HTTPStatus.OK
+        card = next(
+            part
+            for part in page.decode().split('<article class="card playlist-card">')
+            if f"playlist/{playlist.destination.external_id}" in part
+        )
+        assert "Cover selection and uploads are locked" in card
+        assert '<select name="cover_id">' not in card
+        assert 'action="/admin/owner-covers/upload"' not in card
+
+        image_type, data = _binary_form(
+            _csrf(page), "managed", str(playlist.id), _png()
+        )
+        status, _, _ = _upload_http(server, cookie, image_type, data)
+        assert status == HTTPStatus.LOCKED
+        assert (root / "managed-state-v11.json").read_bytes() == before
+        assert not (root / "custom-covers").exists()
+        assert not client.calls

@@ -68,6 +68,8 @@ def render_managed_admin_page(
                 custom_sources=state.sources,
                 sources=sources,
                 state=state,
+                owner_catalog_editable=owner_catalog_editable,
+                inspection_hold=inspection_hold,
             )
             for playlist in snapshot.managed
         )
@@ -396,6 +398,8 @@ def _managed_card(
     custom_sources: tuple[ManagedSource, ...],
     sources: tuple[SourceDefinition, ...],
     state: ManagedState,
+    owner_catalog_editable: bool = False,
+    inspection_hold: bool = False,
 ) -> str:
     outcome = None
     if last_cycle is not None:
@@ -440,7 +444,9 @@ def _managed_card(
         source_prefix=f"edit-{playlist.id}",
         enabled=playlist.enabled,
     )
-    custom_managed = str(playlist.template_id).startswith("custom_")
+    # A migrated v11 playlist is just as owner-managed as a newly created one.
+    # Historical template prefixes are not an ownership or permission boundary.
+    can_edit_cover = owner_catalog_editable or str(playlist.template_id).startswith("custom_")
     upload_form = (
         _owner_cover_upload_form(
             csrf_token=csrf_token,
@@ -448,16 +454,21 @@ def _managed_card(
             target_id=str(playlist.id),
             active_on_spotify=True,
         )
-        if custom_managed
+        if can_edit_cover and not inspection_hold
         else ""
     )
     cover_control = (
         "<label>Selected cover (local only; apply to Spotify separately)"
         f'<select name="cover_id">{_custom_cover_options(catalog, playlist.cover_id)}</select>'
         "</label>"
-        if custom_managed
+        if can_edit_cover and not inspection_hold
         else _hidden_input("cover_id", playlist.cover_id)
     )
+    if can_edit_cover and inspection_hold:
+        cover_control += (
+            '<p class="muted">Cover selection and uploads are locked during '
+            "startup inspection. The existing Spotify cover is unchanged.</p>"
+        )
     return f"""
 <article class="card playlist-card">
   <div class="card-head">
