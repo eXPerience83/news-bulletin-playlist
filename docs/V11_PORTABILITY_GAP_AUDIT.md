@@ -1,5 +1,7 @@
 # 0.2.3b1 → v11: compatibility and portability acceptance gaps (#631)
 
+> **ARCHIVAL (10 November 2026) — superseded implementation status.** PR #646 integrated owner source/template CRUD (#633), ZIP v2 full closure (#638), durable historical JPEGs and the first-boot inspection hold. PR #647 and #640 were merged on 19 November. The blockers **remaining now** are #421 old-process stop/remote-write uncertainty, #631 actual TrueNAS migration and four-destination audit, #565 separately authorized immutable beta and precise documentation. The historical open-blocker list below records the pre-merge state only; current roadmap: [#542](https://github.com/eXPerience83/news-bulletin-playlist/issues/542).
+
 **Status (updated 2026-11-10): NOT READY for production or complete owner portability.**
 
 This is the current status of the single integration candidate PR #646, not

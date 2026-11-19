@@ -1,5 +1,7 @@
 # Architecture
 
+> **Version scope, 19 November 2026:** The Spotify-first engine and safety invariants below remain relevant, but references to a Python 3.14 runtime, `/data/managed-state.json` as the active configuration authority and schema v6 describe the **deployed 0.2.x generation**, not unreleased v11. In `0.3.0b1` `main`, development/CI uses Python 3.15, `managed-state-v11.json` is the single owner-managed authority, old `managed-state.json` is immutable migration evidence, new installations contain no configured presets, and an explicit persistent startup inspection hold protects a direct upgrade before any Spotify writes. Follow [#542](https://github.com/eXPerience83/news-bulletin-playlist/issues/542), [#631](https://github.com/eXPerience83/news-bulletin-playlist/issues/631), [beta acceptance](BETA_V11_ACCEPTANCE.md) and [portability](PORTABILITY.md) for the current release and storage contract. TrueNAS production remains on `0.2.3b1` until separately authorized.
+
 ## Current status
 
 The authoritative runtime is **Spotify-first**.
