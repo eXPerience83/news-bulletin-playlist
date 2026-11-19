@@ -185,7 +185,9 @@ class MigratedCoverAssets:
             try:
                 self.assets.load(asset_id)
             except (CustomCoverAssetError, OSError) as exc:
-                raise MigratedCoverError("Persisted inherited cover is unavailable or corrupt") from exc
+                raise MigratedCoverError(
+                    "Persisted inherited cover is unavailable or corrupt"
+                ) from exc
             verified[cover_id] = True
         return verified
 
