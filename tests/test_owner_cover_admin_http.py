@@ -12,10 +12,8 @@ import pytest
 from _admin_http import csrf as _csrf
 from _admin_http import login as _login
 from _admin_http import request as _request
-from _source_admin_http_fixtures import _server
 from _legacy_dataset import legacy_root
-from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
-from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
+from _source_admin_http_fixtures import _server
 from PIL import Image
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
@@ -30,6 +28,8 @@ from news_bulletin_playlist.managed_state import (
     activate_template,
 )
 from news_bulletin_playlist.spotify.auth import AuthorizationState
+from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
+from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
 
 
 def _png() -> bytes:
