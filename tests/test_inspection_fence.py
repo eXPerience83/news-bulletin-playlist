@@ -186,8 +186,9 @@ def test_release_allows_intentionally_empty_v11_root_only_after_held_inspection(
 ) -> None:
     root = tmp_path / "fresh"
     root.mkdir()
-    startup_gate(root, requested=True)
+    # Empty roots acquire their v11 identity before inspection can be requested.
     V11OperationalStore(root).initialize_fresh()
+    startup_gate(root, requested=True)
     state_sha = inspect_gate(root).state_sha256
     result = release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
     assert result.state == "released"
