@@ -32,7 +32,14 @@ from news_bulletin_playlist.inspection_fence import (
 )
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import ManagedState
-from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
+from news_bulletin_playlist.upgrade_inspection_report import (
+    UpgradeInspectionError,
+    upgrade_inspection_report,
+)
+from news_bulletin_playlist.v11_operational_storage import (
+    V11_OPERATIONAL_FILENAME,
+    V11OperationalStore,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -111,6 +118,176 @@ def test_changed_v11_state_invalidates_operator_release(tmp_path: Path):
     with pytest.raises(InspectionGateError, match="changed"):
         release_gate(root, expected_sha256=previous, confirm=RELEASE_CONFIRMATION)
     assert inspect_gate(root).held
+
+
+@pytest.mark.parametrize("damage", ["modified", "missing"])
+def test_release_refuses_changed_or_missing_legacy_witness(tmp_path: Path, damage: str) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    V11OperationalStore(root).initialize_from_legacy()
+    state_sha = inspect_gate(root).state_sha256
+    original = root / "managed-state.json"
+    if damage == "modified":
+        original.write_bytes(b'{"schema_version":10}')
+    else:
+        original.unlink()
+
+    with pytest.raises(InspectionGateError, match="Full v11 migration inspection"):
+        release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+    assert inspect_gate(root).state_sha256 == state_sha
+
+
+def test_release_refuses_changed_runtime_even_with_current_v11_sha(tmp_path: Path) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    store = V11OperationalStore(root)
+    original = store.initialize_from_legacy()
+    store.save(
+        replace(
+            original.managed_overlay,
+            playlists=tuple(
+                replace(item, enabled=False) for item in original.managed_overlay.playlists
+            ),
+        ),
+        expected_bytes=store.load_bytes(),
+    )
+    changed_sha = inspect_gate(root).state_sha256
+    with pytest.raises(InspectionGateError, match="not all passing"):
+        release_gate(root, expected_sha256=changed_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+    assert inspect_gate(root).state_sha256 == changed_sha
+
+
+def test_release_refuses_changed_source_runtime_without_playlist_edit(tmp_path: Path) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    store = V11OperationalStore(root)
+    original = store.initialize_from_legacy()
+    inventory = original.owner_inventory
+    chosen = inventory.sources[0]
+    revised = replace(chosen, display_name=f"{chosen.display_name} (reviewed)")
+    store.save_owner_inventory(
+        replace(
+            inventory,
+            sources=tuple(revised if item.id == chosen.id else item for item in inventory.sources),
+        ),
+        expected_bytes=store.load_bytes(),
+    )
+
+    report = upgrade_inspection_report(root)
+    assert report["checks"]["managed_destinations_unchanged"] is True
+    assert report["checks"]["runtime_policies_unchanged"] is False
+    assert report["safe_to_review_without_spotify_writes"] is False
+    state_sha = inspect_gate(root).state_sha256
+    with pytest.raises(InspectionGateError, match="not all passing"):
+        release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+
+
+@pytest.mark.parametrize("no_inherited_inventory", [False, True])
+def test_release_checks_unreferenced_historical_cover_after_owner_edit(
+    tmp_path: Path, no_inherited_inventory: bool
+) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    store = V11OperationalStore(root)
+    store.initialize_from_legacy()
+    if no_inherited_inventory:
+        # Simulate an older v11 document without this optional cover inventory.
+        document = json.loads(store.load_bytes())
+        assert document.pop("inherited_cover_ids")
+        (root / V11_OPERATIONAL_FILENAME).write_bytes(
+            (
+                json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
+                + "\n"
+            ).encode("utf-8")
+        )
+    current = store.load()
+    inventory = current.owner_inventory
+    existing_covers = {playlist.cover_id for playlist in current.managed_overlay.playlists} | {
+        template.cover_id for template in current.managed_overlay.templates
+    }
+    target = next(
+        template
+        for template in inventory.templates.records
+        if template.cover_id not in existing_covers
+        and sum(other.cover_id == template.cover_id for other in inventory.templates.records) == 1
+    )
+    replacement_cover = next(
+        template.cover_id
+        for template in inventory.templates.records
+        if template.cover_id != target.cover_id
+    )
+    updated_templates = inventory.templates.replace_one(
+        target.id,
+        replace(target, cover_id=replacement_cover),
+        sources=inventory.source_order.ids,
+    )
+    store.save_owner_inventory(
+        replace(inventory, templates=updated_templates),
+        expected_bytes=store.load_bytes(),
+    )
+    first_report = upgrade_inspection_report(root)
+    assert first_report["checks"]["managed_destinations_unchanged"] is True
+    assert first_report["checks"]["runtime_policies_unchanged"] is True
+    assert first_report["safe_to_review_without_spotify_writes"] is True
+    assert target.cover_id in {item["id"] for item in first_report["historical_covers"]}
+
+    index = json.loads((root / "migrated-covers" / "index.json").read_text())
+    original_id = next(
+        item["asset_id"] for item in index["covers"] if item["cover_id"] == target.cover_id
+    )
+    (root / "custom-covers" / f"{original_id}.jpg").unlink()
+    with pytest.raises(UpgradeInspectionError, match="Could not safely inspect"):
+        upgrade_inspection_report(root)
+    state_sha = inspect_gate(root).state_sha256
+    with pytest.raises(InspectionGateError, match="Full v11 migration inspection"):
+        release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+
+
+def test_release_refuses_missing_original_cover_with_valid_v11_sha(tmp_path: Path) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    V11OperationalStore(root).initialize_from_legacy()
+    state_sha = inspect_gate(root).state_sha256
+    index = json.loads((root / "migrated-covers" / "index.json").read_text())
+    assert index["covers"]
+    asset_id = index["covers"][0]["asset_id"]
+    (root / "custom-covers" / f"{asset_id}.jpg").unlink()
+
+    with pytest.raises(InspectionGateError, match="Full v11 migration inspection"):
+        release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+
+
+def test_release_refuses_missing_cover_index_without_nested_root_lock(tmp_path: Path) -> None:
+    root, _preview = _legacy_root(tmp_path, 10)
+    startup_gate(root, requested=True)
+    V11OperationalStore(root).initialize_from_legacy()
+    state_sha = inspect_gate(root).state_sha256
+    (root / "migrated-covers" / "index.json").unlink()
+
+    # This must fail promptly: the inherited-cover load fallback must not
+    # recursively wait for the release command's already-held root flock.
+    with pytest.raises(InspectionGateError, match="not all passing"):
+        release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert inspect_gate(root).held
+
+
+def test_release_allows_intentionally_empty_v11_root_only_after_held_inspection(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fresh"
+    root.mkdir()
+    # Empty roots acquire their v11 identity before inspection can be requested.
+    V11OperationalStore(root).initialize_fresh()
+    startup_gate(root, requested=True)
+    state_sha = inspect_gate(root).state_sha256
+    result = release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
+    assert result.state == "released"
+    assert result.state_sha256 == state_sha
 
 
 @pytest.mark.parametrize("value", ["true", "yes", "2", "-1", "", " 1 ", "False"])

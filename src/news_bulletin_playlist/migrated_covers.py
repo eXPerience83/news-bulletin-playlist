@@ -167,6 +167,30 @@ class MigratedCoverAssets:
             raise MigratedCoverError("Persisted inherited cover is unavailable or corrupt") from exc
         return data, attribution
 
+    def inspect_expected(self, cover_ids: list[str]) -> dict[str, bool]:
+        """Verify referenced inherited assets without recursively locking /data.
+
+        The release CLI already holds the root lock while comparing the legacy
+        and v11 state. Calling load() with an absent index can reacquire that
+        root lock via V11OperationalStore.load(), so inspect the manifest
+        directly and verify only the content-addressed assets it authorizes.
+        """
+        entries = self._read_index()
+        verified: dict[str, bool] = {}
+        for cover_id in cover_ids:
+            if entries is None or cover_id not in entries:
+                verified[cover_id] = False
+                continue
+            asset_id, _attribution = entries[cover_id]
+            try:
+                self.assets.load(asset_id)
+            except (CustomCoverAssetError, OSError) as exc:
+                raise MigratedCoverError(
+                    "Persisted inherited cover is unavailable or corrupt"
+                ) from exc
+            verified[cover_id] = True
+        return verified
+
     def materialize(self, cover_ids: set[str], loader: _CoverLoader) -> None:
         """Publish all inherited cover bytes BEFORE creating irreversible v11 authority.
 
