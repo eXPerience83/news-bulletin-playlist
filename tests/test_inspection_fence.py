@@ -198,23 +198,21 @@ def test_release_checks_unreferenced_historical_cover_after_owner_edit(
         document = json.loads(store.load_bytes())
         assert document.pop("inherited_cover_ids")
         (root / V11_OPERATIONAL_FILENAME).write_bytes(
-            (json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-             + "\n").encode("utf-8")
+            (
+                json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                + "\n"
+            ).encode("utf-8")
         )
     current = store.load()
     inventory = current.owner_inventory
-    existing_covers = {
-        playlist.cover_id for playlist in current.managed_overlay.playlists
-    } | {
+    existing_covers = {playlist.cover_id for playlist in current.managed_overlay.playlists} | {
         template.cover_id for template in current.managed_overlay.templates
     }
     target = next(
         template
         for template in inventory.templates.records
         if template.cover_id not in existing_covers
-        and sum(
-            other.cover_id == template.cover_id for other in inventory.templates.records
-        ) == 1
+        and sum(other.cover_id == template.cover_id for other in inventory.templates.records) == 1
     )
     replacement_cover = next(
         template.cover_id
