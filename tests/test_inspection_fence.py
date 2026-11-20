@@ -36,7 +36,10 @@ from news_bulletin_playlist.upgrade_inspection_report import (
     UpgradeInspectionError,
     upgrade_inspection_report,
 )
-from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME, V11OperationalStore
+from news_bulletin_playlist.v11_operational_storage import (
+    V11_OPERATIONAL_FILENAME,
+    V11OperationalStore,
+)
 
 
 @pytest.fixture(autouse=True)
