@@ -1,4 +1,5 @@
 """Contract: no beta image can publish without an isolated held v10->v11 smoke."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,11 +15,7 @@ BETA = ROOT / ".github/workflows/publish-beta-amd64.yml"
 def _step_index(path: Path, marker: str) -> int:
     workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     steps = workflow["jobs"]["publish" if path == BETA else "validate"]["steps"]
-    matches = [
-        index
-        for index, step in enumerate(steps)
-        if marker in str(step.get("run", ""))
-    ]
+    matches = [index for index, step in enumerate(steps) if marker in str(step.get("run", ""))]
     assert len(matches) == 1, f"{path}: missing or duplicate {marker}"
     return matches[0]
 
