@@ -129,9 +129,7 @@ def fake_docker(tmp_path: Path) -> tuple[Path, Path, Path]:
         ("released", released),
         ("sha_changed", changed),
     ):
-        (tmp_path / f"report-{name}.json").write_text(
-            json.dumps(report), encoding="utf-8"
-        )
+        (tmp_path / f"report-{name}.json").write_text(json.dumps(report), encoding="utf-8")
     return bin_dir, tmp_path, temporary
 
 
@@ -163,9 +161,7 @@ def _run_cutover(
     assert not (state / "container").exists(), "Disposable Docker container leaked"
     assert list(temporary.iterdir()) == [], "Inspection report temporary file leaked"
     assert all(
-        " --network none " in f" {event} "
-        for event in events
-        if event.startswith("run ")
+        " --network none " in f" {event} " for event in events if event.startswith("run ")
     ), "An offline test container was allowed network egress"
     starts = int((state / "starts").read_text(encoding="utf-8"))
     inspections = int((state / "inspections").read_text(encoding="utf-8"))
