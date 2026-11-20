@@ -153,8 +153,22 @@ def upgrade_inspection_report(
             }
             for template in operational.owner_inventory.templates.records
         ]
+        # Verify the immutable historical cover closure, not only artwork
+        # referenced by today's owner templates and managed destinations.
+        # Versioned owner edits may unreference an original JPEG, but a held
+        # first boot must still fail closed if that inherited asset is lost.
+        inherited_cover_ids = set(operational.inherited_cover_ids)
+        if legacy_raw is not None:
+            # Backward compatibility for v11 documents without the dedicated
+            # inherited-cover inventory: reconstruct the original closure.
+            inherited_cover_ids.update(
+                template.cover_id for template in operational.historical_catalog.playlists
+            )
+            inherited_cover_ids.update(playlist.cover_id for playlist in previous.playlists)
+            inherited_cover_ids.update(template.cover_id for template in previous.templates)
         cover_ids = sorted(
-            {template.cover_id for template in operational.owner_inventory.templates.records}
+            inherited_cover_ids
+            | {template.cover_id for template in operational.owner_inventory.templates.records}
             | {template.cover_id for template in operational.managed_overlay.templates}
             | {playlist.cover_id for playlist in operational.managed_overlay.playlists}
         )
