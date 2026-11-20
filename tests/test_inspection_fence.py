@@ -199,7 +199,7 @@ def test_release_checks_unreferenced_historical_cover_after_owner_edit(
         assert document.pop("inherited_cover_ids")
         (root / V11_OPERATIONAL_FILENAME).write_bytes(
             (
-                json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
                 + "\n"
             ).encode("utf-8")
         )
