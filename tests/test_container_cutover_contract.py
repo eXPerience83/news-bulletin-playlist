@@ -25,11 +25,19 @@ def _step_index(path: Path, marker: str) -> int:
 
 def test_container_and_beta_both_require_packaged_offline_migration() -> None:
     invocation = "bash scripts/verify-v11-container-cutover.sh"
-    assert _step_index(CONTAINER, invocation) > _step_index(CONTAINER, "news-bulletin-playlist:ci .")
-    assert _step_index(BETA, invocation) > _step_index(BETA, "--tag news-bulletin-playlist:beta-candidate")
+    assert _step_index(CONTAINER, invocation) > _step_index(
+        CONTAINER, "news-bulletin-playlist:ci ."
+    )
+    assert _step_index(BETA, invocation) > _step_index(
+        BETA, "--tag news-bulletin-playlist:beta-candidate"
+    )
     payload = yaml.load(BETA.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     steps = payload["jobs"]["publish"]["steps"]
-    login = next(i for i, step in enumerate(steps) if str(step.get("uses", "")).startswith("docker/login-action@"))
+    login = next(
+        i
+        for i, step in enumerate(steps)
+        if str(step.get("uses", "")).startswith("docker/login-action@")
+    )
     assert _step_index(BETA, invocation) < login, "cutover check must run before GHCR login"
     publish = _step_index(BETA, 'docker push "$sha_ref"')
     assert _step_index(BETA, invocation) < publish, "cutover check must precede any publication"
