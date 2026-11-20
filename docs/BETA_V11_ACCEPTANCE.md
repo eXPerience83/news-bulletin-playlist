@@ -1,6 +1,6 @@
 # Forward-only v11 / 0.3.0b1: controlled beta acceptance
 
-**Status (19 November 2026): PRs #646, #647, #640, #649 and #650 merged into unreleased 0.3.0b1 `main`; no beta image published, no TrueNAS migration or real Spotify acceptance. The release command is being hardened to recheck complete local migration invariants (#631).**
+**Status (20 November 2026): PRs #646, #647, #640, #649, #650 and #651 are merged into unreleased 0.3.0b1 `main`; no beta image published, no TrueNAS migration or real Spotify acceptance. The release command now rechecks the complete local migration report under one root lock before allowing any writes.**
 
 ## Release boundary: BREAKING / no supported downgrade
 
@@ -16,6 +16,22 @@
 - PR #590 / #528: initial Spotify creation description includes bounded attribution; selected cover is attempted **only after** the destination is durably known. Failed cover, 429/5xx/transport and uncertain provisioning cannot trigger duplicate playlist creation; later metadata/cover synchronization is explicit.
 - #527 owner cover UI and asset store already exist in code: authenticated bounded upload and private preview, local draft/managed selection, return to bundled/default cover, no upload on local Save, safe content-addressed ownership. Actual persistent TrueNAS uploads and real Spotify behavior remain unaccepted.
 - #562 add-only degraded catalogue logic is covered by isolated tests. A `null` slot is not proof of absence; additions use only positively observed eligible IDs, cannot exceed cap or evict/reorder old items, and uncertain POSTs are fenced. This **does not** prove the live RNE incident is resolved.
+
+## Packaged-image migration gate (offline, synthetic only)
+
+The CI Container workflow and the manual immutable-beta publication workflow
+both run `bash scripts/verify-v11-container-cutover.sh <built-image>` against
+the **exact local Docker image**. The script seeds a disposable volume with four
+fictional Spotify destinations and schema-v10 settings, boots v11 with
+`NEWS_PLAYLIST_STARTUP_INSPECTION=1`, asserts the full read-only
+`inspection-report` is `held/matching` with the same four identities, all
+source/template records and persisted historical artwork, then restarts the
+same volume **without** the inspection env var and verifies the hold and
+state digest persist unchanged. Every test container uses `--network none`:
+there is no real Spotify/OAuth traffic, no original TrueNAS `/data`, no
+GHCR tag movement and no permission to publish. This is a packaging/integration
+gate, **not** a substitute for #421 old-container remote-write clearance or
+#631 acceptance of the real installation.
 
 ## Before any separately authorized publication
 
