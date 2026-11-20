@@ -32,7 +32,10 @@ from news_bulletin_playlist.inspection_fence import (
 )
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import ManagedState
-from news_bulletin_playlist.upgrade_inspection_report import upgrade_inspection_report
+from news_bulletin_playlist.upgrade_inspection_report import (
+    UpgradeInspectionError,
+    upgrade_inspection_report,
+)
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME, V11OperationalStore
 
 
@@ -235,9 +238,8 @@ def test_release_checks_unreferenced_historical_cover_after_owner_edit(
         item["asset_id"] for item in index["covers"] if item["cover_id"] == target.cover_id
     )
     (root / "custom-covers" / f"{original_id}.jpg").unlink()
-    broken = upgrade_inspection_report(root)
-    assert broken["checks"]["historical_artwork_verified"] is False
-    assert broken["safe_to_review_without_spotify_writes"] is False
+    with pytest.raises(UpgradeInspectionError, match="Could not safely inspect"):
+        upgrade_inspection_report(root)
     state_sha = inspect_gate(root).state_sha256
     with pytest.raises(InspectionGateError, match="Full v11 migration inspection"):
         release_gate(root, expected_sha256=state_sha, confirm=RELEASE_CONFIRMATION)
