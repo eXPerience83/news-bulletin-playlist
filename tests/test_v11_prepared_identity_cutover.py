@@ -68,9 +68,7 @@ def test_prepare_in_old_version_then_held_v11_zip_v2_and_all_sources_are_restora
     prepared_state = old_store.load_readonly()
     assert compile_engine_config(BUILTIN_CATALOG, prepared_state) == old_runtime
     assert {str(p.id): p.portable_id for p in prepared_state.playlists} == allocated
-    original_destinations = {
-        str(p.id): p.destination.external_id for p in prepared_state.playlists
-    }
+    original_destinations = {str(p.id): p.destination.external_id for p in prepared_state.playlists}
     preflight = legacy_preflight(root, expected_destinations=4)
     assert preflight["destination_count_matches_expectation"] is True
 
@@ -146,11 +144,13 @@ def test_prepare_in_old_version_then_held_v11_zip_v2_and_all_sources_are_restora
         assert result.current_draft_id != result.owner_template_id
         # ZIP alone never silently creates or relinks a Spotify destination.
         assert receiver.load_readonly().playlists == ()
-        assert old_playlist.destination.external_id.encode() not in (
-            other / V11_OPERATIONAL_FILENAME
-        ).read_bytes()
+        assert (
+            old_playlist.destination.external_id.encode()
+            not in (other / V11_OPERATIONAL_FILENAME).read_bytes()
+        )
         restored = next(
-            d for d in receiver.load_readonly().templates
+            d
+            for d in receiver.load_readonly().templates
             if d.portable_id == parsed.playlist["portable_id"]
         )
         assert restored.default_source_ids
