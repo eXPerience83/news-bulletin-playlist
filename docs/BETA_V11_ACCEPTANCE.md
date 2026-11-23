@@ -33,6 +33,42 @@ GHCR tag movement and no permission to publish. This is a packaging/integration
 gate, **not** a substitute for #421 old-container remote-write clearance or
 #631 acceptance of the real installation.
 
+## Optional read-only legacy baseline before a supervised cutover
+
+The candidate includes `news-playlist legacy-preflight --data-dir /data
+--expect-destinations 4`. It reads the original v6–v10 JSON without writing
+an authority, SQLite, OAuth, credentials, journals or cover files. It captures
+an original SHA-256, **every** destination ID, source parser/filter/temporal
+policies, playlists and limits, owner templates and all inherited cover IDs.
+It refuses damaged files, symlinks, duplicate JSON members, a pre-existing v11
+authority and changing legacy bytes. The count check fails if four destinations
+are not present, but passing the check does **not** authorize migration or
+Spotify writes. An old v0.2.3b1 writer may not honor the preflight's
+cooperative directory lock; quiesce the old instance independently.
+
+**For a future separately authorized TrueNAS session only**: once an immutable
+beta digest has been published and reviewed, the operator can run the
+preflight with a **read-only bind mount and networking disabled**. Never run
+these commands against production without that separate permission.
+
+```sh
+docker run --rm --network none --read-only --user 568:568 \
+  --mount type=bind,src=/mnt/Pool1/news-bulletin-playlist,dst=/data,readonly \
+  --entrypoint news-playlist \
+  ghcr.io/experience83/news-bulletin-playlist@sha256:<APPROVED_DIGEST> \
+  legacy-preflight --data-dir /data --expect-destinations 4
+```
+
+After the **separately approved** held v11 first boot, compare preflight
+`legacy_state_sha256` with the held report's `historical_origin_sha256`;
+compare `sources`, `playlists`, and `owner_templates` record for record,
+and preflight `historical_cover_ids` with held
+`historical_covers[*].id` (each of those covers must also be verified).
+Do not share the full report, which may include private destination IDs,
+in GitHub issues. This does **not** back up /data or verify Spotify's previous
+in-flight writes (#421), and is not a replacement for actual held
+acceptance (#631).
+
 ## Before any separately authorized publication
 
 1. Freeze and record the **exact current `main` commit SHA**, package version and all intended changes. Check that CI (Python 3.15, Ruff, formatting, mypy, pytest) and the **independent Container** workflow are green for that exact revision. Check no unresolved review/blocking findings and rerun after any new commit.
