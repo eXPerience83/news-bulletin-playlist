@@ -27,9 +27,7 @@ def reject_external_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize("schema", [6, 7, 8, 9, 10])
-def test_read_only_original_inventory_equals_held_v11_report(
-    tmp_path: Path, schema: int
-) -> None:
+def test_read_only_original_inventory_equals_held_v11_report(tmp_path: Path, schema: int) -> None:
     root, _preview = legacy_root(tmp_path, schema)
     originals = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
     report = legacy_preflight(root, expected_destinations=4)
@@ -40,9 +38,9 @@ def test_read_only_original_inventory_equals_held_v11_report(
     assert report["destination_count"] == 4
     assert report["source_count"] >= 13
     assert report["template_count"] >= 7
-    assert report["legacy_state_sha256"] == hashlib.sha256(
-        originals["managed-state.json"]
-    ).hexdigest()
+    assert (
+        report["legacy_state_sha256"] == hashlib.sha256(originals["managed-state.json"]).hexdigest()
+    )
     assert originals == {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
 
     startup_gate(root, requested=True)
@@ -54,9 +52,7 @@ def test_read_only_original_inventory_equals_held_v11_report(
     assert report["sources"] == held["sources"]
     assert report["playlists"] == held["playlists"]
     assert report["owner_templates"] == held["owner_templates"]
-    assert report["historical_cover_ids"] == [
-        row["id"] for row in held["historical_covers"]
-    ]
+    assert report["historical_cover_ids"] == [row["id"] for row in held["historical_covers"]]
     with pytest.raises(LegacyPreflightError, match="v11 authority"):
         legacy_preflight(root)
 
@@ -66,9 +62,7 @@ def test_expected_count_mismatch_is_reported_and_cli_fails_closed(
 ) -> None:
     root, _ = legacy_root(tmp_path, 10)
     before = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
-    exit_code = main(
-        ["legacy-preflight", "--data-dir", str(root), "--expect-destinations", "5"]
-    )
+    exit_code = main(["legacy-preflight", "--data-dir", str(root), "--expect-destinations", "5"])
     assert exit_code == 1
     result = json.loads(capsys.readouterr().out)
     assert result["destination_count"] == 4
@@ -77,9 +71,7 @@ def test_expected_count_mismatch_is_reported_and_cli_fails_closed(
 
 
 @pytest.mark.parametrize("bad", ["missing", "symlink", "invalid", "duplicate", "witness"])
-def test_invalid_legacy_evidence_fails_without_creating_v11(
-    tmp_path: Path, bad: str
-) -> None:
+def test_invalid_legacy_evidence_fails_without_creating_v11(tmp_path: Path, bad: str) -> None:
     root, _ = legacy_root(tmp_path, 10)
     file = root / "managed-state.json"
     if bad == "missing":

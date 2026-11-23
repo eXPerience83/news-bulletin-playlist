@@ -74,9 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return healthcheck(url=args.url, timeout=args.timeout)
     if args.command == "legacy-preflight":
         try:
-            report = legacy_preflight(
-                args.data_dir, expected_destinations=args.expect_destinations
-            )
+            report = legacy_preflight(args.data_dir, expected_destinations=args.expect_destinations)
         except LegacyPreflightError as exc:
             parser.error(str(exc))
         print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))

@@ -51,9 +51,7 @@ def _exists(directory: int, filename: str) -> bool:
 
 
 def _assert_no_v11(directory: int) -> None:
-    if _exists(directory, V11_AUTHORITY_FILENAME) or _exists(
-        directory, V11_OPERATIONAL_FILENAME
-    ):
+    if _exists(directory, V11_AUTHORITY_FILENAME) or _exists(directory, V11_OPERATIONAL_FILENAME):
         raise LegacyPreflightError("v11 authority exists; use inspection-report instead")
 
 
@@ -70,9 +68,7 @@ def legacy_preflight(
     try:
         with _locked_root(data_dir) as directory:
             _assert_no_v11(directory)
-            original = _read_regular(
-                directory, MANAGED_STATE_FILENAME, MAX_MANAGED_STATE_BYTES
-            )
+            original = _read_regular(directory, MANAGED_STATE_FILENAME, MAX_MANAGED_STATE_BYTES)
             raw = json.loads(original.decode("utf-8"), object_pairs_hook=_unique_object)
             if not isinstance(raw, dict) or type(raw.get("schema_version")) is not int:
                 raise LegacyPreflightError("invalid original legacy schema")
@@ -108,11 +104,7 @@ def legacy_preflight(
             playlists: list[dict[str, object]] = []
             for playlist in normalized.playlists:
                 runtime = next(
-                    (
-                        item
-                        for item in preview.original_runtime.playlists
-                        if item.id == playlist.id
-                    ),
+                    (item for item in preview.original_runtime.playlists if item.id == playlist.id),
                     None,
                 )
                 playlists.append(
@@ -142,8 +134,7 @@ def legacy_preflight(
                     "source_ids": list(item.definition.default_source_ids),
                     "cover_id": item.definition.cover_id,
                     "duration_exceptions": [
-                        exception_payload(exc)
-                        for exc in item.definition.duration_policy.exceptions
+                        exception_payload(exc) for exc in item.definition.duration_policy.exceptions
                     ],
                 }
                 for item in preview.template_snapshots
@@ -157,16 +148,15 @@ def legacy_preflight(
                 cover_id for cover_id in historical_ids if not is_uploaded_cover_id(cover_id)
             )
 
-            if _read_regular(
-                directory, MANAGED_STATE_FILENAME, MAX_MANAGED_STATE_BYTES
-            ) != original:
+            if (
+                _read_regular(directory, MANAGED_STATE_FILENAME, MAX_MANAGED_STATE_BYTES)
+                != original
+            ):
                 raise LegacyPreflightError("original legacy state changed during inspection")
             _assert_no_v11(directory)
 
             matches = (
-                None
-                if expected_destinations is None
-                else len(playlists) == expected_destinations
+                None if expected_destinations is None else len(playlists) == expected_destinations
             )
             return {
                 "format": REPORT_FORMAT,
