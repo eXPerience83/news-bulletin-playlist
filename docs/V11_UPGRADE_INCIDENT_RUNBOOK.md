@@ -6,6 +6,57 @@
 
 **No automatic rollback.** Neither an old container image nor portable source JSON / playlist ZIP can restore a v11 installation. The four existing Spotify destinations must not be used as destructive test fixtures. This document provides decisions and evidence to collect; it does not claim that Spotify can cancel a previously transmitted mutation.
 
+## Owner migration path: pre-prepare portable IDs, then export under hold
+
+The **existing deployed `0.2.3b1` code** already supports the authenticated
+**Prepare portable export identity** operation for each managed destination.
+When an original playlist has no `portable_id`, this deliberate action
+allocates/persists a UUIDv4 **locally**, leaving source selection, duration
+policy and Spotify destinations unchanged. It must be separately authorized
+as a production *configuration write*; it is not a GET and the procedure
+does **not** run merely because a beta was built. Do not prepare them on
+guessed playlist names; confirm all four destination bindings first.
+
+**Recommended order for the four currently deployed playlists** (not executed):
+
+1. With the old application still running and before the v11 cutover, inspect
+   each of the **four managed destinations** and, if the Admin card says
+   **Prepare portable export identity**, explicitly confirm that action once.
+   Confirm each existing destination ID is unchanged and its UUID persisted.
+   Existing UUIDs must be retained, not regenerated. Do not replace a
+   playlist, create a destination, or attempt a bulk Spotify reconciliation.
+2. Quiesce/stop the old writer under the independent #421 shutdown/remote
+   uncertainty policy. Run `legacy-preflight --expect-destinations 4`
+   using the approved **read-only mounted** candidate image; freeze the
+   actual post-preparation legacy SHA and record the full original sources
+   and policies locally. A passing report is not a backup or Spotify write
+   permission.
+3. Start the approved candidate once with
+   `NEWS_PLAYLIST_STARTUP_INSPECTION=1` set **before boot**. Require all
+   local `inspection-report` checks, destination IDs, source capabilities
+   and historical JPEGs to match. Keep the inspection hold.
+4. **While still held**, export **all sources** via the authenticated
+   read-only `/admin/sources/export.json`, including unused and disabled
+   records. Download each of the **four managed playlists** with the
+   explicit **complete ZIP v2** link (`version=2`). Check that all four
+   downloads can be parsed and independently imported as local drafts with
+   complete owner source/template closure; importing does not link Spotify.
+5. A missing portable UUID discovered *after* the held boot is a **STOP**
+   for the ZIP workflow: Admin `POST /admin/playlists/portable/prepare`
+   is deliberately denied while held. Do **not** release the inspection
+   fence just to obtain an export, bypass the hold, or manually alter
+   `managed-state-v11.json`. Investigate and obtain a separately reviewed
+   plan rather than weakening the safety boundary.
+
+The source JSON and ZIP v2 are **portable configuration**, not backup
+copies of OAuth tokens, SQLite episode history, pending writes or Spotify
+playlist destinations. In-place migration preserves the existing destination
+bindings directly; independent ZIP restoration requires a separately
+verified **existing-destination relink** (owner/name/ID read checks, initially
+paused). A ZIP import must never automatically create, link or rewrite a
+remote playlist. The above drill uses synthetic data only: it does not
+claim that the actual TrueNAS data has passed acceptance.
+
 ## Gate 0 — before authorizing the first candidate boot
 
 1. Record the **actually running** old image ID/digest, application build, effective TrueNAS configuration and runtime stop/restart policy. The source repository's Dockerfile and YAML do not prove what TrueNAS is running. Capture only sanitized metadata; never publish credentials or raw data archives.
