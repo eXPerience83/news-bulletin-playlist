@@ -1,6 +1,8 @@
 name: Container
 
 on:
+  # Safe opt-in validation of integrated main: no package publication.
+  workflow_dispatch: {}
   pull_request:
     paths:
       - "Dockerfile"

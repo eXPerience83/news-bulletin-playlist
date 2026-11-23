@@ -20,7 +20,11 @@ def test_beta_publication_is_manual_main_only_with_explicit_sha() -> None:
     assert data["permissions"] == {"contents": "read"}
 
     job = data["jobs"]["publish"]
-    assert job["permissions"] == {"contents": "read", "packages": "write"}
+    assert job["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "packages": "write",
+    }
     assert data["concurrency"] == {"group": "publish-beta-amd64", "cancel-in-progress": "false"}
 
     scripts = {step["name"]: step["run"] for step in job["steps"] if "run" in step}

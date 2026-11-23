@@ -54,6 +54,18 @@ smoke-tests the same image and publishes only:
 
 `ghcr.io/experience83/news-bulletin-playlist:beta-0.3.0b1-<full-main-sha>`
 
+**Exact-main workflow gate before building:** the beta publisher uses read-only
+GitHub Actions metadata to require a successful **CI push-to-main** run and an
+independent successful **Container manual workflow_dispatch on main**, both
+for the same full source SHA. A green PR run before squash merge is insufficient;
+the latest matching run must be completed and successful, and an absent, stale,
+pending, failed or inaccessible check prevents the beta from building/publishing.
+After freezing main, run **Actions → Container → Run workflow → main** to
+test that exact commit without touching GHCR; CI runs on pushes to main.
+Any new merge invalidates the previous evidence and requires new checks.
+This safety gate does not authorize publication and does not replace the
+independent #421/#631 TrueNAS/Spotify cutover acceptance.
+
 It verifies the corresponding immutable GHCR manifest digest and prints
 `ghcr.io/experience83/news-bulletin-playlist@sha256:<digest>` in the Actions
 summary. A conflicting pre-existing tag fails closed. The workflow **treats**
