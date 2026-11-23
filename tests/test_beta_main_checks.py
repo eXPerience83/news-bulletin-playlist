@@ -15,7 +15,7 @@ BETA = ROOT / ".github/workflows/publish-beta-amd64.yml"
 CONTAINER = ROOT / ".github/workflows/container.yml"
 SHA = "a" * 40
 
-FAKE_GH = '''#!/usr/bin/env python3
+FAKE_GH = """#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -56,7 +56,7 @@ if scenario == "malformed" and workflow == "Container":
     print(json.dumps({"workflow_runs": {}}))
 else:
     print(json.dumps({"workflow_runs": rows}))
-'''
+"""
 
 
 @pytest.mark.parametrize(
