@@ -7,10 +7,12 @@ a working owner-controlled migration path, not permission to deploy.
 from __future__ import annotations
 
 import socket
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from _legacy_dataset import legacy_root
+from _managed_fixtures import _source
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
@@ -18,10 +20,12 @@ from news_bulletin_playlist.inspection_fence import startup_gate
 from news_bulletin_playlist.legacy_preflight import legacy_preflight
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
 from news_bulletin_playlist.managed_state import (
+    ManagedSourceOverride,
     ManagedStateStore,
     compile_engine_config,
     effective_sources,
 )
+from news_bulletin_playlist.models import PublicReleaseMode, SourceId, TemporalStrategy
 from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle_v2
 from news_bulletin_playlist.playlist_import import PlaylistImportService
 from news_bulletin_playlist.portable_identity import portable_id
@@ -161,3 +165,102 @@ def test_prepare_in_old_version_then_held_v11_zip_v2_and_all_sources_are_restora
     assert len(receiver.catalog.playlists) == 4
     assert len(receiver.load_readonly().templates) == 4
     assert len(receiver.catalog.sources) == len(source_rows)
+
+
+def test_custom_disabled_and_unassigned_source_policies_survive_held_export_and_import(
+    tmp_path: Path,
+) -> None:
+    root, _ = legacy_root(tmp_path, 10)
+    legacy = ManagedStateStore(root / "managed-state.json")
+    original = legacy.load_readonly()
+    custom = replace(
+        _source("Y" * 22),
+        temporal_strategy=TemporalStrategy.FULL_DATETIME,
+        public_release_mode=PublicReleaseMode.WALL_TIME,
+    )
+    disabled_unassigned = replace(
+        _source("Z" * 22, enabled=False),
+        temporal_strategy=TemporalStrategy.DISABLED,
+        public_release_mode=PublicReleaseMode.DISABLED,
+    )
+    changed = replace(
+        original,
+        sources=(custom, disabled_unassigned),
+        source_overrides=(
+            ManagedSourceOverride(SourceId("rne"), PublicReleaseMode.DISABLED),
+        ),
+        playlists=tuple(
+            replace(item, source_ids=(*item.source_ids, custom.id))
+            if str(item.id) == "spain_spanish_news"
+            else item
+            for item in original.playlists
+        ),
+    )
+    legacy.save(changed)
+    original_sources = {
+        source.id: source for source in effective_sources(BUILTIN_CATALOG, changed)
+    }
+    before = compile_engine_config(BUILTIN_CATALOG, changed)
+    original_destination_ids = {
+        p.destination.external_id for p in changed.playlists
+    }
+    preflight = legacy_preflight(root, expected_destinations=4)
+    assert preflight["source_count"] == 15
+    assert preflight["destination_count"] == 4
+
+    startup_gate(root, requested=True)
+    migrated = open_managed_state_store(root)
+    retained = migrated.load_readonly()
+    inspection = upgrade_inspection_report(root)
+    assert inspection["gate"] == "held"
+    assert inspection["legacy_comparison"] == "matching"
+    assert inspection["historical_origin_sha256"] == preflight["legacy_state_sha256"]
+    assert compile_engine_config(migrated.catalog, retained) == before
+    assert {
+        p.destination.external_id for p in retained.playlists
+    } == original_destination_ids
+
+    state_before_export = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    source_json = export_source_configuration(
+        migrated, ConfigurationSynchronization()
+    )
+    exported = {row.source.id: row.source for row in parse_sources(source_json)}
+    assert exported == original_sources
+    assert not exported[disabled_unassigned.id].enabled
+    assert exported[custom.id].temporal_strategy is TemporalStrategy.FULL_DATETIME
+    assert exported[custom.id].public_release_mode is PublicReleaseMode.WALL_TIME
+    assert exported[SourceId("rne")].public_release_mode is PublicReleaseMode.DISABLED
+    assert exported[SourceId("un_news_es")].collection_filter_id == "un_news_es_minutes"
+    assert disabled_unassigned.id not in {
+        source_id for playlist in retained.playlists for source_id in playlist.source_ids
+    }
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == state_before_export
+    assert upgrade_inspection_report(root) == inspection
+
+    # A clean installation receives both custom sources, even the disabled,
+    # unassigned one; unknown processing capabilities cannot be substituted.
+    clean = tmp_path / "restored-custom-and-disabled"
+    clean.mkdir()
+    receiver = open_managed_state_store(clean)
+    importer = SourceImportService(
+        receiver,
+        ConfigurationSynchronization(),
+        ProvisioningJournal(clean / "managed-playlist-provisioning.json"),
+    )
+    preview = importer.preview(source_json)
+    outcome = importer.apply(
+        source_json,
+        preview.fingerprint,
+        keep_local=frozenset(),
+        confirm_v8=False,
+    )
+    assert outcome.created == len(original_sources)
+    imported = {
+        source.external_references[0].external_id: source
+        for source in effective_sources(receiver.catalog, receiver.load_readonly())
+    }
+    assert len(imported) == 15
+    for original_source in original_sources.values():
+        restored_source = imported[original_source.external_references[0].external_id]
+        assert replace(restored_source, id=original_source.id) == original_source
+    assert receiver.load_readonly().playlists == ()
