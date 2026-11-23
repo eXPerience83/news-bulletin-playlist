@@ -40,7 +40,7 @@ def no_external_calls(monkeypatch: pytest.MonkeyPatch) -> None:
         pytest.fail("The cutover/export/restore drill must not use the network")
 
     monkeypatch.setattr(socket.socket, "connect", forbidden)
-    monkeypatch.setattr(socket.socket, "getaddrinfo", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
 
 
 @pytest.mark.parametrize("legacy_schema", [6, 7, 8, 9, 10])
