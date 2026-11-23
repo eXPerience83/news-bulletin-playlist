@@ -43,6 +43,18 @@ has occurred.
 
 ### Changed
 
+- **Read-only pre-cutover inventory:** `legacy-preflight` records the
+  original v6–v10 byte SHA, all destination IDs, source processing policies,
+  playlist policies, template exceptions and cover references before the first
+  irreversible v11 boot. This local report is not a backup or authorization
+  to write to Spotify (#631).
+- **Packaged image cutover gate:** both Container CI and the separately
+  authorized beta workflow now require a successful network-isolated Docker
+  migration with four fictional destinations, full local equivalence and
+  persistent inspection hold across a restart. Negative tests verify failures
+  for a prematurely released hold, changed v11 hash or unhealthy container
+  and verify cleanup (#652).
+
 - **Inspection release hardening:** explicit SHA-bound `inspection-release`
   now rechecks the full local migration report under the same root lock and
   refuses release if original legacy evidence, managed policies or persisted

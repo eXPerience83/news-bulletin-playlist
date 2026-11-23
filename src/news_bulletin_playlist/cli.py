@@ -13,6 +13,7 @@ from news_bulletin_playlist.inspection_fence import (
     inspect_gate,
     release_gate,
 )
+from news_bulletin_playlist.legacy_preflight import LegacyPreflightError, legacy_preflight
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
@@ -34,6 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default=DEFAULT_HEALTH_HOST)
     serve_parser.add_argument("--port", type=int, default=DEFAULT_HEALTH_PORT)
     serve_parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+
+    preflight_parser = commands.add_parser(
+        "legacy-preflight",
+        help="inspect v6-v10 sources, destinations and policies before first v11 boot",
+    )
+    preflight_parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    preflight_parser.add_argument("--expect-destinations", type=int)
 
     inspect_parser = commands.add_parser(
         "inspection-status", help="read v11 reconciliation hold state and exact SHA-256"
@@ -64,6 +72,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return serve(host=args.host, port=args.port, data_dir=args.data_dir)
     if args.command == "healthcheck":
         return healthcheck(url=args.url, timeout=args.timeout)
+    if args.command == "legacy-preflight":
+        try:
+            report = legacy_preflight(
+                args.data_dir, expected_destinations=args.expect_destinations
+            )
+        except LegacyPreflightError as exc:
+            parser.error(str(exc))
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0 if report["destination_count_matches_expectation"] is not False else 1
     if args.command == "inspection-status":
         try:
             status = inspect_gate(args.data_dir)
