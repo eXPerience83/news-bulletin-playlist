@@ -186,9 +186,7 @@ def test_custom_disabled_and_unassigned_source_policies_survive_held_export_and_
     changed = replace(
         original,
         sources=(custom, disabled_unassigned),
-        source_overrides=(
-            ManagedSourceOverride(SourceId("rne"), PublicReleaseMode.DISABLED),
-        ),
+        source_overrides=(ManagedSourceOverride(SourceId("rne"), PublicReleaseMode.DISABLED),),
         playlists=tuple(
             replace(item, source_ids=(*item.source_ids, custom.id))
             if str(item.id) == "spain_spanish_news"
@@ -197,13 +195,9 @@ def test_custom_disabled_and_unassigned_source_policies_survive_held_export_and_
         ),
     )
     legacy.save(changed)
-    original_sources = {
-        source.id: source for source in effective_sources(BUILTIN_CATALOG, changed)
-    }
+    original_sources = {source.id: source for source in effective_sources(BUILTIN_CATALOG, changed)}
     before = compile_engine_config(BUILTIN_CATALOG, changed)
-    original_destination_ids = {
-        p.destination.external_id for p in changed.playlists
-    }
+    original_destination_ids = {p.destination.external_id for p in changed.playlists}
     preflight = legacy_preflight(root, expected_destinations=4)
     assert preflight["source_count"] == 15
     assert preflight["destination_count"] == 4
@@ -216,14 +210,10 @@ def test_custom_disabled_and_unassigned_source_policies_survive_held_export_and_
     assert inspection["legacy_comparison"] == "matching"
     assert inspection["historical_origin_sha256"] == preflight["legacy_state_sha256"]
     assert compile_engine_config(migrated.catalog, retained) == before
-    assert {
-        p.destination.external_id for p in retained.playlists
-    } == original_destination_ids
+    assert {p.destination.external_id for p in retained.playlists} == original_destination_ids
 
     state_before_export = (root / V11_OPERATIONAL_FILENAME).read_bytes()
-    source_json = export_source_configuration(
-        migrated, ConfigurationSynchronization()
-    )
+    source_json = export_source_configuration(migrated, ConfigurationSynchronization())
     exported = {row.source.id: row.source for row in parse_sources(source_json)}
     assert exported == original_sources
     assert not exported[disabled_unassigned.id].enabled
