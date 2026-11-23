@@ -12,6 +12,7 @@ on:
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/container.yml"
+      - "scripts/verify-v11-container-cutover.sh"
 
 permissions:
   contents: read
@@ -127,6 +128,9 @@ jobs:
             --output /tmp/news-bulletin-health-restart.json \
             http://127.0.0.1:18788/healthz
           grep -Fq '"status":"ok"' /tmp/news-bulletin-health-restart.json
+
+      - name: Verify packaged v10-to-v11 cutover under offline persistent hold
+        run: bash scripts/verify-v11-container-cutover.sh news-bulletin-playlist:ci
 
       - name: Stop validation container
         if: always()
