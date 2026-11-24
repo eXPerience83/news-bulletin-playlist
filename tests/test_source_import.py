@@ -336,7 +336,7 @@ def test_invalid_pending_references_block_additions_without_writes(tmp_path):
     assert service.provisioning.path.read_bytes() == before
 
 
-@pytest.mark.parametrize("point", ["prepare", "file_fsync", "replace", "chmod", "directory_fsync"])
+@pytest.mark.parametrize("point", ["prepare", "file_fsync", "replace", "privacy", "directory_fsync"])
 def test_pre_and_post_commit_failures_have_readback_based_recovery(tmp_path, monkeypatch, point):
     service = _service(tmp_path)
     state = ManagedState()
@@ -369,13 +369,13 @@ def test_pre_and_post_commit_failures_have_readback_based_recovery(tmp_path, mon
             storage.setattr(managed_state.os, "open", fail_temp)
         elif point == "directory_fsync":
             storage.setattr(managed_state, "fsync_directory", fail)
+        elif point == "privacy":
+            storage.setattr(managed_state, "ensure_private_created", fail)
         else:
             storage.setattr(
-                managed_state.os,
-                {"file_fsync": "fsync", "replace": "replace", "chmod": "chmod"}[point],
-                fail,
+                managed_state.os, {"file_fsync": "fsync", "replace": "replace"}[point], fail
             )
-        if point in {"chmod", "directory_fsync"}:
+        if point == "directory_fsync":
             result = service.apply(
                 document, preview.fingerprint, keep_local=frozenset(), confirm_v8=True
             )
@@ -389,8 +389,8 @@ def test_pre_and_post_commit_failures_have_readback_based_recovery(tmp_path, mon
     assert calls == 1
     assert not list(tmp_path.glob("*.tmp"))
     result = _apply(service, document)
-    assert result.created == (0 if point in {"chmod", "directory_fsync"} else 1)
-    assert calls == (1 if point in {"chmod", "directory_fsync"} else 2)
+    assert result.created == (0 if point == "directory_fsync" else 1)
+    assert calls == (1 if point == "directory_fsync" else 2)
 
 
 def test_failed_readback_does_not_claim_rollback(tmp_path, monkeypatch):
