@@ -18,6 +18,7 @@ from news_bulletin_playlist import managed_state, portable_playlists
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetStore
 from news_bulletin_playlist.managed_state import (
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
     ManagedSourceOverride,
     ManagedState,
     ManagedStateError,
@@ -30,6 +31,7 @@ from news_bulletin_playlist.managed_state import (
 from news_bulletin_playlist.models import (
     DurationPolicy,
     DurationPolicyException,
+    OrderingPolicy,
     PlaylistId,
     PublicReleaseMode,
     SourceId,
@@ -438,3 +440,20 @@ def test_uploaded_fifo_is_rejected_without_blocking(tmp_path):
     os.mkfifo(root / (id_ + ".jpg"))
     with pytest.raises(CustomCoverAssetError, match="regular"):
         PortableCoverLoader(tmp_path).load(id_)
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_legacy_zip_refuses_to_lose_new_managed_ordering(tmp_path, version):
+    playlist = replace(
+        activate_template(BUILTIN_CATALOG.playlists[0], "PRIVATE"),
+        portable_id=UUID,
+        ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST,
+    )
+    service = _service(
+        tmp_path,
+        ManagedState(schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, playlists=(playlist,)),
+    )
+    original = service.store.path.read_bytes()
+    with pytest.raises(PlaylistExportError, match="cannot represent this playlist ordering"):
+        service.export("managed", str(playlist.id), version=version)
+    assert service.store.path.read_bytes() == original

@@ -11,7 +11,13 @@ from _legacy_dataset import legacy_root as _root
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.effective_config import load_effective_config
-from news_bulletin_playlist.managed_state import ManagedState, ManagedStateError, ManagedStateStore
+from news_bulletin_playlist.managed_state import (
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
+    ManagedState,
+    ManagedStateError,
+    ManagedStateStore,
+)
+from news_bulletin_playlist.models import OrderingPolicy
 from news_bulletin_playlist.v11_managed_adapter import (
     ForwardOnlyManagedStateStore,
     open_managed_state_store,
@@ -177,3 +183,37 @@ def test_historical_source_metadata_edit_survives_restart_without_detector_chang
     with pytest.raises(ManagedStateError, match="could not be saved"):
         store.save_owner_source(replace(edited, timezone="Atlantic/Canary"))
     assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == after
+
+
+def test_ordering_override_survives_v11_owner_restart_without_changing_frozen_data(tmp_path):
+    root, _ = _root(tmp_path)
+    store = open_managed_state_store(root)
+    original = store.load()
+    legacy = (root / "managed-state.json").read_bytes()
+    before = json.loads((root / V11_OPERATIONAL_FILENAME).read_bytes())
+    first = replace(
+        original.playlists[0], ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST
+    )
+    edited = replace(
+        original,
+        schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION,
+        playlists=(first, *original.playlists[1:]),
+    )
+    store.save(edited)
+    assert open_managed_state_store(root).load() == edited
+    runtime = load_effective_config(root, {})
+    assert runtime is not None
+    assert runtime.playlists[0].ordering is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+    assert (root / "managed-state.json").read_bytes() == legacy
+    after = json.loads((root / V11_OPERATIONAL_FILENAME).read_bytes())
+    assert {k: v for k, v in before.items() if k != "managed_overlay"} == {
+        k: v for k, v in after.items() if k != "managed_overlay"
+    }
+    restored = replace(
+        edited, playlists=(replace(first, ordering_override=None), *edited.playlists[1:])
+    )
+    store = open_managed_state_store(root)
+    store.save(restored)
+    runtime = load_effective_config(root, {})
+    assert runtime is not None
+    assert runtime.playlists[0].ordering is OrderingPolicy.EDITION_AT_DESC

@@ -10,17 +10,21 @@ import pytest
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.managed_state import (
     MANAGED_STATE_FILENAME,
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
     ManagedState,
     ManagedStateError,
     ManagedStateStore,
     activate_template,
     compile_engine_config,
+    parse_managed_state,
     serialize_managed_state,
 )
 from news_bulletin_playlist.models import (
     AdapterId,
     DestinationReference,
     DurationPolicy,
+    OrderingPolicy,
+    PlaylistId,
     SourceId,
 )
 
@@ -359,3 +363,61 @@ def test_v6_requires_minimum(tmp_path):
     path.write_text(json.dumps(payload))
     with pytest.raises(ManagedStateError, match="min_duration_seconds.*required"):
         ManagedStateStore(path).load()
+
+
+def test_ordering_override_is_independent_and_round_trips(tmp_path: Path) -> None:
+    template = BUILTIN_CATALOG.playlist("spain_spanish_news")
+    first = activate_template(template, "first")
+    second = replace(
+        activate_template(template, "second", playlist_id=PlaylistId("second")),
+        ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST,
+    )
+    state = ManagedState(
+        schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, playlists=(first, second)
+    )
+    store = ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME)
+    store.save(state)
+    assert store.load() == state
+    payload = json.loads(store.path.read_bytes())
+    assert payload["playlists"][0]["ordering_override"] is None
+    assert payload["playlists"][1]["ordering_override"] == "latest_per_source_first"
+    config = compile_engine_config(BUILTIN_CATALOG, store.load())
+    assert tuple(p.ordering for p in config.playlists) == (
+        OrderingPolicy.EDITION_AT_DESC,
+        OrderingPolicy.LATEST_PER_SOURCE_FIRST,
+    )
+    assert config.playlists[1].source_selection == config.playlists[0].source_selection
+    assert config.playlists[1].duration_policy == config.playlists[0].duration_policy
+
+
+@pytest.mark.parametrize("schema", [6, 7, 8, 9, 10])
+def test_old_overlay_never_accepts_or_discards_ordering_override(schema: int) -> None:
+    managed = activate_template(BUILTIN_CATALOG.playlists[0], "destination")
+    legacy = ManagedState(schema_version=schema, playlists=(managed,))
+    payload = serialize_managed_state(legacy)
+    assert "ordering_override" not in payload["playlists"][0]
+    assert parse_managed_state(payload) == legacy
+    payload["playlists"][0]["ordering_override"] = "latest_per_source_first"
+    with pytest.raises(ManagedStateError):
+        parse_managed_state(payload)
+    changed = replace(
+        legacy,
+        playlists=(replace(managed, ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST),),
+    )
+    with pytest.raises(ManagedStateError, match="explicit overlay schema"):
+        serialize_managed_state(changed)
+    with pytest.raises(ManagedStateError, match="explicit overlay schema"):
+        compile_engine_config(BUILTIN_CATALOG, changed)
+
+
+@pytest.mark.parametrize("invalid", ["unknown", False, 1, [], {}])
+def test_ordering_overlay_rejects_invalid_policy(invalid) -> None:
+    managed = activate_template(BUILTIN_CATALOG.playlists[0], "destination")
+    state = ManagedState(schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, playlists=(managed,))
+    payload = serialize_managed_state(state)
+    payload["playlists"][0]["ordering_override"] = invalid
+    with pytest.raises(ManagedStateError, match="ordering_override"):
+        parse_managed_state(payload)
+    del payload["playlists"][0]["ordering_override"]
+    with pytest.raises(ManagedStateError, match="ordering_override"):
+        parse_managed_state(payload)

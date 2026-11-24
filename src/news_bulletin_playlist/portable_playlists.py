@@ -39,6 +39,7 @@ from news_bulletin_playlist.managed_state import (
     template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
+from news_bulletin_playlist.models import OrderingPolicy
 from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.portable_identity import portable_id
 from news_bulletin_playlist.portable_playlist_metadata import exception_payload
@@ -196,6 +197,14 @@ def playlist_bundle(
     if version not in (1, 2) or (version == 2 and kind not in {"managed", "draft"}):
         raise PlaylistExportError("Unsupported or incomplete portable playlist version")
     target = _target(state, store, kind, object_id)
+    if (
+        isinstance(target, ManagedPlaylist)
+        and target.ordering_override is not None
+        and target.ordering_override is not OrderingPolicy.EDITION_AT_DESC
+    ):
+        raise PlaylistExportError(
+            "ZIP v1/v2 cannot represent this playlist ordering; a newer portable format is required"
+        )
     linked_local = (
         next((item for item in state.templates if item.id == target.template_id), None)
         if isinstance(target, ManagedPlaylist)
