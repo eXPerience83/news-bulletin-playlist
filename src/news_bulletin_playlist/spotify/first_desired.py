@@ -12,7 +12,12 @@ from news_bulletin_playlist.desired_state import (
     duration_eligibility_decision,
 )
 from news_bulletin_playlist.desired_state import desired_fingerprint as desired_fingerprint
-from news_bulletin_playlist.models import PlaylistDefinition, SourceDefinition, SourceId
+from news_bulletin_playlist.models import (
+    OrderingPolicy,
+    PlaylistDefinition,
+    SourceDefinition,
+    SourceId,
+)
 from news_bulletin_playlist.spotify.first_models import (
     SpotifyFirstEpisode,
     as_utc,
@@ -100,6 +105,11 @@ def build_spotify_first_desired_state(
         seen_uris.add(item.spotify_episode_uri)
         unique_items.append(item)
 
+    if playlist.ordering is OrderingPolicy.LATEST_PER_SOURCE_FIRST:
+        unique_items = _latest_per_source_first(unique_items)
+    elif playlist.ordering is not OrderingPolicy.EDITION_AT_DESC:
+        raise ValueError("unsupported playlist ordering")
+
     desired = DesiredPlaylistState(
         playlist_id=playlist.id,
         generated_at=observed,
@@ -110,6 +120,20 @@ def build_spotify_first_desired_state(
         desired=desired,
         duration_unavailable_count=duration_unavailable,
     )
+
+
+def _latest_per_source_first(items: Sequence[DesiredPlaylistItem]) -> list[DesiredPlaylistItem]:
+    """Stable partition of eligible, deduplicated items already ordered by chronology."""
+    seen_sources: set[SourceId] = set()
+    first: list[DesiredPlaylistItem] = []
+    history: list[DesiredPlaylistItem] = []
+    for item in items:
+        if item.source_id in seen_sources:
+            history.append(item)
+        else:
+            seen_sources.add(item.source_id)
+            first.append(item)
+    return first + history
 
 
 def _retained(
