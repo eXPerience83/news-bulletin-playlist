@@ -17,7 +17,10 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from news_bulletin_playlist.private_persistence import ensure_private_created, open_private_directory
+from news_bulletin_playlist.private_persistence import (
+    ensure_private_created,
+    open_private_directory,
+)
 
 UPLOAD_COVER_PREFIX = "uploaded_"
 UPLOADED_COVER_ID_PATTERN = re.compile(r"uploaded_[0-9a-f]{64}\Z")
