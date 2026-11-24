@@ -351,10 +351,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 raise ValueError("Invalid playlist import headers")
             preview = path.endswith("/preview")
             edit = path.endswith("/update")
-            version = (
-                3 if path.startswith("/admin/playlists/import/v3/")
-                else 2 if path.startswith("/admin/playlists/import/v2/") else 1
-            )
+            version = 1
+            if path.startswith("/admin/playlists/import/v3/"):
+                version = 3
+            elif path.startswith("/admin/playlists/import/v2/"):
+                version = 2
             linked = version == 2 or path.endswith("/linked/apply")
             document_limit = MAX_PLAYLIST_ZIP_V2_BYTES if version >= 2 else MAX_PLAYLIST_ZIP_BYTES
             limit = document_limit + 8192 if preview else 2 * 1024 * 1024 if edit else 4096

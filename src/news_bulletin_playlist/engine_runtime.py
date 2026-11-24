@@ -68,7 +68,12 @@ from news_bulletin_playlist.managed_state import (
     effective_sources,
 )
 from news_bulletin_playlist.migrated_covers import MigratedCoverAssets, MigratedCoverError
-from news_bulletin_playlist.models import EngineConfig, OrderingPolicy, PlaylistDefinition, PlaylistId
+from news_bulletin_playlist.models import (
+    EngineConfig,
+    OrderingPolicy,
+    PlaylistDefinition,
+    PlaylistId,
+)
 from news_bulletin_playlist.owner_cover_upload import (
     MAX_MULTIPART_BYTES,
     CoverUploadRequestError,
@@ -1093,7 +1098,9 @@ class OperationalHealthHandler(LanAdminHandler):
                         event_name = "admin_playlist_relinked"
                         next_state = "disabled"
                     elif path == "/admin/playlists/ordering":
-                        playlist_id_for_event = self._save_playlist_ordering(service, form, "managed")
+                        playlist_id_for_event = self._save_playlist_ordering(
+                            service, form, "managed"
+                        )
                         event_name = "admin_playlist_updated"
                         next_state = "ordering"
                     elif path == "/admin/playlists/update":

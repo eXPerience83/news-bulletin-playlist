@@ -69,7 +69,9 @@ def preview_page(preview: PlaylistImportPreview, preview_id: str, csrf: str) -> 
     details = esc(canonical_json(p).decode("utf-8"))
     ack = ""
     schema = 11 if preview.bundle.version == 3 else 10
-    action_url = "/admin/playlists/import/v3/apply" if schema == 11 else "/admin/playlists/import/apply"
+    action_url = (
+        "/admin/playlists/import/v3/apply" if schema == 11 else "/admin/playlists/import/apply"
+    )
     if preview.status == "create" and preview.sources.schema_version < schema:
         ack = f"""<p class="notice">This import explicitly adopts managed-state v{schema}
 (including v9 UUID identities).

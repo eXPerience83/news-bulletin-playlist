@@ -923,7 +923,9 @@ def _ordering_form(
         if kind == "managed"
         else "Applies to future activation of this draft, not its existing managed playlist."
     )
-    action = "/admin/playlists/ordering" if kind == "managed" else "/admin/playlists/templates/ordering"
+    action = (
+        "/admin/playlists/ordering" if kind == "managed" else "/admin/playlists/templates/ordering"
+    )
     return f"""
 <form method="post" action="{action}">
   {_hidden_input("csrf_token", csrf)}
@@ -931,7 +933,8 @@ def _ordering_form(
   <label>Playback order<select name="ordering">{choices}</select></label>
   <p class="muted">{note} One latest eligible unique bulletin per source, then newest
   remaining editions. The episode cap still applies; incomplete catalogues cannot
-  safely reorder existing items. Disable shuffle and custom sorting in Spotify to hear this order.</p>
+  safely reorder existing items. Disable shuffle and custom sorting in Spotify
+  to hear this order.</p>
   {acknowledgement}
   <button class="button" type="submit">Save playback order</button>
 </form>
