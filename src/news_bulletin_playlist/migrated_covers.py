@@ -23,7 +23,10 @@ from news_bulletin_playlist.custom_cover_assets import (
 )
 from news_bulletin_playlist.file_durability import fsync_directory
 from news_bulletin_playlist.portable_playlist_metadata import validate_attribution
-from news_bulletin_playlist.private_persistence import ensure_private_created, open_private_directory
+from news_bulletin_playlist.private_persistence import (
+    ensure_private_created,
+    open_private_directory,
+)
 
 MIGRATED_COVERS_DIR = "migrated-covers"
 _INDEX_NAME = "index.json"
