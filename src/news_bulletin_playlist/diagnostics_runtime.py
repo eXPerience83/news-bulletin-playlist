@@ -54,7 +54,7 @@ from news_bulletin_playlist.managed_state import (
 from news_bulletin_playlist.migrated_covers import MigratedCoverError
 from news_bulletin_playlist.models import ParserId
 from news_bulletin_playlist.persistence import PersistenceError
-from news_bulletin_playlist.playlist_bundle import PlaylistBundleError
+from news_bulletin_playlist.playlist_bundle import PlaylistBundleError, inspect_playlist_bundle_v3
 from news_bulletin_playlist.playlist_import import PlaylistImportError, PlaylistImportService
 from news_bulletin_playlist.playlist_import_web import (
     imported_draft_editor,
@@ -292,6 +292,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             "/admin/playlists/import/apply",
             "/admin/playlists/import/v2/preview",
             "/admin/playlists/import/v2/apply",
+            "/admin/playlists/import/v3/preview",
+            "/admin/playlists/import/v3/apply",
+            "/admin/playlists/import/v3/linked/apply",
             "/admin/playlists/imported/update",
         }:
             self._handle_playlist_import(path)
@@ -348,8 +351,12 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 raise ValueError("Invalid playlist import headers")
             preview = path.endswith("/preview")
             edit = path.endswith("/update")
-            v2 = path.startswith("/admin/playlists/import/v2/")
-            document_limit = MAX_PLAYLIST_ZIP_V2_BYTES if v2 else MAX_PLAYLIST_ZIP_BYTES
+            version = (
+                3 if path.startswith("/admin/playlists/import/v3/")
+                else 2 if path.startswith("/admin/playlists/import/v2/") else 1
+            )
+            linked = version == 2 or path.endswith("/linked/apply")
+            document_limit = MAX_PLAYLIST_ZIP_V2_BYTES if version >= 2 else MAX_PLAYLIST_ZIP_BYTES
             limit = document_limit + 8192 if preview else 2 * 1024 * 1024 if edit else 4096
             length = int(lengths[0])
             if not 0 < length <= limit:
@@ -380,18 +387,20 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                         HTTPStatus.FORBIDDEN, "Administration form validation failed"
                     )
                     return
-                if v2:
-                    planned_v2 = service.preview_v2(document)
+                if version == 3:
+                    linked = inspect_playlist_bundle_v3(document).template is not None
+                if linked:
+                    planned_v2 = service.preview_v2(document, version=version)
                     staged = security.stage_playlist_import(
-                        document, planned_v2.sources.fingerprint, version=2
+                        document, planned_v2.sources.fingerprint, version=version
                     )
                     page = preview_v2_page(
                         planned_v2, staged.preview_id, security.issue_csrf_token()
                     )
                 else:
-                    planned_v1 = service.preview(document)
+                    planned_v1 = service.preview(document, version=version)
                     staged = security.stage_playlist_import(
-                        document, planned_v1.sources.fingerprint
+                        document, planned_v1.sources.fingerprint, version=version
                     )
                     page = preview_page(planned_v1, staged.preview_id, security.issue_csrf_token())
                 self._reply(HTTPStatus.OK, page)
@@ -421,10 +430,10 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             preview_id = single_form_value(form, "preview_id")
             if re.fullmatch(r"[A-Za-z0-9_-]{20,128}", preview_id) is None:
                 raise ValueError("Invalid preview reference")
-            context = security.take_playlist_import(preview_id, version=2 if v2 else 1)
+            context = security.take_playlist_import(preview_id, version=version)
             if context is None:
                 raise PlaylistImportError("Preview expired or unavailable; upload a new preview")
-            if v2:
+            if linked:
                 if set(form) not in (
                     {"csrf_token", "preview_id", "action"},
                     {"csrf_token", "preview_id", "action", "confirm"},
@@ -433,7 +442,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     raise ValueError("Invalid ZIP v2 confirmation fields")
                 action = single_form_value(form, "action")
                 if action == "cancel":
-                    self._reply(HTTPStatus.OK, result_v2_page(None))
+                    self._reply(HTTPStatus.OK, result_v2_page(None, version=version))
                     return
                 if (
                     action != "apply"
@@ -445,8 +454,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                     context.document,
                     context.fingerprint,
                     confirm_schema=form.get("ack_schema") == ["1"],
+                    version=version,
                 )
-                self._reply(HTTPStatus.OK, result_v2_page(result_v2))
+                self._reply(HTTPStatus.OK, result_v2_page(result_v2, version=version))
                 return
             decisions = {
                 int(k.removeprefix("decision_")): v[0]
@@ -468,6 +478,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 context.fingerprint,
                 keep_local=frozenset(decisions),
                 confirm_schema=form.get("ack_schema") == ["1"],
+                version=version,
             )
             self._reply(HTTPStatus.OK, result_page(result))
         except PlaylistBundleError as exc:
@@ -619,7 +630,7 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             if any(len(v) != 1 for v in values.values()):
                 raise ValueError
             version_value = values.get("version", ["1"])[0]
-            if version_value not in {"1", "2"}:
+            if version_value not in {"1", "2", "3"}:
                 raise ValueError
             if "version" in values and not path.endswith("export.zip"):
                 raise ValueError

@@ -32,7 +32,16 @@ def upload_page(csrf: str, *, inspection_hold: bool = False) -> bytes:
         active_tab="playlists",
         intro="Local draft import; no Spotify calls. Publishing later is a separate opt-in.",
         body_html=notice
-        + f'''<h2>Import complete playlist ZIP v2</h2>
+        + f'''<h2>Import complete playlist ZIP v3</h2>
+<p>Includes playback order and supports both linked and standalone drafts.
+Maximum 2 MiB; preview is read-only.</p>
+<form method="post" action="/admin/playlists/import/v3/preview" enctype="multipart/form-data">
+<input type="hidden" name="csrf_token" value="{html.escape(csrf, quote=True)}">
+<label>ZIP v3 package
+<input type="file" name="document" accept=".zip,application/zip" required{disabled}>
+</label>
+<button class="button button-primary" type="submit"{disabled}>Preview ZIP v3</button></form>
+<h2>Import complete playlist ZIP v2</h2>
 <p>Recommended for lossless owner-template policy, dormant exceptions and source closure.
 Maximum 2 MiB; preview is read-only and never contacts Spotify.</p>
 <form method="post" action="/admin/playlists/import/v2/preview" enctype="multipart/form-data">
@@ -59,14 +68,16 @@ def preview_page(preview: PlaylistImportPreview, preview_id: str, csrf: str) -> 
     p = preview.bundle.playlist
     details = esc(canonical_json(p).decode("utf-8"))
     ack = ""
-    if preview.status == "create" and preview.sources.schema_version < 10:
-        ack = """<p class="notice">This import explicitly adopts managed-state v10
+    schema = 11 if preview.bundle.version == 3 else 10
+    action_url = "/admin/playlists/import/v3/apply" if schema == 11 else "/admin/playlists/import/apply"
+    if preview.status == "create" and preview.sources.schema_version < schema:
+        ack = f"""<p class="notice">This import explicitly adopts managed-state v{schema}
 (including v9 UUID identities).
-Older images, including v9, cannot read v10.
+Older images, including v9, cannot read v{schema}.
 Rollback may require restoring a compatible complete backup.
 A portable ZIP is not a production backup.</p>
 <label><input type="checkbox" name="ack_schema" value="1" required>
-I accept the v10 compatibility and backup requirement.</label>"""
+I accept the v{schema} compatibility and backup requirement.</label>"""
     confirm = (
         ""
         if preview.blocked
@@ -93,12 +104,12 @@ The original Spotify destination is never restored automatically.</p>
 <pre>{details}</pre></details>
 <p>Source decisions below show the effective local configuration when Keep local is selected.
 UUID comparison is calculated using those local IDs and configurations.</p>
-<form method="post" action="/admin/playlists/import/apply">{fields}
+<form method="post" action="{action_url}">{fields}
 <div class="table-wrap">
 <table><thead><tr><th scope="col">Imported source</th><th scope="col">Show</th>
 <th scope="col">Comparison</th><th scope="col">Local ID</th></tr></thead>
 <tbody>{render_source_import_rows(preview.sources)}</tbody></table></div>{confirm}</form>
-<form method="post" action="/admin/playlists/import/apply">{fields}
+<form method="post" action="{action_url}">{fields}
 <button class="button" name="action" value="cancel" type="submit">Cancel import</button></form>"""
     return render_admin_shell(
         title="Review playlist import",
@@ -227,6 +238,13 @@ def preview_v2_page(plan: PlaylistV2ImportPlan, preview_id: str, csrf: str) -> b
     """Review the whole v2 source/template closure before any local publication."""
     esc = html.escape
     playlist = plan.bundle.playlist
+    version = plan.bundle.version
+    schema = 11 if version == 3 else 10
+    action_url = (
+        "/admin/playlists/import/v3/linked/apply"
+        if version == 3
+        else "/admin/playlists/import/v2/apply"
+    )
     source_rows = "".join(
         "<tr>"
         f"<td><code>{esc(str(getattr(row.incoming, 'id', 'unsupported')))}</code></td>"
@@ -240,20 +258,20 @@ def preview_v2_page(plan: PlaylistV2ImportPlan, preview_id: str, csrf: str) -> b
     controls = ""
     if not plan.blocked:
         acknowledgement = ""
-        if plan.sources.schema_version < 10:
-            acknowledgement = """<p class="notice">This import promotes the local managed overlay
-to schema v10. Older images cannot read it and ZIP does not restore full production
+        if plan.sources.schema_version < schema:
+            acknowledgement = f"""<p class="notice">This import promotes the local managed overlay
+to schema v{schema}. Older images cannot read it and ZIP does not restore full production
 state. Confirm this forward-only compatibility change before importing.</p>
 <label><input type="checkbox" name="ack_schema" value="1" required>
-I accept the local schema v10 compatibility change.</label>"""
+I accept the local schema v{schema} compatibility change.</label>"""
         controls = (
             acknowledgement
-            + """
+            + f"""
 <label><input type="checkbox" name="confirm" value="1" required>
 I confirm installation of these local owner sources, full template and editable draft.
 No Spotify destination will be created or linked.</label>
 <button class="button button-primary" name="action" value="apply" type="submit">
-Apply offline ZIP v2 import</button>"""
+Apply offline ZIP v{version} import</button>"""
         )
     fields = (
         f'<input type="hidden" name="csrf_token" value="{esc(csrf, quote=True)}">'
@@ -264,7 +282,7 @@ Apply offline ZIP v2 import</button>"""
     attribution = plan.bundle.template_attribution
     proposed_id = esc(str(plan.owner_template.id)) if plan.owner_template else "blocked"
     body = f"""<h2>{esc(playlist["display_name"])}</h2>
-<p>ZIP v2 · UUID <code>{esc(playlist["portable_id"])}</code></p>
+<p>ZIP v{version} · UUID <code>{esc(playlist["portable_id"])}</code></p>
 <p><strong>Preview:</strong> {esc(plan.reason)}</p>
 <p>{plan.sources.creates} source(s) will be installed. Other identical owner sources
 may be reused. Differing capabilities or unowned overlaps block the whole import.</p>
@@ -287,22 +305,22 @@ will be retained. No Spotify destination ID, OAuth or episodes are imported.</p>
 <pre>{esc(repr(template))}</pre></details>
 <details><summary>Original template artwork attribution</summary>
 <pre>{esc(canonical_json(attribution).decode("utf-8"))}</pre></details>
-<form method="post" action="/admin/playlists/import/v2/apply">
+<form method="post" action="{action_url}">
 {fields}{controls}</form>
-<form method="post" action="/admin/playlists/import/v2/apply">
+<form method="post" action="{action_url}">
 {fields}<button class="button" name="action" value="cancel" type="submit">
 Cancel import</button></form>"""
     return render_admin_shell(
-        title="Review complete ZIP v2 import",
+        title=f"Review complete ZIP v{version} import",
         active_tab="playlists",
         intro="Read-only comparison; apply is a separate local-only confirmation.",
         body_html=body,
     )
 
 
-def result_v2_page(result: PlaylistV2ImportResult | None) -> bytes:
+def result_v2_page(result: PlaylistV2ImportResult | None, *, version: int = 2) -> bytes:
     if result is None:
-        body = "<h2>ZIP v2 import cancelled</h2><p>No configuration was installed.</p>"
+        body = f"<h2>ZIP v{version} import cancelled</h2><p>No configuration was installed.</p>"
     else:
         warning = (
             '<p class="notice">A durability error occurred after publication; '
@@ -312,7 +330,7 @@ def result_v2_page(result: PlaylistV2ImportResult | None) -> bytes:
             else ""
         )
         body = (
-            "<h2>ZIP v2 offline import complete</h2>"
+            f"<h2>ZIP v{version} offline import complete</h2>"
             f"<p>Owner template: <code>{html.escape(result.owner_template_id)}</code>. "
             f"Current draft: <code>{html.escape(result.current_draft_id)}</code>. "
             f"{result.created_sources} new sources.</p>"
@@ -324,7 +342,7 @@ def result_v2_page(result: PlaylistV2ImportResult | None) -> bytes:
             + '">Edit local draft</a></p>'
         )
     return render_admin_shell(
-        title="ZIP v2 import result",
+        title=f"ZIP v{version} import result",
         active_tab="playlists",
         intro="Owner configuration was imported offline; Spotify is unchanged.",
         body_html=body + '<p><a href="/admin/">Back to playlists</a></p>',

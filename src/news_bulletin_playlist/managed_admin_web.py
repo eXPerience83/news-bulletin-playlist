@@ -23,13 +23,14 @@ from news_bulletin_playlist.managed_admin import (
 )
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningState
 from news_bulletin_playlist.managed_state import (
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
     ManagedPlaylist,
     ManagedSource,
     ManagedState,
     effective_sources,
     template_suspended_by_quarantine,
 )
-from news_bulletin_playlist.models import PlaylistId, SourceDefinition, SourceId
+from news_bulletin_playlist.models import OrderingPolicy, PlaylistId, SourceDefinition, SourceId
 from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.playlist_examples import example_draft_id, resolve_example_sources
 from news_bulletin_playlist.playlist_import_web import imported_draft_editor
@@ -107,6 +108,8 @@ def render_managed_admin_page(
                 spotify_connected=spotify_connected,
                 managed=snapshot.managed,
                 provisioning_intent=snapshot.provisioning_intent,
+                schema_version=state.schema_version,
+                inspection_hold=inspection_hold,
             )
             for draft in snapshot.custom_templates
         )
@@ -489,6 +492,8 @@ def _managed_card(
     <button class="button" type="submit">Save playlist</button>
   </form>
   {upload_form}
+  {_ordering_form("managed", str(playlist.id), playlist.ordering_override, csrf_token,
+                  state.schema_version, inspection_hold)}
   {portable_controls("managed", str(playlist.id), playlist.portable_id)}
   <form method="post" action="/admin/playlists/sync">
     {_hidden_input("csrf_token", csrf_token)}
@@ -741,6 +746,8 @@ def _custom_draft_card(
     spotify_connected: bool,
     managed: tuple[ManagedPlaylist, ...],
     provisioning_intent: ProvisioningIntent | None,
+    schema_version: int,
+    inspection_hold: bool,
 ) -> str:
     if draft.portable_metadata is not None:
         fields = ""
@@ -868,12 +875,66 @@ def _custom_draft_card(
     </div>
   </div>
   {editor}
+  {_ordering_form("draft", str(draft.id), draft.ordering_override, csrf_token,
+                  schema_version, inspection_hold)}
   {portable_controls("draft", str(draft.id), draft.portable_id)}
   {upload_form}
   {publish}
   {relink}
   {delete_control}
 </article>
+"""
+
+
+def _ordering_form(
+    kind: str,
+    object_id: str,
+    current: OrderingPolicy | None,
+    csrf: str,
+    schema_version: int,
+    inspection_hold: bool,
+) -> str:
+    label = (
+        "Latest eligible bulletin per source first"
+        if current is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+        else "Newest edition first"
+    )
+    if inspection_hold:
+        return f'<p>Playback order: {label}. Changes locked during startup inspection.</p>'
+    options = (
+        ("inherit", "Default — newest edition first"),
+        (OrderingPolicy.EDITION_AT_DESC.value, "Newest edition first"),
+        (OrderingPolicy.LATEST_PER_SOURCE_FIRST.value, "Latest eligible bulletin per source first"),
+    )
+    selected = current.value if current is not None else "inherit"
+    choices = "".join(
+        f'<option value="{value}"{" selected" if value == selected else ""}>{name}</option>'
+        for value, name in options
+    )
+    acknowledgement = (
+        '<label><input type="checkbox" name="ack_schema" value="1"> '
+        "If selecting a non-inherited order, accept the forward-only overlay schema v11 "
+        "change. Older images require a compatible backup to roll back.</label>"
+        if schema_version < PLAYLIST_ORDERING_SCHEMA_VERSION
+        else ""
+    )
+    note = (
+        "Applies only to this managed playlist at its next authoritative reconciliation."
+        if kind == "managed"
+        else "Applies to future activation of this draft, not its existing managed playlist."
+    )
+    action = "/admin/playlists/ordering" if kind == "managed" else "/admin/playlists/templates/ordering"
+    return f"""
+<form method="post" action="{action}">
+  {_hidden_input("csrf_token", csrf)}
+  {_hidden_input("target_id", object_id)}
+  <label>Playback order<select name="ordering">{choices}</select></label>
+  <p class="muted">{note} One latest eligible unique bulletin per source, then newest
+  remaining editions. The episode cap still applies; incomplete catalogues cannot
+  safely reorder existing items. Disable shuffle and custom sorting in Spotify to hear this order.</p>
+  {acknowledgement}
+  <button class="button" type="submit">Save playback order</button>
+</form>
 """
 
 

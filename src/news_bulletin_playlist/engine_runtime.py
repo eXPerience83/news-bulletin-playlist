@@ -68,7 +68,7 @@ from news_bulletin_playlist.managed_state import (
     effective_sources,
 )
 from news_bulletin_playlist.migrated_covers import MigratedCoverAssets, MigratedCoverError
-from news_bulletin_playlist.models import EngineConfig, PlaylistDefinition, PlaylistId
+from news_bulletin_playlist.models import EngineConfig, OrderingPolicy, PlaylistDefinition, PlaylistId
 from news_bulletin_playlist.owner_cover_upload import (
     MAX_MULTIPART_BYTES,
     CoverUploadRequestError,
@@ -133,6 +133,7 @@ _ADMIN_NOTICE_MESSAGES = {
         "could not be applied. Use Apply Spotify metadata & cover to retry."
     ),
     "playlist-settings-saved": "Playlist settings saved successfully.",
+    "playlist-ordering-saved": "Playback order saved locally.",
     "spotify-sync-applied": "Spotify metadata and cover applied successfully.",
     "playlist-stopped": "Playlist is no longer managed.",
     "playlist-provisioning-adopted": "Existing Spotify playlist adopted successfully.",
@@ -157,6 +158,8 @@ _ADMIN_POST_NOTICE_KEYS = {
     "/admin/playlists/activate": "playlist-activated",
     "/admin/playlists/relink": "playlist-existing-relinked",
     "/admin/playlists/update": "playlist-settings-saved",
+    "/admin/playlists/ordering": "playlist-ordering-saved",
+    "/admin/playlists/templates/ordering": "playlist-ordering-saved",
     "/admin/playlists/sync": "spotify-sync-applied",
     "/admin/playlists/stop": "playlist-stopped",
     "/admin/provisioning/adopt": "playlist-provisioning-adopted",
@@ -968,6 +971,7 @@ class OperationalHealthHandler(LanAdminHandler):
         synchronization = self.configuration_synchronization
         lifecycle = self.engine_lifecycle
         local_paths = {
+            "/admin/playlists/templates/ordering",
             "/admin/playlists/templates/create",
             "/admin/playlists/templates/from-example",
             "/admin/playlists/templates/update",
@@ -1025,6 +1029,14 @@ class OperationalHealthHandler(LanAdminHandler):
                     cover_error=None,
                     metadata_outcome=metadata_outcome,
                 )
+            elif path == "/admin/playlists/templates/ordering":
+                with synchronization.hold():
+                    playlist_id_for_event = self._save_playlist_ordering(service, form, "draft")
+                self._emit_admin_configuration_event(
+                    event_name="admin_local_template_changed",
+                    playlist_id=playlist_id_for_event,
+                    next_state="draft",
+                )
             elif path in {
                 "/admin/playlists/templates/create",
                 "/admin/playlists/templates/from-example",
@@ -1080,6 +1092,10 @@ class OperationalHealthHandler(LanAdminHandler):
                         playlist_id_for_event = self._relink_imported_playlist(service, form)
                         event_name = "admin_playlist_relinked"
                         next_state = "disabled"
+                    elif path == "/admin/playlists/ordering":
+                        playlist_id_for_event = self._save_playlist_ordering(service, form, "managed")
+                        event_name = "admin_playlist_updated"
+                        next_state = "ordering"
                     elif path == "/admin/playlists/update":
                         playlist_id_for_event, enabled = self._update_managed_playlist(
                             service, form
@@ -1161,6 +1177,24 @@ class OperationalHealthHandler(LanAdminHandler):
             b"",
             extra_headers={"Location": location},
         )
+
+    @staticmethod
+    def _save_playlist_ordering(
+        service: ManagedAdminService, form: Mapping[str, list[str]], kind: str
+    ) -> str:
+        if (
+            set(form) - {"csrf_token", "target_id", "ordering", "ack_schema"}
+            or any(len(values) != 1 for values in form.values())
+            or form.get("ack_schema", ["0"]) not in (["0"], ["1"])
+        ):
+            raise ValueError("Invalid playlist ordering form")
+        target_id = single_form_value(form, "target_id")
+        raw = single_form_value(form, "ordering")
+        ordering = None if raw == "inherit" else OrderingPolicy(raw)
+        service.set_ordering(
+            kind, target_id, ordering, confirm_schema=form.get("ack_schema") == ["1"]
+        )
+        return target_id
 
     def _handle_local_template_form(
         self,

@@ -147,6 +147,7 @@ class AdminSessionManager:
             "sources": MAX_SOURCE_DOCUMENT_BYTES,
             "playlist": MAX_PLAYLIST_ZIP_BYTES,
             "playlist-v2": MAX_PLAYLIST_ZIP_V2_BYTES,
+            "playlist-v3": MAX_PLAYLIST_ZIP_V2_BYTES,
         }
         limit = limits.get(kind)
         if limit is None or not isinstance(document, bytes) or not 0 < len(document) <= limit:

@@ -14,8 +14,11 @@ def portable_controls(kind: str, object_id: str, identity: str | None) -> str:
             f'{html.escape(query, quote=True)}">Prepare portable export identity</a></p>'
         )
     v2_query = urllib.parse.urlencode({"kind": kind, "id": object_id, "version": 2})
+    v3_query = urllib.parse.urlencode({"kind": kind, "id": object_id, "version": 3})
     return (
         f'<p><a class="button" href="/admin/playlists/export.zip?'
+        f'{html.escape(v3_query, quote=True)}">Export complete ZIP v3</a> '
+        f'<a class="button" href="/admin/playlists/export.zip?'
         f'{html.escape(v2_query, quote=True)}">Export complete ZIP v2</a> '
         f'<a class="button" href="/admin/playlists/export.zip?'
         f'{html.escape(query, quote=True)}">Legacy ZIP v1</a></p>'
