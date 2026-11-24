@@ -21,6 +21,7 @@ from news_bulletin_playlist.legacy_catalog_snapshot import (
     MAX_FROZEN_SNAPSHOT_BYTES,
     MAX_MANAGED_STATE_BYTES,
 )
+from news_bulletin_playlist.private_persistence import ensure_private_created
 from news_bulletin_playlist.v11_candidate import (
     MAX_CANDIDATE_BYTES,
     V11Candidate,
@@ -122,6 +123,7 @@ def publish_v11_candidate(root: Path) -> bytes:
         )
         try:
             with os.fdopen(fd, "wb") as stream:
+                ensure_private_created(stream.fileno())
                 stream.write(expected)
                 stream.flush()
                 os.fsync(stream.fileno())
