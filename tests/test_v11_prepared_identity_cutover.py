@@ -166,6 +166,63 @@ def test_prepare_in_old_version_then_held_v11_zip_v2_and_all_sources_are_restora
     assert len(receiver.load_readonly().templates) == 4
     assert len(receiver.catalog.sources) == len(source_rows)
 
+    # Check the second recovery path: each of the four ZIPs must be complete
+    # on its own, without the global JSON or any other ZIP installed first.
+    # This is the precise recovery property documented in the cutover runbook.
+    for index, (original_playlist, bundle, raw_zip) in enumerate(bundles):
+        isolated = tmp_path / f"independent-zip-{index}"
+        isolated.mkdir()
+        separate_store = open_managed_state_store(isolated)
+        assert separate_store.catalog.sources == ()
+        assert separate_store.catalog.playlists == ()
+        separate = PlaylistImportService(
+            separate_store,
+            ConfigurationSynchronization(),
+            ProvisioningJournal(isolated / "managed-playlist-provisioning.json"),
+            PortableCoverLoader(isolated),
+        )
+        preview = separate.preview_v2(raw_zip)
+        assert not preview.blocked, preview.reason
+        assert preview.sources.creates > 0
+        assert preview.owner_template is not None
+        assert preview.selected_source_ids is not None
+        assert len(preview.owner_template.default_source_ids) == len(
+            bundle.template.default_source_ids
+        )
+        result = separate.apply_v2(raw_zip, preview.sources.fingerprint)
+        assert not result.recovered
+        assert result.created_sources == preview.sources.creates
+        assert len(separate_store.catalog.sources) == result.created_sources
+        assert len(separate_store.catalog.playlists) == 1
+
+        restored_template = next(
+            template
+            for template in separate_store.catalog.playlists
+            if str(template.id) == result.owner_template_id
+        )
+        assert restored_template.retention_hours == bundle.template.retention_hours
+        assert restored_template.max_episodes == bundle.template.max_episodes
+        assert len(restored_template.default_source_ids) == len(
+            bundle.template.default_source_ids
+        )
+        assert len(restored_template.duration_policy.exceptions) == len(
+            bundle.template.duration_policy.exceptions
+        )
+        assert separate.covers.load(restored_template.cover_id)[0] == bundle.template_jpeg
+        restored_state = separate_store.load_readonly()
+        assert restored_state.playlists == ()
+        assert len(restored_state.templates) == 1
+        (draft,) = restored_state.templates
+        assert str(draft.id) == result.current_draft_id
+        assert draft.default_source_ids == preview.selected_source_ids
+        assert draft.retention_hours == original_playlist.retention_hours
+        assert draft.min_duration_seconds == original_playlist.min_duration_seconds
+        assert draft.max_duration_seconds == original_playlist.max_duration_seconds
+        assert separate.covers.load(draft.cover_id)[0] == bundle.jpeg
+        assert original_playlist.destination.external_id.encode() not in (
+            isolated / V11_OPERATIONAL_FILENAME
+        ).read_bytes()
+
 
 def test_custom_disabled_and_unassigned_source_policies_survive_held_export_and_import(
     tmp_path: Path,
