@@ -242,6 +242,8 @@ def test_only_imported_draft_may_relink_and_admin_form_is_explicit(tmp_path: Pat
         spotify_connected=True,
         managed=(),
         provisioning_intent=None,
+        schema_version=service.store.load_readonly().schema_version,
+        inspection_hold=False,
     )
     assert 'action="/admin/playlists/relink"' in page
     assert 'name="confirm_existing" value="1" required' in page
