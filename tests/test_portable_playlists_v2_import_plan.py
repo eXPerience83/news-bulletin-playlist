@@ -48,6 +48,7 @@ from news_bulletin_playlist.portable_playlists import (
     PlaylistExportError,
     PlaylistExportService,
     PortableCoverLoader,
+    playlist_bundle,
 )
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
@@ -685,8 +686,9 @@ def test_v3_linked_ordering_round_trip_preserves_owner_closure(tmp_path):
     assert restored.template_attribution == parsed.template_attribution
 
 
-def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(tmp_path):
-    draft = _draft(portable_id=UUID, ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
+@pytest.mark.parametrize("ordering", [None, *OrderingPolicy])
+def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(tmp_path, ordering):
+    draft = _draft(portable_id=UUID, ordering_override=ordering)
     donor = _service(
         tmp_path / "donor",
         ManagedState(schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, templates=(draft,)),
@@ -694,7 +696,7 @@ def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(tmp_pat
     data = donor.export("draft", str(draft.id), version=3)[1]
     parsed = inspect_playlist_bundle_v3(data)
     assert parsed.template is None
-    assert parsed.playlist["ordering_override"] == "latest_per_source_first"
+    assert parsed.playlist["ordering_override"] == (ordering.value if ordering else None)
     with pytest.raises(PlaylistBundleError):
         inspect_playlist_bundle(data)
     with pytest.raises(PlaylistBundleError):
@@ -714,7 +716,7 @@ def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(tmp_pat
     assert store.load_readonly().playlists == ()
     restored = store.load_readonly().templates[0]
     assert restored.owner_template_id is None
-    assert restored.ordering_override is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+    assert restored.ordering_override is ordering
     exporter = PlaylistExportService(
         store, ConfigurationSynchronization(), PortableCoverLoader(root)
     )
@@ -724,6 +726,56 @@ def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(tmp_pat
     assert again.playlist["ordering_override"] == parsed.playlist["ordering_override"]
     assert again.playlist["portable_id"] == UUID
     assert again.jpeg == parsed.jpeg
+    # A genuinely standalone duplicate remains an idempotent no-op.
+    baseline = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    duplicate = importer.preview(outgoing, version=3)
+    assert duplicate.status == "identical"
+    repeated = importer.apply(
+        outgoing, duplicate.sources.fingerprint, keep_local=frozenset(), confirm_schema=False, version=3
+    )
+    assert repeated.local_id == result.local_id
+    assert not repeated.created_draft
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
+
+
+def test_v3_standalone_uuid_cannot_match_existing_linked_draft(tmp_path):
+    data, _ = _donor(tmp_path, different_cover=True, version=3)
+    root, store, importer = _receiver(tmp_path)
+    plan = importer.preview_v2(data, version=3)
+    importer.apply_v2(data, plan.sources.fingerprint, confirm_schema=True, version=3)
+    state = store.load_readonly()
+    linked = state.templates[0]
+    assert linked.owner_template_id is not None
+    covers = PortableCoverLoader(root)
+    exporter = PlaylistExportService(store, ConfigurationSynchronization(), covers)
+    original = exporter.export("draft", str(linked.id), version=3)[1]
+    baseline = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+
+    # Construct a separate synthetic snapshot with identical current fields and
+    # artwork but no owner link. The production exporter creates a valid v3 ZIP;
+    # do not change the receiver's actual authority to manufacture the conflict.
+    detached = replace(linked, owner_template_id=None)
+    _, incoming = playlist_bundle(
+        replace(state, templates=(detached,)), store, "draft", str(detached.id), covers, version=3
+    )
+    parsed = inspect_playlist_bundle_v3(incoming)
+    assert parsed.template is None
+    original_bundle = inspect_playlist_bundle_v3(original)
+    assert original_bundle.template is not None
+    assert parsed.playlist == original_bundle.playlist
+    assert parsed.jpeg == original_bundle.jpeg
+
+    conflict = importer.preview(incoming, version=3)
+    assert conflict.status == "uuid_conflict"
+    assert conflict.blocked
+    assert "linked owner-template draft" in conflict.reason
+    with pytest.raises(PlaylistImportError, match="linked owner-template draft"):
+        importer.apply(
+            incoming, conflict.sources.fingerprint, keep_local=frozenset(), confirm_schema=True, version=3
+        )
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
+    assert store.load_readonly() == state
+    assert exporter.export("draft", str(linked.id), version=3)[1] == original
 
 
 @pytest.mark.parametrize("override", ["future_policy", False, None])

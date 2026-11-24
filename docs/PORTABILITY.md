@@ -53,7 +53,10 @@ with an explicit `playlist.ordering_override` (null, `edition_at_desc`, or
 source closure; managed and linked-draft archives retain the complete template
 and its dormant sources/exceptions. Unknown or inconsistent ordering values
 fail closed. The v1 and v2 decoders keep their existing contracts. Legacy
-exports refuse non-default ordering rather than silently dropping it.
+exports refuse **any explicit ordering override**, including explicit
+`edition_at_desc`, because they cannot distinguish that choice from inheritance.
+Use ZIP v3 to preserve it; objects with a null override retain their historical
+legacy export behavior.
 
 Admin offers ZIP v3 export at the same authenticated endpoint with
 `version=3`. The v3 multipart preview automatically distinguishes a linked
@@ -66,6 +69,9 @@ witness. No upgrade occurs merely by reading, restarting or previewing.
 Older binaries cannot read the new nested schema; rollback requires compatible
 complete state, not just portable archives. Imports never create or link
 Spotify destinations. Standalone v3 drafts do not fabricate an owner template.
+An explicitly standalone ZIP v3 UUID cannot be considered identical to a
+linked local draft, even if current fields and artwork match: the different
+owner closure is a conflict. Preview and Apply refuse it without writes.
 
 The Admin playback order selector persists an independent managed override or
 draft default. Editing a draft does not modify an already managed destination.

@@ -197,13 +197,9 @@ def playlist_bundle(
     if version not in (1, 2, 3) or (version >= 2 and kind not in {"managed", "draft"}):
         raise PlaylistExportError("Unsupported or incomplete portable playlist version")
     target = _target(state, store, kind, object_id)
-    if (
-        version < 3
-        and target.ordering_override is not None
-        and target.ordering_override is not OrderingPolicy.EDITION_AT_DESC
-    ):
+    if version < 3 and target.ordering_override is not None:
         raise PlaylistExportError(
-            "ZIP v1/v2 cannot represent this playlist ordering; a newer portable format is required"
+            "ZIP v1/v2 cannot represent this playlist ordering; export ZIP v3 explicitly"
         )
     linked_local = (
         next((item for item in state.templates if item.id == target.template_id), None)

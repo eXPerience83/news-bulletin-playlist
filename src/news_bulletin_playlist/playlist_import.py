@@ -454,6 +454,16 @@ class PlaylistImportService:
                 "UUID belongs to a managed playlist; no duplicate draft can be installed",
             )
         existing = next((t for t in state.templates if t.portable_id == uuid), None)
+        # ZIP v3 standalone explicitly asserts the absence of an owner template.
+        # Matching current fields cannot establish identity with a linked draft.
+        if bundle.version == 3 and existing is not None and existing.owner_template_id is not None:
+            return PlaylistImportPreview(
+                bundle,
+                source_preview,
+                None,
+                "uuid_conflict",
+                "Standalone ZIP v3 UUID belongs to a linked owner-template draft",
+            )
         occupied = (
             {str(t.id) for t in state.templates}
             | {str(t.id) for t in self.store.catalog.playlists}

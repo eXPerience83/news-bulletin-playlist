@@ -237,6 +237,21 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
   Do not silently fall back to later image assets after an inherited asset fails.
 - Once the v11 runtime adapter is active, use only `managed-state-v11.json` for runtime/Admin edits and compile against the active catalog decoded from its persisted owner inventory, not the current image. The historical catalog and legacy bytes are immutable forensic evidence. Full reference-safe historical source/template CRUD and versioned post-migration edit validation (#633) are not yet implemented; do not claim they are. Never silently read/write old legacy state if v11 exists. No downgrade support. For genuinely fresh installs, do not implicitly provision Spotify playlists or auto-run provider operations. During inspection hold, GET handlers must use read-only snapshots and never finalize pending provisioning.
 
+## Versioned playlist ordering and portability (#660)
+
+- Nested managed overlay schema 11 is distinct from the outer operational
+  v11 authority and its immutable historical witness. Do not promote the
+  nested overlay on read/startup; explicit changes require acknowledgement.
+- Provisioning journal schema 3 snapshots an explicit ordering override; recover
+  from that recorded intent, not a later draft edit.
+- ZIP v3 carries the nullable ordering override and explicit owner-template
+  closure (or null for a standalone draft). Legacy ZIP v1/v2 cannot represent
+  any explicit override, including explicit chronology; reject rather than
+  silently convert to inheritance.
+- A standalone ZIP v3 UUID colliding with a linked local draft is not identical,
+  even when its current fields and artwork match. Preserve both the local
+  authority and the link; require operator conflict resolution.
+
 ## Documentation and external contracts
 
 - For Spotify endpoint/scopes/limits/response-contract claims, verify current official Spotify documentation before treating a claim as a defect.
