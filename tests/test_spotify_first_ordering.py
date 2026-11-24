@@ -5,7 +5,9 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from _reconciliation import _FakeSpotify, strict_reconcile_playlist_items
 
+from news_bulletin_playlist.desired_state import desired_fingerprint
 from news_bulletin_playlist.models import (
     AdapterId,
     CountryCode,
@@ -386,3 +388,158 @@ def test_latest_per_source_single_source_matches_default_with_fallback():
         grouped, episodes, sources={source.id: source}, now=now
     )
     assert actual.desired == expected.desired
+
+@pytest.mark.parametrize("reverse_input", [False, True])
+def test_latest_per_source_shared_uri_has_one_deterministic_owner(reverse_input):
+    ser = _source("ser", SER_SHOW, "Europe/Madrid")
+    rne = _source("rne", RNE_SHOW, "Europe/Madrid")
+    now = datetime(2026, 10, 2, 13, tzinfo=UTC)
+
+    def edition(source, show, key, hours):
+        instant = now - timedelta(hours=hours)
+        return _episode(
+            source,
+            show,
+            key * 22,
+            release_date="2026-10-02",
+            first_seen_at=instant,
+            edition_at=instant,
+            timestamp_source=TimestampSource.TITLE,
+        )
+
+    shared_ser = edition("ser", SER_SHOW, "A", 1)
+    shared_rne = edition("rne", RNE_SHOW, "A", 1)
+    ser_history = edition("ser", SER_SHOW, "B", 2)
+    rne_alternative = edition("rne", RNE_SHOW, "C", 3)
+    episodes = (shared_rne, ser_history, rne_alternative, shared_ser)
+    if reverse_input:
+        episodes = tuple(reversed(episodes))
+    playlist = replace(
+        _playlist("rne", "ser"), ordering=OrderingPolicy.LATEST_PER_SOURCE_FIRST
+    )
+    desired = build_spotify_first_desired_state(
+        playlist, episodes, sources={ser.id: ser, rne.id: rne}, now=now
+    ).desired
+    # Canonical identity tie-break gives SER the shared URI; RNE gets its next
+    # eligible distinct episode. Never count the same Spotify item twice.
+    assert desired.uris == tuple(
+        item.spotify_episode_uri for item in (shared_ser, rne_alternative, ser_history)
+    )
+    assert tuple(item.source_id for item in desired.items) == (ser.id, rne.id, ser.id)
+
+
+@pytest.mark.parametrize("reverse_input", [False, True])
+def test_latest_per_source_dst_folds_and_fallback_keep_physical_chronology(reverse_input):
+    madrid = _source("ser", SER_SHOW, "Europe/Madrid")
+    ny = _source("generic", GENERIC_SHOW, "America/New_York")
+    now = datetime(2026, 10, 25, 2, 30, tzinfo=UTC)
+    local = datetime(2026, 10, 25, 2, 30, tzinfo=madrid.timezone)
+    early = _episode(
+        "ser",
+        SER_SHOW,
+        "A" * 22,
+        release_date="2026-10-25",
+        first_seen_at=local,
+        edition_at=local,
+        timestamp_source=TimestampSource.TITLE,
+    )
+    late = _episode(
+        "ser",
+        SER_SHOW,
+        "B" * 22,
+        release_date="2026-10-25",
+        first_seen_at=local.replace(fold=1),
+        edition_at=local.replace(fold=1),
+        timestamp_source=TimestampSource.TITLE,
+    )
+    middle = _episode(
+        "ser",
+        SER_SHOW,
+        "C" * 22,
+        release_date="2026-10-25",
+        first_seen_at=datetime(2026, 10, 25, 1, tzinfo=UTC),
+        edition_at=datetime(2026, 10, 25, 1, tzinfo=UTC),
+        timestamp_source=TimestampSource.SPOTIFY_PUBLIC_RELEASE,
+    )
+    fallback = _episode(
+        "generic",
+        GENERIC_SHOW,
+        "D" * 22,
+        release_date="2026-10-24",
+        first_seen_at=datetime(2026, 10, 25, 0, 45, tzinfo=UTC),
+    )
+    episodes = (early, late, middle, fallback)
+    if reverse_input:
+        episodes = tuple(reversed(episodes))
+    playlist = replace(
+        _playlist("generic", "ser"),
+        ordering=OrderingPolicy.LATEST_PER_SOURCE_FIRST,
+        retention_hours=3,
+    )
+    desired = build_spotify_first_desired_state(
+        playlist, episodes, sources={madrid.id: madrid, ny.id: ny}, now=now
+    ).desired
+    assert desired.uris == tuple(
+        item.spotify_episode_uri for item in (late, fallback, middle, early)
+    )
+    assert desired.items[1].edition_at is None
+
+
+def test_latest_per_source_filters_before_selection_and_reconciles_only_changed_order():
+    ser = _source("ser", SER_SHOW, "Europe/Madrid")
+    rne = _source("rne", RNE_SHOW, "Europe/Madrid")
+    extra = _source("generic", GENERIC_SHOW, "UTC")
+    now = datetime(2026, 10, 2, 13, tzinfo=UTC)
+
+    def edition(source, show, key, minutes):
+        instant = now - timedelta(minutes=minutes)
+        return _episode(
+            source,
+            show,
+            key * 22,
+            release_date="2026-10-02",
+            first_seen_at=instant,
+            edition_at=instant,
+            timestamp_source=TimestampSource.TITLE,
+        )
+
+    a = edition("ser", SER_SHOW, "A", 10)
+    b = edition("ser", SER_SHOW, "B", 20)
+    c = edition("rne", RNE_SHOW, "C", 30)
+    filtered = edition("rne", RNE_SHOW, "D", 5)
+    missing_duration = replace(edition("rne", RNE_SHOW, "E", 1), duration_seconds=None)
+    cutoff = edition("rne", RNE_SHOW, "F", 60)
+    future = edition("rne", RNE_SHOW, "G", -1)
+    unassigned = edition("generic", GENERIC_SHOW, "H", 1)
+    episodes = (a, b, c, filtered, missing_duration, cutoff, future, unassigned)
+    sources = {source.id: source for source in (ser, rne, extra)}
+    allowed = {
+        rne.id: frozenset(
+            item.spotify_episode_id for item in (c, missing_duration, cutoff, future)
+        )
+    }
+    ordinary = replace(_playlist("ser", "rne"), retention_hours=1)
+    grouped = replace(ordinary, ordering=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
+
+    def build(playlist, rows):
+        return build_spotify_first_desired_state(
+            playlist, rows, sources=sources, now=now, allowed_episode_ids_by_source=allowed
+        )
+
+    before = build(ordinary, episodes)
+    after = build(grouped, episodes)
+    repeated = build(grouped, tuple(reversed(episodes)))
+    assert after.duration_unavailable_count == 1
+    assert before.desired.uris == tuple(item.spotify_episode_uri for item in (a, b, c))
+    assert after.desired.uris == tuple(item.spotify_episode_uri for item in (a, c, b))
+    assert repeated.desired.uris == after.desired.uris
+    assert desired_fingerprint(before.desired.uris) != desired_fingerprint(after.desired.uris)
+    assert desired_fingerprint(repeated.desired.uris) == desired_fingerprint(after.desired.uris)
+    destination = ordinary.destination.external_id
+    client = _FakeSpotify({destination: list(before.desired.uris)})
+    assert strict_reconcile_playlist_items(client, destination, after.desired.uris)
+    assert not strict_reconcile_playlist_items(client, destination, repeated.desired.uris)
+    assert client.writes == [(destination, list(after.desired.uris))]
+    # Disabling the policy restores the same chronological result.
+    assert strict_reconcile_playlist_items(client, destination, before.desired.uris)
+    assert client.states[destination] == list(before.desired.uris)
