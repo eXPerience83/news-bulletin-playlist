@@ -44,6 +44,39 @@ During startup inspection hold, POST preview/apply and all other configuration
 writes return the existing locked response. The held draft editor displays the
 inspection warning. Neither portable ZIP version is a complete `/data` backup.
 
+## ZIP v3 and optional playback ordering (#660; draft PR #661)
+
+ZIP v3 uses the bounded ZIP v2 envelope and source/owner-template validation,
+with an explicit `playlist.ordering_override` (null, `edition_at_desc`, or
+`latest_per_source_first`). The effective `playlist.ordering` must agree.
+`template: null` represents a standalone local draft with only its assigned
+source closure; managed and linked-draft archives retain the complete template
+and its dormant sources/exceptions. Unknown or inconsistent ordering values
+fail closed. The v1 and v2 decoders keep their existing contracts. Legacy
+exports refuse non-default ordering rather than silently dropping it.
+
+Admin offers ZIP v3 export at the same authenticated endpoint with
+`version=3`. The v3 multipart preview automatically distinguishes a linked
+owner closure from a standalone draft, and stages the archive in a
+version-bound session. The separate CSRF-protected apply route requires
+explicit confirmation and rechecks the authoritative configuration. A v3
+import explicitly adopts **nested managed overlay schema 11**; this is not a
+new outer operational v11 envelope or a change to its immutable migration
+witness. No upgrade occurs merely by reading, restarting or previewing.
+Older binaries cannot read the new nested schema; rollback requires compatible
+complete state, not just portable archives. Imports never create or link
+Spotify destinations. Standalone v3 drafts do not fabricate an owner template.
+
+The Admin playback order selector persists an independent managed override or
+draft default. Editing a draft does not modify an already managed destination.
+Provisioning snapshots the override in journal schema 3 when it is present;
+legacy v1/v2 provisioning journals remain readable. Recovery uses the recorded
+choice, not the possibly edited draft. Explicit reset to inherited ordering
+does not downgrade the state schema. Startup inspection hold forbids writes
+and import previews. See [ordering semantics](TIMEZONES_AND_ORDERING.md).
+This is future feature work; #657's v2 acceptance and current stabilization
+remain independent.
+
 ## First-boot durable owner inventory — pre-activation stage (#633)
 
 New direct v6–v10 -> v11 cutovers now include an `owner_inventory` object
