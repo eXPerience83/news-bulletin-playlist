@@ -457,9 +457,7 @@ def test_shared_refresh_helper_orders_warning_commit_and_detector_marker(
 
 
 def test_latest_per_source_partial_preserves_history_until_authoritative_recovery(tmp_path):
-    high, low = sorted(
-        (SOURCE, BUILTIN_CATALOG.sources[1]), key=lambda item: item.id, reverse=True
-    )
+    high, low = sorted((SOURCE, BUILTIN_CATALOG.sources[1]), key=lambda item: item.id, reverse=True)
     high_show = spotify_show_id(high)
     low_show = spotify_show_id(low)
 

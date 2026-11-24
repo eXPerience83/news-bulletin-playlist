@@ -191,9 +191,7 @@ def test_ordering_override_survives_v11_owner_restart_without_changing_frozen_da
     original = store.load()
     legacy = (root / "managed-state.json").read_bytes()
     before = json.loads((root / V11_OPERATIONAL_FILENAME).read_bytes())
-    first = replace(
-        original.playlists[0], ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST
-    )
+    first = replace(original.playlists[0], ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
     edited = replace(
         original,
         schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION,

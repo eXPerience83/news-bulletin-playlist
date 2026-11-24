@@ -372,9 +372,7 @@ def test_ordering_override_is_independent_and_round_trips(tmp_path: Path) -> Non
         activate_template(template, "second", playlist_id=PlaylistId("second")),
         ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST,
     )
-    state = ManagedState(
-        schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, playlists=(first, second)
-    )
+    state = ManagedState(schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, playlists=(first, second))
     store = ManagedStateStore(tmp_path / MANAGED_STATE_FILENAME)
     store.save(state)
     assert store.load() == state

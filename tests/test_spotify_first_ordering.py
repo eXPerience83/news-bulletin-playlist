@@ -389,6 +389,7 @@ def test_latest_per_source_single_source_matches_default_with_fallback():
     )
     assert actual.desired == expected.desired
 
+
 @pytest.mark.parametrize("reverse_input", [False, True])
 def test_latest_per_source_shared_uri_has_one_deterministic_owner(reverse_input):
     ser = _source("ser", SER_SHOW, "Europe/Madrid")
@@ -414,9 +415,7 @@ def test_latest_per_source_shared_uri_has_one_deterministic_owner(reverse_input)
     episodes = (shared_rne, ser_history, rne_alternative, shared_ser)
     if reverse_input:
         episodes = tuple(reversed(episodes))
-    playlist = replace(
-        _playlist("rne", "ser"), ordering=OrderingPolicy.LATEST_PER_SOURCE_FIRST
-    )
+    playlist = replace(_playlist("rne", "ser"), ordering=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
     desired = build_spotify_first_desired_state(
         playlist, episodes, sources={ser.id: ser, rne.id: rne}, now=now
     ).desired
@@ -514,9 +513,7 @@ def test_latest_per_source_filters_before_selection_and_reconciles_only_changed_
     episodes = (a, b, c, filtered, missing_duration, cutoff, future, unassigned)
     sources = {source.id: source for source in (ser, rne, extra)}
     allowed = {
-        rne.id: frozenset(
-            item.spotify_episode_id for item in (c, missing_duration, cutoff, future)
-        )
+        rne.id: frozenset(item.spotify_episode_id for item in (c, missing_duration, cutoff, future))
     }
     ordinary = replace(_playlist("ser", "rne"), retention_hours=1)
     grouped = replace(ordinary, ordering=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
