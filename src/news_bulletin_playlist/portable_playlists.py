@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from dataclasses import replace
 from pathlib import Path
@@ -495,6 +496,30 @@ class PlaylistExportService:
                 self.covers,
                 version=version,
             )
+
+    def export_all(self) -> bytes:
+        """Export all managed playlists and drafts from one read-only snapshot."""
+        from news_bulletin_playlist.playlist_collection import CollectionError, build_collection
+
+        with self.synchronization.hold():
+            state = self.store.load_readonly()
+            if state.quarantined_templates:
+                raise PlaylistExportError("Repair quarantined drafts before exporting all playlists")
+
+            def documents() -> Iterator[bytes]:
+                for playlist in state.playlists:
+                    yield playlist_bundle(
+                        state, self.store, "managed", str(playlist.id), self.covers, version=3
+                    )[1]
+                for draft in state.templates:
+                    yield playlist_bundle(
+                        state, self.store, "draft", str(draft.id), self.covers, version=3
+                    )[1]
+
+            try:
+                return build_collection(documents())
+            except CollectionError as exc:
+                raise PlaylistExportError(str(exc)) from exc
 
     def preparation(self, kind: str, object_id: str) -> tuple[str, int, str | None]:
         with self.synchronization.hold():

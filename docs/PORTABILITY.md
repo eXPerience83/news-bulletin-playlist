@@ -44,6 +44,25 @@ During startup inspection hold, POST preview/apply and all other configuration
 writes return the existing locked response. The held draft editor displays the
 inspection warning. Neither portable ZIP version is a complete `/data` backup.
 
+## Bulk playlist export (#667)
+
+Administration → Playlists offers **Export all ZIP v3**. The authenticated
+GET endpoint `/admin/playlists/export-all.zip` reads one configuration snapshot
+under the existing configuration lock, including paused playlists and hidden
+or standalone drafts. It never prepares identities or contacts Spotify.
+Missing identities, quarantined drafts or any unexportable member fail the
+whole download.
+
+The outer collection is a separate version-1 format, not playlist ZIP v4.
+It contains unchanged individual ZIP v3 files sorted by portable UUID and a
+canonical manifest with kind, UUID, path, size and SHA-256 for every member.
+The manifest has its own SHA-256. Limits are 256 members and 64 MiB of member
+payload. An empty collection is valid. Individual export routes are unchanged.
+
+This is not full configuration recovery: unreferenced owner templates and
+sources, Spotify destination IDs, OAuth, journals and SQLite are not included.
+The collection inspector validates only; bulk Apply remains future work.
+
 ## ZIP v3 and optional playback ordering (#660; draft PR #661)
 
 ZIP v3 uses the bounded ZIP v2 envelope and source/owner-template validation,

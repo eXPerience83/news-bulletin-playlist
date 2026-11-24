@@ -224,7 +224,11 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                         ),
                     )
             return
-        if parsed.path in {"/admin/playlists/export.zip", "/admin/playlists/portable/prepare"}:
+        if parsed.path in {
+            "/admin/playlists/export.zip",
+            "/admin/playlists/export-all.zip",
+            "/admin/playlists/portable/prepare",
+        }:
             self._serve_portable_playlist(parsed.path, parsed.query)
             return
         if parsed.path == "/admin/sources":
@@ -619,6 +623,19 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
         try:
             if len(query) > 512 or urllib.parse.urlsplit(self.path).fragment:
                 raise ValueError
+            if path == "/admin/playlists/export-all.zip":
+                if query:
+                    raise ValueError
+                payload = self._playlist_export_service().export_all()
+                self._reply(
+                    HTTPStatus.OK,
+                    payload,
+                    content_type="application/zip",
+                    extra_headers={
+                        "Content-Disposition": 'attachment; filename="playlists-v3-collection.zip"'
+                    },
+                )
+                return
             values = urllib.parse.parse_qs(
                 query,
                 strict_parsing=True,
