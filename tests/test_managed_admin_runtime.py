@@ -40,6 +40,7 @@ from news_bulletin_playlist.managed_provisioning import (
     ProvisioningState,
 )
 from news_bulletin_playlist.managed_state import (
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
     ManagedSource,
     ManagedState,
     ManagedStateStore,
@@ -50,6 +51,7 @@ from news_bulletin_playlist.models import (
     CountryCode,
     EditorialScope,
     LanguageTag,
+    OrderingPolicy,
     ParserId,
     SourceId,
     SourceOrigin,
@@ -1450,3 +1452,51 @@ def test_custom_playlist_creation_with_cover_failure_shows_pending_notice(
     assert len(service.store.load().playlists) == 1
     assert service.provisioning_journal.load() is None
     assert service.last_initial_cover_error == "local cover unavailable"
+
+
+def test_ordering_route_requires_csrf_schema_ack_and_keeps_other_playlists(tmp_path: Path):
+    service, factory = _service(tmp_path)
+    first = activate_template(BUILTIN_CATALOG.playlists[0], "first")
+    second = activate_template(BUILTIN_CATALOG.playlists[1], "second")
+    service.store.save(ManagedState(schema_version=10, playlists=(first, second)))
+    lifecycle = _FakeLifecycle()
+    security = LanAdminSecurity(_PASSWORD)
+    initial = service.store.path.read_bytes()
+
+    def post(ordering, *, csrf=True, ack=False, held=False):
+        form = {
+            "csrf_token": [security.issue_csrf_token() if csrf else "invalid"],
+            "target_id": [str(first.id)],
+            "ordering": [ordering],
+        }
+        if ack:
+            form["ack_schema"] = ["1"]
+        handler = _HandlerHarness(
+            tmp_path=tmp_path,
+            service=service,
+            lifecycle=lifecycle,
+            path="/admin/playlists/ordering",
+            form=form,
+            security=security,
+        )
+        handler.inspection_hold = held
+        handler.do_POST()
+        return _response(handler).status
+
+    assert post("latest_per_source_first", csrf=False) == HTTPStatus.FORBIDDEN
+    assert post("latest_per_source_first") == HTTPStatus.CONFLICT
+    assert post("unknown", ack=True) == HTTPStatus.BAD_REQUEST
+    assert post("latest_per_source_first", ack=True, held=True) == HTTPStatus.LOCKED
+    assert service.store.path.read_bytes() == initial
+    assert post("latest_per_source_first", ack=True) == HTTPStatus.SEE_OTHER
+    state = service.store.load_readonly()
+    assert state.schema_version == PLAYLIST_ORDERING_SCHEMA_VERSION
+    assert next(p for p in state.playlists if p.id == first.id).ordering_override is (
+        OrderingPolicy.LATEST_PER_SOURCE_FIRST
+    )
+    assert next(p for p in state.playlists if p.id == second.id) == second
+    assert post("inherit") == HTTPStatus.SEE_OTHER
+    state = service.store.load_readonly()
+    assert state.schema_version == PLAYLIST_ORDERING_SCHEMA_VERSION
+    assert all(p.ordering_override is None for p in state.playlists)
+    assert not factory.tokens

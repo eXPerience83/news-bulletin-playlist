@@ -461,14 +461,14 @@ def test_v2_multiple_playlists_reuse_identical_owner_sources_without_duplication
     assert not _root.joinpath("managed-state.json").exists()
 
 
-def _v2_http_preview(server, cookie, document):
+def _v2_http_preview(server, cookie, document, *, version=2):
     """Session-bound ZIP v2 multipart preview, using the actual Admin handler."""
     upload = _request(server, "GET", "/admin/playlists/import", cookie=cookie)[2]
     media_type, body = _multipart(_csrf(upload), document, media_type="application/zip")
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
     connection.request(
         "POST",
-        "/admin/playlists/import/v2/preview",
+        f"/admin/playlists/import/v{version}/preview",
         body=body,
         headers={"Cookie": cookie, "Content-Type": media_type},
     )
@@ -735,3 +735,63 @@ def test_v3_rejects_unknown_or_inconsistent_ordering(tmp_path, override):
 
     with pytest.raises(PlaylistBundleError):
         inspect_playlist_bundle_v3(rewrite(data, edit))
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_v3_admin_preview_apply_and_download(tmp_path, linked):
+    if linked:
+        document, _ = _donor(tmp_path, version=3)
+    else:
+        draft = _draft(portable_id=UUID, ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
+        donor = _service(
+            tmp_path / "donor",
+            ManagedState(schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, templates=(draft,)),
+        )
+        document = donor.export("draft", str(draft.id), version=3)[1]
+    root, store, _importer = _receiver(tmp_path)
+    with _server(root) as (server, client, _legacy):
+        handler = server.RequestHandlerClass
+        managed = handler.managed_admin_service
+        source = handler.source_admin_service
+        assert managed is not None and source is not None
+        managed.store = source.store = store
+        managed.catalog = source.catalog = store.catalog
+        cookie = _login(server)
+        before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        status, preview = _v2_http_preview(server, cookie, document, version=3)
+        assert status == 200, preview
+        assert_valid_admin_html(preview.decode())
+        assert b"latest_per_source_first" in preview
+        assert b"schema v11" in preview or b"managed-state v11" in preview
+        action = (
+            "/admin/playlists/import/v3/linked/apply"
+            if linked
+            else "/admin/playlists/import/v3/apply"
+        )
+        assert action.encode() in preview
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+        status, _, body = _request(
+            server, "POST", action, cookie=cookie, form=_v2_http_confirmation(preview)
+        )
+        assert status == 409, body
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+        status, preview = _v2_http_preview(server, cookie, document, version=3)
+        assert status == 200, preview
+        form = _v2_http_confirmation(preview)
+        form["ack_schema"] = "1"
+        status, _, body = _request(server, "POST", action, cookie=cookie, form=form)
+        assert status == 200, body
+        restored = store.load_readonly().templates[0]
+        assert restored.ordering_override is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+        assert not store.load_readonly().playlists
+        status, _, outgoing = _request(
+            server,
+            "GET",
+            f"/admin/playlists/export.zip?kind=draft&id={restored.id}&version=3",
+            cookie=cookie,
+        )
+        assert status == 200, outgoing
+        parsed = inspect_playlist_bundle_v3(outgoing)
+        assert parsed.playlist["ordering_override"] == "latest_per_source_first"
+        assert (parsed.template is not None) == linked
+        assert not client.calls
