@@ -17,6 +17,8 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from news_bulletin_playlist.private_persistence import ensure_private_created, open_private_directory
+
 UPLOAD_COVER_PREFIX = "uploaded_"
 UPLOADED_COVER_ID_PATTERN = re.compile(r"uploaded_[0-9a-f]{64}\Z")
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
@@ -105,14 +107,9 @@ class CustomCoverAssetStore:
 
     def _open_dir(self, *, create: bool) -> int:
         try:
-            if create:
-                self.root.mkdir(mode=0o700, parents=False, exist_ok=True)
-            fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            mode = os.fstat(fd).st_mode
-            if not stat.S_ISDIR(mode) or stat.S_IMODE(mode) & 0o077:
-                os.close(fd)
-                raise CustomCoverAssetError("Custom cover directory permissions are unsafe")
-            return fd
+            return open_private_directory(self.root, create=create)
+        except PermissionError as exc:
+            raise CustomCoverAssetError("Custom cover directory permissions are unsafe") from exc
         except OSError as exc:
             raise CustomCoverAssetError("Custom cover storage is unavailable") from exc
 
@@ -168,6 +165,7 @@ class CustomCoverAssetStore:
                     dir_fd=directory,
                 )
                 with os.fdopen(fd, "wb") as output:
+                    ensure_private_created(output.fileno())
                     output.write(jpeg)
                     output.flush()
                     os.fsync(output.fileno())
@@ -227,6 +225,7 @@ class CustomCoverAssetStore:
             target = os.open(temp_name, flags, 0o600, dir_fd=directory)
             try:
                 with os.fdopen(target, "wb", closefd=False) as output:
+                    ensure_private_created(target)
                     output.write(jpeg)
                     output.flush()
                     os.fsync(target)
