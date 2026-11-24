@@ -336,7 +336,9 @@ def test_invalid_pending_references_block_additions_without_writes(tmp_path):
     assert service.provisioning.path.read_bytes() == before
 
 
-@pytest.mark.parametrize("point", ["prepare", "file_fsync", "replace", "privacy", "directory_fsync"])
+@pytest.mark.parametrize(
+    "point", ["prepare", "file_fsync", "replace", "privacy", "directory_fsync"]
+)
 def test_pre_and_post_commit_failures_have_readback_based_recovery(tmp_path, monkeypatch, point):
     service = _service(tmp_path)
     state = ManagedState()
