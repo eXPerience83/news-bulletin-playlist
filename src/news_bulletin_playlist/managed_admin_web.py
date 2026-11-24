@@ -492,8 +492,16 @@ def _managed_card(
     <button class="button" type="submit">Save playlist</button>
   </form>
   {upload_form}
-  {_ordering_form("managed", str(playlist.id), playlist.ordering_override, csrf_token,
-                  state.schema_version, inspection_hold)}
+  {
+        _ordering_form(
+            "managed",
+            str(playlist.id),
+            playlist.ordering_override,
+            csrf_token,
+            state.schema_version,
+            inspection_hold,
+        )
+    }
   {portable_controls("managed", str(playlist.id), playlist.portable_id)}
   <form method="post" action="/admin/playlists/sync">
     {_hidden_input("csrf_token", csrf_token)}
@@ -875,8 +883,16 @@ def _custom_draft_card(
     </div>
   </div>
   {editor}
-  {_ordering_form("draft", str(draft.id), draft.ordering_override, csrf_token,
-                  schema_version, inspection_hold)}
+  {
+        _ordering_form(
+            "draft",
+            str(draft.id),
+            draft.ordering_override,
+            csrf_token,
+            schema_version,
+            inspection_hold,
+        )
+    }
   {portable_controls("draft", str(draft.id), draft.portable_id)}
   {upload_form}
   {publish}
@@ -900,7 +916,7 @@ def _ordering_form(
         else "Newest edition first"
     )
     if inspection_hold:
-        return f'<p>Playback order: {label}. Changes locked during startup inspection.</p>'
+        return f"<p>Playback order: {label}. Changes locked during startup inspection.</p>"
     options = (
         ("inherit", "Default — newest edition first"),
         (OrderingPolicy.EDITION_AT_DESC.value, "Newest edition first"),
