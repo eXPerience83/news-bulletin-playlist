@@ -12,6 +12,7 @@ from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTempla
 from news_bulletin_playlist.managed_provisioning import ProvisioningIntent, ProvisioningJournal
 from news_bulletin_playlist.managed_state import (
     IMPORTED_PLAYLIST_SCHEMA_VERSION,
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
     InstalledSource,
     ManagedState,
     ManagedStateError,
@@ -23,6 +24,7 @@ from news_bulletin_playlist.managed_state import (
 from news_bulletin_playlist.models import (
     CountryCode,
     LanguageTag,
+    OrderingPolicy,
     PlaylistId,
     SourceDefinition,
     SourceId,
@@ -33,6 +35,7 @@ from news_bulletin_playlist.playlist_bundle import (
     PlaylistBundle,
     inspect_playlist_bundle,
     inspect_playlist_bundle_v2,
+    inspect_playlist_bundle_v3,
 )
 from news_bulletin_playlist.portable_playlist_metadata import exception_payload
 from news_bulletin_playlist.portable_playlists import PortableCoverLoader, Synchronization
@@ -117,9 +120,9 @@ class PlaylistImportService:
         )
         self.source_service = SourceImportService(store, synchronization, provisioning)
 
-    def preview_v2(self, document: bytes) -> PlaylistV2ImportPlan:
-        """Read-only preview; imported v2 source/template IDs are not installed here."""
-        bundle = inspect_playlist_bundle_v2(document)
+    def preview_v2(self, document: bytes, *, version: int = 2) -> PlaylistV2ImportPlan:
+        """Read-only preview of a complete linked owner-template archive."""
+        bundle = _linked_bundle(document, version)
         if not isinstance(self.store, ForwardOnlyManagedStateStore):
             raise PlaylistImportError("ZIP v2 requires a v11 owner installation")
         with self.synchronization.hold():
@@ -245,7 +248,12 @@ class PlaylistImportService:
         )
 
     def apply_v2(
-        self, document: bytes, fingerprint: str, *, confirm_schema: bool = False
+        self,
+        document: bytes,
+        fingerprint: str,
+        *,
+        confirm_schema: bool = False,
+        version: int = 2,
     ) -> PlaylistV2ImportResult:
         """Durably install a verified v2 owner template and current local draft in one CAS.
 
@@ -253,14 +261,15 @@ class PlaylistImportService:
         JPEGs may remain after a failed transaction, but partial configuration
         writes are forbidden.
         """
-        bundle = inspect_playlist_bundle_v2(document)
+        bundle = _linked_bundle(document, version)
         if not isinstance(self.store, ForwardOnlyManagedStateStore):
             raise PlaylistImportError("ZIP v2 requires a v11 owner installation")
         with self.synchronization.hold():
             state = self.store.load_readonly()
-            if state.schema_version < IMPORTED_PLAYLIST_SCHEMA_VERSION and not confirm_schema:
+            required_schema = _required_schema(bundle)
+            if state.schema_version < required_schema and not confirm_schema:
                 raise PlaylistImportError(
-                    "Explicit schema v10 compatibility acknowledgement is required"
+                    f"Explicit schema v{required_schema} compatibility acknowledgement is required"
                 )
             plan = self._preview_v2(bundle, state, self.provisioning.load())
             if plan.sources.fingerprint != fingerprint:
@@ -319,10 +328,11 @@ class PlaylistImportService:
                     else False
                 ),
                 owner_template_id=plan.owner_template.id,
+                ordering_override=_bundle_ordering(bundle),
             )
             overlay = replace(
                 state,
-                schema_version=max(state.schema_version, IMPORTED_PLAYLIST_SCHEMA_VERSION),
+                schema_version=max(state.schema_version, required_schema),
                 templates=tuple(sorted((*state.templates, draft), key=lambda t: str(t.id))),
             )
             credits = dict(owner.cover_attributions)
@@ -377,8 +387,8 @@ class PlaylistImportService:
                 str(plan.owner_template.id), str(current_id), len(additions)
             )
 
-    def preview(self, document: bytes) -> PlaylistImportPreview:
-        bundle = inspect_playlist_bundle(document)
+    def preview(self, document: bytes, *, version: int = 1) -> PlaylistImportPreview:
+        bundle = _standalone_bundle(document, version)
         with self.synchronization.hold():
             state = self.store.load_readonly()
             return self._preview(bundle, state, self.provisioning.load())
@@ -481,6 +491,7 @@ class PlaylistImportService:
                 replace(e, source_id=SourceId(mapping[e.source_id])) for e in bundle.exceptions
             ),
             hidden=p["configuration"]["hidden"] if p["kind"] == "draft" else False,
+            ordering_override=_bundle_ordering(bundle),
         )
         if existing:
             data, attribution = self.covers.load(existing.cover_id)
@@ -503,6 +514,7 @@ class PlaylistImportService:
                     "min_duration_seconds",
                     "max_duration_seconds",
                     "ordering",
+                    "ordering_override",
                     "hidden",
                 )
             )
@@ -532,7 +544,7 @@ class PlaylistImportService:
         full = self.source_service.build_candidate(state, rows, pending)
         full = replace(
             full,
-            schema_version=IMPORTED_PLAYLIST_SCHEMA_VERSION,
+            schema_version=max(full.schema_version, _required_schema(bundle)),
             templates=full.templates + (candidate,),
         )
         serialize_managed_state(full, catalog=self.store.catalog)
@@ -545,10 +557,16 @@ class PlaylistImportService:
         )
 
     def apply(
-        self, document: bytes, fingerprint: str, *, keep_local: frozenset[int], confirm_schema: bool
+        self,
+        document: bytes,
+        fingerprint: str,
+        *,
+        keep_local: frozenset[int],
+        confirm_schema: bool,
+        version: int = 1,
     ) -> PlaylistImportResult:
         with self.synchronization.hold():
-            bundle = inspect_playlist_bundle(document)
+            bundle = _standalone_bundle(document, version)
             # Strict capability decoder remains the installation authority.
             parse_sources(bundle.source_document)
             state = self.store.load_readonly()
@@ -573,14 +591,16 @@ class PlaylistImportService:
                 )
             if preview.status == "identical":
                 return PlaylistImportResult(str(preview.draft.id), 0, False)
-            if state.schema_version < IMPORTED_PLAYLIST_SCHEMA_VERSION and not confirm_schema:
+            required_schema = _required_schema(bundle)
+            if state.schema_version < required_schema and not confirm_schema:
                 raise PlaylistImportError(
-                    "Explicit schema v10 compatibility and backup acknowledgement is required"
+                    f"Explicit schema v{required_schema} compatibility and backup "
+                    "acknowledgement is required"
                 )
             candidate = self.source_service.build_candidate(state, preview.sources.rows, pending)
             candidate = replace(
                 candidate,
-                schema_version=max(state.schema_version, IMPORTED_PLAYLIST_SCHEMA_VERSION),
+                schema_version=max(state.schema_version, required_schema),
                 templates=tuple(sorted((*state.templates, preview.draft), key=lambda t: t.id)),
             )
             serialize_managed_state(candidate, catalog=self.store.catalog)
@@ -667,3 +687,37 @@ class PlaylistImportService:
                     "Import outcome is uncertain; inspect configuration before retrying"
                 ) from None
             return PlaylistImportResult(str(preview.draft.id), creates, True)
+
+
+def _required_schema(bundle: PlaylistBundle) -> int:
+    return (
+        PLAYLIST_ORDERING_SCHEMA_VERSION
+        if bundle.version == 3
+        else IMPORTED_PLAYLIST_SCHEMA_VERSION
+    )
+
+
+def _bundle_ordering(bundle: PlaylistBundle) -> OrderingPolicy | None:
+    if bundle.version != 3 or bundle.playlist["ordering_override"] is None:
+        return None
+    return OrderingPolicy(bundle.playlist["ordering_override"])
+
+
+def _linked_bundle(document: bytes, version: int) -> PlaylistBundle:
+    if version == 2:
+        return inspect_playlist_bundle_v2(document)
+    if version == 3:
+        bundle = inspect_playlist_bundle_v3(document)
+        if bundle.template is not None:
+            return bundle
+    raise PlaylistImportError("Expected a linked ZIP v2 or v3 owner template")
+
+
+def _standalone_bundle(document: bytes, version: int) -> PlaylistBundle:
+    if version == 1:
+        return inspect_playlist_bundle(document)
+    if version == 3:
+        bundle = inspect_playlist_bundle_v3(document)
+        if bundle.template is None:
+            return bundle
+    raise PlaylistImportError("Expected ZIP v1 or a standalone ZIP v3 draft")

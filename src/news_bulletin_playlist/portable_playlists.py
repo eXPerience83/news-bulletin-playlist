@@ -194,11 +194,12 @@ def playlist_bundle(
     version: int = 1,
 ) -> tuple[str, bytes]:
     """Build everything before returning bytes; caller holds the configuration lock."""
-    if version not in (1, 2) or (version == 2 and kind not in {"managed", "draft"}):
+    if version not in (1, 2, 3) or (version >= 2 and kind not in {"managed", "draft"}):
         raise PlaylistExportError("Unsupported or incomplete portable playlist version")
     target = _target(state, store, kind, object_id)
     if (
-        target.ordering_override is not None
+        version < 3
+        and target.ordering_override is not None
         and target.ordering_override is not OrderingPolicy.EDITION_AT_DESC
     ):
         raise PlaylistExportError(
@@ -225,7 +226,7 @@ def playlist_bundle(
         if current_template is None:
             raise PlaylistExportError("The playlist template is unavailable")
         template = current_template
-        if version == 2 and linked_local is not None and linked_local.owner_template_id is not None:
+        if version >= 2 and linked_local is not None and linked_local.owner_template_id is not None:
             template = next(
                 (
                     item
@@ -281,7 +282,7 @@ def playlist_bundle(
                 for e in template.duration_policy.exceptions
                 if e.source_id in source_ids and e.max_seconds > target.max_duration_seconds
             )
-            if version == 2
+            if version >= 2
             else template.duration_policy.exceptions
         )
         countries, languages, ordering = template.countries, template.languages, template.ordering
@@ -292,21 +293,22 @@ def playlist_bundle(
                 (item for item in store.catalog.playlists if item.id == target.owner_template_id),
                 None,
             )
-            if version == 2 and target.owner_template_id is not None
+            if version >= 2 and target.owner_template_id is not None
             else None
         )
-        if version == 2 and template is None:
+        if template is None and (version == 2 or (version == 3 and target.owner_template_id)):
             raise PlaylistExportError("ZIP v2 draft has no linked owner template closure")
         source_ids = target.default_source_ids
         exceptions = target.duration_exceptions
         countries, languages, ordering = target.countries, target.languages, target.ordering
         configuration = {"enabled": None, "hidden": target.hidden}
+    if version == 3 and target.ordering_override is not None:
+        ordering = target.ordering_override
     if not source_ids or len(source_ids) > 100 or len(set(source_ids)) != len(source_ids):
         raise PlaylistExportError("Playlist assignments exceed portable source limits")
     sources = {source.id: source for source in effective_sources(store.catalog, state)}
     closure_ids = source_ids
-    if version == 2:
-        assert template is not None
+    if version >= 2 and template is not None:
         closure_ids = tuple(
             dict.fromkeys(
                 (
@@ -394,9 +396,15 @@ def playlist_bundle(
         },
         "files": {"sources.json": _descriptor(source_bytes), cover_path: cover_descriptor},
     }
+    if version == 3:
+        playlist_data = manifest["playlist"]
+        assert isinstance(playlist_data, dict)
+        playlist_data["ordering_override"] = (
+            target.ordering_override.value if target.ordering_override is not None else None
+        )
+        manifest["template"] = None
     additional_entries: list[tuple[str, bytes]] = []
-    if version == 2:
-        assert template is not None
+    if version >= 2 and template is not None
         template_document = OwnerTemplateSet((template,)).serialize()
         template_cover_bytes, template_attribution = covers.load(template.cover_id)
         owner_credit = getattr(store, "owner_cover_attribution", None)
@@ -449,7 +457,7 @@ def playlist_bundle(
             entry.external_attr = (stat.S_IFREG | 0o600) << 16
             archive.writestr(entry, data)
     payload = output.getvalue()
-    if len(payload) > (MAX_PLAYLIST_ZIP_V2_BYTES if version == 2 else MAX_PLAYLIST_ZIP_BYTES):
+    if len(payload) > (MAX_PLAYLIST_ZIP_V2_BYTES if version >= 2 else MAX_PLAYLIST_ZIP_BYTES):
         raise PlaylistExportError("Playlist ZIP exceeds the portable size limit")
     return identity, payload
 
