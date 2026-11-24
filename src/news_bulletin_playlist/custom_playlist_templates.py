@@ -68,6 +68,8 @@ class LocalPlaylistTemplate:
     portable_metadata: str | None = None
     duration_exceptions: tuple[DurationPolicyException, ...] = ()
     owner_template_id: PlaylistId | None = None
+    # A draft default for future activation, not a shared runtime template policy.
+    ordering_override: OrderingPolicy | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -171,6 +173,10 @@ class LocalPlaylistTemplate:
             )
         except ValueError as exc:
             raise LocalPlaylistTemplateError("invalid portable duration exceptions") from exc
+        if self.ordering_override is not None and not isinstance(
+            self.ordering_override, OrderingPolicy
+        ):
+            raise LocalPlaylistTemplateError("invalid draft ordering override")
         if self.ordering is not OrderingPolicy.EDITION_AT_DESC:
             raise LocalPlaylistTemplateError("unsupported custom playlist ordering")
         if type(self.hidden) is not bool:

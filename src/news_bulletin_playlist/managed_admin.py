@@ -32,6 +32,7 @@ from news_bulletin_playlist.managed_provisioning import (
     ProvisioningState,
 )
 from news_bulletin_playlist.managed_state import (
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
     PORTABLE_PLAYLIST_SCHEMA_VERSION,
     ManagedPlaylist,
     ManagedState,
@@ -47,6 +48,7 @@ from news_bulletin_playlist.models import (
     CountryCode,
     DurationPolicyException,
     LanguageTag,
+    OrderingPolicy,
     PlaylistId,
     SourceId,
 )
@@ -729,6 +731,7 @@ class ManagedAdminService:
             max_episodes=template.max_episodes,
             max_duration_seconds=duration_max,
             min_duration_seconds=duration_min,
+            ordering_override=local.ordering_override if local is not None else None,
         )
         # Every new Spotify playlist must carry project attribution in its first
         # irreversible create request; validate before journaling or provider I/O.
@@ -827,6 +830,7 @@ class ManagedAdminService:
             max_episodes=intent.max_episodes,
             max_duration_seconds=intent.max_duration_seconds,
             min_duration_seconds=intent.min_duration_seconds,
+            ordering_override=intent.ordering_override,
         )
         self._save_validated(replace(state, playlists=state.playlists + (managed,)))
         self.provisioning_journal.clear()
@@ -947,6 +951,7 @@ class ManagedAdminService:
             max_episodes=local.max_episodes,
             min_duration_seconds=local.min_duration_seconds,
             max_duration_seconds=local.max_duration_seconds,
+            ordering_override=local.ordering_override,
         )
         self._save_validated(replace(state, playlists=state.playlists + (managed,)))
         return managed
@@ -1049,6 +1054,46 @@ class ManagedAdminService:
             playlist=current,
             metadata_outcome=metadata_outcome,
         )
+
+    def set_ordering(
+        self,
+        target_kind: str,
+        target_id: str,
+        ordering: OrderingPolicy | None,
+        *,
+        confirm_schema: bool,
+    ) -> None:
+        """Save a playlist-owned policy only; never call Spotify."""
+        if ordering is not None and not isinstance(ordering, OrderingPolicy):
+            raise ManagedAdminError("Unknown playlist ordering")
+        state = self.store.load()
+        if self.provisioning_journal.load() is not None:
+            raise ManagedAdminError("Resolve pending Spotify provisioning before changing ordering")
+        if target_kind == "managed":
+            playlist = self._managed(state, target_id)
+            if playlist.ordering_override is ordering:
+                return
+            candidate = self._state_with_replacement(
+                state, replace(playlist, ordering_override=ordering)
+            )
+        elif target_kind == "draft":
+            draft = self._local_template(state, target_id)
+            if draft.ordering_override is ordering:
+                return
+            candidate = replace(
+                state,
+                templates=tuple(
+                    replace(item, ordering_override=ordering) if item.id == draft.id else item
+                    for item in state.templates
+                ),
+            )
+        else:
+            raise ManagedAdminError("Unknown playlist ordering target")
+        if ordering is not None and state.schema_version < PLAYLIST_ORDERING_SCHEMA_VERSION:
+            if not confirm_schema:
+                raise ManagedAdminError("Explicit overlay schema v11 acknowledgement is required")
+            candidate = replace(candidate, schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION)
+        self._save_validated(candidate)
 
     def set_enabled(self, playlist_id: PlaylistId | str, enabled: bool) -> ManagedPlaylist:
         state = self.store.load()

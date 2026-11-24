@@ -14,6 +14,7 @@ from _admin_http import login as _login
 from _admin_http import request as _request
 from _html import assert_valid_admin_html
 from _multipart import import_upload as _multipart
+from _playlist_template_fixtures import _draft
 from _portable_playlist_fixtures import UUID, _service, rewrite
 from _source_admin_http_fixtures import _server
 
@@ -23,26 +24,38 @@ from news_bulletin_playlist.custom_playlist_templates import LocalPlaylistTempla
 from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal
 from news_bulletin_playlist.managed_state import (
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
     InstalledSource,
     ManagedState,
     ManagedStateError,
     QuarantinedPlaylistTemplate,
     activate_template,
 )
-from news_bulletin_playlist.models import DurationPolicy, DurationPolicyException, PlaylistId
-from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle_v2
+from news_bulletin_playlist.models import (
+    DurationPolicy,
+    DurationPolicyException,
+    OrderingPolicy,
+    PlaylistId,
+)
+from news_bulletin_playlist.playlist_bundle import (
+    PlaylistBundleError,
+    inspect_playlist_bundle,
+    inspect_playlist_bundle_v2,
+    inspect_playlist_bundle_v3,
+)
 from news_bulletin_playlist.playlist_import import PlaylistImportError, PlaylistImportService
 from news_bulletin_playlist.portable_playlists import (
     PlaylistExportError,
     PlaylistExportService,
     PortableCoverLoader,
+    playlist_bundle,
 )
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_codec import parse_v11_operational
 from news_bulletin_playlist.v11_operational_storage import V11_OPERATIONAL_FILENAME, V11StoreError
 
 
-def _donor(tmp_path, *, different_cover=False):
+def _donor(tmp_path, *, different_cover=False, version=2):
     template = BUILTIN_CATALOG.playlists[0]
     first, last = template.default_source_ids[0], template.default_source_ids[-1]
     first_exception = DurationPolicyException("active", first, time(2, 15, 0, 123456, fold=1), 3600)
@@ -63,12 +76,17 @@ def _donor(tmp_path, *, different_cover=False):
         max_duration_seconds=3000,
         cover_id=(BUILTIN_CATALOG.playlists[1].cover_id if different_cover else template.cover_id),
     )
+    if version == 3:
+        playlist = replace(playlist, ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
     service = _service(
         donor_root,
-        ManagedState(schema_version=9, playlists=(playlist,)),
+        ManagedState(
+            schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION if version == 3 else 9,
+            playlists=(playlist,),
+        ),
         catalog=catalog,
     )
-    return service.export("managed", str(playlist.id), version=2)[1], template
+    return service.export("managed", str(playlist.id), version=version)[1], template
 
 
 def _receiver(tmp_path):
@@ -444,14 +462,14 @@ def test_v2_multiple_playlists_reuse_identical_owner_sources_without_duplication
     assert not _root.joinpath("managed-state.json").exists()
 
 
-def _v2_http_preview(server, cookie, document):
+def _v2_http_preview(server, cookie, document, *, version=2):
     """Session-bound ZIP v2 multipart preview, using the actual Admin handler."""
     upload = _request(server, "GET", "/admin/playlists/import", cookie=cookie)[2]
     media_type, body = _multipart(_csrf(upload), document, media_type="application/zip")
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
     connection.request(
         "POST",
-        "/admin/playlists/import/v2/preview",
+        f"/admin/playlists/import/v{version}/preview",
         body=body,
         headers={"Cookie": cookie, "Content-Type": media_type},
     )
@@ -630,4 +648,210 @@ def test_v2_legacy_overlay_v9_requires_explicit_schema_ack_over_http(tmp_path):
         assert status == 200, result
         assert b"ZIP v2 offline import complete" in result
         assert open_managed_state_store(root).load_readonly().schema_version == 10
+        assert not client.calls
+
+
+def test_v3_linked_ordering_round_trip_preserves_owner_closure(tmp_path):
+    data, historical = _donor(tmp_path, different_cover=True, version=3)
+    parsed = inspect_playlist_bundle_v3(data)
+    assert parsed.playlist["ordering"] == "latest_per_source_first"
+    assert parsed.playlist["ordering_override"] == "latest_per_source_first"
+    assert parsed.template is not None
+    assert parsed.template.ordering is OrderingPolicy.EDITION_AT_DESC
+    with pytest.raises(PlaylistBundleError):
+        inspect_playlist_bundle_v2(data)
+
+    root, store, importer = _receiver(tmp_path)
+    plan = importer.preview_v2(data, version=3)
+    assert not plan.blocked
+    baseline = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    with pytest.raises(PlaylistImportError, match="schema v11"):
+        importer.apply_v2(data, plan.sources.fingerprint, version=3)
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
+    result = importer.apply_v2(data, plan.sources.fingerprint, confirm_schema=True, version=3)
+    draft = store.load_readonly().templates[0]
+    assert draft.ordering_override is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+    assert store.load_readonly().playlists == ()
+    exporter = PlaylistExportService(
+        store, ConfigurationSynchronization(), PortableCoverLoader(root)
+    )
+    outgoing = exporter.export("draft", result.current_draft_id, version=3)[1]
+    restored = inspect_playlist_bundle_v3(outgoing)
+    assert restored.playlist["ordering_override"] == parsed.playlist["ordering_override"]
+    assert restored.template is not None
+    assert len(restored.template.default_source_ids) == len(historical.default_source_ids)
+    assert len(restored.template.duration_policy.exceptions) == 2
+    assert restored.jpeg == parsed.jpeg
+    assert restored.template_jpeg == parsed.template_jpeg
+    assert restored.template_attribution == parsed.template_attribution
+
+
+@pytest.mark.parametrize("ordering", [None, *OrderingPolicy])
+def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(tmp_path, ordering):
+    draft = _draft(portable_id=UUID, ordering_override=ordering)
+    donor = _service(
+        tmp_path / "donor",
+        ManagedState(schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, templates=(draft,)),
+    )
+    data = donor.export("draft", str(draft.id), version=3)[1]
+    parsed = inspect_playlist_bundle_v3(data)
+    assert parsed.template is None
+    assert parsed.playlist["ordering_override"] == (ordering.value if ordering else None)
+    with pytest.raises(PlaylistBundleError):
+        inspect_playlist_bundle(data)
+    with pytest.raises(PlaylistBundleError):
+        inspect_playlist_bundle_v2(data)
+    root, store, importer = _receiver(tmp_path)
+    plan = importer.preview(data, version=3)
+    assert plan.status == "create"
+    with pytest.raises(PlaylistImportError, match="schema v11"):
+        importer.apply(
+            data, plan.sources.fingerprint, keep_local=frozenset(), confirm_schema=False, version=3
+        )
+    result = importer.apply(
+        data, plan.sources.fingerprint, keep_local=frozenset(), confirm_schema=True, version=3
+    )
+    assert result.created_draft
+    assert store.catalog.playlists == ()
+    assert store.load_readonly().playlists == ()
+    restored = store.load_readonly().templates[0]
+    assert restored.owner_template_id is None
+    assert restored.ordering_override is ordering
+    exporter = PlaylistExportService(
+        store, ConfigurationSynchronization(), PortableCoverLoader(root)
+    )
+    outgoing = exporter.export("draft", result.local_id, version=3)[1]
+    again = inspect_playlist_bundle_v3(outgoing)
+    assert again.template is None
+    assert again.playlist["ordering_override"] == parsed.playlist["ordering_override"]
+    assert again.playlist["portable_id"] == UUID
+    assert again.jpeg == parsed.jpeg
+    # A genuinely standalone duplicate remains an idempotent no-op.
+    baseline = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    duplicate = importer.preview(outgoing, version=3)
+    assert duplicate.status == "identical"
+    repeated = importer.apply(
+        outgoing,
+        duplicate.sources.fingerprint,
+        keep_local=frozenset(),
+        confirm_schema=False,
+        version=3,
+    )
+    assert repeated.local_id == result.local_id
+    assert not repeated.created_draft
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
+
+
+def test_v3_standalone_uuid_cannot_match_existing_linked_draft(tmp_path):
+    data, _ = _donor(tmp_path, different_cover=True, version=3)
+    root, store, importer = _receiver(tmp_path)
+    plan = importer.preview_v2(data, version=3)
+    importer.apply_v2(data, plan.sources.fingerprint, confirm_schema=True, version=3)
+    state = store.load_readonly()
+    linked = state.templates[0]
+    assert linked.owner_template_id is not None
+    covers = PortableCoverLoader(root)
+    exporter = PlaylistExportService(store, ConfigurationSynchronization(), covers)
+    original = exporter.export("draft", str(linked.id), version=3)[1]
+    baseline = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+
+    # Construct a separate synthetic snapshot with identical current fields and
+    # artwork but no owner link. The production exporter creates a valid v3 ZIP;
+    # do not change the receiver's actual authority to manufacture the conflict.
+    detached = replace(linked, owner_template_id=None)
+    _, incoming = playlist_bundle(
+        replace(state, templates=(detached,)), store, "draft", str(detached.id), covers, version=3
+    )
+    parsed = inspect_playlist_bundle_v3(incoming)
+    assert parsed.template is None
+    original_bundle = inspect_playlist_bundle_v3(original)
+    assert original_bundle.template is not None
+    assert parsed.playlist == original_bundle.playlist
+    assert parsed.jpeg == original_bundle.jpeg
+
+    conflict = importer.preview(incoming, version=3)
+    assert conflict.status == "uuid_conflict"
+    assert conflict.blocked
+    assert "linked owner-template draft" in conflict.reason
+    with pytest.raises(PlaylistImportError, match="linked owner-template draft"):
+        importer.apply(
+            incoming,
+            conflict.sources.fingerprint,
+            keep_local=frozenset(),
+            confirm_schema=True,
+            version=3,
+        )
+    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
+    assert store.load_readonly() == state
+    assert exporter.export("draft", str(linked.id), version=3)[1] == original
+
+
+@pytest.mark.parametrize("override", ["future_policy", False, None])
+def test_v3_rejects_unknown_or_inconsistent_ordering(tmp_path, override):
+    data, _ = _donor(tmp_path, version=3)
+
+    def edit(manifest, _files):
+        manifest["playlist"]["ordering_override"] = override
+
+    with pytest.raises(PlaylistBundleError):
+        inspect_playlist_bundle_v3(rewrite(data, edit))
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_v3_admin_preview_apply_and_download(tmp_path, linked):
+    if linked:
+        document, _ = _donor(tmp_path, version=3)
+    else:
+        draft = _draft(portable_id=UUID, ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
+        donor = _service(
+            tmp_path / "donor",
+            ManagedState(schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, templates=(draft,)),
+        )
+        document = donor.export("draft", str(draft.id), version=3)[1]
+    root, store, _importer = _receiver(tmp_path)
+    with _server(root) as (server, client, _legacy):
+        handler = server.RequestHandlerClass
+        managed = handler.managed_admin_service
+        source = handler.source_admin_service
+        assert managed is not None and source is not None
+        managed.store = source.store = store
+        managed.catalog = source.catalog = store.catalog
+        cookie = _login(server)
+        before = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+        status, preview = _v2_http_preview(server, cookie, document, version=3)
+        assert status == 200, preview
+        assert_valid_admin_html(preview.decode())
+        assert b"latest_per_source_first" in preview
+        assert b"schema v11" in preview or b"managed-state v11" in preview
+        action = (
+            "/admin/playlists/import/v3/linked/apply"
+            if linked
+            else "/admin/playlists/import/v3/apply"
+        )
+        assert action.encode() in preview
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+        status, _, body = _request(
+            server, "POST", action, cookie=cookie, form=_v2_http_confirmation(preview)
+        )
+        assert status == 409, body
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+        status, preview = _v2_http_preview(server, cookie, document, version=3)
+        assert status == 200, preview
+        form = _v2_http_confirmation(preview)
+        form["ack_schema"] = "1"
+        status, _, body = _request(server, "POST", action, cookie=cookie, form=form)
+        assert status == 200, body
+        restored = store.load_readonly().templates[0]
+        assert restored.ordering_override is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+        assert not store.load_readonly().playlists
+        status, _, outgoing = _request(
+            server,
+            "GET",
+            f"/admin/playlists/export.zip?kind=draft&id={restored.id}&version=3",
+            cookie=cookie,
+        )
+        assert status == 200, outgoing
+        parsed = inspect_playlist_bundle_v3(outgoing)
+        assert parsed.playlist["ordering_override"] == "latest_per_source_first"
+        assert (parsed.template is not None) == linked
         assert not client.calls

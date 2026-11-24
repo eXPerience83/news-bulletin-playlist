@@ -10,11 +10,39 @@ A provider title expresses the bulletin's local wall-clock time in the source's 
 
 The configured `SourceDefinition.timezone` is authoritative when that title is parsed. The resulting edition timestamp is then normalized and compared as an absolute instant for retention and playlist chronology.
 
-`edition_at_desc` is the only supported ordering contract. When exact TITLE/PUBLIC evidence produced an `edition_at`, that physical UTC instant is authoritative. When exact `edition_at` is unavailable, Spotify-first ordering keeps FIRST_SEEN/coarse evidence on one physical timeline: the official Spotify day/month/year value defines a source-local release period using the source IANA timezone and DST rules, while `first_seen_at` is the real observation upper bound. The ordering instant is the earlier of `first_seen_at` and the end of that physical release period.
+`edition_at_desc` is the default ordering contract. When exact TITLE/PUBLIC evidence produced an `edition_at`, that physical UTC instant is authoritative. When exact `edition_at` is unavailable, Spotify-first ordering keeps FIRST_SEEN/coarse evidence on one physical timeline: the official Spotify day/month/year value defines a source-local release period using the source IANA timezone and DST rules, while `first_seen_at` is the real observation upper bound. The ordering instant is the earlier of `first_seen_at` and the end of that physical release period.
 
 That fallback bound is ordering-only. It must not create `edition_at`, upgrade timestamp provenance, change retention semantics or invent exact minute precision. In particular, code must never splice a catalogue calendar date onto only the clock-of-day from `first_seen_at`; those are independent evidence sources and can cross UTC/source-local midnight differently.
 
 The visible episode title must therefore **not** be used on its own to decide whether an item is chronologically misplaced.
+
+## Optional latest eligible bulletin per source first (#660)
+
+The new opt-in `latest_per_source_first` policy keeps the same eligibility
+filters, retention window, timezone evidence, canonical chronology and URI
+deduplication as the default. It then stably partitions the canonical unique
+candidate sequence into the first eligible episode per source, followed by
+the remaining episodes in their original chronological order. A shared URI
+belongs to its first canonical candidate; another source may contribute its
+next unique eligible episode. The existing playlist cap applies **after**
+partitioning. If the cap is smaller than the number of eligible sources, the
+first cap representatives by canonical chronology win, including identity
+tie-breaks. No additional source catalogue requests are needed.
+
+Example (times already normalized to the same timezone):
+
+```text
+Default:  SER 15:00, SER 14:00, RNE 14:00, COPE 13:00, RNE 13:00
+Opt-in:   SER 15:00, RNE 14:00, COPE 13:00, SER 14:00, RNE 13:00
+```
+
+The order is a per-playlist setting, not a source or owner-template setting.
+When a catalogue is incomplete, the existing safe add-only reconciliation
+contract remains authoritative: no destructive reorder, eviction or replacement
+of existing items merely to group sources. Full ordering converges when full
+catalogue authority returns. The runtime configuration write guard includes
+the ordering policy, so a changed choice invalidates stale reconciliation.
+Spotify shuffle or client-side sorting may hide the configured order.
 
 ## Reference example: CNN 5 Cosas
 

@@ -16,7 +16,7 @@ from news_bulletin_playlist.managed_duration import (
     validate_persisted_duration_seconds,
     validate_persisted_min_duration_seconds,
 )
-from news_bulletin_playlist.models import PlaylistId, SourceId
+from news_bulletin_playlist.models import OrderingPolicy, PlaylistId, SourceId
 
 MANAGED_PROVISIONING_FILENAME = "managed-playlist-provisioning.json"
 _SCHEMA_VERSION = 2
@@ -44,6 +44,7 @@ class ProvisioningIntent:
     max_duration_seconds: int
     destination_id: str | None = None
     min_duration_seconds: int = 0
+    ordering_override: OrderingPolicy | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name.strip() or not self.cover_id.strip() or not self.source_ids:
@@ -55,6 +56,10 @@ class ProvisioningIntent:
                 "provisioning intent retention and maximum episode values must be positive"
             )
         validate_duration_range(self.min_duration_seconds, self.max_duration_seconds)
+        if self.ordering_override is not None and not isinstance(
+            self.ordering_override, OrderingPolicy
+        ):
+            raise ValueError("invalid provisioning ordering override")
         if self.state is ProvisioningState.REQUEST_STARTED and self.destination_id is not None:
             raise ValueError("request-started provisioning intent cannot have a destination")
         if self.state is ProvisioningState.DESTINATION_KNOWN and (
@@ -78,6 +83,7 @@ class ProvisioningIntent:
             max_duration_seconds=self.max_duration_seconds,
             min_duration_seconds=self.min_duration_seconds,
             destination_id=value,
+            ordering_override=self.ordering_override,
         )
 
 
@@ -115,6 +121,9 @@ class ProvisioningJournal:
             "min_duration_seconds": intent.min_duration_seconds,
             "destination_id": intent.destination_id,
         }
+        if intent.ordering_override is not None:
+            payload["schema_version"] = 3
+            payload["ordering_override"] = intent.ordering_override.value
         _parse_intent(payload)
         document = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
         parent = self.path.parent
@@ -171,9 +180,11 @@ def _parse_intent(value: object) -> ProvisioningIntent:
         "destination_id",
     }
     version = value.get("schema_version")
-    if version == 2:
+    if version in (2, 3):
         expected.add("min_duration_seconds")
-    if set(value) != expected or type(version) is not int or version not in {1, 2}:
+    if version == 3:
+        expected.add("ordering_override")
+    if set(value) != expected or type(version) is not int or version not in {1, 2, 3}:
         raise ProvisioningJournalError("provisioning journal has an unsupported schema")
     try:
         state = ProvisioningState(_nonempty_string(value["state"]))
@@ -191,7 +202,10 @@ def _parse_intent(value: object) -> ProvisioningIntent:
             max_episodes=_positive_integer(value["max_episodes"]),
             max_duration_seconds=validate_persisted_duration_seconds(value["max_duration_seconds"]),
             min_duration_seconds=validate_persisted_min_duration_seconds(
-                value["min_duration_seconds"] if version == 2 else 0
+                value["min_duration_seconds"] if version in (2, 3) else 0
+            ),
+            ordering_override=(
+                OrderingPolicy(_string(value["ordering_override"])) if version == 3 else None
             ),
             destination_id=(
                 None

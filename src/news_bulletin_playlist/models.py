@@ -18,6 +18,7 @@ DEFAULT_DURATION_MAX_SECONDS = 1800
 
 class OrderingPolicy(StrEnum):
     EDITION_AT_DESC = "edition_at_desc"
+    LATEST_PER_SOURCE_FIRST = "latest_per_source_first"
 
 
 class PublicReleaseMode(StrEnum):

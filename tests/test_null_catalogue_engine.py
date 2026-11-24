@@ -16,7 +16,7 @@ from news_bulletin_playlist.catalog import BUILTIN_CATALOG
 from news_bulletin_playlist.diagnostics import DiagnosticEventStore
 from news_bulletin_playlist.engine import EngineRunner
 from news_bulletin_playlist.engine_observability import InstrumentedEngineCycleRunner
-from news_bulletin_playlist.models import EngineConfig
+from news_bulletin_playlist.models import EngineConfig, OrderingPolicy, SourceSelection
 from news_bulletin_playlist.persistence import PersistenceError, SQLiteStore
 from news_bulletin_playlist.reconciliation import SpotifyReconciliationError
 from news_bulletin_playlist.runtime_diagnostics import OperationalDiagnostics
@@ -454,3 +454,54 @@ def test_shared_refresh_helper_orders_warning_commit_and_detector_marker(
         assert state is None
     else:
         assert state is not None and state.coverage_proven is not has_null
+
+
+def test_latest_per_source_partial_preserves_history_until_authoritative_recovery(tmp_path):
+    high, low = sorted((SOURCE, BUILTIN_CATALOG.sources[1]), key=lambda item: item.id, reverse=True)
+    high_show = spotify_show_id(high)
+    low_show = spotify_show_id(low)
+
+    def uri(number):
+        return f"spotify:episode:{number:022d}"
+
+    # Existing remote order deliberately differs from the complete target.
+    existing = [uri(2), uri(5), uri(1)]
+    client = Client(
+        {
+            high_show: [_item(4), _item(3), None, _item(2), _item(1)],
+            low_show: [_item(6), _item(5)],
+        },
+        {"dependent": existing},
+    )
+    playlist = replace(
+        _playlist("dependent", source=str(high.id)),
+        source_selection=SourceSelection((high.id, low.id)),
+        ordering=OrderingPolicy.LATEST_PER_SOURCE_FIRST,
+    )
+    engine = runner(tmp_path, client, sources=(high, low), playlists=(playlist,))
+    partial = engine.run_cycle()
+    assert not partial.playlists[0].ok
+    assert partial.playlists[0].block_reason == "partial_add_only"
+    assert partial.playlists[0].partial_added_count == 3
+    assert client.writes == []
+    assert len(client.additions) == 1
+    assert set(client.additions[0][1]) == {uri(3), uri(4), uri(6)}
+    assert client.states["dependent"][-len(existing) :] == existing
+
+    # The same observations become authoritative; only now may the engine
+    # replace the sequence and interleave the newest bulletin per source.
+    client.catalogues[high_show] = [_item(4), _item(3), _item(2), _item(1)]
+    engine.clock = lambda: NOW + timedelta(minutes=10)
+    recovered = engine.run_cycle()
+    expected = [uri(4), uri(6), uri(3), uri(2), uri(1), uri(5)]
+    assert recovered.playlists[0].ok
+    assert client.writes == [("dependent", expected)]
+    assert client.states["dependent"] == expected
+    assert len(client.additions) == 1
+
+    engine.clock = lambda: NOW + timedelta(minutes=20)
+    repeated = engine.run_cycle()
+    assert repeated.playlists[0].ok
+    assert repeated.playlists[0].desired_fingerprint == recovered.playlists[0].desired_fingerprint
+    assert client.writes == [("dependent", expected)]
+    assert len(client.additions) == 1

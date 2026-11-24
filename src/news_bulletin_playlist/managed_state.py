@@ -63,6 +63,8 @@ _CUSTOM_TEMPLATES_SCHEMA_VERSION = 7
 INSTALLED_SOURCES_SCHEMA_VERSION = 8
 PORTABLE_PLAYLIST_SCHEMA_VERSION = 9
 IMPORTED_PLAYLIST_SCHEMA_VERSION = 10
+# Nested managed overlay version; distinct from the outer operational v11 envelope.
+PLAYLIST_ORDERING_SCHEMA_VERSION = 11
 _LEGACY_MANAGED_STATE_SCHEMA_VERSION = 1
 _LEGACY_V2_MANAGED_STATE_SCHEMA_VERSION = 2
 _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS = 1800
@@ -99,6 +101,7 @@ class ManagedPlaylist:
     max_duration_seconds: int = _LEGACY_V1_DEFAULT_MAX_DURATION_SECONDS
     min_duration_seconds: int = 0
     portable_id: str | None = None
+    ordering_override: OrderingPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -359,6 +362,15 @@ def template_suspended_by_quarantine(
     return str(template_id).startswith("custom_")
 
 
+def _validate_playlist_ordering(playlist: ManagedPlaylist, schema_version: int) -> None:
+    if playlist.ordering_override is None:
+        return
+    if not isinstance(playlist.ordering_override, OrderingPolicy):
+        raise ManagedStateError("invalid managed playlist ordering override")
+    if schema_version < PLAYLIST_ORDERING_SCHEMA_VERSION:
+        raise ManagedStateError("playlist ordering override requires explicit overlay schema v11")
+
+
 def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> EngineConfig:
     """Compile immutable catalog knowledge plus local choices into the existing engine model."""
     sources = effective_sources(catalog, state)
@@ -376,6 +388,7 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
     seen_destinations: set[tuple[AdapterId, str]] = set()
 
     for managed in state.playlists:
+        _validate_playlist_ordering(managed, state.schema_version)
         # A corrupted custom draft must never reconcile by a made-up/default policy.
         # Keep its managed record and omit *only* its provider destination.
         if template_suspended_by_quarantine(catalog, state, managed.template_id):
@@ -440,7 +453,7 @@ def compile_engine_config(catalog: BuiltInCatalog, state: ManagedState) -> Engin
                 destination=managed.destination,
                 retention_hours=managed.retention_hours,
                 max_episodes=managed.max_episodes,
-                ordering=template.ordering,
+                ordering=managed.ordering_override or template.ordering,
                 duration_policy=duration_policy,
             )
         )
@@ -516,6 +529,7 @@ def _parse_managed_state_with_version(
         INSTALLED_SOURCES_SCHEMA_VERSION,
         PORTABLE_PLAYLIST_SCHEMA_VERSION,
         IMPORTED_PLAYLIST_SCHEMA_VERSION,
+        PLAYLIST_ORDERING_SCHEMA_VERSION,
     }:
         raise ManagedStateError(
             f"unsupported managed-state schema version: {source_schema_version}"
@@ -713,6 +727,7 @@ def serialize_managed_state(
         INSTALLED_SOURCES_SCHEMA_VERSION,
         PORTABLE_PLAYLIST_SCHEMA_VERSION,
         IMPORTED_PLAYLIST_SCHEMA_VERSION,
+        PLAYLIST_ORDERING_SCHEMA_VERSION,
     }:
         raise ManagedStateError(f"unsupported managed-state schema version: {state.schema_version}")
     if state.schema_version == _MANAGED_STATE_SCHEMA_VERSION and (
@@ -734,6 +749,7 @@ def serialize_managed_state(
         _validate_source(source, f"sources[{index}]")
     serialized_playlists: list[dict[str, object]] = []
     for playlist in state.playlists:
+        _validate_playlist_ordering(playlist, state.schema_version)
         item: dict[str, object] = {
             "id": str(playlist.id),
             "template_id": str(playlist.template_id),
@@ -753,6 +769,10 @@ def serialize_managed_state(
         }
         if state.schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION:
             item["portable_id"] = playlist.portable_id
+        if state.schema_version >= PLAYLIST_ORDERING_SCHEMA_VERSION:
+            item["ordering_override"] = (
+                playlist.ordering_override.value if playlist.ordering_override is not None else None
+            )
         serialized_playlists.append(item)
     sorted_sources = tuple(sorted(state.sources, key=lambda source: str(source.id)))
     payload: dict[str, object] = {
@@ -846,6 +866,12 @@ def _serialize_local_template(
         "ordering": item.ordering.value,
         "hidden": item.hidden,
     }
+    if item.ordering_override is not None and schema_version < PLAYLIST_ORDERING_SCHEMA_VERSION:
+        raise ManagedStateError("draft ordering override requires explicit overlay schema v11")
+    if schema_version >= PLAYLIST_ORDERING_SCHEMA_VERSION:
+        result["ordering_override"] = (
+            item.ordering_override.value if item.ordering_override is not None else None
+        )
     if schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION:
         result["portable_id"] = item.portable_id
     if schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION:
@@ -881,6 +907,11 @@ def _parse_local_template(
         | (
             {"portable_metadata", "duration_exceptions", "owner_template_id"}
             if source_schema_version >= IMPORTED_PLAYLIST_SCHEMA_VERSION
+            else set()
+        )
+        | (
+            {"ordering_override"}
+            if source_schema_version >= PLAYLIST_ORDERING_SCHEMA_VERSION
             else set()
         ),
         path,
@@ -922,6 +953,7 @@ def _parse_local_template(
                 _required(data, "max_duration_seconds", path), f"{path}.max_duration_seconds"
             ),
             ordering=OrderingPolicy.EDITION_AT_DESC,
+            ordering_override=_parse_ordering_override(data, path, source_schema_version),
             hidden=_boolean(_required(data, "hidden", path), f"{path}.hidden"),
             portable_id=_parse_portable_id(data, path, source_schema_version),
             portable_metadata=(
@@ -1102,7 +1134,12 @@ def _parse_playlist(
             "max_duration_seconds",
             "min_duration_seconds",
         }
-        | ({"portable_id"} if source_schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION else set()),
+        | ({"portable_id"} if source_schema_version >= PORTABLE_PLAYLIST_SCHEMA_VERSION else set())
+        | (
+            {"ordering_override"}
+            if source_schema_version >= PLAYLIST_ORDERING_SCHEMA_VERSION
+            else set()
+        ),
         path,
     )
     source_values = _sequence(_required(data, "source_ids", path), f"{path}.source_ids")
@@ -1171,7 +1208,22 @@ def _parse_playlist(
         max_duration_seconds=max_duration_seconds,
         min_duration_seconds=min_duration_seconds,
         portable_id=_parse_portable_id(data, path, source_schema_version),
+        ordering_override=_parse_ordering_override(data, path, source_schema_version),
     )
+
+
+def _parse_ordering_override(
+    data: Mapping[str, object], path: str, schema_version: int
+) -> OrderingPolicy | None:
+    if schema_version < PLAYLIST_ORDERING_SCHEMA_VERSION:
+        return None
+    raw = _required(data, "ordering_override", path)
+    if raw is None:
+        return None
+    try:
+        return OrderingPolicy(_string(raw, f"{path}.ordering_override"))
+    except ValueError as exc:
+        raise ManagedStateError(f"{path}.ordering_override: unsupported ordering") from exc
 
 
 def _parse_portable_id(data: Mapping[str, object], path: str, schema_version: int) -> str | None:
