@@ -402,7 +402,7 @@ def test_content_validation_and_unsupported_preview(tmp_path, damage):
     assert files(service.store.path.parent) == before
 
 
-@pytest.mark.parametrize("stage", ["replace", "file_fsync", "chmod", "directory_fsync"])
+@pytest.mark.parametrize("stage", ["replace", "file_fsync", "privacy", "directory_fsync"])
 def test_atomic_state_faults_orphans_restart_and_retry(tmp_path, monkeypatch, stage):
     document = donor(tmp_path)
     service = receiver(tmp_path)
@@ -417,14 +417,14 @@ def test_atomic_state_faults_orphans_restart_and_retry(tmp_path, monkeypatch, st
         with monkeypatch.context() as patch:
             if stage == "directory_fsync":
                 patch.setattr(managed_state, "fsync_directory", fail)
+            elif stage == "privacy":
+                patch.setattr(managed_state, "ensure_private_created", fail)
             else:
-                patch.setattr(
-                    os, {"replace": "replace", "file_fsync": "fsync", "chmod": "chmod"}[stage], fail
-                )
+                patch.setattr(os, {"replace": "replace", "file_fsync": "fsync"}[stage], fail)
             real_save(candidate)
 
     monkeypatch.setattr(service.store, "save", save)
-    if stage in {"replace", "file_fsync"}:
+    if stage in {"replace", "file_fsync", "privacy"}:
         with pytest.raises(PlaylistImportError, match="not committed"):
             apply(service, document)
         assert service.store.path.read_bytes() == before
