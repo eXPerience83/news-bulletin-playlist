@@ -12,6 +12,7 @@ from _playlist_template_fixtures import _draft
 from _portable_playlist_fixtures import OTHER_UUID, _ready, _service
 from _source_admin_http_fixtures import _server
 
+from news_bulletin_playlist import playlist_collection
 from news_bulletin_playlist.managed_state import ManagedState
 from news_bulletin_playlist.playlist_collection import (
     CollectionError,
@@ -50,6 +51,29 @@ def test_all_members_exact_and_deterministic(tmp_path):
         inspect_collection(result + b"x")
     with pytest.raises(CollectionError):
         inspect_collection(result[:50] + b"x" + result[51:])
+
+
+@pytest.mark.parametrize("limit", ["MAX_MEMBERS", "MAX_PAYLOAD_BYTES"])
+def test_aggregate_limits_accept_exact_and_reject_one_extra(tmp_path, monkeypatch, limit):
+    service = _service(tmp_path, _both())
+    state = service.store.load_readonly()
+    documents = [
+        service.export("managed", str(state.playlists[0].id), version=3)[1],
+        service.export("draft", str(state.templates[0].id), version=3)[1],
+    ]
+    baseline = build_collection(documents)
+    exact = len(documents) if limit == "MAX_MEMBERS" else sum(map(len, documents))
+    monkeypatch.setattr(playlist_collection, limit, exact)
+    assert build_collection(documents) == baseline
+    assert {member.document for member in inspect_collection(baseline)} == set(documents)
+
+    # Both members remain individually valid and have distinct portable identities.
+    monkeypatch.setattr(playlist_collection, limit, exact - 1)
+    with pytest.raises(CollectionError, match="aggregate limits"):
+        build_collection(documents)
+    expected = "ZIP envelope" if limit == "MAX_MEMBERS" else "ZIP entry"
+    with pytest.raises(CollectionError, match=expected):
+        inspect_collection(baseline)
 
 
 def test_empty_collection(tmp_path):
