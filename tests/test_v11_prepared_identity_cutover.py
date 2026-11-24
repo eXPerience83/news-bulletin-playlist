@@ -202,9 +202,7 @@ def test_prepare_in_old_version_then_held_v11_zip_v2_and_all_sources_are_restora
         )
         assert restored_template.retention_hours == bundle.template.retention_hours
         assert restored_template.max_episodes == bundle.template.max_episodes
-        assert len(restored_template.default_source_ids) == len(
-            bundle.template.default_source_ids
-        )
+        assert len(restored_template.default_source_ids) == len(bundle.template.default_source_ids)
         assert len(restored_template.duration_policy.exceptions) == len(
             bundle.template.duration_policy.exceptions
         )
@@ -219,9 +217,10 @@ def test_prepare_in_old_version_then_held_v11_zip_v2_and_all_sources_are_restora
         assert draft.min_duration_seconds == original_playlist.min_duration_seconds
         assert draft.max_duration_seconds == original_playlist.max_duration_seconds
         assert separate.covers.load(draft.cover_id)[0] == bundle.jpeg
-        assert original_playlist.destination.external_id.encode() not in (
-            isolated / V11_OPERATIONAL_FILENAME
-        ).read_bytes()
+        assert (
+            original_playlist.destination.external_id.encode()
+            not in (isolated / V11_OPERATIONAL_FILENAME).read_bytes()
+        )
 
 
 def test_custom_disabled_and_unassigned_source_policies_survive_held_export_and_import(
