@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,7 @@ from news_bulletin_playlist.models import (
     DestinationReference,
     ExternalReference,
     LanguageTag,
+    OrderingPolicy,
     ParserId,
     PlaylistDefinition,
     PlaylistId,
@@ -316,3 +318,71 @@ def test_equal_coarse_fallback_bounds_have_stable_identity_tie_break() -> None:
     assert [episode.spotify_episode_id for episode in ordered] == ["L" * 22, "K" * 22]
     assert all(episode.edition_at is None for episode in ordered)
     assert all(episode.timestamp_source is TimestampSource.FIRST_SEEN for episode in ordered)
+
+
+@pytest.mark.parametrize("reverse_input", [False, True])
+@pytest.mark.parametrize("cap", [1, 2, 3, 100])
+def test_latest_per_source_first_respects_eligibility_and_cap(reverse_input, cap):
+    ser = _source("ser", SER_SHOW, "Europe/Madrid")
+    rne = _source("rne", RNE_SHOW, "Europe/Madrid")
+    generic = _source("generic", GENERIC_SHOW, "UTC")
+    now = datetime(2026, 10, 2, 13, 0, tzinfo=UTC)
+
+    def edition(source, show, key, hour):
+        observed = now - timedelta(hours=hour)
+        return _episode(
+            source,
+            show,
+            key * 22,
+            release_date=observed.date().isoformat(),
+            first_seen_at=observed,
+            edition_at=observed,
+            timestamp_source=TimestampSource.TITLE,
+        )
+
+    a = edition("ser", SER_SHOW, "A", 1)
+    b = edition("ser", SER_SHOW, "B", 2)
+    c = edition("rne", RNE_SHOW, "C", 3)
+    d = edition("generic", GENERIC_SHOW, "D", 4)
+    e = edition("rne", RNE_SHOW, "E", 5)
+    # This newer episode is too long and must not represent SER.
+    rejected = replace(edition("ser", SER_SHOW, "F", 0), duration_seconds=3600)
+    expired = edition("generic", GENERIC_SHOW, "G", 72)
+    episodes = (a, b, c, d, e, rejected, expired, a)
+    if reverse_input:
+        episodes = tuple(reversed(episodes))
+    sources = {source.id: source for source in (ser, rne, generic)}
+    ordinary = replace(_playlist("ser", "rne", "generic"), max_episodes=cap)
+    grouped = replace(ordinary, ordering=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
+
+    def desired(playlist):
+        return build_spotify_first_desired_state(
+            playlist, episodes, sources=sources, now=now
+        ).desired.uris
+
+    assert desired(ordinary) == tuple(item.spotify_episode_uri for item in (a, b, c, d, e)[:cap])
+    assert desired(grouped) == tuple(item.spotify_episode_uri for item in (a, c, d, b, e)[:cap])
+
+
+def test_latest_per_source_single_source_matches_default_with_fallback():
+    source = _source("generic", GENERIC_SHOW, "America/New_York")
+    now = datetime(2026, 10, 2, 13, 0, tzinfo=UTC)
+    episodes = tuple(
+        _episode(
+            "generic",
+            GENERIC_SHOW,
+            key * 22,
+            release_date="2026-10-02",
+            first_seen_at=now - timedelta(hours=hours),
+        )
+        for key, hours in (("A", 1), ("B", 2))
+    )
+    ordinary = _playlist("generic")
+    grouped = replace(ordinary, ordering=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
+    expected = build_spotify_first_desired_state(
+        ordinary, episodes, sources={source.id: source}, now=now
+    )
+    actual = build_spotify_first_desired_state(
+        grouped, episodes, sources={source.id: source}, now=now
+    )
+    assert actual.desired == expected.desired
