@@ -29,6 +29,7 @@ from news_bulletin_playlist.managed_state import (
 from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
 from news_bulletin_playlist.owner_inventory import OwnerInventory
 from news_bulletin_playlist.portable_playlists import PortableCoverLoader
+from news_bulletin_playlist.private_persistence import ensure_private_created
 from news_bulletin_playlist.v11_candidate import build_v11_candidate
 from news_bulletin_playlist.v11_candidate_storage import _locked_root, _read_regular
 from news_bulletin_playlist.v11_operational_codec import (
@@ -74,6 +75,7 @@ def _write_temporary(root_fd: int, payload: bytes) -> str:
     )
     try:
         with os.fdopen(fd, "wb") as stream:
+            ensure_private_created(stream.fileno())
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())

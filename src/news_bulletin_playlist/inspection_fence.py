@@ -19,6 +19,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from news_bulletin_playlist.private_persistence import ensure_private_created
 from news_bulletin_playlist.v11_candidate_storage import _locked_root, _read_regular
 from news_bulletin_playlist.v11_operational_codec import (
     MAX_OPERATIONAL_BYTES,
@@ -127,6 +128,7 @@ def _write(fd: int, state: str, release_sha256: str | None = None) -> None:
             dir_fd=fd,
         )
         with os.fdopen(opened, "wb") as stream:
+            ensure_private_created(stream.fileno())
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())

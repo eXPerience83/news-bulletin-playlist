@@ -23,6 +23,10 @@ from news_bulletin_playlist.custom_cover_assets import (
 )
 from news_bulletin_playlist.file_durability import fsync_directory
 from news_bulletin_playlist.portable_playlist_metadata import validate_attribution
+from news_bulletin_playlist.private_persistence import (
+    ensure_private_created,
+    open_private_directory,
+)
 
 MIGRATED_COVERS_DIR = "migrated-covers"
 _INDEX_NAME = "index.json"
@@ -45,22 +49,16 @@ class MigratedCoverAssets:
         self.assets = CustomCoverAssetStore(data_dir / "custom-covers")
 
     def _directory(self, *, create: bool) -> int | None:
-        if create:
-            try:
-                self.root.mkdir(mode=0o700, exist_ok=True)
-            except OSError as exc:
-                raise MigratedCoverError("Migrated cover directory is unavailable") from exc
         try:
-            fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            return open_private_directory(self.root, create=create)
         except FileNotFoundError:
+            if create:
+                raise MigratedCoverError("Migrated cover directory is unavailable") from None
             return None
+        except PermissionError as exc:
+            raise MigratedCoverError("Migrated cover directory permissions are unsafe") from exc
         except OSError as exc:
             raise MigratedCoverError("Migrated cover directory is unsafe") from exc
-        mode = os.fstat(fd).st_mode
-        if not stat.S_ISDIR(mode) or stat.S_IMODE(mode) & 0o077:
-            os.close(fd)
-            raise MigratedCoverError("Migrated cover directory permissions are unsafe")
-        return fd
 
     @staticmethod
     def _canonical(value: object) -> bytes:
@@ -245,6 +243,7 @@ class MigratedCoverAssets:
                     dir_fd=directory,
                 )
                 with os.fdopen(fd, "wb") as stream:
+                    ensure_private_created(stream.fileno())
                     stream.write(payload)
                     stream.flush()
                     os.fsync(stream.fileno())

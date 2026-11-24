@@ -214,6 +214,38 @@ GHCR also keeps candidate/revision tags and immutable image digests for build au
 
 CI checks the deployment channel, package visibility, Compose rendering and the hardened health/web smoke test. The `/data` dataset is deliberately external to the container image, so updating or rolling back an image does not erase SQLite state, Spotify refresh authorization or managed configuration.
 
+## First boot of an existing installation: inspection and ACLs
+
+For the forward-only v11 migration, add this temporary setting to the
+existing TrueNAS YAML under `services.app.environment`, before starting
+the new image:
+
+```yaml
+NEWS_PLAYLIST_STARTUP_INSPECTION: "1"
+```
+
+Keep the current bind mount, runtime UID/GID and credentials. Stop the old
+writer and follow the [v11 acceptance checklist](BETA_V11_ACCEPTANCE.md).
+Use the approved image (verify its digest even when using an edge alias).
+The durable hold persists across restarts. Removing the environment
+variable alone does not release it; use the exact-state-hash release CLI
+only after separate operator acceptance, then remove the setting and restart.
+
+TrueNAS NFSv4 datasets with `aclmode=passthrough` and
+`aclinherit=passthrough` can widen modes requested during file and directory
+creation. New private objects are normalized and checked before publishing.
+Use a trusted application dataset: POSIX mode checks do not establish
+that every named NFSv4 ACL entry is safe. Review effective ACLs in TrueNAS.
+If startup rejects an existing inspection marker or artwork directory,
+stop the app and inspect the exact object (owner, type, permissions and ACL).
+For confirmed owner-managed regular files/directories, repair only the
+affected object via supported TrueNAS administration; private directories
+require owner-only access, and private files require no group/other bits
+(the owner's execute bit may remain on some NFSv4 datasets).
+Do not recursively chmod the dataset, delete the inspection or authority
+markers, downgrade after conversion, or bypass the safety checks.
+Re-run `news-playlist inspection-report --data-dir /data` before release.
+
 ## Historical 0.1.0 persistence baseline cutover (not for v11)
 
 The steps below document the old SQLite format transition. **Do not reuse them as a v11 upgrade, rollback or cleanup plan.** Follow [BETA_V11_ACCEPTANCE.md](BETA_V11_ACCEPTANCE.md) for the unreleased forward-only candidate instead.
