@@ -504,7 +504,7 @@ class PlaylistExportService:
         with self.synchronization.hold():
             state = self.store.load_readonly()
             if state.quarantined_templates:
-                raise PlaylistExportError("Repair quarantined drafts before exporting all playlists")
+                raise PlaylistExportError("Repair quarantined drafts before bulk export")
 
             def documents() -> Iterator[bytes]:
                 for playlist in state.playlists:
