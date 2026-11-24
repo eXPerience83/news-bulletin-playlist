@@ -63,7 +63,9 @@ def test_migration_and_release_under_inherited_acl(tmp_path: Path, inherited_acl
         assert stat.S_IMODE(path.stat().st_mode) & 0o077 == 0
     assert startup_gate(root, requested=False)
     snapshot = inspect_gate(root)
-    released = release_gate(root, expected_sha256=snapshot.state_sha256, confirm=RELEASE_CONFIRMATION)
+    released = release_gate(
+        root, expected_sha256=snapshot.state_sha256, confirm=RELEASE_CONFIRMATION
+    )
     assert released.state == "released"
     assert not startup_gate(root, requested=False)
     assert (root / INSPECTION_FILENAME).stat().st_mode & 0o077 == 0
