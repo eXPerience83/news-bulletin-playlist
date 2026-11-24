@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from news_bulletin_playlist.file_durability import fsync_directory
+from news_bulletin_playlist.private_persistence import ensure_private_created
 from news_bulletin_playlist.spotify_metrics import (
     SpotifyOAuthOperation,
     SpotifyRequestMetrics,
@@ -280,11 +281,11 @@ class SpotifyCredentialStore:
             fd = os.open(temporary, flags, 0o600)
             with os.fdopen(fd, "wb", closefd=True) as handle:
                 fd = None
+                ensure_private_created(handle.fileno())
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
-            os.chmod(self.path, 0o600)
             fsync_directory(self.path.parent)
         except OSError as exc:
             raise SpotifyCredentialStoreError(
