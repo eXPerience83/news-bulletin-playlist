@@ -54,6 +54,7 @@ from news_bulletin_playlist.portable_sources import (
     export_sources,
     parse_sources,
 )
+from news_bulletin_playlist.private_persistence import ensure_private_created
 from news_bulletin_playlist.spotify.identifiers import is_spotify_id
 
 MANAGED_STATE_FILENAME = "managed-state.json"
@@ -303,12 +304,12 @@ class ManagedStateStore:
         descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                ensure_private_created(stream.fileno())
                 stream.write(document)
                 stream.flush()
                 os.fsync(stream.fileno())
             self._reject_retired_legacy()
             os.replace(temp_path, self.path)
-            os.chmod(self.path, 0o600)
             fsync_directory(parent)
         finally:
             with suppress(FileNotFoundError):
