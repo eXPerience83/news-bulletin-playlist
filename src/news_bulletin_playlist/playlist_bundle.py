@@ -268,7 +268,8 @@ def _inspect(document: bytes, *, version: int) -> PlaylistBundle:
             "max_episodes",
             "duration_policy",
             "cover",
-        } | ({"ordering_override"} if version == 3 else set()),
+        }
+        | ({"ordering_override"} if version == 3 else set()),
     )
     if portable_id(p["portable_id"]) is None:
         raise PlaylistBundleError("Portable UUIDv4 is required")
