@@ -35,17 +35,16 @@ def inherited_acl(monkeypatch: pytest.MonkeyPatch) -> None:
         return fd
 
     def widened_mkdir(path, mode=0o777, parents=False, exist_ok=False):
+        existed = path.exists()
         original_mkdir(path, mode, parents, exist_ok)
-        if mode == 0o700:
+        if mode == 0o700 and not existed:
             path.chmod(0o770)
 
     monkeypatch.setattr(os, "open", widened_open)
     monkeypatch.setattr(Path, "mkdir", widened_mkdir)
 
 
-def test_migration_and_release_under_inherited_acl(
-    tmp_path: Path, inherited_acl: None
-) -> None:
+def test_migration_and_release_under_inherited_acl(tmp_path: Path, inherited_acl: None) -> None:
     root, _ = legacy_root(tmp_path, 10)
     assert startup_gate(root, requested=True)
     store = V11OperationalStore(root)
@@ -64,9 +63,7 @@ def test_migration_and_release_under_inherited_acl(
         assert stat.S_IMODE(path.stat().st_mode) & 0o077 == 0
     assert startup_gate(root, requested=False)
     snapshot = inspect_gate(root)
-    released = release_gate(
-        root, expected_sha256=snapshot.state_sha256, confirm=RELEASE_CONFIRMATION
-    )
+    released = release_gate(root, expected_sha256=snapshot.state_sha256, confirm=RELEASE_CONFIRMATION)
     assert released.state == "released"
     assert not startup_gate(root, requested=False)
     assert (root / INSPECTION_FILENAME).stat().st_mode & 0o077 == 0
@@ -96,9 +93,7 @@ def test_failed_release_privacy_preserves_held_marker(
     monkeypatch.setattr(os, "open", widened_open)
     monkeypatch.setattr(os, "fchmod", ineffective_chmod)
     with pytest.raises(InspectionGateError):
-        release_gate(
-            root, expected_sha256=snapshot.state_sha256, confirm=RELEASE_CONFIRMATION
-        )
+        release_gate(root, expected_sha256=snapshot.state_sha256, confirm=RELEASE_CONFIRMATION)
     assert marker.read_bytes() == before
     assert inspect_gate(root).held
     assert not list(root.glob(".spotify-inspection-*.tmp"))
