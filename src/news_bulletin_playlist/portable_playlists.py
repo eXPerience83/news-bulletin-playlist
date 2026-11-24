@@ -39,7 +39,6 @@ from news_bulletin_playlist.managed_state import (
     template_suspended_by_quarantine,
 )
 from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
-from news_bulletin_playlist.models import OrderingPolicy
 from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.portable_identity import portable_id
 from news_bulletin_playlist.portable_playlist_metadata import exception_payload

@@ -731,7 +731,11 @@ def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(tmp_pat
     duplicate = importer.preview(outgoing, version=3)
     assert duplicate.status == "identical"
     repeated = importer.apply(
-        outgoing, duplicate.sources.fingerprint, keep_local=frozenset(), confirm_schema=False, version=3
+        outgoing,
+        duplicate.sources.fingerprint,
+        keep_local=frozenset(),
+        confirm_schema=False,
+        version=3,
     )
     assert repeated.local_id == result.local_id
     assert not repeated.created_draft
@@ -771,7 +775,11 @@ def test_v3_standalone_uuid_cannot_match_existing_linked_draft(tmp_path):
     assert "linked owner-template draft" in conflict.reason
     with pytest.raises(PlaylistImportError, match="linked owner-template draft"):
         importer.apply(
-            incoming, conflict.sources.fingerprint, keep_local=frozenset(), confirm_schema=True, version=3
+            incoming,
+            conflict.sources.fingerprint,
+            keep_local=frozenset(),
+            confirm_schema=True,
+            version=3,
         )
     assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
     assert store.load_readonly() == state
