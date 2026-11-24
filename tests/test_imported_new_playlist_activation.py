@@ -23,7 +23,13 @@ from news_bulletin_playlist.managed_admin import (
     render_spotify_description,
 )
 from news_bulletin_playlist.managed_provisioning import ProvisioningJournal, ProvisioningState
-from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
+from news_bulletin_playlist.managed_state import (
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
+    ManagedState,
+    ManagedStateStore,
+    compile_engine_config,
+)
+from news_bulletin_playlist.models import OrderingPolicy
 from news_bulletin_playlist.playlist_import import PlaylistImportService
 from news_bulletin_playlist.portable_playlists import PortableCoverLoader
 from news_bulletin_playlist.spotify.client import SpotifyTransportError
@@ -232,4 +238,32 @@ def test_imported_multiline_description_accepts_browser_crlf_without_changing_by
     assert client.creates == [
         (reviewed.display_name, render_spotify_description(reviewed.description))
     ]
+    assert service.provisioning_journal.load() is None
+
+
+def test_draft_ordering_is_snapshotted_in_provisioning_and_recovered(tmp_path):
+    client = FakeSpotify(error=SpotifyTransportError("synthetic uncertain write"))
+    service, draft, _ = setup_import(tmp_path, client)
+    state = service.store.load_readonly()
+    draft = replace(draft, ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
+    service.store.save(
+        replace(state, schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, templates=(draft,))
+    )
+    with pytest.raises(SpotifyPlaylistCreationUncertainError):
+        publish(service, draft, confirm=True)
+    intent = service.provisioning_journal.load()
+    assert intent is not None
+    assert intent.ordering_override is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+
+    # Simulate recovery with a known destination, after the draft default changed.
+    state = service.store.load_readonly()
+    service.store.save(replace(state, templates=(replace(draft, ordering_override=None),)))
+    service.provisioning_journal.save(intent.with_destination(NEW_DESTINATION))
+    managed = service.finalize_known_provisioning()
+    assert managed is not None
+    assert managed.ordering_override is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+    state = service.store.load_readonly()
+    runtime = compile_engine_config(EMPTY_CATALOG, state)
+    assert runtime.playlists[0].ordering is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+    assert len(client.creates) == 1
     assert service.provisioning_journal.load() is None

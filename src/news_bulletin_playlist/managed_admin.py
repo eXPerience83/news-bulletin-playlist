@@ -729,6 +729,7 @@ class ManagedAdminService:
             max_episodes=template.max_episodes,
             max_duration_seconds=duration_max,
             min_duration_seconds=duration_min,
+            ordering_override=local.ordering_override if local is not None else None,
         )
         # Every new Spotify playlist must carry project attribution in its first
         # irreversible create request; validate before journaling or provider I/O.
@@ -827,6 +828,7 @@ class ManagedAdminService:
             max_episodes=intent.max_episodes,
             max_duration_seconds=intent.max_duration_seconds,
             min_duration_seconds=intent.min_duration_seconds,
+            ordering_override=intent.ordering_override,
         )
         self._save_validated(replace(state, playlists=state.playlists + (managed,)))
         self.provisioning_journal.clear()
@@ -947,6 +949,7 @@ class ManagedAdminService:
             max_episodes=local.max_episodes,
             min_duration_seconds=local.min_duration_seconds,
             max_duration_seconds=local.max_duration_seconds,
+            ordering_override=local.ordering_override,
         )
         self._save_validated(replace(state, playlists=state.playlists + (managed,)))
         return managed

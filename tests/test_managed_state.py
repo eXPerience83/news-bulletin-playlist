@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from _playlist_template_fixtures import _draft
 
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG, BuiltInCatalog
 from news_bulletin_playlist.managed_state import (
@@ -419,3 +420,19 @@ def test_ordering_overlay_rejects_invalid_policy(invalid) -> None:
     del payload["playlists"][0]["ordering_override"]
     with pytest.raises(ManagedStateError, match="ordering_override"):
         parse_managed_state(payload)
+
+
+def test_draft_ordering_override_is_versioned_and_not_inherited_by_existing_destination():
+    draft = _draft(ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST)
+    managed = activate_template(draft.as_playlist_template(), "destination")
+    state = ManagedState(
+        schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, playlists=(managed,), templates=(draft,)
+    )
+    payload = serialize_managed_state(state)
+    assert payload["templates"][0]["ordering_override"] == "latest_per_source_first"
+    assert parse_managed_state(payload) == state
+    assert compile_engine_config(BUILTIN_CATALOG, state).playlists[0].ordering is (
+        OrderingPolicy.EDITION_AT_DESC
+    )
+    with pytest.raises(ManagedStateError, match="draft ordering override"):
+        serialize_managed_state(replace(state, schema_version=10))

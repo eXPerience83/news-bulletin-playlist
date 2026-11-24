@@ -198,8 +198,7 @@ def playlist_bundle(
         raise PlaylistExportError("Unsupported or incomplete portable playlist version")
     target = _target(state, store, kind, object_id)
     if (
-        isinstance(target, ManagedPlaylist)
-        and target.ordering_override is not None
+        target.ordering_override is not None
         and target.ordering_override is not OrderingPolicy.EDITION_AT_DESC
     ):
         raise PlaylistExportError(
