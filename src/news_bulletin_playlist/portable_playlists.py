@@ -404,7 +404,7 @@ def playlist_bundle(
         )
         manifest["template"] = None
     additional_entries: list[tuple[str, bytes]] = []
-    if version >= 2 and template is not None
+    if version >= 2 and template is not None:
         template_document = OwnerTemplateSet((template,)).serialize()
         template_cover_bytes, template_attribution = covers.load(template.cover_id)
         owner_credit = getattr(store, "owner_cover_attribution", None)
