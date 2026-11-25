@@ -477,7 +477,7 @@ def _target(
     return target
 
 
-def _collection_from_snapshot(
+def collection_from_snapshot(
     state: ManagedState, store: ManagedStateStore, covers: PortableCoverLoader
 ) -> bytes:
     """Build from a snapshot already acquired under the configuration lock."""
@@ -521,7 +521,7 @@ class PlaylistExportService:
     def export_all(self) -> bytes:
         """Export all managed playlists and drafts from one read-only snapshot."""
         with self.synchronization.hold():
-            return _collection_from_snapshot(self.store.load_readonly(), self.store, self.covers)
+            return collection_from_snapshot(self.store.load_readonly(), self.store, self.covers)
 
     @staticmethod
     def export_all_readonly(data_dir: Path, synchronization: Synchronization) -> bytes:
@@ -530,7 +530,7 @@ class PlaylistExportService:
 
         with synchronization.hold():
             store, state = open_managed_state_snapshot_readonly(data_dir)
-            return _collection_from_snapshot(state, store, PortableCoverLoader(data_dir))
+            return collection_from_snapshot(state, store, PortableCoverLoader(data_dir))
 
     def preparation(self, kind: str, object_id: str) -> tuple[str, int, str | None]:
         with self.synchronization.hold():

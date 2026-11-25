@@ -19,6 +19,10 @@ from news_bulletin_playlist.admin_session import SourceImportCapacityError, Sour
 from news_bulletin_playlist.admin_web import render_admin_shell
 from news_bulletin_playlist.build_info import build_revision as resolve_build_revision
 from news_bulletin_playlist.catalog import BUILTIN_CATALOG
+from news_bulletin_playlist.configuration_export import (
+    ConfigurationExportError,
+    export_configuration,
+)
 from news_bulletin_playlist.custom_cover_assets import CustomCoverAssetError
 from news_bulletin_playlist.diagnostics import (
     MAX_DIAGNOSTIC_EXPORT_EVENTS,
@@ -224,6 +228,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                             security.issue_csrf_token(), inspection_hold=self.inspection_hold
                         ),
                     )
+            return
+        if parsed.path == "/admin/playlists/export-configuration.zip":
+            self._serve_configuration_export(parsed.query, parsed.fragment)
             return
         if parsed.path == "/admin/playlists/owner-inventory.json":
             self._serve_owner_inventory(parsed.query, parsed.fragment)
@@ -607,6 +614,30 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 duration_exceptions=tuple(parse_exception(e) for e in raw),
                 hidden=form.get("hidden") == ["1"],
             )
+
+    def _serve_configuration_export(self, query: str, fragment: str) -> None:
+        if self._require_admin() is None:
+            return
+        if query or fragment:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid configuration export request")
+            return
+        synchronization = self.configuration_synchronization
+        if synchronization is None:
+            self._source_error(
+                HTTPStatus.SERVICE_UNAVAILABLE, "Configuration export is unavailable"
+            )
+            return
+        try:
+            payload = export_configuration(self.data_dir, synchronization)
+        except ConfigurationExportError as exc:
+            self._source_error(HTTPStatus.CONFLICT, str(exc))
+            return
+        self._reply(
+            HTTPStatus.OK,
+            payload,
+            content_type="application/zip",
+            extra_headers={"Content-Disposition": 'attachment; filename="configuration-v1.zip"'},
+        )
 
     def _serve_owner_inventory(self, query: str, fragment: str) -> None:
         if self._require_admin() is None:

@@ -220,7 +220,10 @@ def render_managed_admin_page(
   <p class="muted">Save and edit your own playlist templates here. Draft changes stay under
      /data and do not call Spotify. Publishing a draft will be a separate action.</p>
   <p><a class="button" href="/admin/playlists/import">Import playlist ZIP</a>
-     <a class="button" href="/admin/playlists/export-all.zip">Export all ZIP v3</a></p>
+     <a class="button" href="/admin/playlists/export-all.zip">Export all ZIP v3</a>
+     <a class="button" href="/admin/playlists/export-configuration.zip">Export configuration</a></p>
+  <p class="muted">Configuration ZIP includes all owner templates, sources, playlists, drafts
+     and their artwork. It excludes Spotify destination links and operational history.</p>
   <p class="muted">The collection contains managed playlists and drafts, not a complete
      installation backup. Unreferenced owner templates and sources are not included.</p>
   {new_draft}
