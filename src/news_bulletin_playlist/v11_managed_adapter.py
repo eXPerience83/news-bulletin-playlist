@@ -312,6 +312,18 @@ def open_managed_state_store_readonly(data_dir: Path) -> ManagedStateStore:
     return ReadOnlyLegacyStateStore(data_dir / MANAGED_STATE_FILENAME)
 
 
+def open_managed_state_snapshot_readonly(data_dir: Path) -> tuple[ManagedStateStore, ManagedState]:
+    """Open and read one snapshot; caller holds the configuration lock.
+
+    The v11 readonly constructor has already validated and loaded the authority.
+    Reuse those exact bytes for its overlay instead of reading authority again.
+    """
+    store = open_managed_state_store_readonly(data_dir)
+    if isinstance(store, ForwardOnlyManagedStateStore):
+        return store, parse_v11_operational(store._expected_bytes).managed_overlay
+    return store, store.load_readonly()
+
+
 def open_managed_state_store(data_dir: Path) -> ManagedStateStore:
     """Use schema-v11 on fresh and existing installations alike."""
     return ForwardOnlyManagedStateStore(data_dir)

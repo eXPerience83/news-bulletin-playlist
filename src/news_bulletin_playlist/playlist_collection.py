@@ -111,6 +111,23 @@ def build_collection(documents: Iterable[bytes]) -> bytes:
     return _encode(_members(documents))
 
 
+def _check_classic_directory(document: bytes, offset: int, count: int) -> None:
+    """Bound exactly the directory zipfile will parse, before invoking it."""
+    # CPython reads ZIP64 locators even when allowZip64=False.
+    if document[-42:-38] == b"PK\x06\x07":
+        raise CollectionError("ZIP64 collection metadata is unsupported")
+    end = len(document) - 22
+    for _ in range(count):
+        if offset + 46 > end or document[offset : offset + 4] != b"PK\x01\x02":
+            raise CollectionError("Invalid collection central directory")
+        name_length, extra_length, comment_length = struct.unpack_from("<3H", document, offset + 28)
+        if not 0 < name_length <= 50 or extra_length or comment_length:
+            raise CollectionError("Invalid collection central directory")
+        offset += 46 + name_length
+    if offset != end:
+        raise CollectionError("Invalid collection central directory")
+
+
 def inspect_collection(document: bytes) -> tuple[Member, ...]:
     """Validate bounded members and the exact canonical outer envelope.
 
@@ -131,6 +148,7 @@ def inspect_collection(document: bytes) -> tuple[Member, ...]:
             or eocd[5] + eocd[6] != len(document) - 22
         ):
             raise CollectionError("Invalid collection ZIP envelope")
+        _check_classic_directory(document, eocd[6], eocd[3])
         with ZipFile(io.BytesIO(document), allowZip64=False) as archive:
             infos = archive.infolist()
             if len(infos) != eocd[3]:

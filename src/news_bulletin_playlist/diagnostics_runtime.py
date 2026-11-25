@@ -626,7 +626,14 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
             if path == "/admin/playlists/export-all.zip":
                 if query:
                     raise ValueError
-                payload = self._playlist_export_service().export_all()
+                if self.configuration_synchronization is None:
+                    raise PlaylistExportError("Playlist export is unavailable")
+                if self.managed_admin_service is None:
+                    payload = PlaylistExportService.export_all_readonly(
+                        self.data_dir, self.configuration_synchronization
+                    )
+                else:
+                    payload = self._playlist_export_service().export_all()
                 self._reply(
                     HTTPStatus.OK,
                     payload,
