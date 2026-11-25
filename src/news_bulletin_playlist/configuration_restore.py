@@ -244,9 +244,7 @@ class ConfigurationRestoreService:
         except (ValueError, OSError, TypeError, KeyError) as exc:
             raise ConfigurationRestoreError("Restore preview could not be prepared safely") from exc
 
-    def apply(
-        self, document: bytes, fingerprint: str, *, confirmed: bool = False
-    ) -> RestoreResult:
+    def apply(self, document: bytes, fingerprint: str, *, confirmed: bool = False) -> RestoreResult:
         if confirmed is not True:
             raise ConfigurationRestoreError("Explicit restore confirmation is required")
         package = _inspect(document)
@@ -269,11 +267,11 @@ class ConfigurationRestoreService:
                 # Only immutable content-addressed assets may precede the single configuration CAS.
                 try:
                     self.store.save_owner_bundle(candidate.inventory, candidate.overlay)
-                except (ManagedStateError, OSError):
+                except ManagedStateError, OSError:
                     try:
                         self.store.load_readonly()
                         observed = self.store._expected_bytes
-                    except (ValueError, OSError):
+                    except ValueError, OSError:
                         raise ConfigurationRestoreError(
                             "Restore outcome uncertain; inspect authority before retrying"
                         ) from None

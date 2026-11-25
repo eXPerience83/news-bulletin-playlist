@@ -146,8 +146,9 @@ def test_restore_preview_confirm_restart_and_reexport(tmp_path):
             assert new.playlist[field] == old.playlist[field]
         assert new.jpeg == old.jpeg
         recovered = next(d for d in state.templates if d.portable_id == member.portable_id)
-        assert json.loads(recovered.portable_metadata)["configuration"] == (
-            old.playlist["configuration"]
+        assert (
+            json.loads(recovered.portable_metadata)["configuration"]
+            == (old.playlist["configuration"])
         )
         assert recovered.hidden == (
             old.playlist["configuration"]["hidden"] if member.kind == "draft" else False
