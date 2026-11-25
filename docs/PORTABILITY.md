@@ -127,6 +127,38 @@ original enabled/hidden flags are observational, never activation intent.
 Import/apply, conflict resolution, safe relinking and isolated recovery
 acceptance remain separate work. Do not retire older formats until that gate.
 
+## Initial offline configuration restore core (#667)
+
+The backend-only ConfigurationRestoreService provides read-only preview and
+explicitly confirmed Apply bound to the exact ZIP and exact v11 authority bytes.
+It initially accepts up to 16 MiB of portable configuration; the wider export
+limit is not a promise that every export can be restored by this first core.
+No HTTP upload or Admin Apply is exposed yet. Only an initialized fresh v11
+authority with empty historical and current configuration and no pending
+provisioning is eligible; an exact already-restored candidate is a verified
+no-op. Nonidentical existing state is never replaced.
+
+All incoming owner source IDs, source order, retired IDs, owner template IDs
+and policies are retained. JPEGs are installed byte-for-byte under content
+hash IDs; owner references and credits are remapped together, and conflicts
+fail closed. Original drafts keep their IDs; managed members become separate
+editable drafts linked to their owner template with the same portable UUID and
+observational metadata. No Spotify destination, enablement or relinking is
+inferred. Original draft visibility is retained. Managed-to-local-draft links
+are explicitly blocked until the local model can preserve them without
+flattening or fabricating an owner template. That gap and larger archive
+acceptance must be resolved before claiming general recovery.
+
+The candidate is validated entirely in memory before any writes. Apply
+prepares immutable content-addressed JPEGs, then publishes owner inventory and
+overlay with one existing exact-byte v11 CAS. Safe orphan JPEGs may remain on
+failure; no partial configuration is published. If CAS reports failure, one
+readback distinguishes the previous state, observed candidate, or ambiguous
+outcome; never retry blindly. Observed candidate is not proof that a failed
+fsync became durable. Recovery/re-export tests run on isolated roots, not
+production. UI staging, bounded upload, conflict policy, and independent
+review remain required before enabling this workflow.
+
 ## ZIP v3 and optional playback ordering (#660; draft PR #661)
 
 ZIP v3 uses the bounded ZIP v2 envelope and source/owner-template validation,
