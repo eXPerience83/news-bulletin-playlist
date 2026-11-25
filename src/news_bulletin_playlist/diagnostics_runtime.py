@@ -53,6 +53,7 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.migrated_covers import MigratedCoverError
 from news_bulletin_playlist.models import ParserId
+from news_bulletin_playlist.owner_inventory_export import OwnerExportError, export_owner_inventory
 from news_bulletin_playlist.persistence import PersistenceError
 from news_bulletin_playlist.playlist_bundle import PlaylistBundleError, inspect_playlist_bundle_v3
 from news_bulletin_playlist.playlist_import import PlaylistImportError, PlaylistImportService
@@ -223,6 +224,9 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                             security.issue_csrf_token(), inspection_hold=self.inspection_hold
                         ),
                     )
+            return
+        if parsed.path == "/admin/playlists/owner-inventory.json":
+            self._serve_owner_inventory(parsed.query, parsed.fragment)
             return
         if parsed.path in {
             "/admin/playlists/export.zip",
@@ -603,6 +607,28 @@ class DiagnosticOperationalHealthHandler(engine_runtime.OperationalHealthHandler
                 duration_exceptions=tuple(parse_exception(e) for e in raw),
                 hidden=form.get("hidden") == ["1"],
             )
+
+    def _serve_owner_inventory(self, query: str, fragment: str) -> None:
+        if self._require_admin() is None:
+            return
+        if query or fragment:
+            self._source_error(HTTPStatus.BAD_REQUEST, "Invalid owner inventory export request")
+            return
+        synchronization = self.configuration_synchronization
+        if synchronization is None:
+            self._source_error(HTTPStatus.SERVICE_UNAVAILABLE, "Owner export is unavailable")
+            return
+        try:
+            payload = export_owner_inventory(self.data_dir, synchronization)
+        except OwnerExportError as exc:
+            self._source_error(HTTPStatus.CONFLICT, str(exc))
+            return
+        self._reply(
+            HTTPStatus.OK,
+            payload,
+            content_type="application/json; charset=utf-8",
+            extra_headers={"Content-Disposition": 'attachment; filename="owner-inventory-v1.json"'},
+        )
 
     def _playlist_export_service(self) -> PlaylistExportService:
         if self.configuration_synchronization is None:

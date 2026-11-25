@@ -63,6 +63,36 @@ This is not full configuration recovery: unreferenced owner templates and
 sources, Spotify destination IDs, OAuth, journals and SQLite are not included.
 The collection inspector validates only; bulk Apply remains future work.
 
+## Owner inventory export (#667)
+
+Administration → Playlists → Installation-owned templates offers **Export owner
+inventory** (`GET /admin/playlists/owner-inventory.json`). The authenticated,
+read-only download uses one v11 authority snapshot under the configuration lock,
+including during startup inspection hold. Missing or invalid authority fails
+closed; it does not initialize or migrate legacy data.
+
+The version-1 JSON envelope (`news-bulletin-playlist.owner-inventory-export`)
+contains the existing owner inventory codec, complete source order and all
+owner templates, including unused and dormant references. Existing source
+overrides are folded into the exported effective source definitions without
+changing the installation. Retired source identities and stored attribution
+records are retained. Historical split-mode v11 requires explicit promotion
+before this export; it is not silently normalized by a GET.
+
+Each distinct template cover ID has its original JPEG bytes (canonical base64),
+size, SHA-256 and attribution. Uploaded cover IDs are content-address checked.
+The canonical payload has a SHA-256; this checks integrity, not authenticity.
+Limits: 256 artwork records, 192 KiB per JPEG, 96 MiB for the JSON envelope.
+Empty inventories are valid. All template artwork must be available; failure
+produces no attachment.
+
+The pure inspector validates the document without installing anything.
+This is a reusable component for full configuration portability, not a full
+installation backup or import endpoint. Playlist instances/drafts, destination
+IDs, historical migration witnesses, credentials, journals, SQLite and
+non-template artwork are not part of this export. Stored attribution for other
+covers is retained as inventory metadata, not an assertion their JPEG is present.
+
 ## ZIP v3 and optional playback ordering (#660; draft PR #661)
 
 ZIP v3 uses the bounded ZIP v2 envelope and source/owner-template validation,
