@@ -131,6 +131,10 @@ def render_managed_admin_page(
         '<section class="section admin-section"><h2>Installation-owned templates</h2>'
         '<p class="muted">Edit saved defaults locally. IDs, assigned source order, '
         "inactive duration exceptions and artwork references stay intact.</p>"
+        '<p><a class="button" href="/admin/playlists/owner-inventory.json">'
+        "Export owner inventory</a></p>"
+        '<p class="muted">Includes all saved owner templates, sources and template artwork, '
+        "including unused records. Does not include playlists or operational history.</p>"
         '<div class="admin-grid">'
         + "".join(
             _owner_template_edit_form(
