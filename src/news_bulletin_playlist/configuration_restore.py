@@ -20,6 +20,7 @@ from news_bulletin_playlist.managed_state import (
     PLAYLIST_ORDERING_SCHEMA_VERSION,
     ManagedState,
     ManagedStateError,
+    same_managed_configuration,
 )
 from news_bulletin_playlist.models import (
     CountryCode,
@@ -211,7 +212,10 @@ class ConfigurationRestoreService:
         ):
             raise ConfigurationRestoreError("Restore requires a fresh v11 authority without intent")
         inventory, overlay, assets = _build(package, state.schema_version)
-        identical = current.owner_inventory == inventory and state == overlay
+        identical = (
+            current.owner_inventory.to_document() == inventory.to_document()
+            and same_managed_configuration(state, overlay, catalog=current.active_catalog)
+        )
         if not identical and (
             current.owner_inventory.sources
             or current.owner_inventory.templates.records

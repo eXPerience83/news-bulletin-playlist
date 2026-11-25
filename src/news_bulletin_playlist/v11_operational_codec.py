@@ -35,6 +35,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     compile_engine_config,
     parse_managed_state,
+    same_managed_configuration,
     serialize_managed_state,
     source_definition,
 )
@@ -300,7 +301,9 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
         verified = parse_v11_operational(next_payload)
     except (ManagedStateError, ValueError, TypeError, RecursionError) as exc:
         raise V11OperationalError("v11 edit cannot be represented losslessly") from exc
-    if verified.managed_overlay != overlay:
+    if not same_managed_configuration(
+        verified.managed_overlay, overlay, catalog=current.active_catalog
+    ):
         raise V11OperationalError("v11 edit changed managed state")
     if verified.historical_catalog != current.historical_catalog:
         raise V11OperationalError("v11 edit changed historical catalog")
@@ -308,7 +311,7 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
         raise V11OperationalError("v11 edit changed owner-backed active catalog")
     if verified.migration_origin_sha256 != current.migration_origin_sha256:
         raise V11OperationalError("v11 edit changed migration origin")
-    if verified.owner_inventory != current.owner_inventory:
+    if verified.owner_inventory.to_document() != current.owner_inventory.to_document():
         raise V11OperationalError("v11 overlay edit changed installed owner inventory")
     return next_payload
 
@@ -325,11 +328,17 @@ def update_v11_owner_inventory(
     if not isinstance(edited, OwnerInventory):
         raise V11OperationalError("invalid owner inventory edit")
     updated_overlay = current.managed_overlay if managed_overlay is None else managed_overlay
-    if edited == current.owner_inventory and updated_overlay == current.managed_overlay:
-        return payload
     try:
+        inventory_document = edited.to_document()
+        if (
+            inventory_document == current.owner_inventory.to_document()
+            and same_managed_configuration(
+                updated_overlay, current.managed_overlay, catalog=current.active_catalog
+            )
+        ):
+            return payload
         document = json.loads(payload)
-        document["owner_inventory"] = edited.to_document()
+        document["owner_inventory"] = inventory_document
         # Update owner mode and retire its legacy override in one durable CAS.
         # Owner catalog and managed projection must validate as *one* candidate:
         # a newly imported template may reference source records added to the
@@ -345,10 +354,12 @@ def update_v11_owner_inventory(
     except (ValueError, TypeError, RecursionError) as exc:
         raise V11OperationalError("owner inventory edit is not valid") from exc
     if (
-        verified.managed_overlay != updated_overlay
+        not same_managed_configuration(
+            verified.managed_overlay, updated_overlay, catalog=next_catalog
+        )
         or verified.migration_origin_sha256 != current.migration_origin_sha256
         or verified.historical_catalog != current.historical_catalog
-        or verified.owner_inventory != edited
+        or verified.owner_inventory.to_document() != inventory_document
     ):
         raise V11OperationalError("owner edit changed historical evidence or requested policy")
     return candidate

@@ -3,6 +3,7 @@
 import json
 import socket
 from dataclasses import replace
+from datetime import time
 from uuid import uuid4
 
 import pytest
@@ -10,8 +11,9 @@ from _file_snapshots import snapshot_files as _files
 from _legacy_dataset import legacy_root
 from _playlist_template_fixtures import _draft
 
-from news_bulletin_playlist import configuration_restore
+from news_bulletin_playlist import configuration_export, configuration_restore
 from news_bulletin_playlist.configuration_export import (
+    ConfigurationExportError,
     export_configuration,
     inspect_configuration,
 )
@@ -32,7 +34,7 @@ from news_bulletin_playlist.managed_state import (
     ManagedStateError,
     activate_template,
 )
-from news_bulletin_playlist.models import OrderingPolicy
+from news_bulletin_playlist.models import DurationPolicyException, OrderingPolicy
 from news_bulletin_playlist.owner_inventory_export import inspect_owner_inventory
 from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle_v3
 from news_bulletin_playlist.playlist_collection import inspect_collection
@@ -266,4 +268,73 @@ def test_restore_size_limit_before_inspection(tmp_path, monkeypatch):
     monkeypatch.setattr(configuration_restore, "inspect_configuration", forbidden)
     with pytest.raises(ConfigurationRestoreError, match="size limit"):
         service.preview(document)
+    assert before == _files(root)
+
+
+@pytest.mark.parametrize("location", ["owner", "draft"])
+def test_restore_rejects_fold_only_difference(tmp_path, location):
+    _donor(tmp_path)
+    donor = ForwardOnlyManagedStateStore(tmp_path / "legacy", readonly=True)
+    state = donor.load_readonly()
+    sync = ConfigurationSynchronization()
+    managed = state.playlists[0]
+    template = next(t for t in donor.catalog.playlists if t.id == managed.template_id)
+    draft = state.templates[0]
+
+    def edit_fold(fold):
+        if location == "owner":
+            maximum = max(
+                template.duration_policy.default_max_seconds, managed.max_duration_seconds
+            )
+            exception = DurationPolicyException(
+                "fold_regression",
+                template.default_source_ids[0],
+                time(2, 30, fold=fold),
+                maximum + 60,
+            )
+            donor.save_owner_template(
+                replace(
+                    template,
+                    duration_policy=replace(template.duration_policy, exceptions=(exception,)),
+                )
+            )
+        else:
+            exception = DurationPolicyException(
+                "fold_regression",
+                draft.default_source_ids[0],
+                time(2, 30, fold=fold),
+                draft.max_duration_seconds + 60,
+            )
+            edited_draft = replace(draft, duration_exceptions=(exception,))
+            donor.save(replace(state, templates=(edited_draft,)))
+        return export_configuration(tmp_path / "legacy", sync)
+
+    first = edit_fold(0)
+    second = edit_fold(1)
+    assert first != second
+    if location == "owner":
+        initial = inspect_configuration(first)
+        changed = inspect_configuration(second)
+        assert initial.owner_document != changed.owner_document
+        mixed_package = replace(initial, owner_document=changed.owner_document)
+        mixed = configuration_export._encode(mixed_package)
+        with pytest.raises(ConfigurationExportError, match="association does not match"):
+            inspect_configuration(mixed)
+    else:
+        assert (
+            inspect_configuration(first).owner_document
+            == inspect_configuration(second).owner_document
+        )
+
+    root, service = _receiver(tmp_path)
+    preview = service.preview(first)
+    service.apply(first, preview.fingerprint, confirmed=True)
+    before = _files(root)
+    repeated = service.preview(first)
+    assert repeated.already_restored
+    assert service.apply(first, repeated.fingerprint, confirmed=True).preview.already_restored
+    with pytest.raises(ConfigurationRestoreError, match="overwrite"):
+        service.preview(second)
+    with pytest.raises(ConfigurationRestoreError, match="overwrite"):
+        service.apply(second, repeated.fingerprint, confirmed=True)
     assert before == _files(root)
