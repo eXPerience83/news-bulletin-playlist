@@ -23,6 +23,7 @@ from news_bulletin_playlist.owner_inventory_export import (
     build_owner_inventory,
     inspect_owner_inventory,
 )
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.playlist_bundle import PlaylistBundle, inspect_playlist_bundle_v3
 from news_bulletin_playlist.playlist_collection import (
     MAX_ARCHIVE_BYTES,
@@ -99,6 +100,13 @@ def _local_template(bundle: PlaylistBundle) -> PlaylistTemplate:
     )
 
 
+def _same_template(left: PlaylistTemplate | None, right: PlaylistTemplate | None) -> bool:
+    """Compare portable policies exactly, including datetime.time.fold."""
+    if left is None or right is None:
+        return left is right
+    return OwnerTemplateSet((left,)).serialize() == OwnerTemplateSet((right,)).serialize()
+
+
 def _validate(export: ConfigurationExport) -> None:
     owner = inspect_owner_inventory(export.owner_document)
     members = inspect_collection(export.collection_document)
@@ -135,7 +143,8 @@ def _validate(export: ConfigurationExport) -> None:
         if member.kind == "draft":
             if identity[1] in templates:
                 raise ConfigurationExportError("Draft identity collides with an owner template")
-            if template is not None and templates.get(str(template.id)) != template:
+            expected_template = templates.get(str(template.id)) if template is not None else None
+            if not _same_template(expected_template, template):
                 raise ConfigurationExportError("Linked draft template differs from owner inventory")
             drafts[member.portable_id] = bundle
         else:
@@ -151,7 +160,7 @@ def _validate(export: ConfigurationExport) -> None:
             expected = None if draft is None else draft.template or _local_template(draft)
         else:
             raise ConfigurationExportError("Unknown managed template association")
-        if expected is None or managed[link.playlist_uuid].template != expected:
+        if expected is None or not _same_template(managed[link.playlist_uuid].template, expected):
             raise ConfigurationExportError("Managed template association does not match its ZIP")
 
 
