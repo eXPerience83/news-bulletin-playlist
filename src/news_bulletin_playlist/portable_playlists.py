@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from dataclasses import replace
 from pathlib import Path
@@ -476,6 +477,27 @@ def _target(
     return target
 
 
+def _collection_from_snapshot(
+    state: ManagedState, store: ManagedStateStore, covers: PortableCoverLoader
+) -> bytes:
+    """Build from a snapshot already acquired under the configuration lock."""
+    from news_bulletin_playlist.playlist_collection import CollectionError, build_collection
+
+    if state.quarantined_templates:
+        raise PlaylistExportError("Repair quarantined drafts before bulk export")
+
+    def documents() -> Iterator[bytes]:
+        for playlist in state.playlists:
+            yield playlist_bundle(state, store, "managed", str(playlist.id), covers, version=3)[1]
+        for draft in state.templates:
+            yield playlist_bundle(state, store, "draft", str(draft.id), covers, version=3)[1]
+
+    try:
+        return build_collection(documents())
+    except CollectionError as exc:
+        raise PlaylistExportError(str(exc)) from exc
+
+
 class PlaylistExportService:
     def __init__(
         self,
@@ -495,6 +517,20 @@ class PlaylistExportService:
                 self.covers,
                 version=version,
             )
+
+    def export_all(self) -> bytes:
+        """Export all managed playlists and drafts from one read-only snapshot."""
+        with self.synchronization.hold():
+            return _collection_from_snapshot(self.store.load_readonly(), self.store, self.covers)
+
+    @staticmethod
+    def export_all_readonly(data_dir: Path, synchronization: Synchronization) -> bytes:
+        """Open the authority under the same lock used to build the collection."""
+        from news_bulletin_playlist.v11_managed_adapter import open_managed_state_snapshot_readonly
+
+        with synchronization.hold():
+            store, state = open_managed_state_snapshot_readonly(data_dir)
+            return _collection_from_snapshot(state, store, PortableCoverLoader(data_dir))
 
     def preparation(self, kind: str, object_id: str) -> tuple[str, int, str | None]:
         with self.synchronization.hold():
