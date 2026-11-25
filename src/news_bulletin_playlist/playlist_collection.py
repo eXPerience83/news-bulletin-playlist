@@ -44,7 +44,7 @@ def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _write(archive: ZipFile, path: str, data: bytes) -> None:
+def write_stored_entry(archive: ZipFile, path: str, data: bytes) -> None:
     info = ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
     info.create_system = 3
     info.external_attr = (stat.S_IFREG | 0o600) << 16
@@ -96,10 +96,10 @@ def _encode(members: list[Member]) -> bytes:
         raise CollectionError("Collection manifest exceeds size limit")
     output = io.BytesIO()
     with ZipFile(output, "w", compression=ZIP_STORED, allowZip64=False) as archive:
-        _write(archive, _INDEX, manifest)
-        _write(archive, _HASH, (_digest(manifest) + "\n").encode("ascii"))
+        write_stored_entry(archive, _INDEX, manifest)
+        write_stored_entry(archive, _HASH, (_digest(manifest) + "\n").encode("ascii"))
         for member in members:
-            _write(archive, member.path, member.document)
+            write_stored_entry(archive, member.path, member.document)
     result = output.getvalue()
     if len(result) > MAX_ARCHIVE_BYTES:
         raise CollectionError("Collection archive exceeds size limit")
@@ -111,7 +111,7 @@ def build_collection(documents: Iterable[bytes]) -> bytes:
     return _encode(_members(documents))
 
 
-def _check_classic_directory(document: bytes, offset: int, count: int) -> None:
+def check_classic_directory(document: bytes, offset: int, count: int) -> None:
     """Bound exactly the directory zipfile will parse, before invoking it."""
     # CPython reads ZIP64 locators even when allowZip64=False.
     if document[-42:-38] == b"PK\x06\x07":
@@ -148,7 +148,7 @@ def inspect_collection(document: bytes) -> tuple[Member, ...]:
             or eocd[5] + eocd[6] != len(document) - 22
         ):
             raise CollectionError("Invalid collection ZIP envelope")
-        _check_classic_directory(document, eocd[6], eocd[3])
+        check_classic_directory(document, eocd[6], eocd[3])
         with ZipFile(io.BytesIO(document), allowZip64=False) as archive:
             infos = archive.infolist()
             if len(infos) != eocd[3]:

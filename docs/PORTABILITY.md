@@ -93,6 +93,40 @@ IDs, historical migration witnesses, credentials, journals, SQLite and
 non-template artwork are not part of this export. Stored attribution for other
 covers is retained as inventory metadata, not an assertion their JPEG is present.
 
+## Complete portable configuration ZIP (#667)
+
+**Export configuration** in Admin Playlists downloads `configuration-v1.zip`
+(`GET /admin/playlists/export-configuration.zip`). This is an authenticated,
+read-only v11 snapshot, including during inspection hold. The existing owner
+inventory JSON and playlist collection ZIP are embedded byte-for-byte in a
+distinct canonical ZIP envelope (not playlist ZIP v4).
+
+The four fixed stored entries are manifest.json, manifest.sha256,
+owner-inventory-v1.json and playlists-v3-collection.zip. The manifest records
+both component sizes and hashes and the exact managed-template associations:
+an owner template ID or a draft portable UUID for every managed member.
+The inspector validates both components, matching effective source definitions,
+owner policies and artwork across them, and validates local-draft associations.
+A managed member based on an independent local draft may contain a template
+derived from that draft; it must not be misclassified as an owner record.
+
+The export holds the configuration lock from opening the v11 authority through
+construction and validation. Missing authority, split-mode v11, unprepared
+portable IDs, quarantined drafts, unavailable artwork and inconsistent component
+closure fail the entire download. Empty native v11 inventories are valid.
+The outer archive is limited to the sum of the existing component limits plus
+512 KiB for its manifest/envelope; it permits no ZIP64, extras, comments or
+compression. Its inspector is inert, not an upload endpoint. Before introducing
+bulk upload, review peak memory, input limits and staged validation.
+
+This package preserves portable configuration, not an exact operational
+backup. It does not include Spotify destination IDs, credentials, SQLite,
+journals, historical migration witnesses or unreferenced artwork outside the
+portable inventory. Source overrides travel as effective definitions and
+original enabled/hidden flags are observational, never activation intent.
+Import/apply, conflict resolution, safe relinking and isolated recovery
+acceptance remain separate work. Do not retire older formats until that gate.
+
 ## ZIP v3 and optional playback ordering (#660; draft PR #661)
 
 ZIP v3 uses the bounded ZIP v2 envelope and source/owner-template validation,
