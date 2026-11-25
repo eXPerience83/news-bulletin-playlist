@@ -3,6 +3,7 @@
 import hashlib
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 from _admin_effect_guards import forbid_effects as _forbid_effects
@@ -22,6 +23,13 @@ from news_bulletin_playlist.owner_inventory_export import (
     inspect_owner_inventory,
 )
 from news_bulletin_playlist.portable_playlists import PlaylistExportError, PortableCoverLoader
+from news_bulletin_playlist.spotify.auth import (
+    PRODUCTION_SCOPES,
+    SPOTIFY_AUTH_FILENAME,
+    CredentialStatus,
+    SpotifyCredentialRecord,
+    SpotifyCredentialStore,
+)
 from news_bulletin_playlist.v11_managed_adapter import open_managed_state_store
 from news_bulletin_playlist.v11_operational_storage import V11OperationalStore
 
@@ -128,9 +136,26 @@ def test_missing_authority_does_not_initialize(tmp_path):
     assert before == _files(tmp_path)
 
 
-def test_authenticated_held_export_and_late_artwork_failure(tmp_path, monkeypatch):
+def test_authenticated_held_export_and_late_artwork_failure(tmp_path, monkeypatch, capfd):
     root, _ = legacy_root(tmp_path, 10)
     open_managed_state_store(root)
+    secrets = (
+        "owner-export-access-token-sentinel",
+        "owner-export-refresh-token-sentinel",
+        "owner-export-authorization-code-sentinel",
+        "owner-export-pkce-verifier-sentinel",
+    )
+    SpotifyCredentialStore(root / SPOTIFY_AUTH_FILENAME).save(
+        SpotifyCredentialRecord(
+            status=CredentialStatus.ACTIVE,
+            refresh_token=secrets[1],
+            granted_scopes=PRODUCTION_SCOPES,
+            authorized_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    # The other OAuth values are transient; keep them in this synthetic fixture,
+    # not in a persisted production credential record.
+    (root / "oauth-private").write_text("\n".join(secrets), encoding="utf-8")
     with _server(root) as (server, client, _legacy):
         handler = server.RequestHandlerClass
         assert _request(server, "GET", EXPORT)[0] in {303, 401, 403}
@@ -152,13 +177,21 @@ def test_authenticated_held_export_and_late_artwork_failure(tmp_path, monkeypatc
         def fail_second(loader, cover_id):
             seen.append(cover_id)
             if len(seen) == 2:
-                raise PlaylistExportError("Missing cover")
+                raise PlaylistExportError("Missing cover: " + " ".join(secrets))
             return original(loader, cover_id)
 
         monkeypatch.setattr(PortableCoverLoader, "load", fail_second)
-        status, headers, _ = _request(server, "GET", EXPORT, cookie=cookie)
+        status, headers, error = _request(server, "GET", EXPORT, cookie=cookie)
         assert status == 409
+        assert error == b"Owner template or artwork cannot be exported safely"
         assert len(seen) == 2
         assert "Content-Disposition" not in headers
         assert before == _files(root)
         assert not client.calls
+        assert handler.source_admin_service.auth.calls == 0
+    captured = capfd.readouterr()
+    for secret in secrets:
+        assert secret.encode("utf-8") not in document
+        assert secret.encode("utf-8") not in error
+        assert secret not in captured.out
+        assert secret not in captured.err
