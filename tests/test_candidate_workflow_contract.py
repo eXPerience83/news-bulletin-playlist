@@ -99,7 +99,7 @@ def test_candidate_worker_trigger_and_build_boundary_are_locked() -> None:
     _assert_contains(
         build,
         (
-            "cache-mode: write-only",
+            "cache-mode: none",
             "contents: read",
             "issues: read",
             "pull-requests: read",
@@ -109,10 +109,15 @@ def test_candidate_worker_trigger_and_build_boundary_are_locked() -> None:
             "candidate-image-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}",
             'archive_dir="${RUNNER_TEMP}/candidate-transfer"',
             'test ! -L "$archive"',
-            "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+            "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "archive: false",
+            "if-no-files-found: error",
+            "overwrite: false",
+            "retention-days: 1",
+            "artifact_id: ${{ steps.transfer.outputs.artifact-id }}",
         ),
     )
-    _assert_absent(build, ("packages: write", "actions/upload-artifact@", "restore-keys:"))
+    _assert_absent(build, ("packages: write", "actions/cache/", "actions: write", "restore-keys:"))
 
 
 def test_candidate_publication_and_cleanup_boundaries_are_locked() -> None:
@@ -122,10 +127,18 @@ def test_candidate_publication_and_cleanup_boundaries_are_locked() -> None:
     _assert_contains(
         publish,
         (
-            "cache-mode: read",
+            "cache-mode: none",
             "packages: write",
-            "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
-            "fail-on-cache-miss: true",
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            "artifact-ids: ${{ needs.build.outputs.artifact_id }}",
+            "skip-decompress: true",
+            "digest-mismatch: error",
+            "Validate exact same-attempt transfer artifact",
+            '[[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]',
+            '(.workflow_run.id | tostring) == $run',
+            '.name == $name',
+            '.expired == false',
+            '$BUILD_HEAD" == "$AUTHORIZED_HEAD"',
             'if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]',
             "Revalidate authorization before registry publication",
             "current_head_sha=",
@@ -147,6 +160,7 @@ def test_candidate_publication_and_cleanup_boundaries_are_locked() -> None:
         (
             "actions/checkout@",
             "restore-keys:",
+            "actions/cache/",
             '--tag "${image}:edge',
             '--tag "${image}:stable',
             '--tag "${image}:latest',
@@ -160,7 +174,9 @@ def test_candidate_publication_and_cleanup_boundaries_are_locked() -> None:
             "needs: [build, publish]",
             "cache-mode: none",
             "actions: write",
-            "actions/caches?key=${CACHE_KEY}&ref=refs/heads/main",
-            'if [[ "$deleted_count" != "1" ]]',
+            "actions/artifacts/${ARTIFACT_ID}",
+            '(.workflow_run.id | tostring) == $run',
+            '.name == $name',
+            'gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}"',
         ),
     )
