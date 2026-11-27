@@ -158,14 +158,14 @@ def _validate(export: ConfigurationExport) -> None:
     provenance_ids = tuple(identity for identity, _metadata in export.draft_provenance)
     if provenance_ids != tuple(sorted(set(provenance_ids))):
         raise ConfigurationExportError("Duplicate or unordered draft provenance")
-    for identity, metadata in export.draft_provenance:
-        if identity not in drafts:
+    for draft_uuid, metadata in export.draft_provenance:
+        if draft_uuid not in drafts:
             raise ConfigurationExportError("Draft provenance references a missing draft")
         validate_metadata(metadata)
         origin = strict_json(metadata.encode("utf-8"))
-        if origin.get("recovered_from_draft_uuid") == identity:
+        if origin.get("recovered_from_draft_uuid") == draft_uuid:
             raise ConfigurationExportError("Draft provenance cannot reference itself")
-        cover = drafts[identity].playlist["cover"]
+        cover = drafts[draft_uuid].playlist["cover"]
         if (
             origin["cover_sha256"] == cover["sha256"]
             and origin["attribution"] != cover["attribution"]
