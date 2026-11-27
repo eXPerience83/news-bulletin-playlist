@@ -38,6 +38,7 @@ from news_bulletin_playlist.models import DurationPolicyException, OrderingPolic
 from news_bulletin_playlist.owner_inventory_export import inspect_owner_inventory
 from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle_v3
 from news_bulletin_playlist.playlist_collection import inspect_collection
+from news_bulletin_playlist.portable_playlists import PortableCoverLoader
 from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
 
 
@@ -434,3 +435,63 @@ def test_standalone_imported_template_credit_survives_managed_export_and_restore
     state = service.store.load_readonly()
     restored = next(d for d in state.templates if d.portable_id == link.template_id)
     assert json.loads(restored.portable_metadata)["attribution"] == metadata["attribution"]
+
+
+def test_standalone_draft_shared_owner_cover_survives_export_and_restore(tmp_path):
+    # Restore real owner artwork so the inventory has a recorded credit for
+    # uploaded_<sha256>, then reuse that exact JPEG in a new independent draft.
+    initial = _donor(tmp_path)
+    root, donor = _receiver(tmp_path)
+    preview = donor.preview(initial)
+    donor.apply(initial, preview.fingerprint, confirmed=True)
+    state = donor.store.load_readonly()
+    template = donor.store.catalog.playlist("international_english_news")
+    cover_id = template.cover_id
+    assert cover_id.startswith("uploaded_")
+    jpeg, generic_credit = PortableCoverLoader(root).load(cover_id)
+    owner_credit = donor.store.owner_cover_attribution(cover_id)
+    assert owner_credit is not None and owner_credit != generic_credit
+
+    draft = _draft(id="custom_shared_cover", portable_id=str(uuid4()), cover_id=cover_id)
+    assert draft.portable_metadata is None
+    assert draft.owner_template_id is None
+    managed = replace(
+        activate_template(draft.as_playlist_template(), "private-shared-cover"),
+        portable_id=str(uuid4()),
+        enabled=False,
+    )
+    donor.store.save(
+        replace(
+            state,
+            templates=tuple(sorted((*state.templates, draft), key=lambda item: item.id)),
+            playlists=(managed,),
+        )
+    )
+    before = _files(root)
+    document = export_configuration(root, donor.synchronization)
+    assert before == _files(root)
+    package = inspect_configuration(document)
+    members = {
+        member.portable_id: inspect_playlist_bundle_v3(member.document)
+        for member in inspect_collection(package.collection_document)
+    }
+    assert members[draft.portable_id].jpeg == jpeg
+    assert members[draft.portable_id].playlist["cover"]["attribution"] == owner_credit
+    assert members[managed.portable_id].template_jpeg == jpeg
+    assert members[managed.portable_id].template_attribution == owner_credit
+    assert members[managed.portable_id].playlist["cover"]["attribution"] == owner_credit
+
+    second = tmp_path / "second"
+    second.mkdir()
+    receiver_root, receiver = _receiver(second)
+    before = _files(receiver_root)
+    preview = receiver.preview(document)
+    assert before == _files(receiver_root)
+    receiver.apply(document, preview.fingerprint, confirmed=True)
+    restored = receiver.store.load_readonly()
+    assert not restored.playlists
+    for identity in (draft.portable_id, managed.portable_id):
+        record = next(item for item in restored.templates if item.portable_id == identity)
+        assert record.cover_id == cover_id
+        assert json.loads(record.portable_metadata)["attribution"] == owner_credit
+    assert receiver.preview(document).already_restored
