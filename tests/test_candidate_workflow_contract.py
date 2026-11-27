@@ -187,6 +187,7 @@ def test_candidate_publication_and_cleanup_boundaries_are_locked() -> None:
         ),
     )
 
+
 def _candidate_step_scripts(worker: str, name: str) -> list[str]:
     scripts = []
     for step in worker.split(f"      - name: {name}\n")[1:]:
