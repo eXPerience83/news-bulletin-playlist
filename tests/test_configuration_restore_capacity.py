@@ -24,8 +24,14 @@ from news_bulletin_playlist.configuration_export import export_configuration
 from news_bulletin_playlist.configuration_restore import (
     MAX_RESTORE_BYTES,
     ConfigurationRestoreError,
+    ConfigurationRestoreService,
 )
 from news_bulletin_playlist.custom_cover_assets import MAX_JPEG_BYTES, CustomCoverAssetStore
+from news_bulletin_playlist.engine_runtime import ConfigurationSynchronization
+from news_bulletin_playlist.managed_provisioning import (
+    MANAGED_PROVISIONING_FILENAME,
+    ProvisioningJournal,
+)
 from news_bulletin_playlist.models import PlaylistId
 from news_bulletin_playlist.portable_playlists import PortableCoverLoader, playlist_bundle
 from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
@@ -83,10 +89,21 @@ def _measure(document_path, workdir, expected_drafts):
     assert before == _files(root)
     service.apply(document, preview.fingerprint, confirmed=True)
     report("apply_cumulative")
-    state = ForwardOnlyManagedStateStore(root, readonly=True).load_readonly()
+    del service
+    restored_files = _files(root)
+    restarted = ConfigurationRestoreService(
+        ForwardOnlyManagedStateStore(root),
+        ConfigurationSynchronization(),
+        ProvisioningJournal(root / MANAGED_PROVISIONING_FILENAME),
+        CustomCoverAssetStore(root / "custom-covers"),
+    )
+    state = restarted.store.load_readonly()
     assert not state.playlists
     assert len(state.templates) == expected_drafts + 4
-    assert service.preview(document).already_restored
+    repeat = restarted.preview(document)
+    assert repeat.already_restored
+    assert restarted.apply(document, repeat.fingerprint, confirmed=True).preview.already_restored
+    assert restored_files == _files(root)
     report("restart_and_repeat_cumulative")
 
 
