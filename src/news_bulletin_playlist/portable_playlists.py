@@ -185,6 +185,29 @@ class PortableCoverLoader:
         raise PlaylistExportError("Selected bundled cover is missing")
 
 
+def _load_credited_cover(
+    covers: PortableCoverLoader,
+    store: ManagedStateStore,
+    cover_id: str,
+    *,
+    local: LocalPlaylistTemplate | None,
+    owner_fallback: bool,
+) -> tuple[bytes, dict[str, object]]:
+    """Use verified portable credit, then recorded owner credit, then loader credit."""
+    jpeg, attribution = covers.load(cover_id)
+    if owner_fallback:
+        owner_credit = getattr(store, "owner_cover_attribution", None)
+        if callable(owner_credit):
+            stored_credit = owner_credit(cover_id)
+            if stored_credit is not None:
+                attribution = stored_credit
+    if local is not None and local.portable_metadata is not None:
+        metadata = json.loads(local.portable_metadata)
+        if metadata["cover_sha256"] == hashlib.sha256(jpeg).hexdigest():
+            attribution = metadata["attribution"]
+    return jpeg, attribution
+
+
 def playlist_bundle(
     state: ManagedState,
     store: ManagedStateStore,
@@ -335,11 +358,15 @@ def playlist_bundle(
         tuple(sources[source_id] for source_id in closure_ids),
         built_in_ids=built_in_ids,
     )
-    cover_bytes, attribution = covers.load(target.cover_id)
-    if linked_local is not None and linked_local.portable_metadata is not None:
-        metadata = json.loads(linked_local.portable_metadata)
-        if metadata["cover_sha256"] == hashlib.sha256(cover_bytes).hexdigest():
-            attribution = metadata["attribution"]
+    cover_bytes, attribution = _load_credited_cover(
+        covers,
+        store,
+        target.cover_id,
+        local=linked_local,
+        owner_fallback=(
+            version == 3 and linked_local is not None and linked_local.owner_template_id is None
+        ),
+    )
     cover_descriptor = _descriptor(cover_bytes)
     cover_path = f"covers/{cover_descriptor['sha256']}.jpg"
     if len(exceptions) > 100:
@@ -403,12 +430,19 @@ def playlist_bundle(
     additional_entries: list[tuple[str, bytes]] = []
     if version >= 2 and template is not None:
         template_document = OwnerTemplateSet((template,)).serialize()
-        template_cover_bytes, template_attribution = covers.load(template.cover_id)
-        owner_credit = getattr(store, "owner_cover_attribution", None)
-        if callable(owner_credit):
-            stored_credit = owner_credit(template.cover_id)
-            if stored_credit is not None:
-                template_attribution = stored_credit
+        # A standalone local draft can itself be the managed template. Use
+        # the same credit resolution as its draft member, including owner fallback.
+        template_cover_bytes, template_attribution = _load_credited_cover(
+            covers,
+            store,
+            template.cover_id,
+            local=(
+                linked_local
+                if linked_local is not None and template.id == linked_local.id
+                else None
+            ),
+            owner_fallback=True,
+        )
         template_cover_descriptor = _descriptor(template_cover_bytes)
         template_cover_path = f"covers/{template_cover_descriptor['sha256']}.jpg"
         manifest["template"] = {
