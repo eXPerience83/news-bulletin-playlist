@@ -8,6 +8,7 @@ from datetime import time
 from typing import Any
 
 from news_bulletin_playlist.models import DurationPolicyException, SourceId
+from news_bulletin_playlist.portable_identity import portable_id
 
 
 def exact_object(value: object, keys: set[str]) -> dict[str, Any]:
@@ -47,8 +48,9 @@ def validate_attribution(value: object) -> dict[str, Any]:
 def validate_metadata(value: str) -> None:
     if not isinstance(value, str) or len(value.encode("utf-8")) > 65536:
         raise ValueError("Invalid imported metadata size")
+    raw = strict_json(value.encode("utf-8"))
     item = exact_object(
-        strict_json(value.encode("utf-8")),
+        raw,
         {
             "original_id",
             "kind",
@@ -57,7 +59,12 @@ def validate_metadata(value: str) -> None:
             "cover_origin",
             "cover_sha256",
             "attribution",
-        },
+        }
+        | (
+            {"recovered_from_draft_uuid"}
+            if isinstance(raw, dict) and "recovered_from_draft_uuid" in raw
+            else set()
+        ),
     )
     if (
         not isinstance(item["kind"], str)
@@ -73,6 +80,10 @@ def validate_metadata(value: str) -> None:
     for name in ("original_id", "cover_id"):
         if not isinstance(item[name], str) or not 0 < len(item[name]) <= 128:
             raise ValueError("Invalid imported provenance identifier")
+    if "recovered_from_draft_uuid" in item and (
+        item["kind"] != "managed" or portable_id(item["recovered_from_draft_uuid"]) is None
+    ):
+        raise ValueError("Invalid recovered draft provenance")
     configuration = exact_object(item["configuration"], {"enabled", "hidden"})
     if item["kind"] == "managed":
         valid = type(configuration["enabled"]) is bool and configuration["hidden"] is None

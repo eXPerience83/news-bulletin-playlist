@@ -49,11 +49,17 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", forbidden)
 
 
-def _donor(tmp_path, *, local_managed=False):
+def _donor(tmp_path, *, local_managed=False, linked=False):
     root, _ = legacy_root(tmp_path, 10)
     store = ForwardOnlyManagedStateStore(root)
     state = store.load_readonly()
-    draft = _draft(portable_id=str(uuid4()), hidden=True)
+    draft = _draft(
+        portable_id=str(uuid4()),
+        hidden=True,
+        owner_template_id=(
+            store.catalog.playlist("international_english_news").id if linked else None
+        ),
+    )
     playlists = tuple(
         replace(
             p,
@@ -68,6 +74,9 @@ def _donor(tmp_path, *, local_managed=False):
                 activate_template(draft.as_playlist_template(), "private-local"),
                 portable_id=str(uuid4()),
                 enabled=False,
+                source_ids=(draft.default_source_ids[0],),
+                retention_hours=36,
+                ordering_override=OrderingPolicy.LATEST_PER_SOURCE_FIRST,
             ),
         )
     store.save(
@@ -170,13 +179,71 @@ def test_restore_preview_confirm_restart_and_reexport(tmp_path):
     assert before_retry == _files(root)
 
 
-def test_local_draft_association_fails_closed(tmp_path):
-    document = _donor(tmp_path, local_managed=True)
+@pytest.mark.parametrize("linked", [False, True])
+def test_local_draft_association_survives_restore_and_reexport(tmp_path, linked):
+    document = _donor(tmp_path, local_managed=True, linked=linked)
+    original = inspect_configuration(document)
+    link = next(link for link in original.managed_links if link.template_kind == "draft")
     root, service = _receiver(tmp_path)
     before = _files(root)
-    with pytest.raises(ConfigurationRestoreError, match="Managed-to-local-draft"):
-        service.preview(document)
+    preview = service.preview(document)
+    assert preview.original_drafts == 1
+    assert preview.recovered_managed == 5
     assert before == _files(root)
+    service.apply(document, preview.fingerprint, confirmed=True)
+
+    def check_state(store):
+        state = store.load_readonly()
+        assert not state.playlists
+        assert len(state.templates) == 6
+        original_draft = next(d for d in state.templates if d.portable_id == link.template_id)
+        recovered = next(d for d in state.templates if d.portable_id == link.playlist_uuid)
+        assert original_draft.hidden
+        assert not recovered.hidden
+        assert original_draft.owner_template_id == recovered.owner_template_id
+        assert (recovered.owner_template_id is not None) == linked
+        assert recovered.retention_hours == 36
+        assert original_draft.retention_hours == 72
+        assert recovered.default_source_ids == original_draft.default_source_ids[:1]
+        assert recovered.ordering_override is OrderingPolicy.LATEST_PER_SOURCE_FIRST
+        metadata = json.loads(recovered.portable_metadata)
+        assert metadata["kind"] == "managed"
+        assert metadata["configuration"] == {"enabled": False, "hidden": None}
+        assert metadata["recovered_from_draft_uuid"] == link.template_id
+        return state
+
+    first_state = check_state(ForwardOnlyManagedStateStore(root, readonly=True))
+    reexport = export_configuration(root, service.synchronization)
+    package = inspect_configuration(reexport)
+    assert dict(package.draft_provenance)[link.playlist_uuid] == next(
+        d.portable_metadata for d in first_state.templates if d.portable_id == link.playlist_uuid
+    )
+    assert len(package.draft_provenance) == 6
+    assert not package.managed_links
+    second = tmp_path / "second"
+    second.mkdir()
+    _, receiver = _receiver(second)
+    preview = receiver.preview(reexport)
+    receiver.apply(reexport, preview.fingerprint, confirmed=True)
+    assert check_state(receiver.store) == first_state
+    assert receiver.preview(reexport).already_restored
+    assert service.preview(document).already_restored
+
+    # The optional manifest extension is closed over existing draft UUIDs.
+    unknown_provenance = ((str(uuid4()), package.draft_provenance[0][1]),)
+    unknown = replace(package, draft_provenance=unknown_provenance)
+    with pytest.raises(ConfigurationExportError, match="missing draft"):
+        inspect_configuration(configuration_export._encode(unknown))
+    metadata = json.loads(dict(package.draft_provenance)[link.playlist_uuid])
+    metadata["recovered_from_draft_uuid"] = link.playlist_uuid
+    self_link = replace(package, draft_provenance=((link.playlist_uuid, json.dumps(metadata)),))
+    with pytest.raises(ConfigurationExportError, match="reference itself"):
+        inspect_configuration(configuration_export._encode(self_link))
+    metadata = json.loads(dict(package.draft_provenance)[link.playlist_uuid])
+    metadata["attribution"]["credit"] = "inconsistent credit"
+    tampered = replace(package, draft_provenance=((link.playlist_uuid, json.dumps(metadata)),))
+    with pytest.raises(ConfigurationExportError, match="disagrees with current artwork"):
+        inspect_configuration(configuration_export._encode(tampered))
 
 
 def test_pending_intent_blocks_confirmed_apply(tmp_path):
@@ -338,3 +405,32 @@ def test_restore_rejects_fold_only_difference(tmp_path, location):
     with pytest.raises(ConfigurationRestoreError, match="overwrite"):
         service.apply(second, repeated.fingerprint, confirmed=True)
     assert before == _files(root)
+
+
+def test_standalone_imported_template_credit_survives_managed_export_and_restore(tmp_path):
+    _donor(tmp_path, local_managed=True)
+    donor = ForwardOnlyManagedStateStore(tmp_path / "legacy", readonly=True)
+    state = donor.load_readonly()
+    sync = ConfigurationSynchronization()
+    package = inspect_configuration(export_configuration(tmp_path / "legacy", sync))
+    member = next(m for m in inspect_collection(package.collection_document) if m.kind == "draft")
+    bundle = inspect_playlist_bundle_v3(member.document)
+    metadata = json.loads(bundle.metadata)
+    metadata["attribution"]["credit"] = "Imported original artwork credit"
+    draft = replace(state.templates[0], portable_metadata=json.dumps(metadata))
+    donor.save(replace(state, templates=(draft,)))
+
+    document = export_configuration(tmp_path / "legacy", sync)
+    package = inspect_configuration(document)
+    link = next(link for link in package.managed_links if link.template_kind == "draft")
+    members = inspect_collection(package.collection_document)
+    member = next(m for m in members if m.portable_id == link.playlist_uuid)
+    restored_bundle = inspect_playlist_bundle_v3(member.document)
+    assert restored_bundle.template_attribution == metadata["attribution"]
+
+    _, service = _receiver(tmp_path)
+    preview = service.preview(document)
+    service.apply(document, preview.fingerprint, confirmed=True)
+    state = service.store.load_readonly()
+    restored = next(d for d in state.templates if d.portable_id == link.template_id)
+    assert json.loads(restored.portable_metadata)["attribution"] == metadata["attribution"]

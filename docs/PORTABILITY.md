@@ -110,6 +110,15 @@ owner policies and artwork across them, and validates local-draft associations.
 A managed member based on an independent local draft may contain a template
 derived from that draft; it must not be misclassified as an owner record.
 
+Before stable publication, the version-1 configuration manifest supports an
+optional `draft_provenance` array, sorted by portable UUID, with the exact
+validated inert metadata string for each previously imported draft. It is
+omitted when empty; the new reader accepts earlier manifests without this
+field, while older readers reject the extension rather than discard it.
+Individual ZIP v3 files and the collection format are unchanged: the full
+configuration ZIP is required to retain this additional historical metadata.
+The existing bounded manifest limit applies; oversized provenance fails closed.
+
 The export holds the configuration lock from opening the v11 authority through
 construction and validation. Missing authority, split-mode v11, unprepared
 portable IDs, quarantined drafts, unavailable artwork and inconsistent component
@@ -144,10 +153,17 @@ hash IDs; owner references and credits are remapped together, and conflicts
 fail closed. Original drafts keep their IDs; managed members become separate
 editable drafts linked to their owner template with the same portable UUID and
 observational metadata. No Spotify destination, enablement or relinking is
-inferred. Original draft visibility is retained. Managed-to-local-draft links
-are explicitly blocked until the local model can preserve them without
-flattening or fabricating an owner template. That gap and larger archive
-acceptance must be resolved before claiming general recovery.
+inferred. Original draft visibility is retained. For managed-to-local-draft
+associations, the full original draft is restored separately, and the
+recovered current projection keeps the original draft UUID in inert
+`recovered_from_draft_uuid` metadata. A linked parent retains its owner
+template reference; a standalone parent is not promoted or duplicated as an
+owner template. Full configuration re-export preserves both records and the
+observational metadata even after another restore. The historical UUID does
+not impose a live policy dependency (it may outlive an explicitly deleted
+draft); it never authorizes a Spotify operation. Exact relinking to the
+original shared policy, if requested, still needs an explicit workflow before
+exposing recovery in Admin. Larger archive acceptance also remains open.
 
 The candidate is validated entirely in memory before any writes. Apply
 prepares immutable content-addressed JPEGs, then publishes owner inventory and

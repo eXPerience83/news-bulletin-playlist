@@ -410,6 +410,16 @@ def playlist_bundle(
             if stored_credit is not None:
                 template_attribution = stored_credit
         template_cover_descriptor = _descriptor(template_cover_bytes)
+        # A standalone local draft can itself be the managed template. Its
+        # verified portable credit must travel with that template's JPEG too.
+        if (
+            linked_local is not None
+            and template.id == linked_local.id
+            and linked_local.portable_metadata is not None
+        ):
+            original_credit = json.loads(linked_local.portable_metadata)
+            if original_credit["cover_sha256"] == template_cover_descriptor["sha256"]:
+                template_attribution = original_credit["attribution"]
         template_cover_path = f"covers/{template_cover_descriptor['sha256']}.jpg"
         manifest["template"] = {
             "path": "template.json",

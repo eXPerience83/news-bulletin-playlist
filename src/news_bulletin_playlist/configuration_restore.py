@@ -34,7 +34,7 @@ from news_bulletin_playlist.owner_inventory_export import inspect_owner_inventor
 from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.playlist_bundle import inspect_playlist_bundle_v3
 from news_bulletin_playlist.playlist_collection import inspect_collection
-from news_bulletin_playlist.portable_playlists import Synchronization
+from news_bulletin_playlist.portable_playlists import Synchronization, canonical_json
 from news_bulletin_playlist.v11_managed_adapter import ForwardOnlyManagedStateStore
 from news_bulletin_playlist.v11_operational_codec import (
     parse_v11_operational,
@@ -97,11 +97,15 @@ def _build(
     package: ConfigurationExport, schema: int
 ) -> tuple[OwnerInventory, ManagedState, tuple[tuple[str, bytes], ...]]:
     owner = inspect_owner_inventory(package.owner_document)
-    if any(link.template_kind != "owner" for link in package.managed_links):
-        # The current draft model has owner links, not draft-to-draft links.
-        # Never silently flatten a shared local template or fabricate an owner record.
-        raise ConfigurationRestoreError("Managed-to-local-draft restoration is not supported yet")
-    links = {link.playlist_uuid: link.template_id for link in package.managed_links}
+    links = {link.playlist_uuid: link for link in package.managed_links}
+    provenance = dict(package.draft_provenance)
+    members = tuple(
+        (member, inspect_playlist_bundle_v3(member.document))
+        for member in inspect_collection(package.collection_document)
+    )
+    local_bundles = {
+        member.portable_id: bundle for member, bundle in members if member.kind == "draft"
+    }
     credits = dict(owner.inventory.cover_attributions)
     assets: dict[str, bytes] = {}
     remapped: dict[str, str] = {}
@@ -135,22 +139,38 @@ def _build(
     )
     occupied = {template.id for template in inventory.templates.records}
     drafts = []
-    for member in inspect_collection(package.collection_document):
-        bundle = inspect_playlist_bundle_v3(member.document)
+    for member, bundle in members:
         p = bundle.playlist
         template = bundle.template
-        if (
-            template is not None
-            and original_credits.get(template.cover_id) != bundle.template_attribution
-        ):
-            raise ConfigurationRestoreError("Template artwork attribution differs from inventory")
+        metadata = provenance.get(member.portable_id, bundle.metadata)
         owner_id: PlaylistId | None
+        parent = None
         if member.kind == "managed":
             local_id = PlaylistId("custom_" + member.portable_id.replace("-", "") + "_recovered")
-            owner_id = PlaylistId(links[member.portable_id])
+            link = links[member.portable_id]
+            if link.template_kind == "owner":
+                owner_id = PlaylistId(link.template_id)
+            else:
+                parent = local_bundles[link.template_id]
+                owner_id = parent.template.id if parent.template is not None else None
+                # Keep the full original draft separately and the current projection
+                # editable. The UUID is historical provenance, never activation intent.
+                origin = json.loads(bundle.metadata)
+                origin["recovered_from_draft_uuid"] = link.template_id
+                metadata = canonical_json(origin).decode("utf-8")
         else:
             local_id = PlaylistId(p["original_id"])
             owner_id = template.id if template is not None else None
+        if template is not None:
+            expected_credit = (
+                parent.playlist["cover"]["attribution"]
+                if parent is not None and parent.template is None
+                else original_credits.get(template.cover_id)
+            )
+            if expected_credit != bundle.template_attribution:
+                raise ConfigurationRestoreError(
+                    "Template artwork attribution differs from inventory"
+                )
         if local_id in occupied:
             raise ConfigurationRestoreError("Restored draft identity conflicts with another record")
         occupied.add(local_id)
@@ -160,7 +180,7 @@ def _build(
             LocalPlaylistTemplate(
                 id=local_id,
                 portable_id=member.portable_id,
-                portable_metadata=bundle.metadata,
+                portable_metadata=metadata,
                 display_name=p["display_name"],
                 description=p["description"],
                 default_source_ids=tuple(SourceId(x) for x in p["source_ids"]),

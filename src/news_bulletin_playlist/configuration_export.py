@@ -32,7 +32,11 @@ from news_bulletin_playlist.playlist_collection import (
     write_stored_entry,
 )
 from news_bulletin_playlist.portable_identity import portable_id
-from news_bulletin_playlist.portable_playlist_metadata import exact_object, strict_json
+from news_bulletin_playlist.portable_playlist_metadata import (
+    exact_object,
+    strict_json,
+    validate_metadata,
+)
 from news_bulletin_playlist.portable_playlists import (
     PortableCoverLoader,
     Synchronization,
@@ -68,6 +72,7 @@ class ConfigurationExport:
     owner_document: bytes
     collection_document: bytes
     managed_links: tuple[TemplateLink, ...]
+    draft_provenance: tuple[tuple[str, str], ...] = ()
 
 
 def _sha(data: bytes) -> str:
@@ -150,6 +155,22 @@ def _validate(export: ConfigurationExport) -> None:
         else:
             managed[member.portable_id] = bundle
 
+    provenance_ids = tuple(identity for identity, _metadata in export.draft_provenance)
+    if provenance_ids != tuple(sorted(set(provenance_ids))):
+        raise ConfigurationExportError("Duplicate or unordered draft provenance")
+    for identity, metadata in export.draft_provenance:
+        if identity not in drafts:
+            raise ConfigurationExportError("Draft provenance references a missing draft")
+        validate_metadata(metadata)
+        origin = strict_json(metadata.encode("utf-8"))
+        if origin.get("recovered_from_draft_uuid") == identity:
+            raise ConfigurationExportError("Draft provenance cannot reference itself")
+        cover = drafts[identity].playlist["cover"]
+        if (
+            origin["cover_sha256"] == cover["sha256"]
+            and origin["attribution"] != cover["attribution"]
+        ):
+            raise ConfigurationExportError("Draft provenance disagrees with current artwork")
     if tuple(link.playlist_uuid for link in export.managed_links) != tuple(sorted(managed)):
         raise ConfigurationExportError("Managed template associations are incomplete or duplicated")
     for link in export.managed_links:
@@ -187,6 +208,16 @@ def _encode(export: ConfigurationExport) -> bytes:
                 for link in export.managed_links
             ],
         }
+        | (
+            {
+                "draft_provenance": [
+                    {"portable_id": identity, "metadata": metadata}
+                    for identity, metadata in export.draft_provenance
+                ]
+            }
+            if export.draft_provenance
+            else {}
+        )
     )
     if len(manifest) > _MAX_INDEX_BYTES:
         raise ConfigurationExportError("Configuration manifest exceeds size limit")
@@ -225,8 +256,18 @@ def export_configuration(data_dir: Path, synchronization: Synchronization) -> by
                     links.append(TemplateLink(identity, "draft", draft_uuid))
                 else:
                     links.append(TemplateLink(identity, "owner", str(playlist.template_id)))
+            provenance = []
+            for draft in state.templates:
+                if draft.portable_metadata is not None:
+                    draft_uuid = portable_id(draft.portable_id)
+                    if draft_uuid is None:
+                        raise ConfigurationExportError("Missing provenance draft identity")
+                    provenance.append((draft_uuid, draft.portable_metadata))
             result = ConfigurationExport(
-                owner, collection, tuple(sorted(links, key=lambda link: link.playlist_uuid))
+                owner,
+                collection,
+                tuple(sorted(links, key=lambda link: link.playlist_uuid)),
+                tuple(sorted(provenance)),
             )
             _validate(result)
             return _encode(result)
@@ -271,8 +312,15 @@ def inspect_configuration(document: bytes) -> ConfigurationExport:
             manifest = archive.read(_INDEX)
             if archive.read(_HASH) != (_sha(manifest) + "\n").encode("ascii"):
                 raise ConfigurationExportError("Configuration manifest digest mismatch")
+            raw = strict_json(manifest)
             index = exact_object(
-                strict_json(manifest), {"format", "version", "files", "managed_template_links"}
+                raw,
+                {"format", "version", "files", "managed_template_links"}
+                | (
+                    {"draft_provenance"}
+                    if isinstance(raw, dict) and "draft_provenance" in raw
+                    else set()
+                ),
             )
             rows = index["managed_template_links"]
             if (
@@ -295,11 +343,23 @@ def inspect_configuration(document: bytes) -> ConfigurationExport:
                 ):
                     raise ConfigurationExportError("Invalid managed template association")
                 links.append(TemplateLink(identity, item["template_kind"], item["template_id"]))
+            provenance_rows = index.get("draft_provenance", [])
+            if not isinstance(provenance_rows, list) or len(provenance_rows) > 256:
+                raise ConfigurationExportError("Invalid draft provenance count")
+            provenance = []
+            for row in provenance_rows:
+                item = exact_object(row, {"portable_id", "metadata"})
+                identity = portable_id(item["portable_id"])
+                metadata = item["metadata"]
+                if identity is None or not isinstance(metadata, str):
+                    raise ConfigurationExportError("Invalid draft provenance")
+                validate_metadata(metadata)
+                provenance.append((identity, metadata))
             owner = archive.read(_OWNER)
             collection = archive.read(_COLLECTION)
             if index["files"] != {_OWNER: _descriptor(owner), _COLLECTION: _descriptor(collection)}:
                 raise ConfigurationExportError("Configuration component digest mismatch")
-        result = ConfigurationExport(owner, collection, tuple(links))
+        result = ConfigurationExport(owner, collection, tuple(links), tuple(provenance))
         if _encode(result) != document:
             raise ConfigurationExportError("Noncanonical configuration archive")
         _validate(result)
