@@ -331,6 +331,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         content_type: str,
         length: int,
         extra_headers: dict[str, str] | None = None,
+        status: HTTPStatus | None = None,
     ) -> None:
         headers = [
             ("Content-Type", content_type),
@@ -350,8 +351,16 @@ class HealthHandler(BaseHTTPRequestHandler):
                 or re.fullmatch(r"[\t\x20-\x7e\x80-\xff]*", value) is None
             ):
                 raise ValueError("Invalid HTTP response header")
+        # Do not buffer the status line until the complete response is valid.
+        if status is not None:
+            self.send_response(status)
         for name, value in headers:
-            self.send_header(name, value)
+            # Explicit CR/LF removal is a second, independently modeled
+            # serialization boundary; validated values are unchanged.
+            self.send_header(
+                name.replace("\n", "").replace("\r", ""),
+                value.replace("\n", "").replace("\r", ""),
+            )
         self.end_headers()
 
     def _reply(
@@ -362,11 +371,11 @@ class HealthHandler(BaseHTTPRequestHandler):
         content_type: str = "text/html; charset=utf-8",
         extra_headers: dict[str, str] | None = None,
     ) -> None:
-        self.send_response(status)
         self._send_headers(
             content_type=content_type,
             length=len(payload),
             extra_headers=extra_headers,
+            status=status,
         )
         if payload:
             self.wfile.write(payload)
