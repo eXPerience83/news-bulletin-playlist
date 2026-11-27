@@ -59,14 +59,16 @@ def _drafts(count, cover_id):
 
 
 def _measure(document_path, workdir, expected_drafts):
-    # Run in a fresh interpreter: donor export/fixture generation must not
-    # contaminate the process high-water mark. Linux reports ru_maxrss in KiB.
-    import resource
-
+    # Linux ru_maxrss can retain the parent's high-water mark across exec.
+    # VmHWM belongs to the current memory map, so fixture generation in the
+    # parent does not mask the peak of this freshly exec'd interpreter.
     socket.socket.connect = _forbid_network
 
     def report(stage):
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        status = Path("/proc/self/status").read_text(encoding="ascii")
+        fields = next(line.split() for line in status.splitlines() if line.startswith("VmHWM:"))
+        assert fields[2] == "kB"
+        peak = int(fields[1])
         print(f"configuration capacity: {stage} peak_rss_kib={peak}", flush=True)
 
     report("baseline")
