@@ -9,6 +9,7 @@ import html
 import ipaddress
 import json
 import os
+import re
 import secrets
 import stat
 import tempfile
@@ -331,15 +332,26 @@ class HealthHandler(BaseHTTPRequestHandler):
         length: int,
         extra_headers: dict[str, str] | None = None,
     ) -> None:
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(length))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", self._content_security_policy)
+        headers = [
+            ("Content-Type", content_type),
+            ("Content-Length", str(length)),
+            ("Cache-Control", "no-store"),
+            ("X-Content-Type-Options", "nosniff"),
+            ("Referrer-Policy", "no-referrer"),
+            ("Content-Security-Policy", self._content_security_policy),
+        ]
         if extra_headers is not None:
-            for name, value in extra_headers.items():
-                self.send_header(name, value)
+            headers.extend(extra_headers.items())
+        # Validate the entire block before emitting any headers. In particular,
+        # BaseHTTPRequestHandler does not reject response-splitting characters.
+        for name, value in headers:
+            if (
+                re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", name) is None
+                or re.fullmatch(r"[\t\x20-\x7e\x80-\xff]*", value) is None
+            ):
+                raise ValueError("Invalid HTTP response header")
+        for name, value in headers:
+            self.send_header(name, value)
         self.end_headers()
 
     def _reply(

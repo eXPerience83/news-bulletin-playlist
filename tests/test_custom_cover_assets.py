@@ -130,3 +130,24 @@ def test_store_requires_owner_only_permissions(tmp_path: Path) -> None:
     store = CustomCoverAssetStore(root)
     with pytest.raises(CustomCoverAssetError, match="permissions"):
         store.save(_image_bytes())
+
+
+@pytest.mark.parametrize(
+    "cover_id",
+    [
+        "uploaded_" + "a" * 64 + "\n",
+        "uploaded_" + "a" * 63 + "/",
+        "uploaded_" + "a" * 62 + " a",
+        "uploaded_" + "Ａ" * 64,
+        "/uploaded_" + "a" * 64,
+    ],
+)
+def test_invalid_cover_id_never_opens_storage(tmp_path, monkeypatch, cover_id):
+    store = CustomCoverAssetStore(tmp_path / "covers")
+
+    def unexpected_open(*args, **kwargs):
+        pytest.fail("Invalid custom cover ID reached storage")
+
+    monkeypatch.setattr(store, "_open_dir", unexpected_open)
+    with pytest.raises(CustomCoverAssetError, match="Unknown custom cover identifier"):
+        store.load(cover_id)

@@ -473,3 +473,18 @@ def test_legacy_zip_still_exports_inherited_ordering_from_new_overlay(tmp_path, 
     original = service.store.path.read_bytes()
     assert service.export("managed", str(playlist.id), version=version)[0] == UUID
     assert service.store.path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "cover_id",
+    ["../outside", "/absolute", "custom_default/../outside", "custom_default\n", ""],
+)
+def test_bundled_lookup_rejects_unknown_ids_before_open(tmp_path, monkeypatch, cover_id):
+    loader = PortableCoverLoader(tmp_path)
+
+    def unexpected_open(*args, **kwargs):
+        pytest.fail("Unknown bundled ID reached filesystem open")
+
+    monkeypatch.setattr(portable_playlists.os, "open", unexpected_open)
+    with pytest.raises(PlaylistExportError, match="not a supported local asset"):
+        loader._bundled(cover_id)

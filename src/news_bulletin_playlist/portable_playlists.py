@@ -48,18 +48,16 @@ from news_bulletin_playlist.portable_sources import export_sources
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_PLAYLIST_ZIP_BYTES = 1024 * 1024
 MAX_PLAYLIST_ZIP_V2_BYTES = 2 * 1024 * 1024
-_BUNDLED = frozenset(
-    {
-        "spain_spanish_news",
-        "international_english_news",
-        "international_spanish_news",
-        "international_spanish_long_news",
-        "international_french_news",
-        "international_german_news",
-        "international_polish_news",
-        "custom_default",
-    }
-)
+_BUNDLED = {
+    "spain_spanish_news": "spain_spanish_news.jpg",
+    "international_english_news": "international_english_news.jpg",
+    "international_spanish_news": "international_spanish_news.jpg",
+    "international_spanish_long_news": "international_spanish_long_news.jpg",
+    "international_french_news": "international_french_news.jpg",
+    "international_german_news": "international_german_news.jpg",
+    "international_polish_news": "international_polish_news.jpg",
+    "custom_default": "custom_default.jpg",
+}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 
 
@@ -158,6 +156,9 @@ class PortableCoverLoader:
         }
 
     def _bundled(self, cover_id: str) -> bytes:
+        filename = _BUNDLED.get(cover_id)
+        if filename is None:
+            raise PlaylistExportError("Selected cover is not a supported local asset")
         for root in self.roots:
             try:
                 directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -166,7 +167,7 @@ class PortableCoverLoader:
             try:
                 try:
                     fd = os.open(
-                        f"{cover_id}.jpg",
+                        filename,
                         os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                         dir_fd=directory,
                     )

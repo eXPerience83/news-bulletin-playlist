@@ -119,11 +119,14 @@ class CustomCoverAssetStore:
     def load(self, cover_id: str) -> bytes:
         if not is_uploaded_cover_id(cover_id):
             raise CustomCoverAssetError("Unknown custom cover identifier")
+        # Construct the path from decoded digest bytes, not the caller's path text.
+        digest_bytes = bytes.fromhex(cover_id[len(UPLOAD_COVER_PREFIX) :])
+        filename = f"{UPLOAD_COVER_PREFIX}{digest_bytes.hex()}.jpg"
         directory = self._open_dir(create=False)
         try:
             try:
                 fd = os.open(
-                    f"{cover_id}.jpg", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+                    filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
                 )
             except OSError as exc:
                 raise CustomCoverAssetError("Selected custom cover is missing") from exc
