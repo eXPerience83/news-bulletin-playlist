@@ -2,6 +2,7 @@
 
 import json
 import socket
+import tempfile
 from dataclasses import replace
 from datetime import time
 from uuid import uuid4
@@ -11,12 +12,18 @@ from _file_snapshots import snapshot_files as _files
 from _legacy_dataset import legacy_root
 from _playlist_template_fixtures import _draft
 
-from news_bulletin_playlist import configuration_export, configuration_restore
+from news_bulletin_playlist import (
+    configuration_export,
+    configuration_rehearsal,
+    configuration_restore,
+)
+from news_bulletin_playlist.cli import main
 from news_bulletin_playlist.configuration_export import (
     ConfigurationExportError,
     export_configuration,
     inspect_configuration,
 )
+from news_bulletin_playlist.configuration_rehearsal import rehearse_configuration
 from news_bulletin_playlist.configuration_restore import (
     ConfigurationRestoreError,
     ConfigurationRestoreService,
@@ -495,3 +502,48 @@ def test_standalone_draft_shared_owner_cover_survives_export_and_restore(tmp_pat
         assert record.cover_id == cover_id
         assert json.loads(record.portable_metadata)["attribution"] == owner_credit
     assert receiver.preview(document).already_restored
+
+
+@pytest.mark.parametrize(("local_managed", "linked"), [(False, False), (True, False), (True, True)])
+def test_isolated_configuration_rehearsal(tmp_path, local_managed, linked, monkeypatch):
+    document = _donor(tmp_path, local_managed=local_managed, linked=linked)
+    archive = tmp_path / "configuration.zip"
+    archive.write_bytes(document)
+    # Ensure the internally allocated workspace is also within the test root.
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    before = _files(tmp_path)
+    report = rehearse_configuration(archive)
+    assert report["original_drafts"] == 1
+    assert report["recovered_managed"] == (5 if local_managed else 4)
+    assert report["active_destinations"] == 0
+    assert report["idempotent"] is True
+    assert _files(tmp_path) == before
+    assert not list(tmp_path.glob("news-playlist-rehearsal-*"))
+
+
+def test_rehearsal_cli_and_bad_archive(tmp_path, capsys):
+    archive = tmp_path / "configuration.zip"
+    archive.write_bytes(_donor(tmp_path))
+    assert main(["rehearse-configuration", "--archive", str(archive)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["recovered_managed"] == 4
+    assert report["active_destinations"] == 0
+    archive.write_bytes(b"invalid")
+    with pytest.raises(SystemExit) as error:
+        main(["rehearse-configuration", "--archive", str(archive)])
+    assert error.value.code == 2
+    assert archive.read_bytes() == b"invalid"
+
+
+def test_rehearsal_rejects_different_reexport(tmp_path, monkeypatch):
+    archive = tmp_path / "configuration.zip"
+    archive.write_bytes(_donor(tmp_path))
+    other = tmp_path / "other"
+    other.mkdir()
+    different = _donor(other)
+    monkeypatch.setattr(configuration_rehearsal, "export_configuration", lambda *_: different)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    before = _files(tmp_path)
+    with pytest.raises(ConfigurationRestoreError, match="Rehearsal .* differs"):
+        rehearse_configuration(archive)
+    assert _files(tmp_path) == before

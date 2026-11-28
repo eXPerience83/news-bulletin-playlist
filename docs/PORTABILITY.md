@@ -229,6 +229,28 @@ fsync became durable. Recovery/re-export tests run on isolated roots, not
 production. UI staging, bounded upload, conflict policy, and independent
 review remain required before enabling this workflow.
 
+## Private offline recovery rehearsal (#667)
+
+The CLI can exercise the actual configuration restore core, reopen the restored
+authority and re-export it without installing anything in a live data root:
+
+```sh
+news-playlist rehearse-configuration --archive /path/to/configuration-v1.zip
+```
+
+Run from a disconnected disposable environment using the compatible image or
+Python environment. Only the input ZIP is read; no `--data-dir` is accepted.
+The workspace is an automatically removed temporary directory (ensure adequate
+temporary space). The command compares source definitions/order, retired IDs,
+owner template records including exact policy serialization, JPEG bytes and
+attribution, playlist UUIDs, policies, draft visibility, associations and inert
+provenance. Managed records must become inactive drafts, never Spotify
+destinations. It reopens the store, verifies repeat preview/Apply is a no-op
+and reports aggregate counts and archive digests, not IDs or private contents.
+An uncertain commit or mismatch fails the rehearsal. This is portable
+configuration recovery, not operational backup, relinking or a production
+restart; the same 16 MiB restore input limit applies.
+
 ## ZIP v3 and optional playback ordering (#660; draft PR #661)
 
 ZIP v3 uses the bounded ZIP v2 envelope and source/owner-template validation,

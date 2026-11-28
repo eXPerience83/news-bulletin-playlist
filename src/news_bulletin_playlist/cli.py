@@ -7,6 +7,8 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from news_bulletin_playlist.configuration_rehearsal import rehearse_configuration
+from news_bulletin_playlist.configuration_restore import ConfigurationRestoreError
 from news_bulletin_playlist.diagnostics_runtime import serve
 from news_bulletin_playlist.inspection_fence import (
     InspectionGateError,
@@ -70,6 +72,11 @@ def build_parser() -> argparse.ArgumentParser:
     normalize_parser.add_argument("--state-sha256", required=True)
     normalize_parser.add_argument("--confirm", required=True)
 
+    rehearsal_parser = commands.add_parser(
+        "rehearse-configuration", help="verify portable recovery in a disposable offline root"
+    )
+    rehearsal_parser.add_argument("--archive", type=Path, required=True)
+
     health_parser = commands.add_parser("healthcheck", help="check the local runtime health")
     health_parser.add_argument("--url", default=DEFAULT_HEALTH_URL)
     health_parser.add_argument("--timeout", type=float, default=2.0)
@@ -115,6 +122,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         except OverlayNormalizationError as exc:
             parser.error(str(exc))
         print(json.dumps(result, sort_keys=True, indent=2))
+        return 0
+    if args.command == "rehearse-configuration":
+        try:
+            rehearsal = rehearse_configuration(args.archive)
+        except ConfigurationRestoreError as exc:
+            parser.error(str(exc))
+        print(json.dumps(rehearsal, sort_keys=True, indent=2))
         return 0
     if args.command == "inspection-release":
         try:
