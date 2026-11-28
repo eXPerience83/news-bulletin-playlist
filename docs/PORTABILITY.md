@@ -47,6 +47,35 @@ This change does not normalize existing nested overlays, retire any archive
 version, or change migrated installations on read or restart. Explicit
 ordering/import schema acknowledgement remains for older overlays only.
 
+## Explicit offline nested overlay normalization (#667)
+
+Existing operational v11 documents may contain nested schema 6–10. Stop the
+runtime and any other writers, and retain a complete offline dataset backup
+before performing the following one-time operation. Do not use this command
+on a running installation or on pre-v11 data. The confirmation is the
+operator's assertion of offline exclusivity; the CLI cannot prove it.
+
+1. Run `news-playlist inspection-status --data-dir /data` and record the current
+   v11 state SHA-256.
+2. Run `news-playlist normalize-v11-overlay --data-dir /data --state-sha256 SHA
+   --confirm I-STOPPED-RUNTIME-NORMALIZE-V11`, replacing SHA with the exact
+   full lowercase digest.
+3. Review the returned old/new schema and state digests, then restart normally.
+
+The operation rejects a held inspection gate, missing/invalid v11 authority,
+stale digest, and any pending provisioning journal (including unreadable or
+symlink entries). Resolve an ambiguous activation using the existing recovery
+workflow first; never delete a journal just to pass this gate. No journal,
+legacy file, OAuth, history, owner inventory, artwork or origin evidence is
+rewritten. Canonical serialization adds nullable/empty fields but retains
+existing IDs (including absent portable UUIDs), policies, selections and
+quarantine. The effective runtime must compare equal and the original overlay
+must round-trip exactly when projected back to its original schema. Publication
+uses the existing exact-byte CAS and atomic durability protocol. A current
+schema-11 authority is a no-op; ordinary reads/startup do not normalize older
+overlays. This is a forward-only schema adoption; use the offline dataset
+backup for rollback, not an older writer.
+
 ## ZIP v2 Admin workflow (integration branch #646; not yet released)
 
 Admin offers an explicit **complete ZIP v2** download for objects with a prepared

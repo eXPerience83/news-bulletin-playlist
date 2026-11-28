@@ -374,6 +374,31 @@ def update_v11_operational(payload: bytes, overlay: ManagedState) -> bytes:
     return next_payload
 
 
+def normalize_v11_overlay(payload: bytes) -> bytes:
+    """Promote only the nested schema; never allocate identities or alter policies."""
+    current = parse_v11_operational(payload)
+    original = current.managed_overlay
+    if original.schema_version == PLAYLIST_ORDERING_SCHEMA_VERSION:
+        return payload
+    desired = replace(original, schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION)
+    result = update_v11_operational(payload, desired)
+    verified = parse_v11_operational(result)
+    if verified.runtime != current.runtime or not same_managed_configuration(
+        replace(verified.managed_overlay, schema_version=original.schema_version),
+        original,
+        catalog=current.active_catalog,
+    ):
+        raise V11OperationalError("v11 normalization would change effective configuration")
+    # Exact canonical comparison protects all historical and owner evidence.
+    before = json.loads(payload)
+    after = json.loads(result)
+    before.pop("managed_overlay")
+    after.pop("managed_overlay")
+    if _canonical(before) != _canonical(after):
+        raise V11OperationalError("v11 normalization would change origin or owner inventory")
+    return result
+
+
 def update_v11_owner_inventory(
     payload: bytes, edited: OwnerInventory, *, managed_overlay: ManagedState | None = None
 ) -> bytes:
