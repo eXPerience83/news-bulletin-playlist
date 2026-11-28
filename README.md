@@ -109,8 +109,9 @@ while historical over-cap values remain loadable and can round-trip unchanged. M
 raise only the upper bound and never bypass the minimum. Save is local and wakes normal item
 reconciliation; Spotify metadata/cover synchronization remains a separate action.
 
-Activation snapshots both bounds in provisioning journal v2; pending v1 journals recover with
-minimum 0. The current managed-state document supports schema v10 for portable imports,
+Activation snapshots both duration bounds and nullable ordering in provisioning journal v4;
+pending v1–v3 journals remain readable for recovery (v1 defaults the minimum to 0).
+The current managed-state document supports schema v10 for portable imports,
 custom drafts and installed source definitions while retaining reviewed legacy upgrade paths.
 SQLite remains database format 3 for episode/history state; the partial-addition
 fallback has a separate durable intent fence. Duration eligibility remains per playlist

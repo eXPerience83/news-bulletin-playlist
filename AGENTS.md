@@ -242,8 +242,10 @@ For bounded diagnostics exports, derive the exported rows and `truncated` from o
 - Nested managed overlay schema 11 is distinct from the outer operational
   v11 authority and its immutable historical witness. Do not promote the
   nested overlay on read/startup; explicit changes require acknowledgement.
-- Provisioning journal schema 3 snapshots an explicit ordering override; recover
-  from that recorded intent, not a later draft edit.
+- New provisioning journal writes use canonical schema 4 with an explicit nullable
+  ordering override; legacy schemas 1–3 remain read-only compatible for pending
+  recovery. Recover from that recorded intent, not a later draft edit, and never
+  retry an ambiguous creation merely to retire an old journal.
 - ZIP v3 carries the nullable ordering override and explicit owner-template
   closure (or null for a standalone draft). Legacy ZIP v1/v2 cannot represent
   any explicit override, including explicit chronology; reject rather than

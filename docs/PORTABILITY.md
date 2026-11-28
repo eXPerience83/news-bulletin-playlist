@@ -260,9 +260,14 @@ owner closure is a conflict. Preview and Apply refuse it without writes.
 
 The Admin playback order selector persists an independent managed override or
 draft default. Editing a draft does not modify an already managed destination.
-Provisioning snapshots the override in journal schema 3 when it is present;
-legacy v1/v2 provisioning journals remain readable. Recovery uses the recorded
-choice, not the possibly edited draft. Explicit reset to inherited ordering
+Provisioning writes one canonical journal schema 4 with an explicit nullable
+ordering override. Legacy schemas 1–3 remain readable for pending recovery;
+reading them never rewrites their bytes. A normal confirmed destination
+transition writes schema 4; known destinations finalize without a second
+creation, and ambiguous creations still require operator recovery. Old images
+cannot read schema 4. Never delete a pending journal to downgrade or to retire
+the legacy decoder. Recovery uses the recorded choice, not the possibly edited
+draft. Explicit reset to inherited ordering
 does not downgrade the state schema. Startup inspection hold forbids writes
 and import previews. See [ordering semantics](TIMEZONES_AND_ORDERING.md).
 This is future feature work; #657's v2 acceptance and current stabilization

@@ -23,8 +23,8 @@ from news_bulletin_playlist.managed_provisioning import (
     ProvisioningJournalError,
     ProvisioningState,
 )
-from news_bulletin_playlist.managed_state import ManagedStateStore
-from news_bulletin_playlist.models import DurationPolicy
+from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
+from news_bulletin_playlist.models import DurationPolicy, OrderingPolicy
 from news_bulletin_playlist.spotify.client import SpotifyApiError, SpotifyTransportError
 from news_bulletin_playlist.spotify_backoff import SpotifyRateLimitSuppressed
 
@@ -407,28 +407,90 @@ def test_journal_contains_no_credentials(tmp_path: Path) -> None:
         "max_duration_seconds",
         "min_duration_seconds",
         "destination_id",
+        "ordering_override",
     }
+    assert payload["schema_version"] == 4
+    assert payload["ordering_override"] is None
 
 
 @pytest.mark.parametrize("known", [False, True])
-def test_v1_journal_remains_recoverable_with_zero_minimum(tmp_path, known):
+@pytest.mark.parametrize(
+    ("version", "ordering"),
+    [
+        (1, None),
+        (2, None),
+        (3, OrderingPolicy.EDITION_AT_DESC),
+        (3, OrderingPolicy.LATEST_PER_SOURCE_FIRST),
+        (4, None),
+        (4, OrderingPolicy.EDITION_AT_DESC),
+        (4, OrderingPolicy.LATEST_PER_SOURCE_FIRST),
+    ],
+)
+def test_journal_versions_recover_without_duplicate_create(tmp_path, known, version, ordering):
     journal = ProvisioningJournal(tmp_path / "provisioning.json")
-    intent = _request_intent()
+    intent = replace(
+        _request_intent(),
+        min_duration_seconds=0 if version == 1 else 634,
+        ordering_override=ordering,
+    )
     if known:
         intent = intent.with_destination("created")
     journal.save(intent)
     payload = json.loads(journal.path.read_text())
-    assert payload["schema_version"] == 2
-    assert payload.pop("min_duration_seconds") == 0
-    payload["schema_version"] = 1
+    assert payload["schema_version"] == 4
+    assert payload["ordering_override"] == (ordering.value if ordering is not None else None)
+    payload["schema_version"] = version
+    if version == 1:
+        assert payload.pop("min_duration_seconds") == 0
+    if version < 3:
+        assert payload.pop("ordering_override") is None
     journal.path.write_text(json.dumps(payload))
+    prior = journal.path.read_bytes()
     assert journal.load() == intent
-    if known:
-        client = _Client()
-        managed = _service(tmp_path, client, journal=journal).finalize_known_provisioning()
-        assert managed.min_duration_seconds == 0
-        assert managed.max_duration_seconds == 1800
+    assert journal.path.read_bytes() == prior
+    store = ManagedStateStore(tmp_path / "managed-state.json")
+    store.save(ManagedState(schema_version=11))
+    client = _Client()
+    service = _service(tmp_path, client, store=store, journal=journal)
+    if not known:
+        assert service.finalize_known_provisioning() is None
+        with pytest.raises(PlaylistProvisioningRecoveryRequired):
+            _activate(service)
+        assert journal.path.read_bytes() == prior
         assert client.create_calls == []
-    else:
-        journal.save(journal.load().with_destination("created"))
-        assert json.loads(journal.path.read_text())["schema_version"] == 2
+        # Simulate a verified destination transition, not a retry of creation.
+        journal.save(intent.with_destination("created"))
+        assert json.loads(journal.path.read_text())["schema_version"] == 4
+        assert journal.load() == intent.with_destination("created")
+    managed = service.finalize_known_provisioning()
+    assert managed is not None
+    assert managed.destination.external_id == "created"
+    assert managed.min_duration_seconds == intent.min_duration_seconds
+    assert managed.max_duration_seconds == intent.max_duration_seconds
+    assert managed.source_ids == intent.source_ids
+    assert managed.ordering_override is ordering
+    assert client.create_calls == []
+    assert journal.load() is None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda payload: payload.update(schema_version=3, ordering_override=None),
+        lambda payload: payload.pop("ordering_override"),
+        lambda payload: payload.update(ordering_override="unknown"),
+        lambda payload: payload.update(ordering_override=False),
+        lambda payload: payload.update(schema_version=True),
+        lambda payload: payload.update(schema_version=5),
+    ],
+)
+def test_journal_rejects_inconsistent_schema_without_mutation(tmp_path, change):
+    journal = ProvisioningJournal(tmp_path / "provisioning.json")
+    journal.save(_request_intent())
+    payload = json.loads(journal.path.read_text())
+    change(payload)
+    journal.path.write_text(json.dumps(payload))
+    before = journal.path.read_bytes()
+    with pytest.raises(ProvisioningJournalError):
+        journal.load()
+    assert journal.path.read_bytes() == before
