@@ -243,36 +243,40 @@ class V11OperationalStore:
         No writes are allowed without the caller's unmodified prior v11 bytes.
         """
         with _locked_root(self.root) as dir_fd:
-            current = _read_existing(dir_fd)
-            if current is None:
-                raise V11StoreError("v11 is missing; cannot fall back to legacy")
-            if not isinstance(expected_bytes, bytes) or current != expected_bytes:
-                raise V11StoreError("stale v11 edit; reload before saving")
+            return self._save_locked(dir_fd, state, expected_bytes=expected_bytes)
+
+    def _save_locked(self, dir_fd: int, state: ManagedState, *, expected_bytes: bytes) -> bytes:
+        """Reuse overlay CAS while the caller holds the verified root lock."""
+        current = _read_existing(dir_fd)
+        if current is None:
+            raise V11StoreError("v11 is missing; cannot fall back to legacy")
+        if not isinstance(expected_bytes, bytes) or current != expected_bytes:
+            raise V11StoreError("stale v11 edit; reload before saving")
+        try:
+            next_bytes = update_v11_operational(current, state)
+        except V11OperationalError as exc:
+            raise V11StoreError("invalid v11 owner edit") from exc
+        if next_bytes == current:
+            return current
+        try:
+            temporary = _write_temporary(dir_fd, next_bytes)
             try:
-                next_bytes = update_v11_operational(current, state)
-            except V11OperationalError as exc:
-                raise V11StoreError("invalid v11 owner edit") from exc
-            if next_bytes == current:
-                return current
-            try:
-                temporary = _write_temporary(dir_fd, next_bytes)
-                try:
-                    # All cooperative writers take the same directory lock.
-                    if _read_existing(dir_fd) != current:
-                        raise V11StoreError("v11 changed before atomic save")
-                    os.replace(
-                        temporary,
-                        V11_OPERATIONAL_FILENAME,
-                        src_dir_fd=dir_fd,
-                        dst_dir_fd=dir_fd,
-                    )
-                    os.fsync(dir_fd)
-                finally:
-                    with suppress(FileNotFoundError):
-                        os.unlink(temporary, dir_fd=dir_fd)
-            except OSError as exc:
-                raise V11StoreError("v11 write durability uncertain; inspect before retry") from exc
-            return next_bytes
+                # All cooperative writers take the same directory lock.
+                if _read_existing(dir_fd) != current:
+                    raise V11StoreError("v11 changed before atomic save")
+                os.replace(
+                    temporary,
+                    V11_OPERATIONAL_FILENAME,
+                    src_dir_fd=dir_fd,
+                    dst_dir_fd=dir_fd,
+                )
+                os.fsync(dir_fd)
+            finally:
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary, dir_fd=dir_fd)
+        except OSError as exc:
+            raise V11StoreError("v11 write durability uncertain; inspect before retry") from exc
+        return next_bytes
 
     def save_owner_inventory(
         self,

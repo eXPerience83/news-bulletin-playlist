@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
 import socket
 from dataclasses import replace
 
@@ -11,6 +13,7 @@ import pytest
 from _file_snapshots import snapshot_files as _files
 from _legacy_materialization_fixtures import _catalog_with_duration_exception, _legacy_state
 
+from news_bulletin_playlist import overlay_normalization, v11_operational_storage
 from news_bulletin_playlist.cli import main
 from news_bulletin_playlist.inspection_fence import startup_gate
 from news_bulletin_playlist.managed_provisioning import MANAGED_PROVISIONING_FILENAME
@@ -153,3 +156,33 @@ def test_cli_native_v11_is_read_only_noop(tmp_path, capsys):
         "changed": False,
     }
     assert _files(tmp_path) == before
+
+
+def test_normalization_keeps_root_lock_through_publication(tmp_path, monkeypatch):
+    store = _migrated(tmp_path, 10)
+    raw = store.load_bytes()
+    original_normalize = overlay_normalization.normalize_v11_overlay
+    original_write = v11_operational_storage._write_temporary
+    stages = []
+
+    def check_lock(stage):
+        fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+        stages.append(stage)
+
+    def normalize(payload):
+        check_lock("normalize")
+        return original_normalize(payload)
+
+    def write(fd, payload):
+        check_lock("publish")
+        return original_write(fd, payload)
+
+    monkeypatch.setattr(overlay_normalization, "normalize_v11_overlay", normalize)
+    monkeypatch.setattr(v11_operational_storage, "_write_temporary", write)
+    assert _normalize(tmp_path, raw)["changed"] is True
+    assert stages == ["normalize", "publish"]
