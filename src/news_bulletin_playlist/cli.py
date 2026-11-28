@@ -14,6 +14,10 @@ from news_bulletin_playlist.inspection_fence import (
     release_gate,
 )
 from news_bulletin_playlist.legacy_preflight import LegacyPreflightError, legacy_preflight
+from news_bulletin_playlist.overlay_normalization import (
+    OverlayNormalizationError,
+    normalize_offline,
+)
 from news_bulletin_playlist.runtime import (
     DEFAULT_DATA_DIR,
     DEFAULT_HEALTH_HOST,
@@ -59,6 +63,13 @@ def build_parser() -> argparse.ArgumentParser:
     release_parser.add_argument("--state-sha256", required=True)
     release_parser.add_argument("--confirm", required=True)
 
+    normalize_parser = commands.add_parser(
+        "normalize-v11-overlay", help="normalize existing v11 overlay offline"
+    )
+    normalize_parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    normalize_parser.add_argument("--state-sha256", required=True)
+    normalize_parser.add_argument("--confirm", required=True)
+
     health_parser = commands.add_parser("healthcheck", help="check the local runtime health")
     health_parser.add_argument("--url", default=DEFAULT_HEALTH_URL)
     health_parser.add_argument("--timeout", type=float, default=2.0)
@@ -96,6 +107,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(str(exc))
         print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
         return 0 if report["safe_to_review_without_spotify_writes"] else 1
+    if args.command == "normalize-v11-overlay":
+        try:
+            result = normalize_offline(
+                args.data_dir, expected_sha256=args.state_sha256, confirm=args.confirm
+            )
+        except OverlayNormalizationError as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, sort_keys=True, indent=2))
+        return 0
     if args.command == "inspection-release":
         try:
             status = release_gate(
