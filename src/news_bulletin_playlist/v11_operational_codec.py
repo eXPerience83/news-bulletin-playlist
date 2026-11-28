@@ -1,6 +1,6 @@
 """Standalone schema-v11 owned configuration document.
 
-The historical catalog and origin digest are frozen on first migration.
+The origin witness and digest are frozen on first initialization or migration.
 The installation-owned overlay may be edited without consulting the old
 managed-state bytes, the original directory or changing image presets.
 Live startup migration is a separate integration decision.
@@ -30,6 +30,7 @@ from news_bulletin_playlist.legacy_materialization import (
     pause_dormant_legacy_playlists,
 )
 from news_bulletin_playlist.managed_state import (
+    PLAYLIST_ORDERING_SCHEMA_VERSION,
     InstalledSource,
     ManagedState,
     ManagedStateError,
@@ -41,6 +42,8 @@ from news_bulletin_playlist.managed_state import (
 )
 from news_bulletin_playlist.models import EngineConfig, SourceDefinition
 from news_bulletin_playlist.owner_inventory import OwnerInventory, OwnerInventoryError
+from news_bulletin_playlist.owner_source_order import OwnerSourceOrder
+from news_bulletin_playlist.owner_template_records import OwnerTemplateSet
 from news_bulletin_playlist.v11_candidate import (
     V11CandidateError,
     parse_v11_candidate,
@@ -49,6 +52,7 @@ from news_bulletin_playlist.v11_candidate import (
 OPERATIONAL_FORMAT = "news-bulletin-playlist.owned-operational-state"
 OPERATIONAL_SCHEMA_VERSION = 11
 MAX_OPERATIONAL_BYTES = 12 * 1024 * 1024
+_NATIVE_ORIGIN_FORMAT = "news-bulletin-playlist.native-v11-origin"
 
 
 class V11OperationalError(ValueError):
@@ -70,10 +74,61 @@ class V11OperationalState:
     owner_inventory: OwnerInventory
     inherited_cover_ids: tuple[str, ...] = ()
     owner_sources_complete: bool = False
+    native_origin: bool = False
 
     @property
     def is_live_migration_authorized(self) -> bool:
         return False
+
+
+def _native_origin_document() -> dict[str, object]:
+    # This versioned witness denotes an empty native installation, not a
+    # legacy catalog or the digest of a fictitious managed-state.json file.
+    return {
+        "format": _NATIVE_ORIGIN_FORMAT,
+        "version": 1,
+        "managed_schema_version": PLAYLIST_ORDERING_SCHEMA_VERSION,
+    }
+
+
+def _parse_origin(catalog_data: dict[str, object]) -> FrozenLegacyCatalogSnapshot:
+    catalog_bytes = _canonical(catalog_data)
+    if len(catalog_bytes) > MAX_FROZEN_SNAPSHOT_BYTES:
+        raise V11OperationalError("frozen operational catalog too large")
+    if catalog_data.get("format") == _NATIVE_ORIGIN_FORMAT:
+        if catalog_bytes != _canonical(_native_origin_document()):
+            raise V11OperationalError("invalid native v11 origin witness")
+        # Normalize only the internal read view to the same empty historical
+        # closure. The legacy sidecar codec never accepts this new format.
+        return FrozenLegacyCatalogSnapshot(
+            PLAYLIST_ORDERING_SCHEMA_VERSION,
+            hashlib.sha256(catalog_bytes).hexdigest(),
+            (),
+            (),
+            (),
+        )
+    return parse_legacy_snapshot(catalog_bytes)
+
+
+def build_native_v11_operational() -> bytes:
+    """Construct a pristine v11 authority directly, without a legacy candidate."""
+    catalog = BuiltInCatalog((), ())
+    overlay = ManagedState(schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION)
+    inventory = OwnerInventory(OwnerSourceOrder(()), (), OwnerTemplateSet(()))
+    origin = _native_origin_document()
+    payload = _canonical(
+        {
+            "format": OPERATIONAL_FORMAT,
+            "schema_version": OPERATIONAL_SCHEMA_VERSION,
+            "migration_origin_sha256": hashlib.sha256(_canonical(origin)).hexdigest(),
+            "installed_catalog": origin,
+            "managed_overlay": serialize_managed_state(overlay, catalog=catalog),
+            "owner_source_catalog": "complete",
+            "owner_inventory": inventory.to_document(),
+        }
+    )
+    parse_v11_operational(payload)
+    return payload
 
 
 def build_v11_operational_from_candidate(candidate_bytes: bytes) -> bytes:
@@ -205,10 +260,12 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         catalog_data = document["installed_catalog"]
         if not isinstance(catalog_data, dict):
             raise V11OperationalError("invalid frozen operational catalog")
-        catalog_bytes = _canonical(catalog_data)
-        if len(catalog_bytes) > MAX_FROZEN_SNAPSHOT_BYTES:
-            raise V11OperationalError("frozen operational catalog too large")
-        snapshot = parse_legacy_snapshot(catalog_bytes)
+        snapshot = _parse_origin(catalog_data)
+        native_origin = catalog_data.get("format") == _NATIVE_ORIGIN_FORMAT
+        if native_origin and (not complete_owner_sources or owned_cover_ids is not None):
+            raise V11OperationalError(
+                "native v11 requires complete owner mode without inherited covers"
+            )
         if snapshot.source_order is None:
             raise V11OperationalError("v11 requires verified historical source order")
         if owned_cover_ids is not None and not {
@@ -278,6 +335,7 @@ def parse_v11_operational(payload: bytes) -> V11OperationalState:
         owner_inventory=owner_inventory,
         inherited_cover_ids=tuple(owned_cover_ids or ()),
         owner_sources_complete=complete_owner_sources,
+        native_origin=native_origin,
     )
 
 
@@ -343,7 +401,7 @@ def update_v11_owner_inventory(
         # Owner catalog and managed projection must validate as *one* candidate:
         # a newly imported template may reference source records added to the
         # owner inventory by this same atomic CAS.
-        snapshot = parse_legacy_snapshot(_canonical(document["installed_catalog"]))
+        snapshot = _parse_origin(document["installed_catalog"])
         next_catalog = _owner_active_catalog(
             snapshot, edited, complete=current.owner_sources_complete
         )

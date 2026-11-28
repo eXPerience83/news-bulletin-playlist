@@ -22,6 +22,31 @@ copy is prudent; **portable JSON and ZIP are not production backups**.
 Acceptance on isolated synthetic roots is tracked by #553 and later beta gates by
 #565. No release/image or live migration is implied by code merged into `main`.
 
+## Native v11 first boot (#667)
+
+Fresh empty or explicitly claimed roots now publish an empty owner inventory
+and nested overlay schema 11 directly. Image examples remain opt-in. No
+schema-10 overlay, legacy materialization or candidate is generated on this
+path. The same directory lock, private-file permissions, authority marker,
+no-overwrite publication and fsync contract remain in force. Interrupted
+publication with an existing authority marker cannot be reclaimed as fresh.
+
+The outer operational format remains v11. A native root has a distinct
+version-1 `news-bulletin-playlist.native-v11-origin` witness in
+`installed_catalog`, with an immutable digest of the canonical witness in
+`migration_origin_sha256` (the historical field name is retained; no original
+legacy file is implied). The witness denotes the empty initial closure only;
+owner revisions and managed edits preserve it. The operational reader accepts
+the existing frozen legacy catalog unchanged, including previous synthetic
+empty-v10 first-boot documents. The legacy sidecar reader does not accept the
+native witness. Older operational readers reject native roots; do not
+downgrade them. The first-boot inspection report rejects an unexpected legacy
+managed-state file in a native root.
+
+This change does not normalize existing nested overlays, retire any archive
+version, or change migrated installations on read or restart. Explicit
+ordering/import schema acknowledgement remains for older overlays only.
+
 ## ZIP v2 Admin workflow (integration branch #646; not yet released)
 
 Admin offers an explicit **complete ZIP v2** download for objects with a prepared

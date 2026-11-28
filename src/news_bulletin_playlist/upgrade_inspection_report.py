@@ -83,6 +83,8 @@ def upgrade_inspection_report(
             legacy_matches: bool | None = None
             runtime_matches: bool | None = None
         else:
+            if operational.native_origin:
+                raise UpgradeInspectionError("Unexpected legacy managed-state in native v11")
             if hashlib.sha256(legacy_raw).hexdigest() != operational.migration_origin_sha256:
                 raise UpgradeInspectionError("Original managed-state bytes changed after migration")
             document = json.loads(legacy_raw.decode("utf-8"))
