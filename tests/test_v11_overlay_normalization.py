@@ -131,17 +131,20 @@ def test_cli_native_v11_is_read_only_noop(tmp_path, capsys):
     store.initialize_fresh()
     raw = store.load_bytes()
     before = _files(tmp_path)
-    assert main(
-        [
-            "normalize-v11-overlay",
-            "--data-dir",
-            str(tmp_path),
-            "--state-sha256",
-            _sha(raw),
-            "--confirm",
-            NORMALIZATION_CONFIRMATION,
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "normalize-v11-overlay",
+                "--data-dir",
+                str(tmp_path),
+                "--state-sha256",
+                _sha(raw),
+                "--confirm",
+                NORMALIZATION_CONFIRMATION,
+            ]
+        )
+        == 0
+    )
     assert json.loads(capsys.readouterr().out) == {
         "previous_schema": 11,
         "schema_version": 11,

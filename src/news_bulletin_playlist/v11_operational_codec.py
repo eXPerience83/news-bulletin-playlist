@@ -383,13 +383,10 @@ def normalize_v11_overlay(payload: bytes) -> bytes:
     desired = replace(original, schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION)
     result = update_v11_operational(payload, desired)
     verified = parse_v11_operational(result)
-    if (
-        verified.runtime != current.runtime
-        or not same_managed_configuration(
-            replace(verified.managed_overlay, schema_version=original.schema_version),
-            original,
-            catalog=current.active_catalog,
-        )
+    if verified.runtime != current.runtime or not same_managed_configuration(
+        replace(verified.managed_overlay, schema_version=original.schema_version),
+        original,
+        catalog=current.active_catalog,
     ):
         raise V11OperationalError("v11 normalization would change effective configuration")
     # Exact canonical comparison protects all historical and owner evidence.
