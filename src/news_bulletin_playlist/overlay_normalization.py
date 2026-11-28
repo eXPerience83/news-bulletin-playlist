@@ -49,9 +49,7 @@ def normalize_offline(root: Path, *, expected_sha256: str, confirm: str) -> dict
             except FileNotFoundError:
                 pass
             else:
-                raise OverlayNormalizationError(
-                    "Resolve pending provisioning before normalization"
-                )
+                raise OverlayNormalizationError("Resolve pending provisioning before normalization")
             store = V11OperationalStore(root)
             before = _read_existing(fd)
             if before is None:
