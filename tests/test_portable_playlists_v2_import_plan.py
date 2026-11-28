@@ -14,6 +14,7 @@ from _admin_http import login as _login
 from _admin_http import request as _request
 from _html import assert_valid_admin_html
 from _multipart import import_upload as _multipart
+from _native_v11_fixtures import old_empty_v11_bytes
 from _playlist_template_fixtures import _draft
 from _portable_playlist_fixtures import UUID, _service, rewrite
 from _source_admin_http_fixtures import _server
@@ -89,9 +90,13 @@ def _donor(tmp_path, *, different_cover=False, version=2):
     return service.export("managed", str(playlist.id), version=version)[1], template
 
 
-def _receiver(tmp_path):
+def _receiver(tmp_path, *, old_overlay=False):
     root = tmp_path / "receiver"
     root.mkdir()
+    if old_overlay:
+        path = root / V11_OPERATIONAL_FILENAME
+        path.write_bytes(old_empty_v11_bytes())
+        path.chmod(0o600)
     store = open_managed_state_store(root)
     service = PlaylistImportService(
         store,
@@ -651,7 +656,8 @@ def test_v2_legacy_overlay_v9_requires_explicit_schema_ack_over_http(tmp_path):
         assert not client.calls
 
 
-def test_v3_linked_ordering_round_trip_preserves_owner_closure(tmp_path):
+@pytest.mark.parametrize("old_overlay", [False, True])
+def test_v3_linked_ordering_round_trip_preserves_owner_closure(tmp_path, old_overlay):
     data, historical = _donor(tmp_path, different_cover=True, version=3)
     parsed = inspect_playlist_bundle_v3(data)
     assert parsed.playlist["ordering"] == "latest_per_source_first"
@@ -661,14 +667,17 @@ def test_v3_linked_ordering_round_trip_preserves_owner_closure(tmp_path):
     with pytest.raises(PlaylistBundleError):
         inspect_playlist_bundle_v2(data)
 
-    root, store, importer = _receiver(tmp_path)
+    root, store, importer = _receiver(tmp_path, old_overlay=old_overlay)
     plan = importer.preview_v2(data, version=3)
     assert not plan.blocked
     baseline = (root / V11_OPERATIONAL_FILENAME).read_bytes()
-    with pytest.raises(PlaylistImportError, match="schema v11"):
-        importer.apply_v2(data, plan.sources.fingerprint, version=3)
-    assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
-    result = importer.apply_v2(data, plan.sources.fingerprint, confirm_schema=True, version=3)
+    if old_overlay:
+        with pytest.raises(PlaylistImportError, match="schema v11"):
+            importer.apply_v2(data, plan.sources.fingerprint, version=3)
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
+    result = importer.apply_v2(
+        data, plan.sources.fingerprint, confirm_schema=old_overlay, version=3
+    )
     draft = store.load_readonly().templates[0]
     assert draft.ordering_override is OrderingPolicy.LATEST_PER_SOURCE_FIRST
     assert store.load_readonly().playlists == ()
@@ -687,7 +696,10 @@ def test_v3_linked_ordering_round_trip_preserves_owner_closure(tmp_path):
 
 
 @pytest.mark.parametrize("ordering", [None, *OrderingPolicy])
-def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(tmp_path, ordering):
+@pytest.mark.parametrize("old_overlay", [False, True])
+def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(
+    tmp_path, ordering, old_overlay
+):
     draft = _draft(portable_id=UUID, ordering_override=ordering)
     donor = _service(
         tmp_path / "donor",
@@ -701,15 +713,26 @@ def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(tmp_pat
         inspect_playlist_bundle(data)
     with pytest.raises(PlaylistBundleError):
         inspect_playlist_bundle_v2(data)
-    root, store, importer = _receiver(tmp_path)
+    root, store, importer = _receiver(tmp_path, old_overlay=old_overlay)
     plan = importer.preview(data, version=3)
     assert plan.status == "create"
-    with pytest.raises(PlaylistImportError, match="schema v11"):
-        importer.apply(
-            data, plan.sources.fingerprint, keep_local=frozenset(), confirm_schema=False, version=3
-        )
+    baseline = (root / V11_OPERATIONAL_FILENAME).read_bytes()
+    if old_overlay:
+        with pytest.raises(PlaylistImportError, match="schema v11"):
+            importer.apply(
+                data,
+                plan.sources.fingerprint,
+                keep_local=frozenset(),
+                confirm_schema=False,
+                version=3,
+            )
+        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
     result = importer.apply(
-        data, plan.sources.fingerprint, keep_local=frozenset(), confirm_schema=True, version=3
+        data,
+        plan.sources.fingerprint,
+        keep_local=frozenset(),
+        confirm_schema=old_overlay,
+        version=3,
     )
     assert result.created_draft
     assert store.catalog.playlists == ()
@@ -798,7 +821,8 @@ def test_v3_rejects_unknown_or_inconsistent_ordering(tmp_path, override):
 
 
 @pytest.mark.parametrize("linked", [False, True])
-def test_v3_admin_preview_apply_and_download(tmp_path, linked):
+@pytest.mark.parametrize("old_overlay", [False, True])
+def test_v3_admin_preview_apply_and_download(tmp_path, linked, old_overlay):
     if linked:
         document, _ = _donor(tmp_path, version=3)
     else:
@@ -808,7 +832,7 @@ def test_v3_admin_preview_apply_and_download(tmp_path, linked):
             ManagedState(schema_version=PLAYLIST_ORDERING_SCHEMA_VERSION, templates=(draft,)),
         )
         document = donor.export("draft", str(draft.id), version=3)[1]
-    root, store, _importer = _receiver(tmp_path)
+    root, store, _importer = _receiver(tmp_path, old_overlay=old_overlay)
     with _server(root) as (server, client, _legacy):
         handler = server.RequestHandlerClass
         managed = handler.managed_admin_service
@@ -822,7 +846,7 @@ def test_v3_admin_preview_apply_and_download(tmp_path, linked):
         assert status == 200, preview
         assert_valid_admin_html(preview.decode())
         assert b"latest_per_source_first" in preview
-        assert b"schema v11" in preview or b"managed-state v11" in preview
+        assert (b'name="ack_schema"' in preview) == old_overlay
         action = (
             "/admin/playlists/import/v3/linked/apply"
             if linked
@@ -830,15 +854,17 @@ def test_v3_admin_preview_apply_and_download(tmp_path, linked):
         )
         assert action.encode() in preview
         assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
-        status, _, body = _request(
-            server, "POST", action, cookie=cookie, form=_v2_http_confirmation(preview)
-        )
-        assert status == 409, body
-        assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
-        status, preview = _v2_http_preview(server, cookie, document, version=3)
-        assert status == 200, preview
+        if old_overlay:
+            status, _, body = _request(
+                server, "POST", action, cookie=cookie, form=_v2_http_confirmation(preview)
+            )
+            assert status == 409, body
+            assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == before
+            status, preview = _v2_http_preview(server, cookie, document, version=3)
+            assert status == 200, preview
         form = _v2_http_confirmation(preview)
-        form["ack_schema"] = "1"
+        if old_overlay:
+            form["ack_schema"] = "1"
         status, _, body = _request(server, "POST", action, cookie=cookie, form=form)
         assert status == 200, body
         restored = store.load_readonly().templates[0]

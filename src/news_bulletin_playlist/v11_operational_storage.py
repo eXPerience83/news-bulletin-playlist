@@ -7,7 +7,6 @@ missing or invalid v11 file. Caller integration must prevent legacy writes.
 
 from __future__ import annotations
 
-import json
 import os
 from contextlib import suppress
 from pathlib import Path
@@ -21,11 +20,7 @@ from news_bulletin_playlist.installation_identity import (
 )
 from news_bulletin_playlist.legacy_catalog_snapshot import build_legacy_snapshot_v2
 from news_bulletin_playlist.legacy_materialization import preview_legacy_materialization
-from news_bulletin_playlist.managed_state import (
-    ManagedState,
-    ManagedStateStore,
-    serialize_managed_state,
-)
+from news_bulletin_playlist.managed_state import ManagedState, ManagedStateStore
 from news_bulletin_playlist.migrated_covers import MigratedCoverAssets
 from news_bulletin_playlist.owner_inventory import OwnerInventory
 from news_bulletin_playlist.portable_playlists import PortableCoverLoader
@@ -36,6 +31,7 @@ from news_bulletin_playlist.v11_operational_codec import (
     MAX_OPERATIONAL_BYTES,
     V11OperationalError,
     V11OperationalState,
+    build_native_v11_operational,
     build_v11_operational_from_candidate,
     parse_v11_operational,
     update_v11_operational,
@@ -196,10 +192,8 @@ class V11OperationalStore:
                 ) from exc
             return parse_v11_operational(next_bytes)
 
-    def initialize_fresh(self, *, catalog: BuiltInCatalog | None = None) -> V11OperationalState:
-        """Create an empty v11 inventory, never implicitly installing image presets."""
-        if catalog is None:
-            catalog = BuiltInCatalog((), ())
+    def initialize_fresh(self) -> V11OperationalState:
+        """Create a native empty v11 inventory, without a legacy conversion."""
         with _locked_root(self.root) as dir_fd:
             prior = _read_existing(dir_fd)
             if prior is not None:
@@ -224,21 +218,7 @@ class V11OperationalStore:
                         "occupied installation without managed state cannot be claimed fresh"
                     )
             try:
-                empty = ManagedState(schema_version=10)
-                original = (
-                    json.dumps(
-                        serialize_managed_state(empty, catalog=catalog),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        indent=2,
-                    )
-                    + "\n"
-                ).encode("utf-8")
-                preview = preview_legacy_materialization(catalog, empty)
-                frozen = build_legacy_snapshot_v2(preview, original)
-                next_bytes = build_v11_operational_from_candidate(
-                    build_v11_candidate(frozen, original)
-                )
+                next_bytes = build_native_v11_operational()
                 _record_authority(dir_fd)
                 temporary = _write_temporary(dir_fd, next_bytes)
                 try:
