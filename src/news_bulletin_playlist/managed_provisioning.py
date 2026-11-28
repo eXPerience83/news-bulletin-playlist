@@ -19,7 +19,7 @@ from news_bulletin_playlist.managed_duration import (
 from news_bulletin_playlist.models import OrderingPolicy, PlaylistId, SourceId
 
 MANAGED_PROVISIONING_FILENAME = "managed-playlist-provisioning.json"
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 4
 
 
 class ProvisioningJournalError(ValueError):
@@ -120,10 +120,10 @@ class ProvisioningJournal:
             "max_duration_seconds": intent.max_duration_seconds,
             "min_duration_seconds": intent.min_duration_seconds,
             "destination_id": intent.destination_id,
+            "ordering_override": (
+                intent.ordering_override.value if intent.ordering_override is not None else None
+            ),
         }
-        if intent.ordering_override is not None:
-            payload["schema_version"] = 3
-            payload["ordering_override"] = intent.ordering_override.value
         _parse_intent(payload)
         document = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
         parent = self.path.parent
@@ -180,11 +180,11 @@ def _parse_intent(value: object) -> ProvisioningIntent:
         "destination_id",
     }
     version = value.get("schema_version")
-    if version in (2, 3):
+    if version in (2, 3, 4):
         expected.add("min_duration_seconds")
-    if version == 3:
+    if version in (3, 4):
         expected.add("ordering_override")
-    if set(value) != expected or type(version) is not int or version not in {1, 2, 3}:
+    if set(value) != expected or type(version) is not int or version not in {1, 2, 3, 4}:
         raise ProvisioningJournalError("provisioning journal has an unsupported schema")
     try:
         state = ProvisioningState(_nonempty_string(value["state"]))
@@ -202,10 +202,12 @@ def _parse_intent(value: object) -> ProvisioningIntent:
             max_episodes=_positive_integer(value["max_episodes"]),
             max_duration_seconds=validate_persisted_duration_seconds(value["max_duration_seconds"]),
             min_duration_seconds=validate_persisted_min_duration_seconds(
-                value["min_duration_seconds"] if version in (2, 3) else 0
+                value["min_duration_seconds"] if version in (2, 3, 4) else 0
             ),
             ordering_override=(
-                OrderingPolicy(_string(value["ordering_override"])) if version == 3 else None
+                OrderingPolicy(_string(value["ordering_override"]))
+                if version == 3 or (version == 4 and value["ordering_override"] is not None)
+                else None
             ),
             destination_id=(
                 None
