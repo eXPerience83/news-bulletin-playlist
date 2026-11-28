@@ -719,7 +719,13 @@ def test_v3_standalone_draft_round_trip_without_synthetic_owner_template(
     baseline = (root / V11_OPERATIONAL_FILENAME).read_bytes()
     if old_overlay:
         with pytest.raises(PlaylistImportError, match="schema v11"):
-            importer.apply(data, plan.sources.fingerprint, keep_local=frozenset(), version=3)
+            importer.apply(
+                data,
+                plan.sources.fingerprint,
+                keep_local=frozenset(),
+                confirm_schema=False,
+                version=3,
+            )
         assert (root / V11_OPERATIONAL_FILENAME).read_bytes() == baseline
     result = importer.apply(
         data,
