@@ -26,9 +26,7 @@ class OverlayNormalizationError(ValueError):
     """Do not change configuration when offline normalization cannot be verified."""
 
 
-def normalize_offline(
-    root: Path, *, expected_sha256: str, confirm: str
-) -> dict[str, object]:
+def normalize_offline(root: Path, *, expected_sha256: str, confirm: str) -> dict[str, object]:
     """Require operator-asserted offline exclusivity and publish via existing CAS.
 
     The root lock serializes owner writes, but not every runtime side effect or
